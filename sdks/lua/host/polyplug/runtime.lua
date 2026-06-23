@@ -106,6 +106,52 @@ local function get_lib()
     return M._lib
 end
 
+--- Build the trusted-key allowlist cdata array and point a RuntimeConfig at it.
+--
+-- Accepts a sequence of 32-byte Ed25519 verifying keys, each either a Lua
+-- string of length 32 or a sequence table of 32 byte values (0-255). The keys
+-- are copied into a freshly allocated `Ed25519PublicKey[n]` array; the config's
+-- `trusted_keys` / `trusted_keys_len` / `trusted_keys__align` fields are set to
+-- address it.
+--
+-- OWNERSHIP: the runtime COPIES `config.trusted_keys` during
+-- polyplug_runtime_create. The returned `buf` cdata only needs to stay
+-- referenced across that one call (the caller keeps it in a local), after which
+-- it may be reclaimed. An empty or nil list leaves the fields zero
+-- (Trust-On-First-Use) and returns nil.
+-- @param config cdata  A `RuntimeConfig` cdata to populate.
+-- @param keys table|nil  Sequence of 32-byte keys (strings or byte tables).
+-- @return cdata|nil      The `Ed25519PublicKey[n]` buffer (alive across create), or nil.
+function M.build_trusted_keys(config, keys)
+    if keys == nil or #keys == 0 then
+        return nil
+    end
+    local count = #keys
+    local buf = ffi.new("Ed25519PublicKey[?]", count)
+    for i = 1, count do
+        local key = keys[i]
+        if type(key) == "string" then
+            if #key ~= 32 then
+                error("polyplug: trusted key #" .. i .. " must be 32 bytes, got " .. #key)
+            end
+            ffi.copy(buf[i - 1].bytes, key, 32)
+        elseif type(key) == "table" then
+            if #key ~= 32 then
+                error("polyplug: trusted key #" .. i .. " must be 32 bytes, got " .. #key)
+            end
+            for b = 1, 32 do
+                buf[i - 1].bytes[b - 1] = key[b]
+            end
+        else
+            error("polyplug: trusted key #" .. i .. " must be a 32-byte string or table")
+        end
+    end
+    config.trusted_keys = ffi.cast("void*", buf)
+    config.trusted_keys_len = count
+    config.trusted_keys__align = ffi.alignof("Ed25519PublicKey")
+    return buf
+end
+
 function M.load_lib(so_path)
     M._lib = ffi.load(so_path)
     return M._lib
@@ -155,6 +201,14 @@ M.Runtime.__index = M.Runtime
 --   opts.signature_policy number Bundle signature enforcement policy (see
 --                                M.SignaturePolicy); defaults to
 --                                M.SignaturePolicy.Off.
+--   opts.trusted_keys  table     Sequence of 32-byte Ed25519 verifying keys
+--                                (each a Lua string of length 32 or a table of
+--                                32 byte values) forming the key-pinning
+--                                allowlist. Empty/unset = Trust-On-First-Use.
+--                                Only effective alongside a non-Off
+--                                signature_policy. The runtime copies the keys
+--                                during create, so the SDK only holds the cdata
+--                                buffer across that one call.
 -- @return Runtime             The runtime instance.
 function M.Runtime.new(opts)
     local lib = get_lib()
@@ -163,8 +217,10 @@ function M.Runtime.new(opts)
     local reload_cb_cdata = nil
     local log_cb_cdata = nil
     local log_bridge = nil
+    local trusted_keys_buf = nil
 
-    if opts.config or opts.on_reload or opts.log or opts.signature_policy then
+    if opts.config or opts.on_reload or opts.log or opts.signature_policy
+        or opts.trusted_keys then
         -- Build a single RuntimeConfig; the on_reload callback pointer lives
         -- inside it — there is no separate options wrapper.
         local config_c = ffi.new("RuntimeConfig", {
@@ -273,6 +329,11 @@ function M.Runtime.new(opts)
             config_c.log_user_data = log_bridge
             config_c.log_max_level = opts.log_max_level or M.LogLevel.Warn
         end
+
+        -- Trusted-key allowlist (key pinning). The runtime copies
+        -- config.trusted_keys during create, so trusted_keys_buf only needs to
+        -- stay referenced (local) across the create call below.
+        trusted_keys_buf = M.build_trusted_keys(config_c, opts.trusted_keys)
 
         -- config_c stays anchored (local) for the duration of the create call;
         -- the runtime copies what it needs before returning.

@@ -227,6 +227,50 @@ runs.
   LuaJIT callback + `ffi.string` copies + user function); see
   `crates/polyplug/benches/README.md`
 
+## Bundle Signature Verification
+
+Pass `signature_policy` to `Runtime.new(opts)` to control how the runtime treats
+each bundle's `bundle.sig` (defaults to `polyplug.SignaturePolicy.Off` — unsigned
+bundles load normally):
+
+```lua
+local polyplug = require("polyplug")
+
+local runtime = polyplug.Runtime.new({
+    signature_policy = polyplug.SignaturePolicy.Required, -- Off | WarnOnly | Required
+})
+```
+
+### Key pinning (`trusted_keys`)
+
+By default, signature verification is **Trust-On-First-Use**: the runtime trusts
+the key embedded in each `bundle.sig`, so it proves integrity but not
+authenticity. Pass `trusted_keys` — a sequence of 32-byte Ed25519 verifying keys
+— to switch to **key pinning**: after the normal signature check, the runtime
+also requires the bundle's embedded key to be one of the pinned keys, rejecting a
+bundle re-signed with any other key:
+
+```lua
+local runtime = polyplug.Runtime.new({
+    signature_policy = polyplug.SignaturePolicy.Required,
+    trusted_keys = {
+        my_key_bytes,          -- a 32-byte Lua string, or
+        { 1, 2, 3, --[[ … ]] }, -- a sequence of 32 byte values (0-255)
+    },
+})
+```
+
+**Key points:**
+- Each key must be exactly 32 bytes (a Lua string of length 32 or a 32-element
+  byte table); a wrong length raises an error
+- Only effective alongside a non-`Off` `signature_policy`; under `Off` no
+  verification runs
+- An empty or omitted `trusted_keys` keeps Trust-On-First-Use (the fields stay
+  zero)
+- The keys are copied into a cdata buffer that lives only across the
+  `polyplug_runtime_create` call — the runtime copies the keys during create, so
+  the buffer is reclaimed afterward (no module-level state)
+
 ## Performance Notes
 
 - **Backend**: LuaJIT FFI (required)

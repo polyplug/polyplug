@@ -52,7 +52,11 @@ import {
   RUNTIME_CONFIG_LOG_USER_DATA_OFFSET,
   RUNTIME_CONFIG_LOG_MAX_LEVEL_OFFSET,
   RUNTIME_CONFIG_SIGNATURE_POLICY_OFFSET,
+  RUNTIME_CONFIG_TRUSTED_KEYS_OFFSET,
+  RUNTIME_CONFIG_TRUSTED_KEYS_LEN_OFFSET,
+  RUNTIME_CONFIG_TRUSTED_KEYS_ALIGN_OFFSET,
   RUNTIME_CONFIG_SIZE,
+  ED25519_PUBLIC_KEY_SIZE,
   RELOAD_PHASE_PHASE_TYPE_OFFSET,
   RELOAD_PHASE_BUNDLE_ID_OFFSET,
   RELOAD_PHASE_BUNDLE_NAME_OFFSET,
@@ -1130,6 +1134,30 @@ export function openPolyplug(soPath) {
 }
 
 /**
+ * Pack an array of Ed25519 verifying keys into one contiguous N*32-byte buffer.
+ *
+ * Each entry must be exactly {@link ED25519_PUBLIC_KEY_SIZE} (32) raw bytes,
+ * supplied as a Uint8Array or ArrayBuffer. The returned buffer is the storage
+ * the runtime's `trusted_keys.items` pointer references during create; the
+ * runtime copies the bytes out, so the caller only keeps it across that call.
+ * @param {(Uint8Array|ArrayBuffer)[]} keys - Verifying keys, 32 bytes each.
+ * @returns {Uint8Array} Contiguous key buffer (keys.length * 32 bytes).
+ */
+function marshalTrustedKeys(keys) {
+  const keysBuf = new Uint8Array(keys.length * ED25519_PUBLIC_KEY_SIZE);
+  for (let i = 0; i < keys.length; i += 1) {
+    const key = keys[i] instanceof ArrayBuffer ? new Uint8Array(keys[i]) : keys[i];
+    if (!(key instanceof Uint8Array) || key.length !== ED25519_PUBLIC_KEY_SIZE) {
+      throw new Error(
+        `trustedKeys[${i}] must be ${ED25519_PUBLIC_KEY_SIZE} bytes (Ed25519 public key), got ${key?.length}`,
+      );
+    }
+    keysBuf.set(key, i * ED25519_PUBLIC_KEY_SIZE);
+  }
+  return keysBuf;
+}
+
+/**
  * Create new runtime instance.
  * Uses HostApi-based API: polyplug_runtime_create returns HostApi*.
  *
@@ -1140,8 +1168,9 @@ export function openPolyplug(soPath) {
  * RuntimeConfig is the full 72-byte ABI struct: compatibility (u32 @ 0),
  * hot_reload_enabled (bool @ 4), on_reload (fn @ 8), on_reload_user_data (ptr @ 16),
  * log (fn @ 24), log_user_data (ptr @ 32), log_max_level (u32 @ 40),
- * signature_policy (u32 @ 44), trusted_keys (Array @ 48). The struct is 72 bytes.
- * Offsets/size come from the abi.ts constants.
+ * signature_policy (u32 @ 44), trusted_keys (Array{ items @ 48, len @ 56,
+ * align @ 64 }). The struct is 72 bytes. Offsets/size come from the abi.ts
+ * constants.
  *
  * @param {FfiLibrary} lib - Dynamic library
  * @param {Object} [options] - Per-runtime options
@@ -1150,6 +1179,7 @@ export function openPolyplug(soPath) {
  * @param {boolean} [options.config.hotReloadEnabled=false] - Whether hot-reload is enabled
  * @param {number} [options.config.logMaxLevel=5] - Max LogLevel (1=Error … 5=Trace) delivered to `logger`
  * @param {number} [options.config.signaturePolicy=0] - Bundle signature enforcement policy (SignaturePolicy.Off=0, WarnOnly=1, Required=2), written at offset 44
+ * @param {(Uint8Array|ArrayBuffer)[]} [options.config.trustedKeys] - Ed25519 verifying-key allowlist (key pinning). Each entry is 32 raw bytes. Empty/unset = Trust-On-First-Use (default). The runtime copies the keys during create, so the backing buffer is only held across the create call.
  * @param {function(ReloadPhase): void} [options.onReload] - Hot-reload phase callback
  * @param {function(number, string, string): void} [options.logger] - Logger callback (level, scope, message)
  * @returns {Runtime}
@@ -1161,6 +1191,11 @@ export function runtimeNew(lib, options = {}) {
 
   /** @type {FfiCallback[]} */
   const ownedCallbacks = [];
+  // The trusted-keys buffer (when pinned) lives here as a local: the runtime
+  // copies the keys during polyplug_runtime_create, so it only needs to stay
+  // reachable across that call.
+  /** @type {Uint8Array | null} */
+  let keysBuf = null;
   let host;
 
   if (config || onReloadCallback || loggerCallback) {
@@ -1175,6 +1210,25 @@ export function runtimeNew(lib, options = {}) {
     // SignaturePolicy.Off default (0), preserving existing behavior.
     if (config?.signaturePolicy !== undefined) {
       configView.setUint32(RUNTIME_CONFIG_SIGNATURE_POLICY_OFFSET, config.signaturePolicy, true);
+    }
+
+    // Trusted Ed25519 verifying-key allowlist (key pinning), the trusted_keys
+    // Array at offset 48: { items @ 48, len @ 56, align @ 64 }. An empty/unset
+    // list leaves the zeroed Array (null items, len 0) — Trust-On-First-Use.
+    // The runtime copies this Array's keys during create, so the contiguous
+    // N*32-byte buffer is held in the `keysBuf` local that stays reachable
+    // across the polyplug_runtime_create call below.
+    const trustedKeys = config?.trustedKeys ?? null;
+    if (trustedKeys && trustedKeys.length > 0) {
+      keysBuf = marshalTrustedKeys(trustedKeys);
+      configView.setBigUint64(
+        RUNTIME_CONFIG_TRUSTED_KEYS_OFFSET,
+        _ffi.pointerValue(_ffi.pointerOf(keysBuf)),
+        true,
+      );
+      configView.setBigUint64(RUNTIME_CONFIG_TRUSTED_KEYS_LEN_OFFSET, BigInt(trustedKeys.length), true);
+      // Ed25519PublicKey is a 32-byte array, align 1.
+      configView.setBigUint64(RUNTIME_CONFIG_TRUSTED_KEYS_ALIGN_OFFSET, 1n, true);
     }
 
     if (onReloadCallback) {
@@ -1243,6 +1297,9 @@ export function runtimeNew(lib, options = {}) {
 
     const configPtr = _ffi.pointerOf(configBuf);
     host = lib.symbols.polyplug_runtime_create(configPtr);
+    // The runtime copied the trusted keys during the call above; release the
+    // local reference to the backing buffer.
+    keysBuf = null;
   } else {
     host = lib.symbols.polyplug_runtime_create(null);
   }

@@ -21,12 +21,14 @@ namespace Polyplug.Host;
 public sealed class RuntimeBuilder
 {
     private readonly List<string> _pluginDirs;
+    private readonly List<byte[]> _trustedKeys;
     private Action<ReloadPhase>? _onReload;
     private SignaturePolicy? _signaturePolicy;
 
     public RuntimeBuilder()
     {
         _pluginDirs = [];
+        _trustedKeys = [];
         _onReload = null;
         _signaturePolicy = null;
     }
@@ -72,46 +74,136 @@ public sealed class RuntimeBuilder
         return this;
     }
 
+    /// <summary>
+    /// Pin the trusted Ed25519 verifying-key allowlist (key pinning). Each entry
+    /// is a 32-byte verifying key. When non-empty AND the
+    /// <see cref="SignaturePolicy"/> is not <see cref="SignaturePolicy.Off"/>,
+    /// the runtime requires every bundle's embedded signing key to be a member of
+    /// this allowlist (a re-signed bundle with an attacker key is rejected).
+    /// Empty (the default) = Trust-On-First-Use: the embedded key is trusted
+    /// without pinning.
+    ///
+    /// The keys are copied into the builder. The runtime copies the key bytes
+    /// out of <c>RuntimeConfig.TrustedKeys</c> during
+    /// <c>polyplug_runtime_create</c>; the unmanaged buffer is only needed for
+    /// that call and is freed as soon as create returns.
+    /// </summary>
+    public RuntimeBuilder TrustedKeys(IReadOnlyList<byte[]> keys)
+    {
+        if (keys is null)
+        {
+            throw new ArgumentNullException(nameof(keys));
+        }
+
+        _trustedKeys.Clear();
+        foreach (byte[] key in keys)
+        {
+            if (key is null)
+            {
+                throw new ArgumentNullException(nameof(keys), "trusted key entry must not be null.");
+            }
+            if (key.Length != Ed25519PublicKeyBytes)
+            {
+                throw new ArgumentException(
+                    $"each trusted key must be exactly {Ed25519PublicKeyBytes} bytes (got {key.Length}).",
+                    nameof(keys));
+            }
+            _trustedKeys.Add((byte[])key.Clone());
+        }
+        return this;
+    }
+
     public Runtime Build()
     {
-        Runtime runtime = _onReload is null
-            ? BuildWithConfig(_signaturePolicy)
-            : BuildWithReloadCallback(_onReload, _signaturePolicy);
+        bool hasKeys = _trustedKeys.Count > 0;
+        Runtime runtime = _onReload is null && !hasKeys && _signaturePolicy is null
+            ? BuildDefault()
+            : _onReload is null
+                ? BuildWithConfig(_signaturePolicy, _trustedKeys)
+                : BuildWithReloadCallback(_onReload, _signaturePolicy, _trustedKeys);
         LoadPluginDirs(runtime);
         return runtime;
     }
 
-    private static Runtime BuildWithConfig(SignaturePolicy? signaturePolicy)
-    {
-        // No reload callback. With no options at all, pass null for defaults;
-        // otherwise marshal a RuntimeConfig carrying the chosen options.
-        if (signaturePolicy is null)
-        {
-            nint defaultHandle = Runtime.CreateNative();
-            if (defaultHandle == nint.Zero)
-            {
-                Runtime.ThrowLastError("Failed to create runtime.");
-            }
+    /// <summary>Size of an <c>Ed25519PublicKey</c> (32 raw bytes).</summary>
+    internal const int Ed25519PublicKeyBytes = 32;
 
-            return new Runtime(defaultHandle, default, default);
+    /// <summary>
+    /// Alignment of <c>Ed25519PublicKey</c>. The ABI mirror documents it as
+    /// <c>#[repr(C)]</c>, 32 bytes, align 1 — a bare byte array with no padding.
+    /// The value is reported through <c>RuntimeConfig.TrustedKeysAlign</c> so the
+    /// runtime sees the same element alignment Rust uses (<c>align_of</c>).
+    /// </summary>
+    internal const int Ed25519PublicKeyAlign = 1;
+
+    private static Runtime BuildDefault()
+    {
+        nint defaultHandle = Runtime.CreateNative();
+        if (defaultHandle == nint.Zero)
+        {
+            Runtime.ThrowLastError("Failed to create runtime.");
         }
 
+        return new Runtime(defaultHandle, default, default);
+    }
+
+    /// <summary>
+    /// Marshal the trusted-key list into a freshly allocated unmanaged buffer and
+    /// stamp <c>config.TrustedKeys/TrustedKeysLen/TrustedKeysAlign</c>. Returns the
+    /// buffer pointer (caller owns it) or <c>nint.Zero</c> for an empty list. The
+    /// runtime copies the key bytes during <c>polyplug_runtime_create</c>, so the
+    /// caller frees this buffer as soon as create returns.
+    /// </summary>
+    internal static nint MarshalTrustedKeys(IReadOnlyList<byte[]> keys, ref RuntimeConfig config)
+    {
+        if (keys.Count == 0)
+        {
+            return nint.Zero;
+        }
+
+        nint buffer = Marshal.AllocHGlobal(Ed25519PublicKeyBytes * keys.Count);
+        for (int i = 0; i < keys.Count; i++)
+        {
+            Marshal.Copy(keys[i], 0, buffer + i * Ed25519PublicKeyBytes, Ed25519PublicKeyBytes);
+        }
+
+        config.TrustedKeys = buffer;
+        config.TrustedKeysLen = (nuint)keys.Count;
+        config.TrustedKeysAlign = (nuint)Ed25519PublicKeyAlign;
+        return buffer;
+    }
+
+    private static Runtime BuildWithConfig(SignaturePolicy? signaturePolicy, IReadOnlyList<byte[]> trustedKeys)
+    {
         RuntimeConfig config = new RuntimeConfig
         {
             Compatibility = Compatibility.Strict,
-            SignaturePolicy = signaturePolicy.Value,
+            SignaturePolicy = signaturePolicy ?? Polyplug.Abi.SignaturePolicy.Off,
         };
 
-        nint configPtr = Marshal.AllocHGlobal(Marshal.SizeOf<RuntimeConfig>());
+        nint keysBuffer = MarshalTrustedKeys(trustedKeys, ref config);
         nint handle;
         try
         {
-            Marshal.StructureToPtr(config, configPtr, fDeleteOld: false);
-            handle = NativeMethods.PolyplugRuntimeCreate(configPtr);
+            nint configPtr = Marshal.AllocHGlobal(Marshal.SizeOf<RuntimeConfig>());
+            try
+            {
+                Marshal.StructureToPtr(config, configPtr, fDeleteOld: false);
+                handle = NativeMethods.PolyplugRuntimeCreate(configPtr);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(configPtr);
+            }
         }
         finally
         {
-            Marshal.FreeHGlobal(configPtr);
+            // The runtime copied the key bytes during create; free the buffer
+            // now (also on the throw path).
+            if (keysBuffer != nint.Zero)
+            {
+                Marshal.FreeHGlobal(keysBuffer);
+            }
         }
 
         if (handle == nint.Zero)
@@ -130,12 +222,16 @@ public sealed class RuntimeBuilder
     /// The native core copies the config during the call, so the unmanaged
     /// copy is freed once create returns.
     /// </summary>
-    private static Runtime BuildWithReloadCallback(Action<ReloadPhase> callback, SignaturePolicy? signaturePolicy)
+    private static Runtime BuildWithReloadCallback(
+        Action<ReloadPhase> callback,
+        SignaturePolicy? signaturePolicy,
+        IReadOnlyList<byte[]> trustedKeys)
     {
         Runtime.ReloadCallbackState state = new Runtime.ReloadCallbackState(callback);
         Runtime.OnReloadTrampoline trampoline = Runtime.OnReloadNative;
         GCHandle stateHandle = GCHandle.Alloc(state);
         GCHandle trampolineHandle = GCHandle.Alloc(trampoline);
+        nint keysBuffer = nint.Zero;
 
         try
         {
@@ -148,16 +244,31 @@ public sealed class RuntimeBuilder
                 SignaturePolicy = signaturePolicy ?? Polyplug.Abi.SignaturePolicy.Off,
             };
 
-            nint configPtr = Marshal.AllocHGlobal(Marshal.SizeOf<RuntimeConfig>());
+            keysBuffer = MarshalTrustedKeys(trustedKeys, ref config);
+
             nint handle;
             try
             {
-                Marshal.StructureToPtr(config, configPtr, fDeleteOld: false);
-                handle = NativeMethods.PolyplugRuntimeCreate(configPtr);
+                nint configPtr = Marshal.AllocHGlobal(Marshal.SizeOf<RuntimeConfig>());
+                try
+                {
+                    Marshal.StructureToPtr(config, configPtr, fDeleteOld: false);
+                    handle = NativeMethods.PolyplugRuntimeCreate(configPtr);
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(configPtr);
+                }
             }
             finally
             {
-                Marshal.FreeHGlobal(configPtr);
+                // The runtime copied the key bytes during create; free the
+                // buffer now (also on the throw path).
+                if (keysBuffer != nint.Zero)
+                {
+                    Marshal.FreeHGlobal(keysBuffer);
+                    keysBuffer = nint.Zero;
+                }
             }
 
             if (handle == nint.Zero)
@@ -169,7 +280,8 @@ public sealed class RuntimeBuilder
         }
         catch
         {
-            // Creation failed before a Runtime took ownership — release here.
+            // Creation failed before a Runtime took ownership of the GCHandles —
+            // release here.
             stateHandle.Free();
             trampolineHandle.Free();
             throw;

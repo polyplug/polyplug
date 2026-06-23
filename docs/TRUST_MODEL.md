@@ -472,9 +472,12 @@ distinct and complementary:
   the private signing key stays offline with the author. An empty allowlist would
   reject every bundle, so the runtime only switches to the pinning verifier when at
   least one key is configured. `RuntimeBuilder::trusted_keys(&[VerifyingKey])` is
-  the Rust-host ergonomic entry point; the keys are copied into the runtime, which
-  owns the buffer for its lifetime (the persisted config never points at freed
-  caller storage). A malformed key in the host allowlist fails the load with
+  the Rust-host ergonomic entry point, and every other host SDK exposes the
+  equivalent builder setter (`trusted_keys` / `TrustedKeys` / `trustedKeys` for
+  cpp/csharp/python/lua/js); the keys are copied into the runtime during `create`,
+  which then owns them for its lifetime, so a host SDK only lends its buffer for
+  that call and may release it as soon as `create` returns (the persisted config
+  never points at freed caller storage). A malformed key in the host allowlist fails the load with
   `LoaderError::MalformedTrustedKey`. Pinning never weakens the open-ecosystem
   default — it is purely opt-in.
 

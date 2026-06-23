@@ -14,7 +14,7 @@ import ctypes
 import os
 import sys
 from pathlib import Path
-from typing import Callable, Optional, Protocol, runtime_checkable
+from typing import Callable, Iterable, Optional, Protocol, runtime_checkable
 
 # Import all FFI struct types from the auto-generated abi module.
 # The polyplug_abi package re-exports from sdks/python/abi/abi.py (per D-28).
@@ -24,6 +24,7 @@ from polyplug_abi import (
     Array,
     Compatibility,
     DispatchMechanisms,
+    Ed25519PublicKey,
     GuestContractHandle,
     GuestContractInstance,
     GuestContractInterface,
@@ -54,6 +55,9 @@ COMPATIBILITY_YOLO: int = Compatibility.Yolo
 # GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes, align 4).
 # The null handle sentinel has index == u32::MAX (0xFFFFFFFF) and generation == 0.
 _NULL_HANDLE_INDEX: int = (1 << 32) - 1
+
+# Ed25519PublicKey is the 32-byte compressed Edwards point encoding.
+_ED25519_PUBLIC_KEY_LEN: int = 32
 
 _BACKEND: str = "ctypes"
 _cffi_available: bool = False
@@ -188,9 +192,14 @@ class Runtime:
     Holds HostApi pointer and calls methods through struct fields.
 
     All configuration is per-instance (Rule 12: no class-level statics shared
-    across runtimes): pass ``config`` and ``on_reload`` to the constructor.
-    The ctypes callback wrapper and host-contract keepalives live on the
-    instance and die with it.
+    across runtimes): pass ``config``, ``on_reload``, ``signature_policy``, and
+    ``trusted_keys`` to the constructor. The ctypes callback wrapper and
+    host-contract keepalives live on the instance and die with it.
+
+    ``trusted_keys`` is an iterable of 32-byte Ed25519 public keys forming an
+    allowlist. When non-empty and ``signature_policy != Off``, the runtime
+    requires each bundle's signing key to be in the allowlist. Empty/unset
+    selects Trust-On-First-Use (the default).
     """
 
     def __init__(
@@ -198,6 +207,7 @@ class Runtime:
         config: Optional["RuntimeConfig"] = None,
         on_reload: Optional[Callable[[ReloadPhase], None]] = None,
         signature_policy: Optional[SignaturePolicy] = None,
+        trusted_keys: Optional[Iterable[bytes]] = None,
     ) -> None:
         lib_path: str = _resolve_lib_path()
         self._backend: Backend = _create_backend(lib_path)
@@ -211,6 +221,13 @@ class Runtime:
         self._c_callback: Optional[ctypes.CFUNCTYPE] = None
         self._runtime_config: Optional[RuntimeConfig] = None
 
+        # The trusted-key list, materialized into a transient ctypes array only
+        # for the duration of polyplug_runtime_create (the runtime copies the key
+        # bytes during the call). None when no keys were supplied.
+        self._trusted_keys: Optional[list[bytes]] = (
+            None if trusted_keys is None else list(trusted_keys)
+        )
+
         # Per-instance host-contract keepalives: registered interface structs
         # (with their thunks/stubs anchored on `_keepalive`), keyed by
         # contract_id. The runtime holds raw pointers into these for its whole
@@ -222,6 +239,7 @@ class Runtime:
             self._on_reload_cb is not None
             or self._config is not None
             or self._signature_policy is not None
+            or self._trusted_keys
         ):
             host_ptr: int = self._create_runtime_with_options()
         else:
@@ -252,6 +270,29 @@ class Runtime:
         self._register_loader_fn = self._host_struct.register_loader
         self._free_fn = self._host_struct.free
 
+    @staticmethod
+    def _build_trusted_keys(
+        keys: Optional[list[bytes]],
+    ) -> Optional[ctypes.Array]:
+        """Build the contiguous ``Ed25519PublicKey`` array from raw public keys.
+
+        Each key must be exactly 32 bytes (``bytes``/``bytearray``). Returns the
+        ctypes array, or ``None`` when no keys are supplied — an unset/empty
+        allowlist leaves the config fields zeroed, selecting Trust-On-First-Use.
+        """
+        if not keys:
+            return None
+
+        buf = (Ed25519PublicKey * len(keys))()
+        for i, key in enumerate(keys):
+            if len(key) != _ED25519_PUBLIC_KEY_LEN:
+                raise ValueError(
+                    f"trusted key {i} must be {_ED25519_PUBLIC_KEY_LEN} bytes, "
+                    f"got {len(key)}"
+                )
+            buf[i].bytes = (ctypes.c_uint8 * _ED25519_PUBLIC_KEY_LEN)(*key)
+        return buf
+
     def _create_runtime_with_options(self) -> int:
         """Create runtime via polyplug_runtime_create with a RuntimeConfig.
 
@@ -264,11 +305,15 @@ class Runtime:
         - log_user_data (pointer or null)
         - log_max_level (u32)
         - signature_policy (u32, offset 44)
-        - trusted_keys (Array<Ed25519PublicKey>, offset 48; zeroed = empty = TOFU)
+        - trusted_keys (*const Ed25519PublicKey, offset 48; null = empty = TOFU)
+        - trusted_keys_len (usize, element count)
+        - trusted_keys__align (usize, Ed25519PublicKey alignment)
 
-        The runtime only borrows the config for the duration of the build,
-        but the config is retained on the instance so the C callback wrapper
-        (referenced by `on_reload`) is not garbage-collected while in use.
+        The runtime only borrows the config for the duration of the build, but
+        the config is retained on the instance so the C callback wrapper
+        (referenced by `on_reload`) is not garbage-collected while in use. The
+        runtime copies `trusted_keys` during the create call, so the key array
+        is a local that stays referenced only until create returns.
         """
         config = RuntimeConfig()
         config.hot_reload_enabled = False
@@ -284,6 +329,17 @@ class Runtime:
         # signature_policy argument wins over a config-supplied value.
         if self._signature_policy is not None:
             config.signature_policy = self._signature_policy
+
+        # Transient: the runtime copies the key bytes during the create call
+        # below, so this array only needs to stay referenced until create
+        # returns (it remains alive as a local through that call).
+        trusted_keys_buf: Optional[ctypes.Array] = self._build_trusted_keys(
+            self._trusted_keys
+        )
+        if trusted_keys_buf is not None:
+            config.trusted_keys = ctypes.cast(trusted_keys_buf, ctypes.c_void_p)
+            config.trusted_keys_len = len(trusted_keys_buf)
+            config.trusted_keys__align = ctypes.alignment(Ed25519PublicKey)
 
         if self._on_reload_cb is not None:
             self._c_callback = self._make_c_callback()

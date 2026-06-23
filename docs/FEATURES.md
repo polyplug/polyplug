@@ -407,13 +407,16 @@ runs**, so a bad signature never reaches `dlopen`/the VM.
   detection*, not *author approval*.
 - **Key pinning (`trusted_keys`, opt-in)** — a host that *does* trust specific
   authors can populate `RuntimeConfig.trusted_keys` (an `Array<Ed25519PublicKey>`,
-  via `RuntimeBuilder::trusted_keys(&[VerifyingKey])`). When non-empty, the runtime
+  via `RuntimeBuilder::trusted_keys(&[VerifyingKey])` in Rust, or the equivalent
+  builder setter in every host SDK — `trusted_keys` / `TrustedKeys` / `trustedKeys`
+  for cpp/csharp/python/lua/js). When non-empty, the runtime
   runs the normal verification **then** requires the bundle's embedded key to be in
   the allowlist — upgrading the guarantee from *integrity* to *authenticity*. A
   bundle re-signed with an attacker key (which passes TOFU) is rejected with
   `LoaderError::UntrustedSigningKey` under `Required`, or logged under `WarnOnly`.
   Only public keys are pinned; the private signing key stays offline. Empty (the
-  default) = TOFU; under `Off` the allowlist is not consulted.
+  default) = TOFU; under `Off` the allowlist is not consulted. The runtime copies
+  the keys during `create`, so a host SDK only lends its buffer for that call.
 - **Tooling** — `polyplugc keygen --out <dir>` writes `signing.key` (private,
   `0o600` on Unix) and `verifying.key` (public); `polyplugc sign --bundle-dir
   <dir> --key signing.key` runs the `validate --bundle-dir` checks then writes

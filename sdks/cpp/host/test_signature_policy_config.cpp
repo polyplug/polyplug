@@ -15,19 +15,30 @@
 #include <cstdint>
 #include <cstdio>
 #include <optional>
+#include <vector>
 
 #include "polyplug/runtime.hpp"
 
 // ─── Captured config + create/destroy stubs (replace the native exports) ──────
 namespace {
 std::optional<RuntimeConfig> g_captured_config{};
+// Snapshot of the trusted-key bytes taken DURING create (the runtime copies the
+// keys during create; the host buffer may be freed once create returns, so the
+// captured pointer must not be dereferenced afterward).
+std::vector<Ed25519PublicKey> g_captured_keys{};
 HostApi g_fake_host{};
 } // namespace
 
 extern "C" {
 const HostApi* polyplug_runtime_create(const RuntimeConfig* config) {
+    g_captured_keys.clear();
     if (config != nullptr) {
         g_captured_config = *config;
+        if (config->trusted_keys != nullptr && config->trusted_keys_len > 0) {
+            const auto* keys =
+                static_cast<const Ed25519PublicKey*>(config->trusted_keys);
+            g_captured_keys.assign(keys, keys + config->trusted_keys_len);
+        }
     } else {
         g_captured_config.reset();
     }
@@ -93,6 +104,51 @@ int main() {
         check(g_captured_config.has_value()
                   && static_cast<uint32_t>(g_captured_config->signature_policy) == 1,
               "signature_policy(WarnOnly) -> raw value 1");
+    }
+
+    // trusted_keys({k1, k2}) must reach the marshaled config as a 2-element
+    // Array (key pinning). The buffer is transient — alive only across create —
+    // so the bytes are verified from the snapshot taken during the create stub.
+    {
+        g_captured_config.reset();
+        std::array<uint8_t, 32> k1{};
+        std::array<uint8_t, 32> k2{};
+        k1.fill(0x11);
+        k2.fill(0x22);
+        polyplug::Runtime rt = polyplug::Runtime::builder()
+            .trusted_keys({k1, k2})
+            .build();
+        check(g_captured_config.has_value(),
+              "trusted_keys() marshaled a RuntimeConfig");
+        check(g_captured_config.has_value()
+                  && g_captured_config->trusted_keys != nullptr,
+              "trusted_keys() -> config.trusted_keys != nullptr");
+        check(g_captured_config.has_value()
+                  && g_captured_config->trusted_keys_len == 2,
+              "trusted_keys({k1, k2}) -> config.trusted_keys_len == 2");
+        check(g_captured_config.has_value()
+                  && g_captured_config->trusted_keys__align == alignof(Ed25519PublicKey),
+              "trusted_keys() -> config.trusted_keys__align == alignof(Ed25519PublicKey)");
+        // The bytes the runtime sees during create must match the input. The
+        // snapshot is taken inside the create stub (the host buffer is freed
+        // when build() returns), proving the keys are valid for the create call.
+        check(g_captured_keys.size() == 2
+                  && g_captured_keys[0].bytes[0] == 0x11
+                  && g_captured_keys[1].bytes[0] == 0x22,
+              "trusted_keys() -> bytes are valid during create");
+    }
+
+    // No trusted_keys() -> the fields stay zero (TOFU preserved). The
+    // signature_policy-only path must not populate trusted_keys.
+    {
+        g_captured_config.reset();
+        polyplug::Runtime rt = polyplug::Runtime::builder()
+            .signature_policy(SignaturePolicy::Required)
+            .build();
+        check(g_captured_config.has_value()
+                  && g_captured_config->trusted_keys == nullptr
+                  && g_captured_config->trusted_keys_len == 0,
+              "no trusted_keys() -> trusted_keys fields stay zero (TOFU)");
     }
 
     if (g_failures == 0) {

@@ -13,6 +13,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- host.tests exercises the internal trusted-key marshalling helper directly. -->
+    <InternalsVisibleTo Include="Polyplug.Host.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\abi\Polyplug.Abi.csproj" />
   </ItemGroup>
 

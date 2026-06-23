@@ -190,6 +190,40 @@ var runtime = new RuntimeBuilder()
   `reload()` returns `HotReloadDisabled` (use collectible-ALC `unload` instead)
 - See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
 
+## Bundle Signing & Key Pinning
+
+Set a signature policy to require/verify each bundle's `bundle.sig`, and
+optionally pin an allowlist of trusted Ed25519 verifying keys:
+
+```csharp
+using Polyplug.Host;
+using Polyplug.Abi;
+
+// 32-byte Ed25519 verifying keys (public keys only — signing keys stay offline).
+byte[] key1 = LoadVerifyingKey("author1.pub"); // 32 bytes
+byte[] key2 = LoadVerifyingKey("author2.pub"); // 32 bytes
+
+var runtime = new RuntimeBuilder()
+    .SignaturePolicy(SignaturePolicy.Required)
+    .TrustedKeys([key1, key2])
+    .Build();
+```
+
+**Key points:**
+
+- Each key passed to `TrustedKeys` must be exactly 32 bytes; otherwise the
+  builder throws `ArgumentException`.
+- **Empty allowlist (default)** = Trust-On-First-Use: a bundle's embedded
+  verifying key is trusted as long as its signature is internally consistent.
+- **Non-empty allowlist** + a policy other than `SignaturePolicy.Off` = key
+  pinning: after Ed25519 verification, the runtime additionally requires the
+  bundle's embedded key to be in the allowlist; a re-signed bundle with an
+  attacker key is rejected.
+- The runtime **copies** the trusted keys during `Build()`
+  (`polyplug_runtime_create`); the unmanaged key buffer is only needed for that
+  call and is freed as soon as create returns.
+- See [Trust Model](../../docs/TRUST_MODEL.md) for the full signing/pinning design.
+
 ## Performance Notes
 
 - **Hot path**: Single indirect call via `calli` IL instruction

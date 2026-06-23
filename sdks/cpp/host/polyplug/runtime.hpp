@@ -10,6 +10,7 @@
 #include "handle.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -99,6 +100,38 @@ public:
             return *this;
         }
 
+        /// Pin the trusted Ed25519 verifying-key allowlist (key pinning). Each
+        /// entry is a 32-byte verifying key. When non-empty AND
+        /// `signature_policy` is not `Off`, the runtime requires every bundle's
+        /// embedded signing key to be a member of this allowlist (a re-signed
+        /// bundle with an attacker key is rejected). Empty (the default) =
+        /// Trust-On-First-Use: the embedded key is trusted without pinning.
+        ///
+        /// The keys are copied into the Builder. The runtime copies the key
+        /// bytes out of `RuntimeConfig.trusted_keys` during
+        /// `polyplug_runtime_create`; the buffer is only needed for that call,
+        /// so `build()` holds it in a local that is released as soon as create
+        /// returns.
+        Builder& trusted_keys(const std::vector<std::array<uint8_t, 32>>& keys) {
+            std::vector<Ed25519PublicKey> pinned{};
+            pinned.reserve(keys.size());
+            for (const std::array<uint8_t, 32>& key : keys) {
+                Ed25519PublicKey pk{};
+                std::copy(key.begin(), key.end(), pk.bytes);
+                pinned.push_back(pk);
+            }
+            trusted_keys_ = std::move(pinned);
+            return *this;
+        }
+
+        /// Pin the trusted Ed25519 verifying-key allowlist from `Ed25519PublicKey`
+        /// values directly. See the `std::array` overload for the ownership and
+        /// pinning semantics.
+        Builder& trusted_keys(std::vector<Ed25519PublicKey> keys) {
+            trusted_keys_ = std::move(keys);
+            return *this;
+        }
+
         Builder& config(const RuntimeConfig& cfg) noexcept {
             config_ = cfg;
             return *this;
@@ -118,7 +151,7 @@ public:
     private:
         Runtime create_runtime() {
             if (config_.has_value() || on_reload_cb_.has_value() || compatibility_.has_value()
-                || signature_policy_.has_value()) {
+                || signature_policy_.has_value() || !trusted_keys_.empty()) {
                 // Build a RuntimeConfig from stored options.
                 RuntimeConfig cfg{};
                 if (config_.has_value()) {
@@ -140,6 +173,16 @@ public:
                     cb = std::make_unique<detail::OnReloadFn>(std::move(on_reload_cb_.value()));
                     cfg.on_reload = detail::on_reload_trampoline;
                     cfg.on_reload_user_data = cb.get();
+                }
+                // The runtime copies the key bytes during
+                // polyplug_runtime_create, so the buffer only needs to live
+                // across that call. Keep it in a local that stays alive until
+                // create returns, then let it destruct at end of scope.
+                std::vector<Ed25519PublicKey> pinned_keys = std::move(trusted_keys_);
+                if (!pinned_keys.empty()) {
+                    cfg.trusted_keys = pinned_keys.data();
+                    cfg.trusted_keys_len = pinned_keys.size();
+                    cfg.trusted_keys__align = alignof(Ed25519PublicKey);
                 }
                 const HostApi* h = polyplug_runtime_create(&cfg);
                 if (h == nullptr) {
@@ -183,6 +226,7 @@ public:
         std::vector<std::string> plugin_dirs_{};
         std::optional<uint32_t> compatibility_{};
         std::optional<SignaturePolicy> signature_policy_{};
+        std::vector<Ed25519PublicKey> trusted_keys_{};
         std::optional<RuntimeConfig> config_{};
         std::optional<std::function<void(const ReloadPhase&)>> on_reload_cb_{};
     };
