@@ -1,13 +1,21 @@
 # polyplug
 
-**The native-speed plugin runtime for trusted, first-party extensibility — across six languages.**
+**A high-performance, zero/minimal-overhead, cross-language, cross-platform plugin runtime — write both your app *and* its plugins in any of six languages.**
 
-polyplug lets a single host application load and call plugins written in **Rust, C++,
-C#, Python, Lua, or JavaScript**, through a frozen C ABI with near-native dispatch
-(~2.4 ns/call for native languages). Plugins run as real native code or real language
-runtimes (CPython, the .NET CLR, LuaJIT, QuickJS) — *not* compiled to WebAssembly — so
-you keep zero-copy data sharing and full language-native behavior. The `polyplugc` CLI
-generates the typed glue for each language from a small `.toml` contract.
+polyplug lets you build **both sides** of an extensible application — the **host app** and
+its **plugins** — in any of six languages (**Rust, C++, C#, Python, Lua, JavaScript**), in
+**any combination**, over a frozen C ABI with near-native dispatch (~2.4 ns/call for native
+languages). A Rust host can load a Python plugin; a Bun/JavaScript host can load a C++
+plugin; **any host language pairs with any guest language — a full 6×6 matrix**. Plugins
+run as real native code or real language runtimes (CPython, the .NET CLR, LuaJIT, QuickJS) —
+*not* compiled to WebAssembly — so you keep zero-copy data sharing and full language-native
+behavior **at native speed**. The `polyplugc` CLI generates the typed glue for each language
+from a small `.toml` contract.
+
+> **Host *or* guest, your choice.** Each of the six languages is a first-class **host**
+> language (embed the runtime, load and call plugins) *and* a first-class **guest** language
+> (write a plugin other apps load). Pick per side independently — see the per-language
+> **Host** and **Guest** guides in the Languages section.
 
 ![one plugin call, end to end — by plugin language](assets/benches/hero.svg)
 
@@ -18,11 +26,14 @@ generates the typed glue for each language from a small `.toml` contract.
 ## Built for *trusted* plugins — vet the author, not the sandbox
 
 polyplug is built for **trusted** plugins: code you write or vet — first-party features,
-partner integrations, a vetted-author ecosystem. It runs plugins **in-process with the
-host's privileges and no sandbox.** If you need to run **untrusted** third-party code,
-use a WebAssembly runtime (Extism, Wasmtime) instead. This is the same trust model the
-most successful native extension ecosystems use (e.g. VS Code extensions): **vet the
-author, not the sandbox.**
+partner integrations, a vetted-author ecosystem. Because those plugins are trusted and run
+**in-process with no sandbox**, you pay **zero sandbox tax**: a call into a plugin is a
+direct function-pointer dispatch (~2.4 ns for native languages) with zero-copy data
+sharing, not a marshalled hop across an isolation boundary — that is where the
+high-performance, zero/minimal-overhead positioning comes from. If you need to run
+**untrusted** third-party code, use a WebAssembly runtime (Extism, Wasmtime) instead. This
+is the same trust model the most successful native extension ecosystems use (e.g. VS Code
+extensions): **vet the author, not the sandbox.**
 
 | | **polyplug** (native C ABI) | **WASM runtimes** (Extism, Wasmtime) |
 |---|---|---|

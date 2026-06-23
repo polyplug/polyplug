@@ -2,20 +2,41 @@
 
 This guide walks through the full plugin-development flow end-to-end: define a
 contract, generate the glue code, implement the plugin, build it, validate it.
-The host-side embedding walkthrough follows. Everything here is based on a Rust
-guest and a Rust host — the simplest, most self-contained path.
+The host-side embedding walkthrough follows. This guide uses a Rust guest and a
+Rust host — the simplest, most self-contained path. Remember polyplug is
+**host⇄guest in any of six languages**: once you have the shape here, the
+per-language **Host** and **Guest** guides in the Languages section show the same
+flow in C++, C#, Python, Lua, and JavaScript.
 
 ---
 
 ## Prerequisites
 
-- Rust toolchain (stable, edition 2024)
-- `polyplugc` built from the workspace:
-  ```
-  cargo build --release -p polyplugc
-  ```
-  The binary is at `target/release/polyplugc`. Add it to your `PATH` or invoke
-  it with its full path throughout this guide.
+### Install the `polyplugc` CLI
+
+`polyplugc` turns a `.toml` contract into typed glue. Install it whichever way
+suits your stack — **only the `cargo` path needs the Rust toolchain**; every other
+method ships a prebuilt binary, so a Python, JS/Bun, or .NET developer never
+touches Rust:
+
+```bash
+cargo install polyplugc                       # Rust
+npm  install -g @polyplug/cli                 # Node  (also: bunx @polyplug/cli,
+                                              #        deno install -A npm:@polyplug/cli)
+uv   tool install polyplugc                    # Python (also: pipx install polyplugc,
+                                              #         pip install polyplugc)
+dotnet tool install -g Polyplug.Cli            # .NET
+curl -fsSL https://polyplug.github.io/install.sh | bash   # prebuilt binary
+```
+
+Or grab a binary straight from the [GitHub Releases](https://github.com/polyplug/polyplug/releases)
+page. The registry packages (`npm`/`pip`/`uv`/`dotnet`) embed the prebuilt binary, so
+they install **fully offline** with no download step. To build from a checkout of this
+repo instead: `cargo build --release -p polyplugc` → `target/release/polyplugc`.
+
+### For this guide
+
+- A Rust toolchain (stable, edition 2024) — because the example guest and host below are Rust.
 
 ---
 

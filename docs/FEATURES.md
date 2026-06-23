@@ -13,8 +13,11 @@ Status legend: shipped unless explicitly marked otherwise.
 ## 1. Cross-language plugin runtime
 
 A host application loads plugin bundles at runtime; each bundle exports one or
-more guest contracts the host discovers and calls through a frozen C ABI. Plugins
-and hosts can be written in any of six languages.
+more guest contracts the host discovers and calls through a frozen C ABI. Each of
+the six languages is a first-class **host** (embed the runtime, load and call
+plugins) **and** a first-class **guest** (write a plugin other apps load) — any
+host language pairs with any guest language, a full **6×6 matrix**, all at
+near-native dispatch (~2.4 ns/call for native languages).
 
 | Role | Languages |
 |---|---|

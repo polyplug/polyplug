@@ -1,12 +1,14 @@
 # polyplug
 
-**The native-speed plugin runtime for trusted, first-party extensibility — across six languages.**
+**A high-performance, zero/minimal-overhead, cross-language, cross-platform plugin runtime — write both your app *and* its plugins in any of six languages.**
 
 ## Overview
 
-polyplug lets a single host application load and call plugins written in Rust, C++, C#, Python, Lua, or JavaScript, through a frozen C ABI with near-native dispatch (~2.4 ns/call for native languages). Plugins run as real native code or real language runtimes (CPython, the .NET CLR, LuaJIT, QuickJS) — *not* compiled to WebAssembly — so you keep zero-copy data sharing and full language-native behavior. The `polyplugc` CLI generates the typed glue for each language from a small `.toml` contract.
+polyplug lets you build **both sides** of an extensible application — the **host app** and its **plugins** — in any of six languages (**Rust, C++, C#, Python, Lua, JavaScript**), in **any combination**, talking over a frozen C ABI with near-native dispatch (~2.4 ns/call for native languages). A Rust host can load a Python plugin; a Bun/JavaScript host can load a C++ plugin; any host language pairs with any guest language — a full 6×6 matrix. Plugins run as real native code or real language runtimes (CPython, the .NET CLR, LuaJIT, QuickJS) — *not* compiled to WebAssembly — so you keep zero-copy data sharing and full language-native behavior **at native speed**. The `polyplugc` CLI generates the typed glue for each language from a small `.toml` contract.
 
-**polyplug is built for _trusted_ plugins** — code you write or vet (first-party features, partner integrations, a vetted-author ecosystem). It runs plugins in-process with no sandbox. If you need to run _untrusted_ third-party code, use a WebAssembly runtime (Extism, Wasmtime) instead — see [When to use polyplug](#when-to-use-polyplug) below. This is the same trust model the most successful native extension ecosystems use (e.g. VS Code extensions): **vet the author, not the sandbox.**
+> **Host *or* guest, your choice.** Each of the six languages is a first-class **host** language (embed the runtime, load and call plugins) *and* a first-class **guest** language (write a plugin other apps load). Pick per side independently.
+
+**polyplug is built for _trusted_ plugins** — code you write or vet (first-party features, partner integrations, a vetted-author ecosystem). Because those plugins are trusted and run **in-process with no sandbox**, you pay **zero sandbox tax**: dispatch is a direct function-pointer call (~2.4 ns for native languages) with zero-copy data sharing, not a marshalled hop across an isolation boundary. If you need to run _untrusted_ third-party code, use a WebAssembly runtime (Extism, Wasmtime) instead — see [When to use polyplug](#when-to-use-polyplug) below. This is the same trust model the most successful native extension ecosystems use (e.g. VS Code extensions): **vet the author, not the sandbox.**
 
 **Status: published to crates.io, PyPI, NuGet, LuaRocks, npm, and JSR** — latest release **0.1.1** (see [Installation](#installation)). The ABI is **pre-1.0** — ABI-visible changes are permitted between releases (see [docs/TRUST_MODEL.md](docs/TRUST_MODEL.md)). The full test suite runs on Linux, macOS, and Windows.
 
@@ -83,6 +85,18 @@ luarocks install polyplug polyplug-loader-native
 deno add jsr:@polyplug/host jsr:@polyplug/loaders-native    # Deno
 npm  i  @polyplug/host @polyplug/loaders-native             # Node.js (koffi auto-installed)
 bun  add @polyplug/host @polyplug/loaders-native            # Bun (uses built-in bun:ffi)
+```
+
+Install the **`polyplugc` CLI** (turns a `.toml` contract into typed glue) from whichever
+registry fits your stack — only the `cargo` path needs Rust; the rest embed a prebuilt
+binary and install **fully offline**:
+
+```bash
+cargo install polyplugc                       # Rust
+npm  install -g @polyplug/cli                  # Node (also: bunx @polyplug/cli, deno install -A npm:@polyplug/cli)
+uv   tool install polyplugc                     # Python (also: pipx / pip install polyplugc)
+dotnet tool install -g Polyplug.Cli             # .NET
+curl -fsSL https://polyplug.github.io/install.sh | bash   # prebuilt binary (or download from Releases)
 ```
 
 - The Rust `polyplug` crate is the runtime engine; every other `host` package is
