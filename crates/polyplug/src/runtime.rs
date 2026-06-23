@@ -90,17 +90,26 @@ pub struct Runtime {
     /// the runtime's lifetime — `config.log_user_data` points into this box.
     /// Never read after construction; it exists purely as an owner.
     pub(crate) _logger_closure: Option<Box<crate::logger::LoggerClosure>>,
-    /// Owns the host's trusted Ed25519 verifying keys for the runtime's lifetime.
+    /// Owns the trusted Ed25519 verifying keys supplied through the Rust builder
+    /// API for the runtime's lifetime.
     ///
-    /// `config.trusted_keys` (the ABI `Array`) points at this `Vec`'s heap
-    /// buffer. The builder receives the keys borrowed for the `build()` call
-    /// only, so the runtime takes its own owned copy and repoints the persisted
-    /// `config.trusted_keys` at it — that way no `Array` pointer ever dangles
-    /// into freed builder storage, mirroring how `_logger_closure` backs
+    /// When a host pins keys via [`RuntimeBuilder::trusted_keys`], the builder
+    /// receives them borrowed for the `build()` call only, so the runtime takes
+    /// its own owned copy here and repoints the persisted `config.trusted_keys`
+    /// `Array` at this `Vec`'s heap buffer — that way no `Array` pointer ever
+    /// dangles into freed builder storage, mirroring how `_logger_closure` backs
     /// `config.log_user_data`. The `Vec`'s data buffer is stable across the move
     /// into this field (moving a `Vec` moves only its 3-word header, never the
-    /// heap buffer the `Array` points to). Never read after construction; it
-    /// exists purely as an owner.
+    /// heap buffer the `Array` points to).
+    ///
+    /// When keys instead arrive through the FFI / `config()` path (a non-Rust
+    /// host populating `RuntimeConfig.trusted_keys` directly), this `Vec` is empty
+    /// and `config.trusted_keys` keeps pointing at the host-owned buffer, which
+    /// the host guarantees to keep alive for the runtime's lifetime per the
+    /// `RuntimeConfig.trusted_keys` ownership contract. Never read after
+    /// construction; it exists purely as an owner.
+    ///
+    /// [`RuntimeBuilder::trusted_keys`]: crate::runtime_builder::RuntimeBuilder::trusted_keys
     pub(crate) _trusted_keys: Vec<polyplug_abi::types::Ed25519PublicKey>,
     /// Last error message for FFI error reporting.
     pub(crate) last_error: Mutex<String>,

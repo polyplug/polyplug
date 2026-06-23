@@ -196,16 +196,27 @@ impl RuntimeBuilder {
     //  loads them in sorted order, registers interfaces.
     //  Full capability graph resolution is a future enhancement.
     pub fn build(mut self) -> Result<Arc<Runtime>, RuntimeError> {
-        // Take ownership of the host's trusted keys and repoint the config
-        // `Array` at this `Vec`'s heap buffer. The `Vec` moves into a `Runtime`
-        // field below, so it outlives the runtime; moving a `Vec` relocates only
-        // its header, never the heap buffer the `Array` pointer addresses, so the
-        // pointer stays valid for the runtime's entire lifetime. An empty set
-        // leaves `config.trusted_keys` as the default empty `Array` (TOFU).
+        // Resolve the trusted-key buffer behind `config.trusted_keys`. Two paths
+        // feed keys in, and they must not clobber each other:
+        //
+        // * Rust builder API (`trusted_keys()`): `self.trusted_keys` is non-empty.
+        //   Take ownership and repoint the config `Array` at this `Vec`'s heap
+        //   buffer. The `Vec` moves into a `Runtime` field below, so it outlives
+        //   the runtime; moving a `Vec` relocates only its header, never the heap
+        //   buffer the `Array` pointer addresses, so the pointer stays valid for
+        //   the runtime's entire lifetime.
+        // * FFI / `config()` path: a host (any language) set `config.trusted_keys`
+        //   to its own `Array` and did NOT call the Rust `trusted_keys()` API, so
+        //   `self.trusted_keys` is empty. Leave the host-supplied `Array` exactly
+        //   as given — the host owns that buffer and keeps it alive for the
+        //   runtime's lifetime per the `RuntimeConfig.trusted_keys` ownership
+        //   contract. Overwriting it here would silently disable key pinning for
+        //   every non-Rust host.
+        //
+        // When neither path supplies keys, `config.trusted_keys` is the default
+        // empty `Array` (TOFU).
         let trusted_keys: Vec<Ed25519PublicKey> = self.trusted_keys;
-        if trusted_keys.is_empty() {
-            self.config.trusted_keys = Array::empty();
-        } else {
+        if !trusted_keys.is_empty() {
             self.config.trusted_keys = Array::new(
                 trusted_keys.as_ptr() as *mut Ed25519PublicKey,
                 trusted_keys.len(),

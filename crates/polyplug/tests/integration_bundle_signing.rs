@@ -379,3 +379,104 @@ fn policy_off_ignores_pinned_keys() {
         result.err()
     );
 }
+
+// ─── Key pinning via the FFI / `config()` path (non-Rust hosts) ─────────────────
+//
+// Non-Rust hosts (cpp/csharp/python/lua/js) do not call the Rust `trusted_keys()`
+// builder API — they populate `RuntimeConfig.trusted_keys` directly and hand the
+// config to `polyplug_runtime_create`, which forwards it through
+// `RuntimeBuilder::config()`. These tests exercise that exact path to prove the
+// host-supplied `Array` survives `build()` (it is NOT overwritten by the empty
+// Rust-API key set) and that pinning is enforced. The backing `Vec` is kept alive
+// for the runtime's whole lifetime per the `RuntimeConfig.trusted_keys` ownership
+// contract.
+
+/// Drive the runtime through the `config()` path with a host-owned trusted-key
+/// buffer — the same path the FFI `polyplug_runtime_create` takes.
+fn build_via_config_with_trusted_keys(
+    plugin_dir: PathBuf,
+    policy: SignaturePolicy,
+    keys: &[polyplug_abi::types::Ed25519PublicKey],
+) -> Result<Arc<Runtime>, RuntimeError> {
+    let trusted_keys: polyplug_abi::Array<polyplug_abi::types::Ed25519PublicKey> =
+        if keys.is_empty() {
+            polyplug_abi::Array::empty()
+        } else {
+            polyplug_abi::Array::new(
+                keys.as_ptr() as *mut polyplug_abi::types::Ed25519PublicKey,
+                keys.len(),
+            )
+        };
+    let cfg: polyplug_abi::RuntimeConfig = polyplug_abi::RuntimeConfig {
+        signature_policy: policy,
+        trusted_keys,
+        ..Default::default()
+    };
+    Runtime::builder()
+        .loader(NoopLoader)
+        .plugin_dir(plugin_dir)
+        .config(cfg)
+        .build()
+}
+
+#[test]
+fn config_path_pinned_key_accepts_bundle_signed_with_trusted_key() {
+    let tmp: TempDir = TempDir::new().expect("tmp dir");
+    let bundle_dir: PathBuf = write_stub_bundle(tmp.path(), "cfg_pinned_ok");
+
+    let (signing_key, verifying_key): (SigningKey, VerifyingKey) = generate_keypair();
+    sign_bundle(&bundle_dir, &signing_key).expect("sign bundle");
+
+    // Host-owned key buffer; must outlive the runtime returned below.
+    let keys: Vec<polyplug_abi::types::Ed25519PublicKey> =
+        vec![polyplug_abi::types::Ed25519PublicKey {
+            bytes: *verifying_key.as_bytes(),
+        }];
+
+    let result: Result<Arc<Runtime>, RuntimeError> = build_via_config_with_trusted_keys(
+        tmp.path().to_path_buf(),
+        SignaturePolicy::Required,
+        &keys,
+    );
+
+    assert!(
+        result.is_ok(),
+        "config()+pinned: bundle signed by a host-trusted key must load OK; got: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn config_path_pinned_key_rejects_bundle_signed_with_untrusted_key() {
+    let tmp: TempDir = TempDir::new().expect("tmp dir");
+    let bundle_dir: PathBuf = write_stub_bundle(tmp.path(), "cfg_pinned_untrusted");
+
+    // Sign with key A but pin only an unrelated key B via the host config.
+    let (signing_key_a, _): (SigningKey, VerifyingKey) = generate_keypair();
+    sign_bundle(&bundle_dir, &signing_key_a).expect("sign bundle");
+    let (_, verifying_key_b): (SigningKey, VerifyingKey) = generate_keypair();
+
+    let keys: Vec<polyplug_abi::types::Ed25519PublicKey> =
+        vec![polyplug_abi::types::Ed25519PublicKey {
+            bytes: *verifying_key_b.as_bytes(),
+        }];
+
+    let result: Result<Arc<Runtime>, RuntimeError> = build_via_config_with_trusted_keys(
+        tmp.path().to_path_buf(),
+        SignaturePolicy::Required,
+        &keys,
+    );
+
+    // The bug this guards: if build() wiped the host-supplied trusted_keys, this
+    // would fall back to TOFU and load OK instead of rejecting the untrusted key.
+    assert!(
+        matches!(
+            result,
+            Err(RuntimeError::Loader(
+                LoaderError::UntrustedSigningKey { .. }
+            ))
+        ),
+        "config()+pinned: an untrusted signing key must fail with UntrustedSigningKey; got: {:?}",
+        result.err()
+    );
+}
