@@ -88,7 +88,7 @@ jobs:
       - run: bash examples/smoke/lua_install_smoke.sh
 
   js-smoke:
-    name: Install smoke · JS (npm + Deno)
+    name: Install smoke · JS (npm + Deno + Bun)
     needs: build-natives
     runs-on: ubuntu-latest
     steps:
@@ -99,6 +99,7 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/download-artifact@v4
         with:
           name: smoke-natives-linux-x64

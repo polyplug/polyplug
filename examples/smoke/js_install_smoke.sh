@@ -63,14 +63,15 @@ command -v node >/dev/null 2>&1 || fail "node not found on PATH"
 command -v npm  >/dev/null 2>&1 || fail "npm not found on PATH"
 command -v npx  >/dev/null 2>&1 || fail "npx not found on PATH"
 command -v deno >/dev/null 2>&1 || fail "deno not found on PATH"
-command -v bun  >/dev/null 2>&1 || fail "bun not found on PATH"
+if command -v bun >/dev/null 2>&1; then HAVE_BUN=1; else HAVE_BUN=0; fi
 
 # DO NOT run cargo. The prebuilt native must already exist.
 if [ ! -f "$PREBUILT_SO" ]; then
   fail "prebuilt native missing: $PREBUILT_SO (build it with 'cargo build --release -p polyplug'; this script will NOT run cargo)"
 fi
 
-echo "==> node $(node --version), npm $(npm --version), deno $(deno --version | head -1), bun $(bun --version)"
+if [ "$HAVE_BUN" = "1" ]; then BUN_VER="$(bun --version)"; else BUN_VER="(absent)"; fi
+echo "==> node $(node --version), npm $(npm --version), deno $(deno --version | head -1), bun $BUN_VER"
 echo "==> using prebuilt native: $PREBUILT_SO"
 
 # --------------------------------------------------------------------------
@@ -290,7 +291,11 @@ FFI_EOF
 echo "==> NODE-FFI smoke: load embedded native + construct Runtime (koffi backend)"
 ( cd "$CONSUMER_DIR" && node ffi_smoke.mjs )
 
-echo "==> BUN-FFI smoke: load embedded native + construct Runtime (bun:ffi backend)"
-( cd "$CONSUMER_DIR" && bun ffi_smoke.mjs )
+if [ "$HAVE_BUN" = "1" ]; then
+  echo "==> BUN-FFI smoke: load embedded native + construct Runtime (bun:ffi backend)"
+  ( cd "$CONSUMER_DIR" && bun ffi_smoke.mjs )
+else
+  echo "==> BUN-FFI smoke: SKIPPED — bun not on PATH (CI installs it; install bun to run this leg locally)"
+fi
 
 echo "JS SMOKE OK"
