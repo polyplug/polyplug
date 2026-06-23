@@ -19,6 +19,8 @@ This document defines the security boundaries, dependency enforcement mechanisms
 
 **Bottom line:** polyplug is an architecture enforcement tool, not a security sandbox. For untrusted plugins, use OS-level isolation (containers, separate processes).
 
+**Reporting a vulnerability:** this document describes the security *model*; for how to *report* a security issue privately, see [`SECURITY.md`](../SECURITY.md).
+
 ---
 
 This document defines the security boundaries, dependency enforcement mechanisms, and trust assumptions of the polyplug runtime platform.

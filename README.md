@@ -41,6 +41,8 @@ polyplug runs plugins **in-process, with the host's privileges, and no sandbox.*
 
 Planned (post-0.1.x): an **optional process-isolation mode**. See [docs/TRUST_MODEL.md](docs/TRUST_MODEL.md) for the full threat model and [docs/ROADMAP.md](docs/ROADMAP.md) for the security roadmap.
 
+**Found a vulnerability?** Report it privately — see [SECURITY.md](SECURITY.md). Please don't open a public issue.
+
 ## Features
 
 - **Cross-Language** — Write plugins in Rust, Python, C#, Lua, JavaScript (QuickJS), or C++ (host applications can also be written in any of the six, including JS on Deno, Node.js, and Bun)
