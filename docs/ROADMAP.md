@@ -22,7 +22,7 @@ than abandon it.
 |---|---|---|
 | ~~G1~~ ✅ | ~~Bundle signing + verification~~ **Done** | Shipped: detached Ed25519 `bundle.sig` over a canonical digest, enforced at load via `SignaturePolicy` (`Off`/`WarnOnly`/`Required`); freedom-preserving TOFU. See `TRUST_MODEL.md` § Bundle Signing and the `polyplug_signing` crate. |
 | ~~G4~~ ✅ | ~~Published SDKs per registry~~ **Done** | All six registries publish from `release.yml`: crates.io, PyPI, NuGet, npm, JSR, LuaRocks. Latest release 0.1.1; see [Installation](../README.md#installation). |
-| G5 | Docs website + native-crash debugging guide | Browsable docs site plus a guide for diagnosing native crashes (symbols, core dumps, sanitizers) in trusted-plugin deployments. **← next.** |
+| ~~G5~~ ✅ | ~~Docs website + native-crash debugging guide~~ **Done** | Shipped: an mdBook site over the `docs/` tree plus the workspace rustdoc API reference, deployed to GitHub Pages by `docs.yml`, and a new [Debugging Native Crashes](DEBUGGING_NATIVE_CRASHES.md) guide (symbols, core dumps, sanitizers) for trusted-plugin deployments. |
 | G2 ⏸ | Optional process-isolation mode | Opt-in, per-plugin out-of-process execution — the credible answer to "I sometimes need isolation" while keeping the native fast path the default. **Deferred** (owner: not now); needs a design/scoping decision before building. |
 | ~~G3~~ ❌ | ~~Resource limits / runaway-plugin watchdog~~ **Non-goal** | A per-call wall-clock watchdog cannot be built without hot-path overhead: knowing a call ran too long requires recording when it started (a clock read ~15–30 ns, or ≥2 atomic stores/call). That violates the ~0.5 ns zero-overhead dispatch invariant, which is sacred. **Per-call timeouts are a host-side concern** — run the call on a worker thread you control and enforce your own deadline, outside polyplug (same pattern as tracing-via-host-contract). |
 
@@ -60,6 +60,7 @@ than abandon it.
 | **Lua/JS host-SDK suites in CI** | ✅ Done (#26) — the `test` job runs `just test-host-lua test-host-js`; closes the no-cargo-coverage gap that previously hid two bugs until after merge |
 | **JS host SDK on Node.js + Bun (not just Deno)** | ✅ Done — one runtime-detected FFI seam (`sdks/js/abi/ffi/`): Deno → `Deno.dlopen`, Node → `koffi` (optional dep, lazy-loaded), Bun → built-in `bun:ffi`. Same 57-test suite runs green on all three (`test-host-js` / `-node` / `-bun`); the install-smoke loads the embedded native via the Node and Bun FFI backends from the published tarballs |
 | **Incremental codegen writes** | ✅ Done (#31) — `polyplugc generate` skips bindings whose content is unchanged (mtime-preserving, no downstream rebuild cascade) and always rewrites `manifest.toml` via the wired `force_regenerate` flag |
+| **Documentation site + API reference (G5)** | ✅ Done — mdBook site over `docs/` + workspace rustdoc, deployed to GitHub Pages by `docs.yml`; new [Debugging Native Crashes](DEBUGGING_NATIVE_CRASHES.md) guide |
 
 ---
 
@@ -181,8 +182,6 @@ scoping:
   process." A sandboxed guest target (seccomp / process isolation) would
   let hosts load *untrusted* plugins — a natural fit for a "universal plugin
   runtime" and a significant market expansion.
-- **Published API-docs site.** `rustdoc` + the `docs/` tree as a browsable site
-  (this is G5 above).
 
 **Explicit non-goal — in-runtime per-call resource limits / timeouts.** A
 watchdog that enforces a per-call wall-clock deadline must record when each call

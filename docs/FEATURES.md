@@ -418,9 +418,10 @@ runs**, so a bad signature never reaches `dlopen`/the VM.
   default) = TOFU; under `Off` the allowlist is not consulted. The runtime copies
   the keys during `create`, so a host SDK only lends its buffer for that call.
 - **Tooling** — `polyplugc keygen --out <dir>` writes `signing.key` (private,
-  `0o600` on Unix) and `verifying.key` (public); `polyplugc sign --bundle-dir
-  <dir> --key signing.key` runs the `validate --bundle-dir` checks then writes
-  `bundle.sig`; `polyplugc verify --bundle-dir <dir>` exits non-zero on failure.
+  `0o600` on Unix) and `verifying.key` (public);
+  `polyplugc sign --bundle-dir <dir> --key signing.key` runs the
+  `validate --bundle-dir` checks then writes `bundle.sig`;
+  `polyplugc verify --bundle-dir <dir>` exits non-zero on failure.
 - **ABI** — `signature_policy` occupies the former tail padding of `RuntimeConfig`
   (offset `0x2C`); `trusted_keys` (a 24-byte `Array<Ed25519PublicKey>`) follows at
   offset `0x30`, growing the struct from 48 to **72 bytes**, align 8. All six host

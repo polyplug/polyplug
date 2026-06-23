@@ -118,8 +118,8 @@ To maintain maximum performance, polyplug does not enforce dependencies on every
 ### Phase 1 vs. Phase 2
 The runtime distinguishes between the **Initialization Phase (Phase 1)** and the **Execution Phase (Phase 2)**.
 
-```
 ### Diagram: Enforcement Flow
+
 ```
 ------------------------------|----------------------------
 INIT_BUNDLE_ID != 0           |  INIT_BUNDLE_ID == 0
@@ -411,11 +411,12 @@ the prior epoch.
 > old epoch unpins. **Unload always reclaims when safe** — there is no opt-in mode and no
 > retain tier; see the Unload Trust Model below.
 
-## 8. Future Work
+## 8. Security & Lifecycle Hardening
 
-The trust model continues to evolve as polyplug expands its reach into more dynamic environments.
+The trust model continues to evolve as polyplug expands its reach into more dynamic
+environments. The features below are implemented; one planned item closes the section.
 
-### Bundle Signing ✅ done
+### Bundle Signing
 
 A bundle directory can carry a detached `bundle.sig` file produced by the
 `polyplug_signing` crate (Ed25519 over SHA-256, pure Rust). The host's
@@ -495,7 +496,7 @@ pre-existing field offset is unchanged; all six host SDK abi mirrors carry the n
 type and field and default `trusted_keys` to an empty `Array`, so existing hosts
 that zero-initialize the config get TOFU and are unaffected.
 
-### Unload ✅ done
+### Unload
 
 `HostApi.unload_bundle(this, bundle_id)` (offset 136) is live.
 `Runtime::unload_bundle(bundle_id)` refuses if any still-loaded bundle declared a
@@ -540,7 +541,7 @@ prior epoch.
     GC-reclaimed once references and native frames clear. C#-guest bundles register native
     function pointers, so the host-cached-pointer UB caveat applies to them too.
 
-### Hot-Reload ✅ done
+### Hot-Reload
 Hot-reload is implemented for native, Lua, and JavaScript (QuickJS) bundles using
 crossbeam-epoch: the active version is swapped under a single write lock that republishes an
 immutable `ReadView` and `defer_destroy`s the old one, so a pointer resolved under an epoch
@@ -549,10 +550,10 @@ pin stays valid until its guard unpins. Reload is driven explicitly by
 return `HotReloadDisabled` (CPython / CLR single-initialization constraints). See the
 Hot-Reload Safety Guarantees section above.
 
-### Scripting and JS Bindings ✅ done (Epics 10–11, 11.5)
+### Scripting and JS Bindings
 Python, Lua, and JavaScript (QuickJS) plugins are implemented. All respect the same trust model rules — scripted plugins have their own bundle ID and declare dependencies in `bundle.toml`. The runtime enforces these through the same `INIT_BUNDLE_ID` mechanism used by native code.
 
-### Priority Resolution
+### Priority Resolution (planned)
 A weighting system for multi-impl providers is planned for a future version. This will allow the host or a "Coordinator Bundle" to assign priorities to implementations, ensuring that `find_guest_contract` returns the "best" provider rather than just the first one registered.
 
 ## Plugin crash isolation

@@ -506,3 +506,6 @@ examples/hosts/cpp/*.d
 
 # C++ SDK test runner artifacts (built by sdks/cpp/Makefile)
 sdks/cpp/build/
+
+# mdBook documentation site build output
+/book

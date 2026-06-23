@@ -1,0 +1,90 @@
+name: docs
+
+# Builds the browsable documentation site (mdBook over docs/) plus the workspace
+# rustdoc API reference, and publishes both to GitHub Pages.
+#
+# One-time setup by the repo owner: Settings -> Pages -> Build and deployment ->
+# Source = "GitHub Actions". No gh-pages branch is used.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'book.toml'
+      - 'crates/**'
+      - 'sdks/rust/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; never cancel an in-progress publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  MDBOOK_VERSION: '0.5.3'
+
+jobs:
+  build:
+    name: Build site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install mdBook
+        run: |
+          set -euo pipefail
+          url="https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL "$url" | tar -xz -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # Build the rustdoc API reference. DOCS_RS + --cfg docsrs reproduce the
+      # docs.rs build so the loaders (pyo3 / netcorehost) skip native linking and
+      # the vendored LuaJIT / QuickJS compile from source -- no system -dev libs
+      # beyond the toolchain image's C compiler.
+      - name: Build rustdoc API reference
+        env:
+          DOCS_RS: '1'
+          RUSTDOCFLAGS: '--cfg docsrs'
+        run: cargo doc --workspace --no-deps
+
+      - name: Build mdBook site
+        run: mdbook build
+
+      - name: Assemble site (book + /api rustdoc)
+        run: |
+          set -euo pipefail
+          rm -rf site
+          cp -r book site
+          cp -r target/doc site/api
+          # Land visitors of /api/ on the runtime crate.
+          printf '<!doctype html><meta http-equiv="refresh" content="0; url=polyplug/index.html">\n' > site/api/index.html
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

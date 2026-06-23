@@ -158,11 +158,13 @@ polyplug/
 
 ## Documentation
 
+- **Documentation site** — The full docs tree and the rustdoc API reference are published as a browsable site at **<https://polyplug.github.io/polyplug/>** (built from `docs/` with mdBook; see [`docs/SUMMARY.md`](docs/SUMMARY.md) for the table of contents). Build it locally with `mdbook build`.
 - **Architecture** — See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for diagrams of the runtime pipelines (bundle load, lock-free dispatch, plugin-calls-plugin, loaders, hot-reload, unload)
 - **Quick Start** — See [`docs/QUICKSTART.md`](docs/QUICKSTART.md) to write your first plugin in 10 minutes
 - **Examples** — See [`docs/EXAMPLES.md`](docs/EXAMPLES.md) for the full reference gallery (30 guests × 6 hosts)
 - **Features** — See [`docs/FEATURES.md`](docs/FEATURES.md) for a current-state overview of every shipped feature (arena, hot-reload, unload, platform support, trust model)
 - **Workflow** — See [`docs/WORKFLOW.md`](docs/WORKFLOW.md) for the end-to-end host-app and plugin-developer pipelines
+- **Debugging native crashes** — See [`docs/DEBUGGING_NATIVE_CRASHES.md`](docs/DEBUGGING_NATIVE_CRASHES.md) for diagnosing crashes (symbols, core dumps, sanitizers) in trusted-plugin deployments
 - **SDKs** — See `sdks/` for host and guest libraries in each language
 - **Design Docs** — See `docs/` for architecture and design decisions
 
