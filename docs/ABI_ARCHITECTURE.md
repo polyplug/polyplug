@@ -231,3 +231,7 @@ the yaml golden set cannot silently disagree with the real types. Pinning the
 out-param ABI's type foundation: a mirror cannot quietly change `AbiError`'s
 layout. The out-param *convention* on the function pointers themselves remains
 runtime-proven by the lua-cdef floor and the `just verify-abi` ceiling above.
+
+Import hygiene across the workspace (no inline fully-qualified paths at use-sites)
+is enforced by a separate guard — `just verify-no-fq-paths` / `no_inline_fq_paths.yaml`
+— also in the SDK Consistency CI job. See `docs/WORKFLOW.md` § "Import hygiene".

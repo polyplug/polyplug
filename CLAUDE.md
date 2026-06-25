@@ -754,6 +754,39 @@ fn test_something_else() { }
 
 ---
 
+### 20. No Inline Fully-Qualified Paths
+
+**Import symbols at the top of the module and use the SHORT name at every use-site. Inline fully-qualified multi-segment paths are FORBIDDEN.** This is the use-site companion to Rule 2 (`use` at file top only): the path is named once in a `use`, never spelled out inline.
+
+```rust
+// FORBIDDEN — inline fully-qualified paths
+let p: std::path::PathBuf = std::path::PathBuf::new();
+return Err(crate::error::RuntimeError::PluginNotFound { contract_id });
+let v: polyplug_abi::types::Version = polyplug_abi::types::Version::default();
+
+// CORRECT — import at top, short name at use-site
+use std::path::PathBuf;
+use crate::error::RuntimeError;
+use polyplug_abi::types::Version;
+
+let p: PathBuf = PathBuf::new();
+return Err(RuntimeError::PluginNotFound { contract_id });
+let v: Version = Version::default();
+```
+
+Applies to ALL roots — same-crate (`crate::`), cross-crate (`polyplug_abi::`, `libloading::`, …), and stdlib (`std::`, `core::`, `alloc::`) — and ALL referents: types, generics, trait bounds, signatures, match patterns, free functions, enum variants, and consts.
+
+**The four exceptions (the guard does not flag these):**
+
+1. **`core::str::*` / `std::str::*`** — the bare `str::Item` form is an ambiguous primitive-type projection (and `str::from_utf8` trips an msrv lint); keep these fully-qualified.
+2. **Module-qualified forms whose leading segment is an imported module**, not a crate root — `ptr::null_mut()`, `mem::size_of()`, `fs::read(…)`, `de::Error` (after `use core::ptr;` / `use std::fs;` / `use serde::de;`). These are idiomatic and do not cross a crate boundary inline.
+3. **`crate::` paths inside `macro_rules!` bodies** — macros expand at the call site and may need the `crate::` root for hygiene.
+4. **FFI function-pointer `type` aliases** (the Rule 16 exception) — defined once in a `use`-topped file and imported by callers.
+
+**Enforcement:** `just verify-no-fq-paths` runs the committed ast-grep rule `no_inline_fq_paths.yaml` (CI: the **SDK Consistency** job). See `docs/WORKFLOW.md` § "Import hygiene".
+
+---
+
 ## Project Structure
 
 ```
@@ -856,6 +889,7 @@ polyplug/
 | SDK static / module-global holding runtime or plugin state (any language, host or guest) | state flows through instances and context parameters |
 | duplicate "helper" implementations outside the `sdk_validator.yaml` target files | helpers live only in validated files; golden set in `sdk_validator.yaml` |
 | documentation `.md` at repo root (except CLAUDE.md, README.md, CHANGELOG.md) | all docs live in `docs/` |
+| inline fully-qualified path (`std::path::PathBuf`, `crate::error::Foo`) at a use-site | `use` it at module top, write the short name (exceptions: `core::str::*`, module-qualified `ptr::`/`fs::`, macro `crate::`) |
 
 ---
 

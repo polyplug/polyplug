@@ -176,6 +176,39 @@ dist/decoder/
 
 ---
 
+## Import hygiene (no inline fully-qualified paths)
+
+**Rule:** `use` statements belong at the top of every file. Inline fully-qualified
+paths at use-sites — `std::collections::HashMap::new()`, `crate::error::MyError`,
+`polyplug_abi::AbiError` written inside a function body or expression — are
+forbidden (CLAUDE.md, rule 20 — the use-site companion to rule 2's "`use` at file top").
+
+**Exceptions** (the rule does not flag these):
+
+- `core::str::*` / `std::str::*` — primitive-method collision; short names conflict
+  with built-ins.
+- Module-qualified forms whose leading segment is an *imported module*, not a crate
+  root — e.g. `ptr::write`, `mem::size_of`, `fs::read` — do not cross a crate
+  boundary and are idiomatic Rust.
+- `crate::` paths inside `macro_rules!` bodies — macros may need to name their home
+  crate explicitly for hygienic expansion.
+- FFI function-pointer `type` aliases (the Rule 16 exception) — a `type` alias
+  whose right-hand side is `unsafe extern "C"` / `extern "system"` is a single
+  definition point; it lives in a `use`-topped file and is imported by callers, so
+  it never creates inline FQ drift.
+
+**Guard:** `just verify-no-fq-paths` (requires `ast-grep` ≥ 0.40)
+
+```
+ast-grep scan --rule no_inline_fq_paths.yaml crates sdks
+```
+
+The rule file lives at `no_inline_fq_paths.yaml`. It is enforced in CI
+inside the **SDK Consistency** job (`.github/workflows/ci.yml`), which already
+installs `ast-grep`, immediately after the `sdk-validator` step.
+
+---
+
 ## Where things come from — quick reference
 
 | Artifact | Produced by | Edited by hand? |
