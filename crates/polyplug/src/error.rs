@@ -1,5 +1,8 @@
 //! Error — error type hierarchy for polyplug.
 
+use std::io::Error as IoError;
+use std::path::PathBuf;
+
 use thiserror::Error;
 
 use polyplug_abi::types::Version;
@@ -89,7 +92,7 @@ pub enum LoaderError {
     BundleReadFailed {
         path: String,
         #[source]
-        source: std::io::Error,
+        source: IoError,
     },
 
     #[error("version mismatch for contract `{contract}`: required={required}, found={found}")]
@@ -109,7 +112,7 @@ pub enum LoaderError {
     },
 
     #[error("bundle path is not a directory: `{path}`")]
-    BundleNotADirectory { path: std::path::PathBuf },
+    BundleNotADirectory { path: PathBuf },
 
     #[error("bundle \"{bundle}\" manifest.toml has an empty or missing `file` field")]
     ManifestMissingFile { bundle: String },
@@ -243,10 +246,13 @@ pub enum HostContractError {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
+    use std::path::PathBuf;
+
+    use polyplug_abi::types::Version;
+
     use super::{
         AllocatorError, GraphError, HostContractError, LoaderError, RegistryError, RuntimeError,
     };
-    use polyplug_abi::types::Version;
 
     // --- RuntimeError / RuntimeError ---
 
@@ -412,7 +418,7 @@ mod tests {
     #[test]
     fn loader_error_bundle_not_a_directory_display() {
         let err: LoaderError = LoaderError::BundleNotADirectory {
-            path: std::path::PathBuf::from("/usr/lib/plugins/myplugin.so"),
+            path: PathBuf::from("/usr/lib/plugins/myplugin.so"),
         };
         let s: String = err.to_string();
         assert!(s.contains("not a directory"), "got: {s}");

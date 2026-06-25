@@ -19,6 +19,7 @@
 //! the structural one — distinct per-instance `HostApi` pointers and clean
 //! concurrent teardown of every runtime built.
 
+use core::ptr;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Barrier;
@@ -28,7 +29,9 @@ use polyplug::runtime::Runtime;
 use polyplug_utils::GuestContractId;
 
 use crate::common::TestNativeLoader;
-use crate::fixtures::{RELOAD_V1_DIR, make_hot_reload_runtime, resolve_version_fn};
+use crate::fixtures::{
+    RELOAD_V1_DIR, hot_reload_config, make_hot_reload_runtime, resolve_version_fn,
+};
 
 const RUNTIMES: usize = 8_usize;
 
@@ -60,7 +63,7 @@ fn two_runtimes_do_not_share_registry_or_host_api() {
 
     // Each runtime owns its own HostApi (distinct heap addresses).
     assert!(
-        !core::ptr::eq(rt_loaded.host_abi(), rt_empty.host_abi()),
+        !ptr::eq(rt_loaded.host_abi(), rt_empty.host_abi()),
         "each runtime must own a distinct HostApi — no shared global table"
     );
 }
@@ -134,7 +137,7 @@ fn parallel_runtime_build_use_destroy_churn() {
                 for cycle in 0_usize..CYCLES_PER_THREAD {
                     // Fresh runtime + fresh loader every cycle.
                     let rt: Arc<Runtime> = Runtime::builder()
-                        .config(crate::fixtures::hot_reload_config())
+                        .config(hot_reload_config())
                         .loader(TestNativeLoader::new())
                         .build()
                         .unwrap_or_else(|e| panic!("thread {t} cycle {cycle}: build: {e}"));

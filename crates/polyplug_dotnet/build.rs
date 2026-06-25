@@ -9,9 +9,13 @@
 //! sentinel `BYTE_BRIDGE_UNAVAILABLE`, and `BundleSource::Bytes` loads return a structured
 //! error at runtime instead of failing the Rust build.
 
+use std::env;
+use std::fs;
+use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::ExitStatus;
 
 fn main() {
     let manifest_dir: PathBuf = PathBuf::from(env_var("CARGO_MANIFEST_DIR"));
@@ -53,13 +57,13 @@ fn main() {
     let built: bool = build_bridge(&bridge_dir);
 
     let bridge_available: bool = if built && bridge_dll.exists() {
-        match std::fs::copy(&bridge_dll, &embed_path) {
+        match fs::copy(&bridge_dll, &embed_path) {
             Ok(_) => true,
             Err(e) => {
                 println!(
                     "cargo:warning=polyplug_dotnet: failed to stage byte-load bridge dll: {e}"
                 );
-                let _: Result<(), std::io::Error> = std::fs::write(&embed_path, []);
+                let _: Result<(), IoError> = fs::write(&embed_path, []);
                 false
             }
         }
@@ -67,7 +71,7 @@ fn main() {
         println!(
             "cargo:warning=polyplug_dotnet: byte-load bridge unavailable (dotnet SDK missing or build failed); BundleSource::Bytes will be unsupported at runtime"
         );
-        let _: Result<(), std::io::Error> = std::fs::write(&embed_path, []);
+        let _: Result<(), IoError> = fs::write(&embed_path, []);
         false
     };
 
@@ -85,7 +89,7 @@ fn main() {
 
 /// Build the managed bridge with `dotnet build -c Release`. Returns `true` on success.
 fn build_bridge(bridge_dir: &Path) -> bool {
-    let status: Result<std::process::ExitStatus, std::io::Error> = Command::new("dotnet")
+    let status: Result<ExitStatus, IoError> = Command::new("dotnet")
         .arg("build")
         .arg("-c")
         .arg("Release")
@@ -96,5 +100,5 @@ fn build_bridge(bridge_dir: &Path) -> bool {
 }
 
 fn env_var(key: &str) -> String {
-    std::env::var(key).unwrap_or_default()
+    env::var(key).unwrap_or_default()
 }

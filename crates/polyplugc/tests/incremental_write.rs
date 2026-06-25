@@ -10,7 +10,13 @@
 
 #![allow(clippy::expect_used)]
 
+use polyplugc::WriteSummary;
+use polyplugc::generate;
+use polyplugc::write_output;
+use std::env;
+use std::fs;
 use std::path::PathBuf;
+use std::process;
 
 use polyplug_codegen::{GenerateConfig, GenerateOutput, Lang, Side};
 
@@ -38,11 +44,11 @@ implements = [\"pipeline.Decoder@1.0\"]
 ";
 
 fn generate_lua_bundle(tmp_dir: &PathBuf) -> (GenerateOutput, PathBuf) {
-    std::fs::create_dir_all(tmp_dir).expect("create tmp dir");
+    fs::create_dir_all(tmp_dir).expect("create tmp dir");
     let api_path: PathBuf = tmp_dir.join("api.toml");
     let bundle_path: PathBuf = tmp_dir.join("bundle.toml");
-    std::fs::write(&api_path, API_TOML).expect("write api.toml");
-    std::fs::write(&bundle_path, BUNDLE_TOML).expect("write bundle.toml");
+    fs::write(&api_path, API_TOML).expect("write api.toml");
+    fs::write(&bundle_path, BUNDLE_TOML).expect("write bundle.toml");
 
     let out_dir: PathBuf = tmp_dir.join("out");
     let config: GenerateConfig = GenerateConfig {
@@ -51,15 +57,15 @@ fn generate_lua_bundle(tmp_dir: &PathBuf) -> (GenerateOutput, PathBuf) {
         side: Side::Guest,
         out_dir: out_dir.clone(),
     };
-    let output: GenerateOutput = polyplugc::generate(config).expect("generate guest");
+    let output: GenerateOutput = generate(config).expect("generate guest");
     (output, out_dir)
 }
 
 #[test]
 fn manifest_is_force_regenerate_and_bindings_are_not() {
     let tmp_dir: PathBuf =
-        std::env::temp_dir().join(format!("polyplugc_inc_write_flags_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&tmp_dir);
+        env::temp_dir().join(format!("polyplugc_inc_write_flags_{}", process::id()));
+    let _ = fs::remove_dir_all(&tmp_dir);
     let (output, _out_dir): (GenerateOutput, PathBuf) = generate_lua_bundle(&tmp_dir);
 
     let manifest = output
@@ -82,14 +88,14 @@ fn manifest_is_force_regenerate_and_bindings_are_not() {
         "language bindings must NOT be force_regenerate (so unchanged ones are cached)"
     );
 
-    let _ = std::fs::remove_dir_all(&tmp_dir);
+    let _ = fs::remove_dir_all(&tmp_dir);
 }
 
 #[test]
 fn rewrites_only_force_and_changed_files() {
     let tmp_dir: PathBuf =
-        std::env::temp_dir().join(format!("polyplugc_inc_write_cache_{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&tmp_dir);
+        env::temp_dir().join(format!("polyplugc_inc_write_cache_{}", process::id()));
+    let _ = fs::remove_dir_all(&tmp_dir);
     let (output, out_dir): (GenerateOutput, PathBuf) = generate_lua_bundle(&tmp_dir);
 
     let total: usize = output.files.len();
@@ -104,15 +110,13 @@ fn rewrites_only_force_and_changed_files() {
     );
 
     // First write: nothing on disk yet, so every file is written.
-    let first: polyplugc::WriteSummary =
-        polyplugc::write_output(&output, &out_dir).expect("first write");
+    let first: WriteSummary = write_output(&output, &out_dir).expect("first write");
     assert_eq!(first.written, total, "first write must emit every file");
     assert_eq!(first.unchanged, 0, "first write has nothing to skip");
 
     // Identical re-write: only the force-regenerate files are rewritten; every other
     // file is byte-identical on disk and skipped.
-    let second: polyplugc::WriteSummary =
-        polyplugc::write_output(&output, &out_dir).expect("second write");
+    let second: WriteSummary = write_output(&output, &out_dir).expect("second write");
     assert_eq!(
         second.written, force_count,
         "an identical re-run must rewrite only the force_regenerate files"
@@ -130,10 +134,9 @@ fn rewrites_only_force_and_changed_files() {
         .find(|f| !f.force_regenerate)
         .expect("a non-force binding exists");
     let victim_path: PathBuf = out_dir.join(&victim.path);
-    std::fs::write(&victim_path, "-- stale, drifted content\n").expect("drift victim");
+    fs::write(&victim_path, "-- stale, drifted content\n").expect("drift victim");
 
-    let third: polyplugc::WriteSummary =
-        polyplugc::write_output(&output, &out_dir).expect("third write");
+    let third: WriteSummary = write_output(&output, &out_dir).expect("third write");
     assert_eq!(
         third.written,
         force_count + 1,
@@ -141,11 +144,11 @@ fn rewrites_only_force_and_changed_files() {
     );
     assert_eq!(third.unchanged, total - force_count - 1);
 
-    let restored: String = std::fs::read_to_string(&victim_path).expect("read restored victim");
+    let restored: String = fs::read_to_string(&victim_path).expect("read restored victim");
     assert_eq!(
         restored, victim.content,
         "the drifted binding must be restored to its generated content"
     );
 
-    let _ = std::fs::remove_dir_all(&tmp_dir);
+    let _ = fs::remove_dir_all(&tmp_dir);
 }

@@ -16,24 +16,31 @@
 #![allow(clippy::expect_used)]
 
 use core::ffi::c_void;
-use std::sync::{Arc, Mutex};
+use core::ptr;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use polyplug::Runtime;
 use polyplug::error::{LoaderError, RegistryError, RuntimeError};
 use polyplug::loader::{BundleLoader, BundleSource, ManifestData};
 use polyplug_abi::HostApi;
+use polyplug_abi::SupportedLanguage;
+use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::dispatch::{DispatchMechanisms, DispatchType, NativeDispatch};
 use polyplug_abi::guest::{GuestContractInstance, GuestContractInterface};
 use polyplug_abi::plugin::PluginDescriptor;
 use polyplug_abi::runtime::{Compatibility, RuntimeConfig};
 use polyplug_abi::types::{LogLevel, StringView, Version};
+use polyplug_utils::bundle_id as compute_bundle_id;
 use polyplug_utils::{BundleId, GuestContractId};
 
 const CONTRACT_NAME: &str = "compat.test";
 const BUNDLE_NAME: &str = "compat_test_bundle";
 
 unsafe extern "C" fn noop_create_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _ctx: *const (),
     out_instance: *mut GuestContractInstance,
@@ -45,7 +52,7 @@ unsafe extern "C" fn noop_create_instance(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
@@ -69,7 +76,7 @@ fn leak_native_interface(function_count: u32) -> &'static GuestContractInterface
         dispatch: DispatchMechanisms {
             native: NativeDispatch {
                 function_count,
-                functions: core::ptr::null(),
+                functions: ptr::null(),
             },
         },
     }))
@@ -87,8 +94,8 @@ impl BundleLoader for CompatTestLoader {
         "compat-test"
     }
 
-    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
-        polyplug_abi::SupportedLanguage::Rust
+    fn loader_language(&self) -> SupportedLanguage {
+        SupportedLanguage::Rust
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -148,22 +155,21 @@ impl BundleLoader for CompatTestLoader {
 /// Build a manifest whose declared `function_count` for `compat.test@1` is 2,
 /// deliberately one more than the loader's interface will report (1).
 fn mismatched_manifest() -> ManifestData {
-    let mut function_count: std::collections::HashMap<String, u32> =
-        std::collections::HashMap::new();
+    let mut function_count: HashMap<String, u32> = HashMap::new();
     function_count.insert(format!("{CONTRACT_NAME}@1"), 2_u32);
 
     ManifestData {
         loader: "compat-test".to_owned(),
         name: BUNDLE_NAME.to_owned(),
         dependencies: Vec::new(),
-        id: polyplug_utils::bundle_id(BUNDLE_NAME),
+        id: compute_bundle_id(BUNDLE_NAME),
         version: "1.0".to_owned(),
         file: "inline.code".to_owned(),
         provides: vec![format!("{CONTRACT_NAME}@1")],
         function_count,
         needs_reinit_on_dep_reload: false,
         bundle_dependencies: Vec::new(),
-        path: std::path::PathBuf::new(),
+        path: PathBuf::new(),
     }
 }
 

@@ -7,6 +7,11 @@
 
 #![allow(clippy::std_instead_of_core)]
 
+use std::collections::{HashMap, HashSet};
+use std::error::Error;
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use crate::mapper::map_all_abi_types;
 use crate::types::AbiTypes;
 use polyplug_codegen::data::Item;
@@ -14,8 +19,6 @@ use polyplug_codegen::languages::{
     CSharpGenerator, CodeGenerator, CppGenerator, ForwardKind, GenerationContext, JsGenerator,
     LuaGenerator, PythonGenerator,
 };
-use std::fs;
-use std::path::{Path, PathBuf};
 
 /// Target language for SDK generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -990,7 +993,7 @@ pub fn generate_language_sdk(lang: TargetLang, abi_types: &AbiTypes) -> String {
 
     // Map every enum name to its Rust `repr` so generators that reference enum
     // fields by their underlying integer type (Python ctypes) can size them.
-    let enum_reprs: std::collections::HashMap<String, String> = all_items
+    let enum_reprs: HashMap<String, String> = all_items
         .iter()
         .filter_map(|item| match item {
             Item::Enum(e) => Some((e.name.clone(), e.repr.clone())),
@@ -1122,8 +1125,6 @@ fn lua_forward_declarations(items: &[Item]) -> String {
 /// union, and enum fields to satisfy via emission order. Constants and
 /// definitions with satisfied dependencies keep their relative source order.
 fn lua_dependency_ordered(items: Vec<Item>) -> Vec<Item> {
-    use std::collections::HashSet;
-
     // Aggregates that can complete a by-value dependency: structs, unions, and
     // enums (an enum field needs its size, i.e. its definition, first).
     let aggregate_names: HashSet<String> = items
@@ -1199,8 +1200,6 @@ fn lua_dependency_ordered(items: Vec<Item>) -> Vec<Item> {
 /// order. Structs and unions are topologically sorted by their by-value field
 /// dependencies (resolved via `CppGenerator::value_dependency`).
 fn cpp_dependency_ordered(items: Vec<Item>) -> Vec<Item> {
-    use std::collections::HashSet;
-
     // Names of aggregates whose definitions still need to be emitted.
     let aggregate_names: HashSet<String> = items
         .iter()
@@ -1282,8 +1281,6 @@ fn cpp_dependency_ordered(items: Vec<Item>) -> Vec<Item> {
 /// aggregates they reference by value (resolved via
 /// `PythonGenerator::type_dependencies`). Pointer fields impose no constraint.
 fn python_dependency_ordered(items: Vec<Item>) -> Vec<Item> {
-    use std::collections::HashSet;
-
     let aggregate_names: HashSet<String> = items
         .iter()
         .filter_map(|item| match item {
@@ -1798,13 +1795,12 @@ pub fn generate_all_sdks(
     abi_types: &mut AbiTypes,
     workspace_root: &Path,
     tracked_files: &[PathBuf],
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     // Populate size hints from known size table.
     populate_size_hints(abi_types);
 
     // Validate that all types can be represented in target languages (D-09).
-    validate_representable_types(abi_types)
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    validate_representable_types(abi_types).map_err(|e| -> Box<dyn Error> { e.into() })?;
 
     // Emit cargo:rerun-if-changed for all tracked source files.
     for path in tracked_files {
@@ -1863,7 +1859,7 @@ pub fn generate_all_sdks(
 fn generate_layout_tests(
     abi_types: &AbiTypes,
     workspace_root: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     // Collect structs with known sizes.
     let sized_structs: Vec<(&str, usize)> = abi_types
         .structs
@@ -1878,33 +1874,33 @@ fn generate_layout_tests(
     // Python: test_layout.py with pytest assertions.
     let python_tests = generate_python_layout_tests(&sized_structs);
     let python_dir = workspace_root.join("sdks/python/abi");
-    std::fs::create_dir_all(&python_dir)?;
-    std::fs::write(python_dir.join("test_layout.py"), python_tests)?;
+    fs::create_dir_all(&python_dir)?;
+    fs::write(python_dir.join("test_layout.py"), python_tests)?;
 
     // C#: LayoutTests.cs with xUnit. Written to the dedicated test project so
     // the shipped Polyplug.Abi library does not glob-compile an xunit-dependent file.
     let csharp_tests = generate_csharp_layout_tests(&sized_structs);
     let csharp_dir = workspace_root.join("sdks/csharp/abi.tests");
-    std::fs::create_dir_all(&csharp_dir)?;
-    std::fs::write(csharp_dir.join("LayoutTests.cs"), csharp_tests)?;
+    fs::create_dir_all(&csharp_dir)?;
+    fs::write(csharp_dir.join("LayoutTests.cs"), csharp_tests)?;
 
     // Lua: test_layout.lua with simple assertions.
     let lua_tests = generate_lua_layout_tests(&sized_structs);
     let lua_dir = workspace_root.join("sdks/lua/abi");
-    std::fs::create_dir_all(&lua_dir)?;
-    std::fs::write(lua_dir.join("test_layout.lua"), lua_tests)?;
+    fs::create_dir_all(&lua_dir)?;
+    fs::write(lua_dir.join("test_layout.lua"), lua_tests)?;
 
     // JS: test_layout.ts with Deno.test.
     let js_tests = generate_js_layout_tests(&sized_structs);
     let js_dir = workspace_root.join("sdks/js/abi");
-    std::fs::create_dir_all(&js_dir)?;
-    std::fs::write(js_dir.join("test_layout.ts"), js_tests)?;
+    fs::create_dir_all(&js_dir)?;
+    fs::write(js_dir.join("test_layout.ts"), js_tests)?;
 
     // C++: test_layout.cpp with static_assert.
     let cpp_tests = generate_cpp_layout_tests(&sized_structs);
     let cpp_dir = workspace_root.join("sdks/cpp/abi");
-    std::fs::create_dir_all(&cpp_dir)?;
-    std::fs::write(cpp_dir.join("test_layout.cpp"), cpp_tests)?;
+    fs::create_dir_all(&cpp_dir)?;
+    fs::write(cpp_dir.join("test_layout.cpp"), cpp_tests)?;
 
     Ok(())
 }

@@ -14,10 +14,13 @@
 
 use polyplug_codegen::{GenerateConfig, GenerateOutput, GeneratedFile, Lang, Side};
 use polyplug_utils::guest_contract_id as fnv_contract_id;
+use polyplugc::generate;
 use polyplugc::ir::{
-    PrimitiveType, ResolvedContract, ResolvedFunction, ResolvedParam, ResolvedTypeRef, ValidatedIr,
-    Version,
+    AbiBuiltin, PrimitiveType, ResolvedContract, ResolvedField, ResolvedFunction, ResolvedParam,
+    ResolvedTypeRef, ValidatedIr, Version,
 };
+use std::ffi::OsStr;
+use std::fs;
 use std::path::PathBuf;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -87,12 +90,12 @@ fn run_guest_generator(ir: ValidatedIr, test_tag: &str, file_suffix: &str) -> St
     let tmp_dir: PathBuf = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("gen_correctness")
         .join(test_tag);
-    std::fs::create_dir_all(&tmp_dir).expect("create tmp dir");
+    fs::create_dir_all(&tmp_dir).expect("create tmp dir");
 
     // Serialise IR to TOML and write it next to the output directory.
     let api_toml_content: String = ir_to_api_toml(&ir);
     let api_path: PathBuf = tmp_dir.join("api.toml");
-    std::fs::write(&api_path, &api_toml_content).expect("write api.toml");
+    fs::write(&api_path, &api_toml_content).expect("write api.toml");
 
     let config: GenerateConfig = GenerateConfig {
         api_toml: api_path,
@@ -100,7 +103,7 @@ fn run_guest_generator(ir: ValidatedIr, test_tag: &str, file_suffix: &str) -> St
         side: Side::Guest,
         out_dir: tmp_dir.join("out"),
     };
-    let output: GenerateOutput = polyplugc::generate(config).expect("generate");
+    let output: GenerateOutput = generate(config).expect("generate");
 
     output
         .files
@@ -108,7 +111,7 @@ fn run_guest_generator(ir: ValidatedIr, test_tag: &str, file_suffix: &str) -> St
         .find(|f: &GeneratedFile| {
             f.path
                 .file_name()
-                .map(|n: &std::ffi::OsStr| n == file_suffix)
+                .map(|n: &OsStr| n == file_suffix)
                 .unwrap_or(false)
         })
         .unwrap_or_else(|| panic!("{file_suffix} must be generated"))
@@ -126,7 +129,7 @@ fn ir_to_api_toml(ir: &ValidatedIr) -> String {
         let fields_inline: String = ty
             .fields
             .iter()
-            .map(|f: &polyplugc::ir::ResolvedField| {
+            .map(|f: &ResolvedField| {
                 format!(
                     "{{ name = \"{}\", type = \"{}\" }}",
                     f.name,
@@ -188,10 +191,10 @@ fn resolved_type_to_str(ty: &ResolvedTypeRef) -> &'static str {
         ResolvedTypeRef::Primitive(PrimitiveType::F32) => "f32",
         ResolvedTypeRef::Primitive(PrimitiveType::F64) => "f64",
         ResolvedTypeRef::Primitive(PrimitiveType::Bool) => "bool",
-        ResolvedTypeRef::AbiType(polyplugc::ir::AbiBuiltin::StringView) => "StringView",
-        ResolvedTypeRef::AbiType(polyplugc::ir::AbiBuiltin::Buffer) => "Buffer",
-        ResolvedTypeRef::AbiType(polyplugc::ir::AbiBuiltin::Ptr) => "ptr",
-        ResolvedTypeRef::AbiType(polyplugc::ir::AbiBuiltin::Void) => "void",
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "StringView",
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer",
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "ptr",
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void",
         ResolvedTypeRef::UserDefined(_) => {
             // UserDefined names are dynamic; no test uses them here.
             panic!("resolved_type_to_str: UserDefined not supported in ir_to_api_toml")
@@ -369,9 +372,7 @@ fn signature_stringview_return_matches_contract() {
         "get_name",
         0,
         vec![],
-        Some(ResolvedTypeRef::AbiType(
-            polyplugc::ir::AbiBuiltin::StringView,
-        )),
+        Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
     )];
     let ir: ValidatedIr = make_ir("sv.check", 1, fns);
     let contracts: String = generate_guest_contracts(ir, "sig_stringview_return");

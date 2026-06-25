@@ -4,15 +4,31 @@
 //!
 //! This test crate is the crate root for the `stress_memory` test binary.
 
+use core::cell::Ref;
 use core::cell::RefCell;
+use core::ffi::c_void;
+use core::mem::forget;
+use core::mem::transmute;
+use core::ptr::null;
+use core::ptr::null_mut;
+use core::slice::from_raw_parts;
+use core::str::from_utf8;
+use core::str::from_utf8_unchecked;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
+use std::env;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process;
 use std::sync::Arc;
+use std::thread;
 
+use libloading::{Library, Symbol};
 use polyplug::runtime_store::RuntimeStore;
+use polyplug_abi::DependencyInfo;
 use polyplug_abi::GuestContractInstance;
+use polyplug_abi::HostContractInstance;
+use polyplug_abi::HostContractInterface;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::tracking::TrackingAllocator;
@@ -29,7 +45,7 @@ const MEMORY_PLUGIN_SO: &str = env!("MEMORY_PLUGIN_SO");
 
 // --- Thread-local registry ---------------------------------------------------
 
-std::thread_local! {
+thread_local! {
     static STRESS_REGISTRY: RefCell<RuntimeStore> = RefCell::new(RuntimeStore::new());
     static TLS_TRACKING_ALLOC: RefCell<unsafe extern "C" fn(usize, usize) -> *mut u8> =
         RefCell::new(polyplug_host_alloc);
@@ -102,7 +118,7 @@ unsafe extern "C" fn stub_resolve_guest_contract(
     _this: *const HostApi,
     _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
-    core::ptr::null()
+    null()
 }
 
 /// Stub get_host_contract -- returns null instance.
@@ -110,8 +126,8 @@ unsafe extern "C" fn stub_get_host_contract(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::HostContractInstance {
-    polyplug_abi::HostContractInstance::null()
+) -> HostContractInstance {
+    HostContractInstance::null()
 }
 
 /// Stub list_bundles -- returns empty array.
@@ -120,9 +136,7 @@ unsafe extern "C" fn stub_list_bundles(_this: *const HostApi) -> Array<BundleId>
 }
 
 /// Stub get_dependencies -- returns empty array.
-unsafe extern "C" fn stub_get_dependencies(
-    _this: *const HostApi,
-) -> Array<polyplug_abi::DependencyInfo> {
+unsafe extern "C" fn stub_get_dependencies(_this: *const HostApi) -> Array<DependencyInfo> {
     Array::empty()
 }
 
@@ -131,8 +145,8 @@ unsafe extern "C" fn stub_resolve_host_contract_interface(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractInterface {
-    core::ptr::null()
+) -> *const HostContractInterface {
+    null()
 }
 
 /// Stub load_bundle callback.
@@ -164,7 +178,7 @@ unsafe extern "C" fn stub_reload_bundle(
 /// Stub register_host_contract callback.
 unsafe extern "C" fn stub_register_host_contract(
     _this: *const HostApi,
-    _interface: *const polyplug_abi::HostContractInterface,
+    _interface: *const HostContractInterface,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -176,7 +190,7 @@ unsafe extern "C" fn stub_register_host_contract(
 /// Stub register_loader callback.
 unsafe extern "C" fn stub_register_loader(
     _this: *const HostApi,
-    _loader_ptr: *mut core::ffi::c_void,
+    _loader_ptr: *mut c_void,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -255,14 +269,13 @@ unsafe extern "C" fn registry_register_callback(
     // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
     // &'static str contract name -- guaranteed valid UTF-8 by construction.
     let contract_name: &str = unsafe {
-        let bytes: &[u8] =
-            core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
-        core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
+        let bytes: &[u8] = from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
+        from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
 
     // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
     let result: Result<GuestContractHandle, _> = STRESS_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, RuntimeStore> = reg_cell.borrow();
+        let registry: Ref<'_, RuntimeStore> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
         unsafe {
             registry.register_guest_contract(
@@ -303,21 +316,21 @@ fn workspace_root() -> PathBuf {
 }
 
 /// Loads the memory_plugin shared library.
-fn load_memory_plugin() -> libloading::Library {
+fn load_memory_plugin() -> Library {
     // SAFETY: MEMORY_PLUGIN_SO is a compiled cdylib built by build.rs.
-    unsafe { libloading::Library::new(MEMORY_PLUGIN_SO).expect("failed to load memory_plugin .so") }
+    unsafe { Library::new(MEMORY_PLUGIN_SO).expect("failed to load memory_plugin .so") }
 }
 
 /// Initialise the memory_plugin and store interface into the thread-local registry.
 /// Returns the interface pointer.
-fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestContractInterface {
+fn init_memory_plugin_interface(library: &Library) -> *const GuestContractInterface {
     // Reset registry before each use.
     STRESS_REGISTRY.with(|cell| {
         *cell.borrow_mut() = RuntimeStore::new();
     });
 
     // SAFETY: polyplug_init matches the expected 2-arg ABI signature.
-    let init_fn: libloading::Symbol<
+    let init_fn: Symbol<
         '_,
         unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe {
@@ -327,7 +340,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
     };
 
     let host_interface: HostApi = HostApi {
-        runtime: core::ptr::null_mut(),
+        runtime: null_mut(),
         register_guest_contract: registry_register_callback,
         alloc: stub_alloc,
         free: stub_free,
@@ -349,7 +362,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
         revision_counter: stub_revision_counter,
-        reserved: core::ptr::null(),
+        reserved: null(),
     };
 
     let ctx: BundleInitContext = BundleInitContext {
@@ -387,7 +400,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
 
 #[test]
 fn stress_large_buffer_fill_and_read() {
-    let library: libloading::Library = load_memory_plugin();
+    let library: Library = load_memory_plugin();
     let interface_ptr: *const GuestContractInterface = init_memory_plugin_interface(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
@@ -417,7 +430,7 @@ fn stress_large_buffer_fill_and_read() {
     let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are enforced
         // by the test (FillArgs matches what memory_plugin fn 0 expects).
-        unsafe { core::mem::transmute(fn_ptr) };
+        unsafe { transmute(fn_ptr) };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args is a valid FillArgs, out is a valid u32 location.
@@ -442,7 +455,7 @@ fn stress_large_buffer_fill_and_read() {
 
     // Verify all bytes are 0xAB.
     // SAFETY: ptr is valid for BUFFER_SIZE bytes, written by the plugin.
-    let filled_slice: &[u8] = unsafe { core::slice::from_raw_parts(ptr, BUFFER_SIZE) };
+    let filled_slice: &[u8] = unsafe { from_raw_parts(ptr, BUFFER_SIZE) };
     assert!(
         filled_slice.iter().all(|&b| b == 0xAB_u8),
         "all bytes in 1 MiB buffer must be 0xAB"
@@ -456,12 +469,12 @@ fn stress_large_buffer_fill_and_read() {
     // a TrackingAllocator, so there is nothing for a tracker to observe here. (A fresh
     // tracker created at this point would only assert 0 == 0 — vacuously.)
 
-    core::mem::forget(library);
+    forget(library);
 }
 
 #[test]
 fn stress_string_view_non_ascii_utf8() {
-    let library: libloading::Library = load_memory_plugin();
+    let library: Library = load_memory_plugin();
     let interface_ptr: *const GuestContractInterface = init_memory_plugin_interface(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
@@ -481,7 +494,7 @@ fn stress_string_view_non_ascii_utf8() {
     let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (StringView matches what memory_plugin fn 2 expects).
-        unsafe { core::mem::transmute(fn_ptr) };
+        unsafe { transmute(fn_ptr) };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: input_sv is a valid StringView with a valid ptr/len, out_sv is a valid location.
@@ -510,20 +523,20 @@ fn stress_string_view_non_ascii_utf8() {
 
     // Validate the returned bytes are valid UTF-8.
     // SAFETY: out_sv.ptr is valid for out_sv.len bytes (same memory as input_bytes).
-    let returned_bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_sv.ptr, out_sv.len) };
+    let returned_bytes: &[u8] = unsafe { from_raw_parts(out_sv.ptr, out_sv.len) };
     let returned_str: &str =
-        core::str::from_utf8(returned_bytes).expect("echoed StringView must be valid UTF-8");
+        from_utf8(returned_bytes).expect("echoed StringView must be valid UTF-8");
     assert_eq!(returned_str, "café", "echoed string must equal input");
 
     // No TrackingAllocator is involved on this path (the echo returns a borrowed view),
     // so there is nothing for a tracker to observe — a fresh tracker would assert 0 == 0.
 
-    core::mem::forget(library);
+    forget(library);
 }
 
 #[test]
 fn stress_zero_length_buffer_and_string_view() {
-    let library: libloading::Library = load_memory_plugin();
+    let library: Library = load_memory_plugin();
     let interface_ptr: *const GuestContractInterface = init_memory_plugin_interface(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
@@ -531,12 +544,12 @@ fn stress_zero_length_buffer_and_string_view() {
 
     // Zero-length Buffer and StringView.
     let zero_buf: Buffer = Buffer {
-        ptr: core::ptr::null_mut(),
+        ptr: null_mut(),
         len: 0,
         cap: 0,
     };
     let zero_sv: StringView = StringView {
-        ptr: core::ptr::null(),
+        ptr: null(),
         len: 0,
     };
     let args: ZeroArgs = ZeroArgs {
@@ -553,7 +566,7 @@ fn stress_zero_length_buffer_and_string_view() {
     let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (ZeroArgs/ZeroResult match what memory_plugin fn 3 expects).
-        unsafe { core::mem::transmute(fn_ptr) };
+        unsafe { transmute(fn_ptr) };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args is a valid ZeroArgs, out is a valid ZeroResult location.
@@ -583,12 +596,12 @@ fn stress_zero_length_buffer_and_string_view() {
     // This path does not allocate through a TrackingAllocator, so a fresh tracker
     // here would only assert 0 == 0 (vacuous) — omitted.
 
-    core::mem::forget(library);
+    forget(library);
 }
 
 #[test]
 fn stress_concurrent_8_threads_no_shared_memory() {
-    let library: libloading::Library = load_memory_plugin();
+    let library: Library = load_memory_plugin();
     let interface_ptr: *const GuestContractInterface = init_memory_plugin_interface(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
@@ -601,7 +614,7 @@ fn stress_concurrent_8_threads_no_shared_memory() {
     let alloc_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
     let free_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
 
-    std::thread::scope(|s| {
+    thread::scope(|s| {
         for thread_idx in 0_usize..THREAD_COUNT {
             let alloc_counter: Arc<AtomicUsize> = Arc::clone(&alloc_count);
             let free_counter: Arc<AtomicUsize> = Arc::clone(&free_count);
@@ -620,7 +633,7 @@ fn stress_concurrent_8_threads_no_shared_memory() {
                 let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
                 let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
                     // SAFETY: fn_ptr is the fill function with compatible signature.
-                    unsafe { core::mem::transmute(fn_ptr) };
+                    unsafe { transmute(fn_ptr) };
 
                 let args: FillArgs = FillArgs {
                     buf: Buffer {
@@ -656,7 +669,7 @@ fn stress_concurrent_8_threads_no_shared_memory() {
 
                 // Verify buffer contents.
                 // SAFETY: ptr is valid for THREAD_BUFFER_SIZE bytes, written by the plugin.
-                let slice: &[u8] = unsafe { core::slice::from_raw_parts(ptr, THREAD_BUFFER_SIZE) };
+                let slice: &[u8] = unsafe { from_raw_parts(ptr, THREAD_BUFFER_SIZE) };
                 assert!(
                     slice.iter().all(|&b| b == fill_byte),
                     "thread {}: all bytes must equal fill_byte 0x{:02X}",
@@ -690,12 +703,12 @@ fn stress_concurrent_8_threads_no_shared_memory() {
     // assertions above. A fresh tracker on this coordinating thread observed nothing, so
     // asserting on it would be vacuous — omitted.
 
-    core::mem::forget(library);
+    forget(library);
 }
 
 #[test]
 fn stress_plugin_allocates_returns_to_host_then_host_frees() {
-    let library: libloading::Library = load_memory_plugin();
+    let library: Library = load_memory_plugin();
     let interface_ptr: *const GuestContractInterface = init_memory_plugin_interface(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
@@ -737,7 +750,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     TLS_TRACKING_FREE.with(|cell| *cell.borrow_mut() = free_fn);
 
     let host_interface: HostApi = HostApi {
-        runtime: core::ptr::null_mut(),
+        runtime: null_mut(),
         register_guest_contract: registry_register_callback,
         alloc: tracking_alloc_wrapper,
         free: tracking_free_wrapper,
@@ -759,7 +772,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
         revision_counter: stub_revision_counter,
-        reserved: core::ptr::null(),
+        reserved: null(),
     };
 
     let args: AllocArgs = AllocArgs {
@@ -768,7 +781,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
         fill_byte: 0xCC_u8,
     };
     let mut out_buf: Buffer = Buffer {
-        ptr: core::ptr::null_mut(),
+        ptr: null_mut(),
         len: 0,
         cap: 0,
     };
@@ -778,7 +791,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (AllocArgs/Buffer match what memory_plugin fn 1 expects).
-        unsafe { core::mem::transmute(fn_ptr) };
+        unsafe { transmute(fn_ptr) };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args is a valid AllocArgs (host interface is live), out_buf is a valid Buffer location.
@@ -819,7 +832,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
 
     // Verify the buffer was filled with 0xCC.
     // SAFETY: out_buf.ptr is valid for out_buf.len bytes, filled by the plugin.
-    let buf_slice: &[u8] = unsafe { core::slice::from_raw_parts(out_buf.ptr, out_buf.len) };
+    let buf_slice: &[u8] = unsafe { from_raw_parts(out_buf.ptr, out_buf.len) };
     assert!(
         buf_slice.iter().all(|&b| b == 0xCC_u8),
         "all bytes in plugin-allocated buffer must be 0xCC"
@@ -834,12 +847,12 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     assert_eq!(tracker.free_count(), 1, "free_count must be 1 after free");
     tracker.assert_no_leaks();
 
-    core::mem::forget(library);
+    forget(library);
 }
 
 #[test]
 fn stress_caller_alloc_plugin_fills_freed_after_use() {
-    let library: libloading::Library = load_memory_plugin();
+    let library: Library = load_memory_plugin();
     let interface_ptr: *const GuestContractInterface = init_memory_plugin_interface(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
@@ -874,7 +887,7 @@ fn stress_caller_alloc_plugin_fills_freed_after_use() {
     let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (FillArgs matches what memory_plugin fn 0 expects).
-        unsafe { core::mem::transmute(fn_ptr) };
+        unsafe { transmute(fn_ptr) };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args is a valid FillArgs, out is a valid u32 location.
@@ -896,7 +909,7 @@ fn stress_caller_alloc_plugin_fills_freed_after_use() {
 
     // Verify buffer was filled with 0xDE.
     // SAFETY: ptr is valid for 64 bytes, written by the plugin.
-    let filled_slice: &[u8] = unsafe { core::slice::from_raw_parts(ptr, 64) };
+    let filled_slice: &[u8] = unsafe { from_raw_parts(ptr, 64) };
     assert!(
         filled_slice.iter().all(|&b| b == 0xDE_u8),
         "all 64 bytes must be 0xDE"
@@ -914,7 +927,7 @@ fn stress_caller_alloc_plugin_fills_freed_after_use() {
     // _workspace_root is unused here but workspace_root() is defined per task spec.
     let _workspace_root: PathBuf = workspace_root();
 
-    core::mem::forget(library);
+    forget(library);
 }
 
 /// Called when the test binary is re-invoked with the `POLYPLUG_DOUBLE_FREE_SUBPROCESS`
@@ -932,7 +945,7 @@ fn run_double_free_subprocess() -> ! {
     // SAFETY: This is intentionally invalid -- the abort fires before UB occurs.
     unsafe { free_fn(ptr, 64_usize, 1_usize) };
     // unreachable -- abort() terminates the process.
-    std::process::exit(0)
+    process::exit(0)
 }
 
 #[test]
@@ -942,12 +955,12 @@ fn test_double_free_detected() {
     // by the cargo test harness and cause "Unrecognized option" errors.
     const SENTINEL: &str = "POLYPLUG_DOUBLE_FREE_SUBPROCESS";
     // If this invocation IS the subprocess, perform the double-free and let abort() fire.
-    if std::env::var(SENTINEL).is_ok() {
+    if env::var(SENTINEL).is_ok() {
         run_double_free_subprocess();
     }
     // Otherwise spawn ourselves as a subprocess with the sentinel env var set.
-    let exe: std::path::PathBuf = std::env::current_exe().expect("current_exe");
-    let status: std::process::ExitStatus = std::process::Command::new(&exe)
+    let exe: PathBuf = env::current_exe().expect("current_exe");
+    let status: process::ExitStatus = process::Command::new(&exe)
         .env(SENTINEL, "1")
         .status()
         .expect("failed to spawn subprocess");
@@ -959,32 +972,32 @@ fn test_double_free_detected() {
 
 /// `HostApi.log` stub for test hosts — drops the record.
 unsafe extern "C" fn stub_host_log(
-    _this: *const polyplug_abi::HostApi,
+    _this: *const HostApi,
     _level: u32,
-    _scope: polyplug_abi::StringView,
-    _message: polyplug_abi::StringView,
+    _scope: StringView,
+    _message: StringView,
 ) {
 }
 
 unsafe extern "C" fn stub_create_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _args: *const core::ffi::c_void,
-    out_instance: *mut polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _args: *const c_void,
+    out_instance: *mut GuestContractInstance,
 ) {
     if !out_instance.is_null() {
         // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+        unsafe { out_instance.write(GuestContractInstance::null()) };
     }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _instance: polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _instance: GuestContractInstance,
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const polyplug_abi::HostApi) -> *const u64 {
-    core::ptr::null()
+unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
+    null()
 }

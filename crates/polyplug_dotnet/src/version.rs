@@ -1,5 +1,6 @@
 //! version — pelite-based .NET assembly target framework reader.
 
+use std::fs;
 use std::path::Path;
 
 use pelite::PeFile;
@@ -48,7 +49,7 @@ const TFM_MARKER: &[u8] = b".NETCoreApp,Version=v";
 pub fn read_target_framework(dll_path: &Path) -> Result<String, LoaderError> {
     // Read file bytes, then delegate to the shared byte-slice parser so that path-based
     // and byte-based ([`BundleSource::Bytes`]) loading run identical TFM detection logic.
-    let bytes: Vec<u8> = std::fs::read(dll_path).map_err(|_| LoaderError::InitFailed {
+    let bytes: Vec<u8> = fs::read(dll_path).map_err(|_| LoaderError::InitFailed {
         bundle: dll_path.to_string_lossy().into_owned(),
         error: "assembly not found or unreadable".to_owned(),
     })?;

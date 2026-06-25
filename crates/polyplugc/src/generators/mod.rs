@@ -13,6 +13,7 @@ use crate::ir::ResolvedContract;
 use crate::ir::ResolvedDependency;
 use crate::ir::ValidatedIr;
 use polyplug_codegen::PolyplugcError;
+use polyplug_codegen::ResolvedBundleFile;
 
 /// Arena buffer length (bytes) emitted by every language generator.
 pub(crate) const CALL_ARENA_BUF_LEN: usize = 512;
@@ -121,10 +122,10 @@ pub(crate) fn emit_manifest_dependencies(dependencies: &[ResolvedDependency]) ->
 }
 
 /// Format the manifest file field based on ResolvedBundleFile.
-pub(crate) fn format_manifest_file_field(file: &polyplug_codegen::ResolvedBundleFile) -> String {
+pub(crate) fn format_manifest_file_field(file: &ResolvedBundleFile) -> String {
     match file {
-        polyplug_codegen::ResolvedBundleFile::Single(path) => format!("file = \"{path}\""),
-        polyplug_codegen::ResolvedBundleFile::PlatformMap(map) => {
+        ResolvedBundleFile::Single(path) => format!("file = \"{path}\""),
+        ResolvedBundleFile::PlatformMap(map) => {
             let mut lines: Vec<String> = Vec::with_capacity(map.len() + 1);
             lines.push(String::from("[file]"));
             let mut entries: Vec<(&str, &str, &str)> = map

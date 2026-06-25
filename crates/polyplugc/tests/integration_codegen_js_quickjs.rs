@@ -4,6 +4,7 @@
 
 use polyplug_codegen::{GenerateConfig, Lang, Side};
 use polyplugc::generate;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -29,9 +30,9 @@ fn generate_js_quickjs_bindings(api_toml: &Path, out_dir: &Path) {
     for file in &output.files {
         let file_path = out_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 }
 
@@ -42,7 +43,7 @@ fn test_generate_js_quickjs_files_exist() {
     let out_dir: PathBuf =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_js_quickjs");
 
-    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    fs::create_dir_all(&out_dir).expect("create out_dir");
 
     generate_js_quickjs_bindings(&api_toml, &out_dir);
 
@@ -78,10 +79,10 @@ fn test_js_host_caller_function_count_guard_is_vm_safe() {
     let out_dir: PathBuf =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("js_quickjs_vm_safe_guard");
 
-    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    fs::create_dir_all(&out_dir).expect("create out_dir");
     generate_js_quickjs_bindings(&api_toml, &out_dir);
 
-    let callers: String = std::fs::read_to_string(out_dir.join("host/callers.ts"))
+    let callers: String = fs::read_to_string(out_dir.join("host/callers.ts"))
         .expect("read generated host/callers.ts");
 
     // The caller must emit at least one function-index guard.

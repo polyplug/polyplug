@@ -51,6 +51,9 @@ use polyplug_abi::GuestContractInterface;
 use polyplug_abi::runtime::RuntimeConfig;
 use polyplug_utils::GuestContractId;
 
+use criterion::BenchmarkGroup;
+use criterion::measurement::WallTime;
+
 // The integration tests' native loader. `polyplug` is loader-agnostic, so a
 // native bundle needs a registered loader; this mirrors `NativeLoader` using
 // only `polyplug`'s public surface (see the module's own doc comment).
@@ -87,8 +90,7 @@ fn fresh_hot_reload_runtime() -> Arc<Runtime> {
 }
 
 fn bench_amortization(c: &mut Criterion) {
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("amortization");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("amortization");
 
     // ── load: one-time cost of bringing a bundle online ───────────────────────
     //

@@ -1,10 +1,18 @@
 //! Native bundle loader — loads .so/.dll/.dylib plugins.
 
+use core::slice;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs::{self, Metadata};
+use std::io::Error as IoError;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+
+#[cfg(test)]
+use std::sync::PoisonError;
+
+use libloading::{Library, Symbol};
 
 use polyplug::Runtime;
 use polyplug::error::LoaderError;
@@ -14,8 +22,7 @@ use polyplug_abi::HostApi;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::SupportedLanguage;
 use polyplug_abi::plugin::BundleInitContext;
-use polyplug_abi::types::AbiError;
-use polyplug_abi::types::AbiErrorCode;
+use polyplug_abi::types::{AbiError, AbiErrorCode, StringView};
 use polyplug_utils::BundleId;
 
 use crate::config::NativeConfig;
@@ -26,7 +33,7 @@ use crate::config::NativeConfig;
 /// Owns library handles internally — NOT stored in registry.
 pub struct NativeLoader {
     /// Active library handles, keyed by BundleId.
-    libraries: Mutex<HashMap<BundleId, libloading::Library>>,
+    libraries: Mutex<HashMap<BundleId, Library>>,
     /// Count of libraries scheduled for epoch-deferred reclamation (unload,
     /// reload-superseded, and failed-init paths).
     ///
@@ -61,7 +68,7 @@ impl NativeLoader {
     /// unload per the documented host contract (docs/TRUST_MODEL.md). The handle
     /// is an owned `libloading::Library` (`Send + 'static`), so moving it into the
     /// deferred closure is sound.
-    fn schedule_reclaim(&self, library: libloading::Library) {
+    fn schedule_reclaim(&self, library: Library) {
         self.scheduled_reclaims.fetch_add(1, Ordering::Relaxed);
         crossbeam_epoch::pin().defer(move || drop(library));
     }
@@ -80,12 +87,7 @@ impl NativeLoader {
     ///    the now-invalidated interface, which the runtime keeps epoch-owned in its
     ///    published `ReadView` until quiescent. The global epoch keeps both the
     ///    interface and this library alive together until no reader is pinned.
-    fn vacate_failed_init(
-        &self,
-        bundle_name: &str,
-        library: libloading::Library,
-        runtime: &Runtime,
-    ) {
+    fn vacate_failed_init(&self, bundle_name: &str, library: Library, runtime: &Runtime) {
         let bundle_id: BundleId = BundleId::new(bundle_name);
         // Ignore the slot count / vacated Arcs: we only need the interfaces vacated.
         let _ = runtime.registry().invalidate_bundle(bundle_id);
@@ -141,8 +143,8 @@ impl NativeLoader {
         // or that canonicalizes outside the bundle root (`../../evil.so`, an absolute
         // path), since such an artifact is loaded but never covered by the signing
         // digest.
-        let is_symlink: bool = std::fs::symlink_metadata(&bundle_path)
-            .map(|m: std::fs::Metadata| m.file_type().is_symlink())
+        let is_symlink: bool = fs::symlink_metadata(&bundle_path)
+            .map(|m: Metadata| m.file_type().is_symlink())
             .unwrap_or(false);
         if is_symlink {
             return Err(LoaderError::ArtifactPathEscape {
@@ -153,7 +155,7 @@ impl NativeLoader {
         let canonical_artifact: PathBuf =
             bundle_path
                 .canonicalize()
-                .map_err(|e: std::io::Error| LoaderError::InitFailed {
+                .map_err(|e: IoError| LoaderError::InitFailed {
                     bundle: manifest.name.clone(),
                     error: format!(
                         "failed to canonicalize artifact path {}: {}",
@@ -165,7 +167,7 @@ impl NativeLoader {
             manifest
                 .path
                 .canonicalize()
-                .map_err(|e: std::io::Error| LoaderError::InitFailed {
+                .map_err(|e: IoError| LoaderError::InitFailed {
                     bundle: manifest.name.clone(),
                     error: format!(
                         "failed to canonicalize bundle root {}: {}",
@@ -183,15 +185,15 @@ impl NativeLoader {
         let path_str: String = bundle_path.to_string_lossy().into_owned();
 
         // SAFETY: path points to a compiled plugin bundle; libloading validates the shared library.
-        let library: libloading::Library = unsafe {
-            libloading::Library::new(&bundle_path).map_err(|e| LoaderError::InitFailed {
+        let library: Library = unsafe {
+            Library::new(&bundle_path).map_err(|e| LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
                 error: format!("failed to load plugin library at {}: {}", path_str, e),
             })?
         };
 
         // SAFETY: polyplug_abi_version is a C function with signature `extern "C" fn() -> u32`.
-        let abi_version_symbol: libloading::Symbol<'_, unsafe extern "C" fn() -> u32> = unsafe {
+        let abi_version_symbol: Symbol<'_, unsafe extern "C" fn() -> u32> = unsafe {
             library
                 .get(b"polyplug_abi_version\0")
                 .map_err(|_| LoaderError::InitFailed {
@@ -222,7 +224,7 @@ impl NativeLoader {
         ) -> AbiError = {
             // SAFETY: polyplug_init is an exported C symbol from the plugin library,
             // validated to exist by library.get(). The signature matches the ABI contract.
-            let sym: libloading::Symbol<
+            let sym: Symbol<
                 '_,
                 unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
             > = unsafe {
@@ -238,8 +240,7 @@ impl NativeLoader {
         // All strings crossing the ABI are UTF-8 (`StringView`). A non-UTF-8 (or WTF-8
         // on Windows) bundle path cannot be smuggled across as "UTF-8": reject it with
         // a clear error instead.
-        let bundle_dir: &std::path::Path =
-            bundle_path.parent().unwrap_or(std::path::Path::new("."));
+        let bundle_dir: &Path = bundle_path.parent().unwrap_or(Path::new("."));
         let bundle_dir_str: &str = match bundle_dir.to_str() {
             Some(s) => s,
             None => {
@@ -254,7 +255,7 @@ impl NativeLoader {
         };
         let ctx: BundleInitContext = BundleInitContext {
             bundle_id: BundleId::new(&manifest.name).id(),
-            bundle_path: polyplug_abi::types::StringView {
+            bundle_path: StringView {
                 ptr: bundle_dir_str.as_ptr(),
                 len: bundle_dir_str.len(),
             },
@@ -288,7 +289,7 @@ impl NativeLoader {
             } else {
                 // SAFETY: ptr is non-null and points to valid UTF-8 bytes
                 let bytes: &[u8] = unsafe {
-                    core::slice::from_raw_parts(init_result.message.ptr, init_result.message.len)
+                    slice::from_raw_parts(init_result.message.ptr, init_result.message.len)
                 };
                 String::from_utf8_lossy(bytes).into_owned()
             };
@@ -308,7 +309,7 @@ impl NativeLoader {
         // may still resolve raw fn pointers into the prior mapping, so it is reclaimed
         // only once no reader is pinned.
         let bundle_id: BundleId = BundleId::new(&manifest.name);
-        let superseded: Option<libloading::Library> = self
+        let superseded: Option<Library> = self
             .libraries
             .lock()
             .recover_poisoned(runtime.logger(), "loader.native")
@@ -379,7 +380,7 @@ impl BundleLoader for NativeLoader {
     /// The library is always epoch-reclaimed (never parked alive forever).
     fn unload(&self, bundle_id: BundleId, runtime: &Runtime) -> Result<(), LoaderError> {
         // Remove the live handle; nothing to do if this bundle isn't loaded by us.
-        let library: libloading::Library = match self
+        let library: Library = match self
             .libraries
             .lock()
             .recover_poisoned(runtime.logger(), "loader.native")
@@ -401,7 +402,7 @@ impl NativeLoader {
     pub(crate) fn live_library_count(&self) -> usize {
         self.libraries
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .len()
     }
 
@@ -416,10 +417,16 @@ impl NativeLoader {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod unload_tests {
+    use std::env;
+    use std::ffi::{OsStr, OsString};
+    use std::fs;
     use std::path::{Path, PathBuf};
+    use std::process;
     use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use polyplug::Runtime;
+    use polyplug::error::LoaderError;
     use polyplug::loader::{BundleLoader, BundleSource, ManifestData, parse_manifest};
     use polyplug_utils::BundleId;
 
@@ -519,8 +526,7 @@ mod unload_tests {
         let source: BundleSource = BundleSource::Path(manifest.path.clone());
         let loader: NativeLoader = NativeLoader::new(NativeConfig::default());
 
-        let load_result: Result<(), polyplug::error::LoaderError> =
-            loader.load(&manifest, &source, &runtime);
+        let load_result: Result<(), LoaderError> = loader.load(&manifest, &source, &runtime);
         assert!(
             load_result.is_err(),
             "init returns a non-Ok error, so load() must fail"
@@ -631,14 +637,14 @@ mod unload_tests {
         let src_dll: PathBuf = src_dir.join(&dll_name);
 
         let mut name_bytes: Vec<u8> =
-            format!("polyplug_native_badutf8_{}_", std::process::id()).into_bytes();
+            format!("polyplug_native_badutf8_{}_", process::id()).into_bytes();
         name_bytes.push(0xFF);
-        let dir_name: std::ffi::OsString = std::ffi::OsStr::from_bytes(&name_bytes).to_owned();
-        let temp_dir: PathBuf = std::env::temp_dir().join(dir_name);
-        std::fs::create_dir_all(&temp_dir).expect("create non-utf8 bundle dir");
+        let dir_name: OsString = OsStr::from_bytes(&name_bytes).to_owned();
+        let temp_dir: PathBuf = env::temp_dir().join(dir_name);
+        fs::create_dir_all(&temp_dir).expect("create non-utf8 bundle dir");
 
         let dest_dll: PathBuf = temp_dir.join(&dll_name);
-        std::fs::copy(&src_dll, &dest_dll).expect("copy fixture dll");
+        fs::copy(&src_dll, &dest_dll).expect("copy fixture dll");
 
         let manifest_toml: String = format!(
             "id = {}\nname = \"{}\"\nversion = \"{}\"\nloader = \"native\"\nprovides = [\"test.add\"]\n\n[file]\nlinux.x86_64 = \"{}\"\nlinux.aarch64 = \"{}\"\nmacos.x86_64 = \"{}\"\nmacos.aarch64 = \"{}\"\n\n[function_count]\n\"test.add@1\" = 1\n",
@@ -650,8 +656,7 @@ mod unload_tests {
             dll_name,
             dll_name
         );
-        std::fs::write(temp_dir.join("manifest.toml"), &manifest_toml)
-            .expect("write temp manifest");
+        fs::write(temp_dir.join("manifest.toml"), &manifest_toml).expect("write temp manifest");
 
         let manifest: ManifestData =
             parse_manifest(&temp_dir).expect("parse_manifest for non-utf8 bundle");
@@ -659,18 +664,16 @@ mod unload_tests {
         let runtime: Arc<Runtime> = test_runtime();
         let loader: NativeLoader = NativeLoader::new(NativeConfig::default());
 
-        let load_result: Result<(), polyplug::error::LoaderError> =
-            loader.load(&manifest, &source, &runtime);
+        let load_result: Result<(), LoaderError> = loader.load(&manifest, &source, &runtime);
 
-        let err: polyplug::error::LoaderError =
-            load_result.expect_err("non-UTF-8 bundle path must fail cleanly");
+        let err: LoaderError = load_result.expect_err("non-UTF-8 bundle path must fail cleanly");
         let msg: String = err.to_string();
         assert!(
             msg.contains("not valid UTF-8"),
             "error must mention non-UTF-8 path, got: {msg}"
         );
 
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     /// A `manifest.file` that escapes the bundle directory (`../evil.so`) must be
@@ -688,26 +691,26 @@ mod unload_tests {
 
         // A bundle dir holding a real DLL "outside.so" right next to (one level up
         // from) the bundle, with manifest.file pointing at it via `../`.
-        let parent: PathBuf = std::env::temp_dir().join(format!(
+        let parent: PathBuf = env::temp_dir().join(format!(
             "polyplug_native_escape_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
         let bundle_dir: PathBuf = parent.join("bundle");
-        std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+        fs::create_dir_all(&bundle_dir).expect("create bundle dir");
 
         // Place a loadable DLL OUTSIDE the bundle directory.
         let outside_dll: PathBuf = parent.join("outside.so");
-        std::fs::copy(&src_dll, &outside_dll).expect("copy fixture dll outside bundle");
+        fs::copy(&src_dll, &outside_dll).expect("copy fixture dll outside bundle");
 
         let manifest_toml: String = format!(
             "id = {}\nname = \"{}\"\nversion = \"{}\"\nloader = \"native\"\nprovides = [\"test.add\"]\nfile = \"../outside.so\"\n\n[function_count]\n\"test.add@1\" = 1\n",
             src_manifest.id, src_manifest.name, src_manifest.version
         );
-        std::fs::write(bundle_dir.join("manifest.toml"), manifest_toml).expect("write manifest");
+        fs::write(bundle_dir.join("manifest.toml"), manifest_toml).expect("write manifest");
 
         let manifest: ManifestData =
             parse_manifest(&bundle_dir).expect("parse_manifest for escape bundle");
@@ -715,17 +718,13 @@ mod unload_tests {
         let runtime: Arc<Runtime> = test_runtime();
         let loader: NativeLoader = NativeLoader::new(NativeConfig::default());
 
-        let result: Result<(), polyplug::error::LoaderError> =
-            loader.load(&manifest, &source, &runtime);
+        let result: Result<(), LoaderError> = loader.load(&manifest, &source, &runtime);
         assert!(
-            matches!(
-                result,
-                Err(polyplug::error::LoaderError::ArtifactPathEscape { .. })
-            ),
+            matches!(result, Err(LoaderError::ArtifactPathEscape { .. })),
             "a `../` artifact path must be rejected, got: {result:?}"
         );
 
-        let _ = std::fs::remove_dir_all(&parent);
+        let _ = fs::remove_dir_all(&parent);
     }
 
     /// A `manifest.file` that is a symlink (even one pointing at a valid DLL inside
@@ -742,19 +741,19 @@ mod unload_tests {
         let dll_name: String = src_manifest.file.clone();
         let src_dll: PathBuf = src_dir.join(&dll_name);
 
-        let bundle_dir: PathBuf = std::env::temp_dir().join(format!(
+        let bundle_dir: PathBuf = env::temp_dir().join(format!(
             "polyplug_native_symlink_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
-        std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+        fs::create_dir_all(&bundle_dir).expect("create bundle dir");
 
         // Real DLL inside the bundle, plus a symlink artifact pointing at it.
         let real_dll: PathBuf = bundle_dir.join("real.so");
-        std::fs::copy(&src_dll, &real_dll).expect("copy fixture dll into bundle");
+        fs::copy(&src_dll, &real_dll).expect("copy fixture dll into bundle");
         let link_name: &str = "artifact.so";
         symlink(&real_dll, bundle_dir.join(link_name)).expect("create symlink artifact");
 
@@ -762,7 +761,7 @@ mod unload_tests {
             "id = {}\nname = \"{}\"\nversion = \"{}\"\nloader = \"native\"\nprovides = [\"test.add\"]\nfile = \"{}\"\n\n[function_count]\n\"test.add@1\" = 1\n",
             src_manifest.id, src_manifest.name, src_manifest.version, link_name
         );
-        std::fs::write(bundle_dir.join("manifest.toml"), manifest_toml).expect("write manifest");
+        fs::write(bundle_dir.join("manifest.toml"), manifest_toml).expect("write manifest");
 
         let manifest: ManifestData =
             parse_manifest(&bundle_dir).expect("parse_manifest for symlink bundle");
@@ -770,17 +769,13 @@ mod unload_tests {
         let runtime: Arc<Runtime> = test_runtime();
         let loader: NativeLoader = NativeLoader::new(NativeConfig::default());
 
-        let result: Result<(), polyplug::error::LoaderError> =
-            loader.load(&manifest, &source, &runtime);
+        let result: Result<(), LoaderError> = loader.load(&manifest, &source, &runtime);
         assert!(
-            matches!(
-                result,
-                Err(polyplug::error::LoaderError::ArtifactPathEscape { .. })
-            ),
+            matches!(result, Err(LoaderError::ArtifactPathEscape { .. })),
             "a symlinked artifact must be rejected, got: {result:?}"
         );
 
-        let _ = std::fs::remove_dir_all(&bundle_dir);
+        let _ = fs::remove_dir_all(&bundle_dir);
     }
 
     /// On Windows, a mapped DLL holds an exclusive file lock, so `remove_file`
@@ -804,27 +799,27 @@ mod unload_tests {
         let src_dll: PathBuf = src_dir.join(&dll_name);
 
         // Unique temp dir for an isolated copy of the bundle.
-        let temp_dir: PathBuf = std::env::temp_dir().join(format!(
+        let temp_dir: PathBuf = env::temp_dir().join(format!(
             "polyplug_native_reclaim_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
-        std::fs::create_dir_all(&temp_dir).expect("create temp bundle dir");
+        fs::create_dir_all(&temp_dir).expect("create temp bundle dir");
 
-        // Copy the DLL into the temp dir; the write handle is closed by std::fs::copy.
+        // Copy the DLL into the temp dir; the write handle is closed by fs::copy.
         let dest_dll: PathBuf = temp_dir.join(&dll_name);
-        std::fs::copy(&src_dll, &dest_dll).expect("copy fixture dll");
+        fs::copy(&src_dll, &dest_dll).expect("copy fixture dll");
 
-        // Write a minimal manifest pointing at the copied DLL. std::fs::write closes
+        // Write a minimal manifest pointing at the copied DLL. fs::write closes
         // its handle before returning, so no write handle keeps the dir/file locked.
         let manifest_toml: String = format!(
             "id = {}\nname = \"{}\"\nversion = \"{}\"\nloader = \"native\"\nprovides = [\"test.add\"]\n\n[file]\nwindows.x86_64 = \"{}\"\n\n[function_count]\n\"test.add@1\" = 1\n",
             src_manifest.id, src_manifest.name, src_manifest.version, dll_name
         );
-        std::fs::write(temp_dir.join("manifest.toml"), manifest_toml).expect("write temp manifest");
+        fs::write(temp_dir.join("manifest.toml"), manifest_toml).expect("write temp manifest");
 
         let manifest: ManifestData =
             parse_manifest(&temp_dir).expect("parse_manifest for temp bundle");
@@ -839,7 +834,7 @@ mod unload_tests {
 
         // While loaded, the DLL is mapped and locked: removal must fail.
         assert!(
-            std::fs::remove_file(&dest_dll).is_err(),
+            fs::remove_file(&dest_dll).is_err(),
             "a mapped DLL must be locked on Windows"
         );
 
@@ -855,7 +850,7 @@ mod unload_tests {
         let mut removed: bool = false;
         for _ in 0..1024 {
             crossbeam_epoch::pin().flush();
-            if std::fs::remove_file(&dest_dll).is_ok() {
+            if fs::remove_file(&dest_dll).is_ok() {
                 removed = true;
                 break;
             }
@@ -865,6 +860,6 @@ mod unload_tests {
             "DLL must be removable after the epoch-deferred dlclose runs"
         );
 
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

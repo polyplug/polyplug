@@ -40,13 +40,16 @@ use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering;
 use std::collections::HashSet;
 use std::ffi::CString;
+use std::ffi::NulError;
 
 use pyo3::Bound;
+use pyo3::PyErr;
 use pyo3::Python;
 use pyo3::types::PyAny;
 use pyo3::types::PyAnyMethods;
 use pyo3::types::PyDict;
 use pyo3::types::PyDictMethods;
+use pyo3::types::PyList;
 use pyo3::types::PyModule;
 
 use polyplug::error::LoaderError;
@@ -112,14 +115,14 @@ pub(crate) fn snapshot_loaded_modules(
     bundle_name: &str,
 ) -> Result<HashSet<String>, LoaderError> {
     let sys_mod: Bound<'_, PyModule> =
-        PyModule::import(py, "sys").map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+        PyModule::import(py, "sys").map_err(|e: PyErr| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("Python sys import failed: {}", e),
         })?;
     let modules: Bound<'_, PyAny> =
         sys_mod
             .getattr("modules")
-            .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+            .map_err(|e: PyErr| LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
                 error: format!("sys.modules access failed: {}", e),
             })?;
@@ -129,23 +132,21 @@ pub(crate) fn snapshot_loaded_modules(
     let keys_view: Bound<'_, PyAny> =
         modules
             .call_method0("keys")
-            .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+            .map_err(|e: PyErr| LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
                 error: format!("sys.modules.keys() failed: {}", e),
             })?;
-    let keys: Bound<'_, PyAny> = py
-        .get_type::<pyo3::types::PyList>()
-        .call1((keys_view,))
-        .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!("sys.modules keys materialization failed: {}", e),
-        })?;
-    let names: Vec<String> = keys
-        .extract()
-        .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: format!("sys.modules keys extraction failed: {}", e),
-        })?;
+    let keys: Bound<'_, PyAny> =
+        py.get_type::<PyList>()
+            .call1((keys_view,))
+            .map_err(|e: PyErr| LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("sys.modules keys materialization failed: {}", e),
+            })?;
+    let names: Vec<String> = keys.extract().map_err(|e: PyErr| LoaderError::InitFailed {
+        bundle: bundle_name.to_owned(),
+        error: format!("sys.modules keys extraction failed: {}", e),
+    })?;
     Ok(names.into_iter().collect())
 }
 
@@ -186,21 +187,19 @@ pub(crate) fn isolate_bundle_modules(
     before: &HashSet<String>,
 ) -> Result<String, LoaderError> {
     let helper_code: CString =
-        CString::new(ISOLATION_HELPER_PY).map_err(|e: std::ffi::NulError| {
-            LoaderError::InitFailed {
-                bundle: bundle_name.to_owned(),
-                error: format!("isolation helper contained interior nul: {}", e),
-            }
+        CString::new(ISOLATION_HELPER_PY).map_err(|e: NulError| LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("isolation helper contained interior nul: {}", e),
         })?;
     let file_name: CString =
-        CString::new("polyplug_python_isolation.py").map_err(|e: std::ffi::NulError| {
+        CString::new("polyplug_python_isolation.py").map_err(|e: NulError| {
             LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
                 error: format!("isolation file name contained interior nul: {}", e),
             }
         })?;
     let module_name: CString =
-        CString::new("polyplug_python_isolation").map_err(|e: std::ffi::NulError| {
+        CString::new("polyplug_python_isolation").map_err(|e: NulError| {
             LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
                 error: format!("isolation module name contained interior nul: {}", e),
@@ -208,12 +207,12 @@ pub(crate) fn isolate_bundle_modules(
         })?;
 
     let helper: Bound<'_, PyModule> =
-        PyModule::from_code(py, &helper_code, &file_name, &module_name).map_err(
-            |e: pyo3::PyErr| LoaderError::InitFailed {
+        PyModule::from_code(py, &helper_code, &file_name, &module_name).map_err(|e: PyErr| {
+            LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
                 error: format!("isolation helper compile failed: {}", e),
-            },
-        )?;
+            }
+        })?;
 
     let prefix: String = next_isolation_prefix(bundle_id);
     let before_list: Vec<&str> = before.iter().map(|s: &String| s.as_str()).collect();
@@ -223,7 +222,7 @@ pub(crate) fn isolate_bundle_modules(
         .and_then(|isolate: Bound<'_, PyAny>| {
             isolate.call1((prefix.as_str(), bundle_dir, before_list))
         })
-        .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+        .map_err(|e: PyErr| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("module isolation failed: {}", e),
         })?;
@@ -232,14 +231,14 @@ pub(crate) fn isolate_bundle_modules(
     // could collide with a future load; drop it from sys.modules now. Its code
     // object is no longer needed once `isolate` has run.
     let sys_mod: Bound<'_, PyModule> =
-        PyModule::import(py, "sys").map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+        PyModule::import(py, "sys").map_err(|e: PyErr| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("Python sys import failed: {}", e),
         })?;
     let modules: Bound<'_, PyAny> =
         sys_mod
             .getattr("modules")
-            .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+            .map_err(|e: PyErr| LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
                 error: format!("sys.modules access failed: {}", e),
             })?;

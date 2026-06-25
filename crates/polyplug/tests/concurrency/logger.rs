@@ -23,6 +23,8 @@ use polyplug::runtime::Runtime;
 use polyplug_abi::types::LogLevel;
 use polyplug_abi::{HostApi, StringView};
 
+use crate::common::TestNativeLoader;
+
 const THREADS: usize = 8_usize;
 const LOGS_PER_THREAD: usize = 2_000_usize;
 
@@ -54,7 +56,7 @@ fn concurrent_host_log_funnel_delivers_every_record_intact() {
     // The closure is invoked from every logging thread at once: it must be
     // `Send + Sync`, and it validates each record's integrity in place.
     let rt: Arc<Runtime> = Runtime::builder()
-        .loader(crate::common::TestNativeLoader::new())
+        .loader(TestNativeLoader::new())
         .logger(move |level: LogLevel, scope: &str, message: &str| {
             if level != LogLevel::Info || !thread_index_agrees(scope, message) {
                 cb_malformed.store(true, Ordering::Relaxed);

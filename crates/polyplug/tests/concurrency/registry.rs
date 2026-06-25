@@ -8,11 +8,16 @@
 //! repeatedly while resolver threads read it (the published-`ReadView` invariant:
 //! a resolver observes either the old or the new interface, never a torn one).
 
+use core::ptr::null_mut;
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Barrier;
+use std::thread;
+use std::thread::JoinHandle;
+
+use crossbeam_epoch::{Guard, pin as epoch_pin};
 
 use polyplug::error::{HostContractError, LoaderError, RegistryError, RuntimeError};
 use polyplug::runtime::Runtime;
@@ -26,7 +31,7 @@ use polyplug_utils::GuestContractId;
 use polyplug_utils::HostContractId;
 
 use crate::common::TestNativeLoader;
-use crate::fixtures::make_descriptor;
+use crate::fixtures::{MOCK_FNS_EMPTY, make_descriptor};
 
 const THREADS: usize = 8_usize;
 const RESOLVER_THREADS: usize = 6_usize;
@@ -99,12 +104,12 @@ static INTERFACE_SWAP_V2: GuestContractInterface =
 fn stress_concurrent_register_find_resolve() {
     let registry: Arc<RuntimeStore> = Arc::new(RuntimeStore::new());
     let barrier: Arc<Barrier> = Arc::new(Barrier::new(THREADS));
-    let mut thread_handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(THREADS);
+    let mut thread_handles: Vec<JoinHandle<()>> = Vec::with_capacity(THREADS);
 
     for idx in 0_usize..THREADS {
         let reg_clone: Arc<RuntimeStore> = Arc::clone(&registry);
         let barrier_clone: Arc<Barrier> = Arc::clone(&barrier);
-        let thread_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
+        let thread_handle: JoinHandle<()> = thread::spawn(move || {
             let descriptor: PluginDescriptor =
                 make_descriptor(PLUGIN_NAMES[idx], CONTRACT_NAMES[idx]);
             let interface: &'static GuestContractInterface = &INTERFACES_V1[idx];
@@ -182,15 +187,14 @@ fn stress_concurrent_swaps_with_resolvers() {
     let stop: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let ready: Arc<Barrier> = Arc::new(Barrier::new(RESOLVER_THREADS + 1_usize));
     let resolve_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0_usize));
-    let mut resolver_handles: Vec<std::thread::JoinHandle<()>> =
-        Vec::with_capacity(RESOLVER_THREADS);
+    let mut resolver_handles: Vec<JoinHandle<()>> = Vec::with_capacity(RESOLVER_THREADS);
 
     for _thread_idx in 0_usize..RESOLVER_THREADS {
         let reg_clone: Arc<RuntimeStore> = Arc::clone(&registry);
         let stop_clone: Arc<AtomicBool> = Arc::clone(&stop);
         let ready_clone: Arc<Barrier> = Arc::clone(&ready);
         let resolve_counter: Arc<AtomicUsize> = Arc::clone(&resolve_count);
-        let resolver_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
+        let resolver_handle: JoinHandle<()> = thread::spawn(move || {
             ready_clone.wait();
             // Each resolver guarantees at least one successful resolve before
             // honoring `stop` — on a loaded runner the swap loop can finish and
@@ -204,7 +208,7 @@ fn stress_concurrent_swaps_with_resolvers() {
                 // no reader is pinned; pinning before resolving keeps the interface this
                 // iteration touches alive across the deref even if the swapper thread
                 // republishes concurrently.
-                let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+                let _epoch_guard: Guard = epoch_pin();
                 let handle_result: Result<GuestContractHandle, RegistryError> = reg_clone
                     .find_guest_contract(GuestContractId::from_u64(SWAP_CONTRACT_ID), 0_u32);
                 if let Ok(found) = handle_result {
@@ -274,13 +278,13 @@ fn concurrent_register_loader_duplicate_is_exactly_one_winner() {
     let ok_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0_usize));
     let dup_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0_usize));
 
-    let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(REGISTER_RACE_THREADS);
+    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(REGISTER_RACE_THREADS);
     for _ in 0_usize..REGISTER_RACE_THREADS {
         let rt: Arc<Runtime> = Arc::clone(&runtime);
         let ready_clone: Arc<Barrier> = Arc::clone(&ready);
         let ok_clone: Arc<AtomicUsize> = Arc::clone(&ok_count);
         let dup_clone: Arc<AtomicUsize> = Arc::clone(&dup_count);
-        handles.push(std::thread::spawn(move || {
+        handles.push(thread::spawn(move || {
             ready_clone.wait();
             match rt.register_loader(Box::new(TestNativeLoader::new())) {
                 Ok(()) => {
@@ -349,14 +353,14 @@ fn leak_host_contract_interface() -> &'static HostContractInterface {
         },
         singleton: false,
         dispatch_type: DispatchType::Native,
-        runtime: core::ptr::null_mut(),
-        user_data: core::ptr::null_mut(),
+        runtime: null_mut(),
+        user_data: null_mut(),
         create_instance: hc_create,
         destroy_instance: hc_destroy,
         dispatch: DispatchMechanisms {
             native: NativeDispatch {
                 function_count: 0,
-                functions: crate::fixtures::MOCK_FNS_EMPTY.as_ptr(),
+                functions: MOCK_FNS_EMPTY.as_ptr(),
             },
         },
     }))
@@ -373,11 +377,11 @@ fn concurrent_register_host_contract_distinct_ids_all_land() {
         .expect("runtime build must succeed");
     let ready: Arc<Barrier> = Arc::new(Barrier::new(REGISTER_RACE_THREADS));
 
-    let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(REGISTER_RACE_THREADS);
+    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(REGISTER_RACE_THREADS);
     for i in 0_usize..REGISTER_RACE_THREADS {
         let rt: Arc<Runtime> = Arc::clone(&runtime);
         let ready_clone: Arc<Barrier> = Arc::clone(&ready);
-        handles.push(std::thread::spawn(move || {
+        handles.push(thread::spawn(move || {
             let iface: &'static HostContractInterface = leak_host_contract_interface();
             ready_clone.wait();
             rt.register_host_contract(BASE + i as u64, iface)
@@ -408,13 +412,13 @@ fn concurrent_register_host_contract_same_id_is_exactly_one_winner() {
     let ok_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0_usize));
     let dup_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0_usize));
 
-    let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(REGISTER_RACE_THREADS);
+    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(REGISTER_RACE_THREADS);
     for _ in 0_usize..REGISTER_RACE_THREADS {
         let rt: Arc<Runtime> = Arc::clone(&runtime);
         let ready_clone: Arc<Barrier> = Arc::clone(&ready);
         let ok_clone: Arc<AtomicUsize> = Arc::clone(&ok_count);
         let dup_clone: Arc<AtomicUsize> = Arc::clone(&dup_count);
-        handles.push(std::thread::spawn(move || {
+        handles.push(thread::spawn(move || {
             let iface: &'static HostContractInterface = leak_host_contract_interface();
             ready_clone.wait();
             match rt.register_host_contract(ID, iface) {
@@ -463,13 +467,13 @@ fn concurrent_register_guest_duplicate_provider_is_exactly_one_winner() {
     let ok_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0_usize));
     let dup_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0_usize));
 
-    let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(REGISTER_RACE_THREADS);
+    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(REGISTER_RACE_THREADS);
     for _ in 0_usize..REGISTER_RACE_THREADS {
         let reg: Arc<RuntimeStore> = Arc::clone(&registry);
         let ready_clone: Arc<Barrier> = Arc::clone(&ready);
         let ok_clone: Arc<AtomicUsize> = Arc::clone(&ok_count);
         let dup_clone: Arc<AtomicUsize> = Arc::clone(&dup_count);
-        handles.push(std::thread::spawn(move || {
+        handles.push(thread::spawn(move || {
             let descriptor: PluginDescriptor = make_descriptor("dup_plugin", "stress.dup.contract");
             ready_clone.wait();
             // SAFETY: INTERFACE_DUP is 'static, valid for the test lifetime.
@@ -538,11 +542,11 @@ fn concurrent_find_all_during_multi_provider_registration() {
     let ready: Arc<Barrier> = Arc::new(Barrier::new(PROVIDERS + FIND_ALL_READERS));
     let stop: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
-    let mut writer_handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(PROVIDERS);
+    let mut writer_handles: Vec<JoinHandle<()>> = Vec::with_capacity(PROVIDERS);
     for i in 0_usize..PROVIDERS {
         let reg: Arc<RuntimeStore> = Arc::clone(&registry);
         let ready_clone: Arc<Barrier> = Arc::clone(&ready);
-        writer_handles.push(std::thread::spawn(move || {
+        writer_handles.push(thread::spawn(move || {
             // Same contract id AND name for every provider — only the bundle id
             // differs, which is what makes them distinct providers rather than a
             // DuplicateProvider (same bundle) or a ContractIdCollision (same id,
@@ -562,12 +566,12 @@ fn concurrent_find_all_during_multi_provider_registration() {
         }));
     }
 
-    let mut reader_handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(FIND_ALL_READERS);
+    let mut reader_handles: Vec<JoinHandle<()>> = Vec::with_capacity(FIND_ALL_READERS);
     for _ in 0_usize..FIND_ALL_READERS {
         let reg: Arc<RuntimeStore> = Arc::clone(&registry);
         let ready_clone: Arc<Barrier> = Arc::clone(&ready);
         let stop_clone: Arc<AtomicBool> = Arc::clone(&stop);
-        reader_handles.push(std::thread::spawn(move || {
+        reader_handles.push(thread::spawn(move || {
             ready_clone.wait();
             let mut buffer: [GuestContractHandle; PROVIDERS + 4] =
                 [GuestContractHandle::null(); PROVIDERS + 4];

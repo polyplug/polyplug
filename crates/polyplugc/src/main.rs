@@ -1,4 +1,8 @@
+use std::fs;
+use std::io;
+use std::path::Path;
 use std::path::PathBuf;
+use std::process;
 
 use clap::Parser;
 use clap::Subcommand;
@@ -100,7 +104,7 @@ fn main() {
     let cli: Cli = Cli::parse();
     if let Err(e) = run(cli) {
         eprintln!("error: {e}");
-        std::process::exit(1);
+        process::exit(1);
     }
 }
 
@@ -159,11 +163,9 @@ fn run(cli: Cli) -> Result<(), PolyplugcError> {
         }
 
         Command::Keygen { out } => {
-            std::fs::create_dir_all(&out).map_err(|e: std::io::Error| {
-                PolyplugcError::WriteFailed {
-                    path: out.display().to_string(),
-                    source: e,
-                }
+            fs::create_dir_all(&out).map_err(|e: io::Error| PolyplugcError::WriteFailed {
+                path: out.display().to_string(),
+                source: e,
             })?;
 
             let (signing_key, verifying_key): (SigningKey, VerifyingKey) = generate_keypair();
@@ -200,7 +202,7 @@ fn run(cli: Cli) -> Result<(), PolyplugcError> {
                 }
                 Err(e) => {
                     eprintln!("FAIL: {e}");
-                    std::process::exit(1);
+                    process::exit(1);
                 }
             }
         }
@@ -225,7 +227,7 @@ fn hex_encode(bytes: &[u8]) -> String {
         .join("")
 }
 
-fn write_files(output: &GenerateOutput, out_dir: &std::path::Path) -> Result<(), PolyplugcError> {
+fn write_files(output: &GenerateOutput, out_dir: &Path) -> Result<(), PolyplugcError> {
     let summary: WriteSummary = write_output(output, out_dir)?;
     println!(
         "generated {} files ({} written, {} unchanged)",

@@ -6,24 +6,42 @@
 //!
 //! This test crate is the crate root for the `integration_codegen_cpp` test binary.
 
+use std::fs;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Output;
 
+use libloading::{Library, Symbol};
+
+use core::cell::Ref;
+use core::cell::RefCell;
+use core::ffi::c_void;
+use core::mem;
+use core::ptr;
+use core::slice;
+use core::str;
+
 use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
+use polyplug_abi::Array;
 use polyplug_abi::BundleInitContext;
+use polyplug_abi::DependencyInfo;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
+use polyplug_abi::HostContractInstance;
+use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::types::StringView;
 use polyplug_abi::types::abi_error_ok;
+use polyplug_utils::BundleId;
+use polyplug_utils::GuestContractId;
 
 mod common;
 
@@ -96,21 +114,20 @@ unsafe extern "C" fn registry_register_callback(
     // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
     // &'static str contract name — guaranteed valid UTF-8 by construction.
     let contract_name: &str = unsafe {
-        let bytes: &[u8] =
-            core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
-        core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
+        let bytes: &[u8] = slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
+        str::from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
 
     // Register with thread-local Registry.
     let result: Result<GuestContractHandle, _> = CPP_DISPATCH_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, RuntimeStore> = reg_cell.borrow();
+        let registry: Ref<'_, RuntimeStore> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
         unsafe {
             registry.register_guest_contract(
                 *desc,
                 interface,
                 contract_name.to_owned(),
-                polyplug_utils::BundleId::from_u64(vt.contract_id.id()),
+                BundleId::from_u64(vt.contract_id.id()),
             )
         }
     });
@@ -153,8 +170,8 @@ unsafe extern "C" fn noop_find_all_guest_contracts(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::Array<GuestContractHandle> {
-    polyplug_abi::Array::empty()
+) -> Array<GuestContractHandle> {
+    Array::empty()
 }
 
 /// No-op resolve_guest_contract callback.
@@ -162,7 +179,7 @@ unsafe extern "C" fn noop_resolve_guest_contract(
     _this: *const HostApi,
     _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
-    core::ptr::null()
+    ptr::null()
 }
 
 /// No-op get_host_contract callback.
@@ -170,22 +187,18 @@ unsafe extern "C" fn noop_get_host_contract(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::HostContractInstance {
-    polyplug_abi::HostContractInstance::null()
+) -> HostContractInstance {
+    HostContractInstance::null()
 }
 
 /// No-op list_bundles callback.
-unsafe extern "C" fn noop_list_bundles(
-    _this: *const HostApi,
-) -> polyplug_abi::Array<polyplug_utils::BundleId> {
-    polyplug_abi::Array::empty()
+unsafe extern "C" fn noop_list_bundles(_this: *const HostApi) -> Array<BundleId> {
+    Array::empty()
 }
 
 /// No-op get_dependencies callback.
-unsafe extern "C" fn noop_get_dependencies(
-    _this: *const HostApi,
-) -> polyplug_abi::Array<polyplug_abi::DependencyInfo> {
-    polyplug_abi::Array::empty()
+unsafe extern "C" fn noop_get_dependencies(_this: *const HostApi) -> Array<DependencyInfo> {
+    Array::empty()
 }
 
 /// No-op resolve_host_contract_interface callback.
@@ -193,8 +206,8 @@ unsafe extern "C" fn noop_resolve_host_contract_interface(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractInterface {
-    core::ptr::null()
+) -> *const HostContractInterface {
+    ptr::null()
 }
 
 /// No-op load_bundle callback.
@@ -226,7 +239,7 @@ unsafe extern "C" fn noop_reload_bundle(
 /// No-op register_host_contract callback.
 unsafe extern "C" fn noop_register_host_contract(
     _this: *const HostApi,
-    _interface: *const polyplug_abi::HostContractInterface,
+    _interface: *const HostContractInterface,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -238,7 +251,7 @@ unsafe extern "C" fn noop_register_host_contract(
 /// No-op register_loader callback.
 unsafe extern "C" fn noop_register_loader(
     _this: *const HostApi,
-    _loader_ptr: *mut core::ffi::c_void,
+    _loader_ptr: *mut c_void,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -263,7 +276,7 @@ unsafe extern "C" fn noop_get_error_len(_this: *const HostApi) -> usize {
 
 unsafe extern "C" fn noop_unload_bundle(
     _this: *const HostApi,
-    _bundle_id: polyplug_utils::BundleId,
+    _bundle_id: BundleId,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -275,7 +288,7 @@ unsafe extern "C" fn noop_unload_bundle(
 /// Build a HostApi with all callbacks.
 fn make_host_interface() -> HostApi {
     HostApi {
-        runtime: core::ptr::null_mut(),
+        runtime: ptr::null_mut(),
         register_guest_contract: registry_register_callback,
         alloc: noop_alloc,
         free: noop_free,
@@ -297,13 +310,12 @@ fn make_host_interface() -> HostApi {
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
         revision_counter: stub_revision_counter,
-        reserved: core::ptr::null(),
+        reserved: ptr::null(),
     }
 }
 
-std::thread_local! {
-    static CPP_DISPATCH_REGISTRY: core::cell::RefCell<RuntimeStore> =
-        core::cell::RefCell::new(RuntimeStore::new());
+thread_local! {
+    static CPP_DISPATCH_REGISTRY: RefCell<RuntimeStore> = RefCell::new(RuntimeStore::new());
 }
 
 /// `AddArgs` — mirrors the C++ struct in the test plugin (`#[repr(C)]`).
@@ -324,7 +336,7 @@ fn test_cpp_codegen_files_exist() {
         .join("fixtures")
         .join("test_bundle.toml");
 
-    std::fs::create_dir_all(&out_dir).expect("failed to create out_dir");
+    fs::create_dir_all(&out_dir).expect("failed to create out_dir");
 
     // ── 2. Run polyplugc to generate C++ bindings ─────────────────────────────
     let gen_output: Output = Command::new(polyplugc_bin())
@@ -367,8 +379,7 @@ fn test_cpp_codegen_files_exist() {
     );
 
     // ── 4. Attempt g++ compile of interfaces.hpp (skip if g++ not found) ───────
-    let gpp_version_result: std::io::Result<std::process::Output> =
-        Command::new("g++").args(["--version"]).output();
+    let gpp_version_result: io::Result<Output> = Command::new("g++").args(["--version"]).output();
 
     if let Ok(version_out) = gpp_version_result {
         if version_out.status.success() {
@@ -377,7 +388,7 @@ fn test_cpp_codegen_files_exist() {
             let out_obj: PathBuf =
                 PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("test_cpp_codegen_interfaces.o");
 
-            let compile_result: std::process::Output = Command::new("g++")
+            let compile_result: Output = Command::new("g++")
                 .arg("-std=c++20")
                 .arg(format!("-I{}", out_dir.join("guest").display()))
                 .arg(format!("-I{}", out_dir.join("host").display()))
@@ -409,8 +420,8 @@ fn test_cpp_codegen_files_exist() {
 
 /// Contract id for `test.add@1`, computed from the canonical scheme
 /// (`fnv1a_64("guest_contract:test.add@1")`) so it tracks the plugin fixtures.
-fn test_add_contract_id() -> polyplug_utils::GuestContractId {
-    polyplug_utils::GuestContractId::new("test.add", 1)
+fn test_add_contract_id() -> GuestContractId {
+    GuestContractId::new("test.add", 1)
 }
 
 #[test]
@@ -422,14 +433,13 @@ fn test_cpp_plugin_dispatch() {
 
     // ── 1. Load the pre-compiled C++ test plugin ──────────────────────────────
     // SAFETY: TEST_PLUGIN_CPP_SO is a compiled cdylib built by build.rs.
-    let library: libloading::Library = unsafe {
-        libloading::Library::new(TEST_PLUGIN_CPP_SO)
-            .expect("failed to load C++ test plugin shared library")
+    let library: Library = unsafe {
+        Library::new(TEST_PLUGIN_CPP_SO).expect("failed to load C++ test plugin shared library")
     };
 
     // ── 2. Resolve polyplug_init (2-arg signature) ───────────────────────────
     // SAFETY: symbol matches expected ABI signature.
-    let init_fn: libloading::Symbol<
+    let init_fn: Symbol<
         '_,
         unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe {
@@ -491,7 +501,7 @@ fn test_cpp_plugin_dispatch() {
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { core::mem::transmute(fn_ptr) };
+    ) = unsafe { mem::transmute(fn_ptr) };
 
     // ── 7. Call fn_ptr(args_ptr, out_ptr) — add(10, 20) → 30 ─────────────────
     let args: AddArgs = AddArgs {
@@ -521,7 +531,7 @@ fn test_cpp_plugin_dispatch() {
     println!("test_cpp_plugin_dispatch: add(10, 20) = {} ✓", out);
 
     // Keep the library alive until after the last call.
-    core::mem::forget(library);
+    mem::forget(library);
 }
 
 // ─── Part C: Cross-language test — Rust plugin loaded via Rust test infrastructure ───
@@ -537,12 +547,11 @@ fn test_cpp_host_loads_rust_plugin() {
     }
 
     // SAFETY: TEST_PLUGIN_SO is a compiled Rust cdylib built by build.rs
-    let library: libloading::Library = unsafe {
-        libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load Rust test plugin")
-    };
+    let library: Library =
+        unsafe { Library::new(TEST_PLUGIN_SO).expect("failed to load Rust test plugin") };
 
     // SAFETY: symbol matches expected ABI signature (2-arg)
-    let init_fn: libloading::Symbol<
+    let init_fn: Symbol<
         '_,
         unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe {
@@ -601,7 +610,7 @@ fn test_cpp_host_loads_rust_plugin() {
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { core::mem::transmute(fn_ptr) };
+    ) = unsafe { mem::transmute(fn_ptr) };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args and out are valid stack allocations; null stateless instance.
@@ -625,7 +634,7 @@ fn test_cpp_host_loads_rust_plugin() {
         "test_cpp_host_loads_rust_plugin: Rust plugin add(3,5) = {} ✓",
         out
     );
-    core::mem::forget(library);
+    mem::forget(library);
 }
 
 // ─── Part D: Exception isolation test — throwing C++ plugin ───
@@ -640,13 +649,12 @@ fn test_exception_isolation_cpp() {
     }
 
     // SAFETY: TEST_PLUGIN_CPP_THROW_SO is a compiled C++ cdylib built by build.rs
-    let library: libloading::Library = unsafe {
-        libloading::Library::new(TEST_PLUGIN_CPP_THROW_SO)
-            .expect("failed to load throwing C++ test plugin")
+    let library: Library = unsafe {
+        Library::new(TEST_PLUGIN_CPP_THROW_SO).expect("failed to load throwing C++ test plugin")
     };
 
     // SAFETY: symbol matches expected ABI signature (2-arg).
-    let init_fn: libloading::Symbol<
+    let init_fn: Symbol<
         '_,
         unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe {
@@ -704,7 +712,7 @@ fn test_exception_isolation_cpp() {
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { core::mem::transmute(fn_ptr) };
+    ) = unsafe { mem::transmute(fn_ptr) };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args and out are valid
@@ -725,7 +733,7 @@ fn test_exception_isolation_cpp() {
     );
     // Process survived — if we reach this line, no crash occurred
     println!("test_exception_isolation_cpp: exception caught, host survived ✓");
-    core::mem::forget(library);
+    mem::forget(library);
 }
 
 // ─── Enum types codegen test ─────────────────────────────────────────────────
@@ -740,7 +748,7 @@ fn test_cpp_codegen_generates_enum_types() {
         .join("fixtures")
         .join("test_api.toml");
 
-    std::fs::create_dir_all(&out_dir).expect("failed to create out_dir");
+    fs::create_dir_all(&out_dir).expect("failed to create out_dir");
 
     // ── 2. Run polyplugc to generate C++ bindings ──────────────────────────────
     let gen_output: Output = run_polyplugc_cpp(&api_toml, &out_dir);
@@ -753,7 +761,7 @@ fn test_cpp_codegen_generates_enum_types() {
 
     // ── 3. Read host/types.hpp and assert enum content ─────────────────────────
     let types_file: PathBuf = out_dir.join("host").join("types.hpp");
-    let content: String = std::fs::read_to_string(&types_file).expect("read types file");
+    let content: String = fs::read_to_string(&types_file).expect("read types file");
 
     assert!(
         content.contains("enum class PixelFormat"),
@@ -769,32 +777,32 @@ fn test_cpp_codegen_generates_enum_types() {
 
 /// `HostApi.log` stub for test hosts — drops the record.
 unsafe extern "C" fn stub_host_log(
-    _this: *const polyplug_abi::HostApi,
+    _this: *const HostApi,
     _level: u32,
-    _scope: polyplug_abi::StringView,
-    _message: polyplug_abi::StringView,
+    _scope: StringView,
+    _message: StringView,
 ) {
 }
 
 unsafe extern "C" fn stub_create_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _args: *const core::ffi::c_void,
-    out_instance: *mut polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _args: *const c_void,
+    out_instance: *mut GuestContractInstance,
 ) {
     if !out_instance.is_null() {
         // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+        unsafe { out_instance.write(GuestContractInstance::null()) };
     }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _instance: polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _instance: GuestContractInstance,
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const polyplug_abi::HostApi) -> *const u64 {
-    core::ptr::null()
+unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
+    ptr::null()
 }

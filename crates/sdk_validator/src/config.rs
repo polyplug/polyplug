@@ -5,9 +5,13 @@
 //! section is the source of truth for each language's naming convention, and
 //! target paths resolve relative to the config file's parent directory.
 
+use core::fmt::{Formatter, Result as FmtResult};
 use core::str::FromStr;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
+
+use serde::de::{MapAccess, Visitor};
 
 use crate::ast_grep::NamingConvention;
 use crate::error::ValidatorError;
@@ -80,16 +84,16 @@ impl<'de> serde::Deserialize<'de> for VariantEntriesYaml {
     {
         struct EntriesVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for EntriesVisitor {
+        impl<'de> Visitor<'de> for EntriesVisitor {
             type Value = VariantEntriesYaml;
 
-            fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            fn expecting(&self, formatter: &mut Formatter<'_>) -> FmtResult {
                 formatter.write_str("a mapping of variant name to integer value")
             }
 
             fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
             where
-                A: serde::de::MapAccess<'de>,
+                A: MapAccess<'de>,
             {
                 let mut entries: Vec<(String, i64)> = Vec::new();
                 while let Some((variant, value)) = map.next_entry::<String, i64>()? {
@@ -115,7 +119,7 @@ impl<'de> serde::Deserialize<'de> for VariantEntriesYaml {
 /// - a language present in `targets:` has no (or an invalid) `naming:` entry
 pub fn parse_config(path: &Path) -> Result<Config, ValidatorError> {
     let content: String =
-        std::fs::read_to_string(path).map_err(|source| ValidatorError::ConfigRead {
+        fs::read_to_string(path).map_err(|source| ValidatorError::ConfigRead {
             path: path.to_path_buf(),
             source,
         })?;
@@ -471,10 +475,11 @@ pub fn filter_to_struct(config: &Config, struct_name: Option<&str>) -> Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::error::Error;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    fn create_temp_config(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
+    fn create_temp_config(content: &str) -> Result<NamedTempFile, Box<dyn Error>> {
         let mut file: NamedTempFile = NamedTempFile::new()?;
         file.write_all(content.as_bytes())?;
         file.flush()?;
@@ -508,7 +513,7 @@ targets:
 "#;
 
     #[test]
-    fn test_parse_config() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_config(VALID_YAML)?;
         let config: Config = parse_config(file.path())?;
 
@@ -527,11 +532,10 @@ targets:
     }
 
     #[test]
-    fn test_parse_config_resolves_paths_relative_to_config_dir()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_resolves_paths_relative_to_config_dir() -> Result<(), Box<dyn Error>> {
         let dir: tempfile::TempDir = tempfile::tempdir()?;
         let config_path: PathBuf = dir.path().join("cfg.yaml");
-        std::fs::write(&config_path, VALID_YAML)?;
+        fs::write(&config_path, VALID_YAML)?;
 
         let config: Config = parse_config(&config_path)?;
         let rust_targets: &Vec<PathBuf> =
@@ -544,7 +548,7 @@ targets:
     }
 
     #[test]
-    fn test_parse_config_invalid_version() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_invalid_version() -> Result<(), Box<dyn Error>> {
         let yaml: String = VALID_YAML.replace("version: 1", "version: 2");
         let file: NamedTempFile = create_temp_config(&yaml)?;
         assert!(matches!(
@@ -555,7 +559,7 @@ targets:
     }
 
     #[test]
-    fn test_parse_config_duplicate_method() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_duplicate_method() -> Result<(), Box<dyn Error>> {
         let yaml: &str = r#"
 version: 1
 methods:
@@ -577,7 +581,7 @@ targets:
     }
 
     #[test]
-    fn test_parse_config_invalid_method_name() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_invalid_method_name() -> Result<(), Box<dyn Error>> {
         let yaml: &str = r#"
 version: 1
 methods:
@@ -598,7 +602,7 @@ targets:
     }
 
     #[test]
-    fn test_parse_config_unknown_target_language() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_unknown_target_language() -> Result<(), Box<dyn Error>> {
         let yaml: &str = r#"
 version: 1
 methods:
@@ -622,7 +626,7 @@ targets:
     }
 
     #[test]
-    fn test_parse_config_unknown_naming_language() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_unknown_naming_language() -> Result<(), Box<dyn Error>> {
         let yaml: &str = r#"
 version: 1
 methods:
@@ -644,7 +648,7 @@ targets: {}
     }
 
     #[test]
-    fn test_parse_config_missing_naming_for_target() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_missing_naming_for_target() -> Result<(), Box<dyn Error>> {
         let yaml: &str = r#"
 version: 1
 methods:
@@ -669,7 +673,7 @@ targets:
     }
 
     #[test]
-    fn test_parse_config_invalid_naming_value() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_invalid_naming_value() -> Result<(), Box<dyn Error>> {
         let yaml: &str = r#"
 version: 1
 methods:
@@ -701,7 +705,7 @@ targets:
     }
 
     #[test]
-    fn test_parse_config_malformed_yaml() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_malformed_yaml() -> Result<(), Box<dyn Error>> {
         let yaml: &str = r#"
 version: 1
 methods:
@@ -784,10 +788,10 @@ enum_targets:
 "#;
 
     #[test]
-    fn test_parse_config_enums() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_enums() -> Result<(), Box<dyn Error>> {
         let dir: tempfile::TempDir = tempfile::tempdir()?;
         let config_path: PathBuf = dir.path().join("cfg.yaml");
-        std::fs::write(&config_path, VALID_ENUM_YAML)?;
+        fs::write(&config_path, VALID_ENUM_YAML)?;
 
         let config: Config = parse_config(&config_path)?;
         let dispatch: &BTreeMap<String, i64> = config
@@ -813,8 +817,7 @@ enum_targets:
     }
 
     #[test]
-    fn test_parse_config_missing_enum_sections_default_empty()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_missing_enum_sections_default_empty() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_config(VALID_YAML)?;
         let config: Config = parse_config(file.path())?;
         assert!(config.enums.is_empty());
@@ -823,7 +826,7 @@ enum_targets:
     }
 
     #[test]
-    fn test_parse_config_unknown_enum_target_language() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_unknown_enum_target_language() -> Result<(), Box<dyn Error>> {
         let yaml: String = VALID_ENUM_YAML.replace("  lua:\n", "  lau:\n");
         let file: NamedTempFile = create_temp_config(&yaml)?;
         match parse_config(file.path()) {
@@ -837,8 +840,7 @@ enum_targets:
     }
 
     #[test]
-    fn test_parse_config_enum_target_references_unknown_enum()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_enum_target_references_unknown_enum() -> Result<(), Box<dyn Error>> {
         let yaml: String =
             VALID_ENUM_YAML.replace("  lua:\n    DispatchType:", "  lua:\n    LogLevel:");
         let file: NamedTempFile = create_temp_config(&yaml)?;
@@ -856,7 +858,7 @@ enum_targets:
     }
 
     #[test]
-    fn test_parse_config_duplicate_variant_is_fatal() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_duplicate_variant_is_fatal() -> Result<(), Box<dyn Error>> {
         let yaml: String = VALID_ENUM_YAML.replace("    Native: 0", "    Native: 0\n    Native: 7");
         let file: NamedTempFile = create_temp_config(&yaml)?;
         match parse_config(file.path()) {
@@ -870,7 +872,7 @@ enum_targets:
     }
 
     #[test]
-    fn test_parse_config_invalid_variant_name() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_invalid_variant_name() -> Result<(), Box<dyn Error>> {
         let yaml: String = VALID_ENUM_YAML.replace("    Native: 0", "    \"Na tive\": 0");
         let file: NamedTempFile = create_temp_config(&yaml)?;
         match parse_config(file.path()) {
@@ -884,7 +886,7 @@ enum_targets:
     }
 
     #[test]
-    fn test_parse_config_invalid_enum_name() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_invalid_enum_name() -> Result<(), Box<dyn Error>> {
         // Replace only the `enums:` key (2-space indent), not the
         // `enum_targets:` reference (4-space indent).
         let yaml: String = VALID_ENUM_YAML.replace("\n  DispatchType:", "\n  \"Dispatch Type\":");
@@ -926,10 +928,10 @@ struct_targets:
 "#;
 
     #[test]
-    fn test_parse_config_structs() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_structs() -> Result<(), Box<dyn Error>> {
         let dir: tempfile::TempDir = tempfile::tempdir()?;
         let config_path: PathBuf = dir.path().join("cfg.yaml");
-        std::fs::write(&config_path, VALID_STRUCT_YAML)?;
+        fs::write(&config_path, VALID_STRUCT_YAML)?;
 
         let config: Config = parse_config(&config_path)?;
         let string_view: &Vec<String> = config
@@ -954,8 +956,7 @@ struct_targets:
     }
 
     #[test]
-    fn test_parse_config_missing_struct_sections_default_empty()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_missing_struct_sections_default_empty() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_config(VALID_YAML)?;
         let config: Config = parse_config(file.path())?;
         assert!(config.structs.is_empty());
@@ -964,8 +965,7 @@ struct_targets:
     }
 
     #[test]
-    fn test_parse_config_unknown_struct_target_language() -> Result<(), Box<dyn core::error::Error>>
-    {
+    fn test_parse_config_unknown_struct_target_language() -> Result<(), Box<dyn Error>> {
         let yaml: String = VALID_STRUCT_YAML.replace("  lua:\n", "  lau:\n");
         let file: NamedTempFile = create_temp_config(&yaml)?;
         match parse_config(file.path()) {
@@ -979,8 +979,7 @@ struct_targets:
     }
 
     #[test]
-    fn test_parse_config_struct_target_references_unknown_struct()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_struct_target_references_unknown_struct() -> Result<(), Box<dyn Error>> {
         let yaml: String =
             VALID_STRUCT_YAML.replace("  lua:\n    StringView:", "  lua:\n    Version:");
         let file: NamedTempFile = create_temp_config(&yaml)?;
@@ -998,7 +997,7 @@ struct_targets:
     }
 
     #[test]
-    fn test_parse_config_duplicate_field_is_fatal() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_duplicate_field_is_fatal() -> Result<(), Box<dyn Error>> {
         let yaml: String = VALID_STRUCT_YAML.replace("    - ptr\n", "    - ptr\n    - ptr\n");
         let file: NamedTempFile = create_temp_config(&yaml)?;
         match parse_config(file.path()) {
@@ -1012,7 +1011,7 @@ struct_targets:
     }
 
     #[test]
-    fn test_parse_config_invalid_field_name() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_invalid_field_name() -> Result<(), Box<dyn Error>> {
         let yaml: String = VALID_STRUCT_YAML.replace("    - ptr", "    - \"p tr\"");
         let file: NamedTempFile = create_temp_config(&yaml)?;
         match parse_config(file.path()) {
@@ -1026,7 +1025,7 @@ struct_targets:
     }
 
     #[test]
-    fn test_parse_config_invalid_struct_name() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_parse_config_invalid_struct_name() -> Result<(), Box<dyn Error>> {
         // `AbiError` appears only as a `structs:` key, so this rename is
         // unambiguous (unlike `StringView`, which is also a methods key).
         let yaml: String = VALID_STRUCT_YAML.replace("\n  AbiError:", "\n  \"Abi Error\":");

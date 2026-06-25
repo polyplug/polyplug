@@ -11,7 +11,12 @@
 //! Total:  103 bytes
 //! ```
 
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use core::array::TryFromSliceError;
+
+use ed25519_dalek::{Signature, SignatureError, Signer, SigningKey, VerifyingKey};
+use std::fs;
+use std::io::Error as IoError;
+use std::path::{Path, PathBuf};
 
 use crate::SigError;
 use crate::digest::{SIG_FILE_NAME, canonical_digest};
@@ -69,26 +74,22 @@ impl BundleSig {
         let vk_bytes: [u8; 32] =
             data[7..39]
                 .try_into()
-                .map_err(
-                    |_: core::array::TryFromSliceError| SigError::MalformedLength {
-                        bundle: bundle.to_owned(),
-                        expected: SIG_FILE_LEN,
-                        found: data.len(),
-                    },
-                )?;
+                .map_err(|_: TryFromSliceError| SigError::MalformedLength {
+                    bundle: bundle.to_owned(),
+                    expected: SIG_FILE_LEN,
+                    found: data.len(),
+                })?;
         let sig_bytes: [u8; 64] =
             data[39..103]
                 .try_into()
-                .map_err(
-                    |_: core::array::TryFromSliceError| SigError::MalformedLength {
-                        bundle: bundle.to_owned(),
-                        expected: SIG_FILE_LEN,
-                        found: data.len(),
-                    },
-                )?;
+                .map_err(|_: TryFromSliceError| SigError::MalformedLength {
+                    bundle: bundle.to_owned(),
+                    expected: SIG_FILE_LEN,
+                    found: data.len(),
+                })?;
 
         let verifying_key: VerifyingKey =
-            VerifyingKey::from_bytes(&vk_bytes).map_err(|e: ed25519_dalek::SignatureError| {
+            VerifyingKey::from_bytes(&vk_bytes).map_err(|e: SignatureError| {
                 SigError::SignatureMismatch {
                     bundle: bundle.to_owned(),
                     reason: format!("invalid verifying key: {e}"),
@@ -107,7 +108,7 @@ impl BundleSig {
 /// Compute the canonical digest and write a `bundle.sig` file to `bundle_dir`.
 ///
 /// Overwrites any existing `bundle.sig`.
-pub fn sign_bundle(bundle_dir: &std::path::Path, signing_key: &SigningKey) -> Result<(), SigError> {
+pub fn sign_bundle(bundle_dir: &Path, signing_key: &SigningKey) -> Result<(), SigError> {
     let digest: [u8; 32] = canonical_digest(bundle_dir)?;
 
     let signature: Signature = signing_key.sign(&digest);
@@ -118,8 +119,8 @@ pub fn sign_bundle(bundle_dir: &std::path::Path, signing_key: &SigningKey) -> Re
         signature,
     };
 
-    let sig_path: std::path::PathBuf = bundle_dir.join(SIG_FILE_NAME);
-    std::fs::write(&sig_path, bundle_sig.serialize()).map_err(|e: std::io::Error| SigError::Io {
+    let sig_path: PathBuf = bundle_dir.join(SIG_FILE_NAME);
+    fs::write(&sig_path, bundle_sig.serialize()).map_err(|e: IoError| SigError::Io {
         path: sig_path.display().to_string(),
         source: e,
     })

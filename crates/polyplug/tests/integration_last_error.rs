@@ -6,9 +6,16 @@
 //! These tests exercise `HostApi.get_last_error` and `HostApi.get_error_len`
 //! with per-runtime error storage.
 
+use core::iter::repeat_n;
+use core::ptr;
+use core::str;
+use core::str::Utf8Error;
+
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::runtime::host_get_last_error;
+use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::HostApi;
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -36,12 +43,12 @@ fn clear_error(host: *const HostApi) {
 /// `load_bundle` with a non-existent path.
 fn trigger_error(host: *const HostApi) {
     let path: &[u8] = b"/nonexistent/path/that/does/not/exist";
-    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+    let mut result: AbiError = AbiError::ok();
     // SAFETY: host is valid; path is valid bytes.
     unsafe { ((*host).load_bundle)(host, path.as_ptr(), path.len(), &mut result) };
     assert_ne!(
         result.code,
-        polyplug_abi::AbiErrorCode::Ok as u32,
+        AbiErrorCode::Ok as u32,
         "load_bundle with non-existent path must return error"
     );
 }
@@ -52,7 +59,7 @@ fn trigger_error(host: *const HostApi) {
 #[test]
 fn last_error_empty_on_fresh_runtime() {
     // SAFETY: polyplug_runtime_create returns a HostApi or null on OOM.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -74,7 +81,7 @@ fn last_error_empty_on_fresh_runtime() {
 #[test]
 fn last_error_cleared_after_read() {
     // SAFETY: polyplug_runtime_create returns a HostApi or null on OOM.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -105,7 +112,7 @@ fn last_error_cleared_after_read() {
 #[test]
 fn error_len_does_not_clear_error() {
     // SAFETY: polyplug_runtime_create returns a HostApi or null on OOM.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -142,7 +149,7 @@ fn error_len_does_not_clear_error() {
 #[test]
 fn last_error_truncates_to_buf_len() {
     // SAFETY: polyplug_runtime_create returns a HostApi or null on OOM.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -188,7 +195,7 @@ fn last_error_truncates_to_buf_len() {
 #[test]
 fn last_error_zero_buf_len_clears_error() {
     // SAFETY: polyplug_runtime_create returns a HostApi or null on OOM.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -224,7 +231,7 @@ fn last_error_zero_buf_len_clears_error() {
 #[test]
 fn last_error_null_buf_zero_len_clears_error() {
     // SAFETY: polyplug_runtime_create returns a HostApi or null on OOM.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -234,7 +241,7 @@ fn last_error_null_buf_zero_len_clears_error() {
     assert!(error_len > 0, "error must be set before null-buf test");
 
     // SAFETY: buf=null, buf_len=0 — no write occurs; host is valid.
-    let n: usize = unsafe { ((*host).get_last_error)(host, core::ptr::null_mut(), 0) };
+    let n: usize = unsafe { ((*host).get_last_error)(host, ptr::null_mut(), 0) };
     assert_eq!(
         n, error_len,
         "get_last_error(null buf, 0) must return error length"
@@ -251,10 +258,10 @@ fn last_error_null_buf_zero_len_clears_error() {
 #[test]
 fn last_error_per_runtime_isolation() {
     // SAFETY: polyplug_runtime_create returns a HostApi or null on OOM.
-    let host1: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host1: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
     assert!(!host1.is_null(), "runtime 1 creation must succeed");
     // SAFETY: polyplug_runtime_create returns a HostApi or null on OOM.
-    let host2: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host2: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
     assert!(!host2.is_null(), "runtime 2 creation must succeed");
 
     clear_error(host1);
@@ -289,7 +296,7 @@ fn last_error_per_runtime_isolation() {
 #[test]
 fn last_error_no_write_when_empty() {
     // SAFETY: polyplug_runtime_create returns a HostApi or null on OOM.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -317,7 +324,7 @@ fn last_error_no_write_when_empty() {
 #[test]
 fn last_error_exact_buf_len_writes_full_message() {
     // SAFETY: polyplug_runtime_create returns a HostApi or null on OOM.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -336,7 +343,7 @@ fn last_error_exact_buf_len_writes_full_message() {
     );
 
     // Validate that the written bytes are valid UTF-8.
-    let msg_result: Result<&str, core::str::Utf8Error> = core::str::from_utf8(&buf);
+    let msg_result: Result<&str, Utf8Error> = str::from_utf8(&buf);
     assert!(msg_result.is_ok(), "LAST_ERROR must be valid UTF-8");
     let msg: &str = msg_result.unwrap_or("");
     assert!(!msg.is_empty(), "decoded error message must be non-empty");
@@ -349,19 +356,19 @@ fn last_error_exact_buf_len_writes_full_message() {
 #[test]
 fn last_error_large_message_handling() {
     // SAFETY: polyplug_runtime_create returns a HostApi or null on OOM.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
     assert!(!host.is_null(), "polyplug_runtime_create must succeed");
 
     clear_error(host);
 
     // A 512-byte path — long enough to exercise message formatting with the path included.
-    let long_path: Vec<u8> = core::iter::repeat_n(b'x', 512).collect();
-    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+    let long_path: Vec<u8> = repeat_n(b'x', 512).collect();
+    let mut result: AbiError = AbiError::ok();
     // SAFETY: host is valid; long_path is a valid non-null byte slice.
     unsafe { ((*host).load_bundle)(host, long_path.as_ptr(), long_path.len(), &mut result) };
     assert_ne!(
         result.code,
-        polyplug_abi::AbiErrorCode::Ok as u32,
+        AbiErrorCode::Ok as u32,
         "load_bundle with non-existent path must fail"
     );
 
@@ -380,7 +387,7 @@ fn last_error_large_message_handling() {
 
     assert_eq!(n, msg_len, "large-message read must return msg_len bytes");
     assert!(
-        core::str::from_utf8(&buf).is_ok(),
+        str::from_utf8(&buf).is_ok(),
         "large LAST_ERROR message must be valid UTF-8"
     );
 
@@ -400,7 +407,7 @@ fn last_error_large_message_handling() {
 #[test]
 fn last_error_repeated_cycles_independent() {
     // SAFETY: polyplug_runtime_create returns a HostApi or null on OOM.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -435,7 +442,7 @@ fn last_error_null_host_returns_zero() {
     let mut buf: [u8; 256] = [0_u8; 256];
     // SAFETY: buf is a valid stack buffer; null host is valid for this call.
     // Call the underlying host_get_last_error function directly.
-    let n: usize = unsafe { host_get_last_error(core::ptr::null(), buf.as_mut_ptr(), buf.len()) };
+    let n: usize = unsafe { host_get_last_error(ptr::null(), buf.as_mut_ptr(), buf.len()) };
     assert!(
         n == 0,
         "get_last_error with null host must return 0 (no host to have an error)"

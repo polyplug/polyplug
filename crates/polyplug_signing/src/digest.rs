@@ -2,7 +2,9 @@
 //!
 //! See `lib.rs` module-level documentation for the full algorithm specification.
 
-use std::path::Path;
+use std::fs::{self, DirEntry, FileType, ReadDir};
+use std::io::Error as IoError;
+use std::path::{Component, Path, PathBuf, StripPrefixError};
 
 use sha2::{Digest, Sha256};
 
@@ -32,8 +34,7 @@ pub fn canonical_digest(bundle_dir: &Path) -> Result<[u8; 32], SigError> {
     let bundle_name: String = bundle_dir.display().to_string();
 
     // Collect all file paths relative to the bundle root, excluding bundle.sig.
-    let mut entries: Vec<(String, std::path::PathBuf)> =
-        collect_files(bundle_dir, bundle_dir, &bundle_name)?;
+    let mut entries: Vec<(String, PathBuf)> = collect_files(bundle_dir, bundle_dir, &bundle_name)?;
 
     // A signable bundle must contain at least one file.
     if entries.is_empty() {
@@ -56,11 +57,10 @@ pub fn canonical_digest(bundle_dir: &Path) -> Result<[u8; 32], SigError> {
     canonical.extend_from_slice(&file_count.to_le_bytes());
 
     for (rel_path, abs_path) in &entries {
-        let file_bytes: Vec<u8> =
-            std::fs::read(abs_path).map_err(|e: std::io::Error| SigError::Io {
-                path: abs_path.display().to_string(),
-                source: e,
-            })?;
+        let file_bytes: Vec<u8> = fs::read(abs_path).map_err(|e: IoError| SigError::Io {
+            path: abs_path.display().to_string(),
+            source: e,
+        })?;
 
         let file_hash: [u8; 32] = Sha256::digest(&file_bytes).into();
 
@@ -80,30 +80,26 @@ fn collect_files(
     dir: &Path,
     bundle_root: &Path,
     bundle_name: &str,
-) -> Result<Vec<(String, std::path::PathBuf)>, SigError> {
-    let mut result: Vec<(String, std::path::PathBuf)> = Vec::new();
+) -> Result<Vec<(String, PathBuf)>, SigError> {
+    let mut result: Vec<(String, PathBuf)> = Vec::new();
 
-    let read_dir: std::fs::ReadDir =
-        std::fs::read_dir(dir).map_err(|e: std::io::Error| SigError::Io {
-            path: dir.display().to_string(),
-            source: e,
-        })?;
+    let read_dir: ReadDir = fs::read_dir(dir).map_err(|e: IoError| SigError::Io {
+        path: dir.display().to_string(),
+        source: e,
+    })?;
 
     for entry_result in read_dir {
-        let entry: std::fs::DirEntry = entry_result.map_err(|e: std::io::Error| SigError::Io {
+        let entry: DirEntry = entry_result.map_err(|e: IoError| SigError::Io {
             path: dir.display().to_string(),
             source: e,
         })?;
 
-        let abs_path: std::path::PathBuf = entry.path();
+        let abs_path: PathBuf = entry.path();
 
-        let file_type: std::fs::FileType =
-            entry
-                .file_type()
-                .map_err(|e: std::io::Error| SigError::Io {
-                    path: abs_path.display().to_string(),
-                    source: e,
-                })?;
+        let file_type: FileType = entry.file_type().map_err(|e: IoError| SigError::Io {
+            path: abs_path.display().to_string(),
+            source: e,
+        })?;
 
         // A symlink is rejected outright: it is excluded from the digest but the
         // loader would still `dlopen` its target, a signature bypass.
@@ -115,24 +111,22 @@ fn collect_files(
         }
 
         if file_type.is_dir() {
-            let mut sub: Vec<(String, std::path::PathBuf)> =
+            let mut sub: Vec<(String, PathBuf)> =
                 collect_files(&abs_path, bundle_root, bundle_name)?;
             result.append(&mut sub);
         } else if file_type.is_file() {
-            let rel: std::path::PathBuf = abs_path
+            let rel: PathBuf = abs_path
                 .strip_prefix(bundle_root)
-                .map_err(
-                    |_: std::path::StripPrefixError| SigError::PathOutsideBundle {
-                        bundle: bundle_name.to_owned(),
-                        path: abs_path.display().to_string(),
-                    },
-                )?
+                .map_err(|_: StripPrefixError| SigError::PathOutsideBundle {
+                    bundle: bundle_name.to_owned(),
+                    path: abs_path.display().to_string(),
+                })?
                 .to_path_buf();
 
             // Build a platform-independent relative path using `/` separator.
             let rel_str: String = rel
                 .components()
-                .map(|c: std::path::Component<'_>| {
+                .map(|c: Component<'_>| {
                     c.as_os_str().to_str().ok_or_else(|| SigError::NonUtf8Path {
                         bundle: bundle_name.to_owned(),
                         path: abs_path.display().to_string(),
@@ -164,6 +158,7 @@ fn collect_files(
 mod tests {
     #![allow(clippy::expect_used)]
     use std::fs;
+    use std::process::{Command, ExitStatus};
 
     use tempfile::TempDir;
 
@@ -198,7 +193,7 @@ mod tests {
 
         // Point a symlink at a target outside the bundle.
         let outside: TempDir = TempDir::new().expect("outside dir");
-        let target: std::path::PathBuf = outside.path().join("evil.so");
+        let target: PathBuf = outside.path().join("evil.so");
         fs::write(&target, b"evil bytes").expect("write evil");
         symlink(&target, tmp.path().join("artifact.so")).expect("create symlink");
 
@@ -212,14 +207,11 @@ mod tests {
     #[test]
     fn fifo_in_bundle_is_rejected_as_irregular() {
         let tmp: TempDir = TempDir::new().expect("tmp dir");
-        let fifo_path: std::path::PathBuf = tmp.path().join("pipe");
+        let fifo_path: PathBuf = tmp.path().join("pipe");
 
         // Create a fifo via the `mkfifo` utility to avoid a `libc` dependency. Skip
         // the assertion only if the utility is unavailable on this host.
-        let status: Option<std::process::ExitStatus> = std::process::Command::new("mkfifo")
-            .arg(&fifo_path)
-            .status()
-            .ok();
+        let status: Option<ExitStatus> = Command::new("mkfifo").arg(&fifo_path).status().ok();
         match status {
             Some(s) if s.success() => {}
             _ => return,
@@ -235,7 +227,7 @@ mod tests {
     fn nested_subdirectory_files_are_covered_by_the_digest() {
         let tmp: TempDir = TempDir::new().expect("tmp dir");
         fs::write(tmp.path().join("manifest.toml"), b"name = \"x\"").expect("write manifest");
-        let nested: std::path::PathBuf = tmp.path().join("lib").join("inner");
+        let nested: PathBuf = tmp.path().join("lib").join("inner");
         fs::create_dir_all(&nested).expect("create nested dirs");
         fs::write(nested.join("deep.so"), b"deep bytes").expect("write deep");
 

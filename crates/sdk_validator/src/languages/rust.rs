@@ -2,6 +2,9 @@
 
 use std::path::Path;
 
+#[cfg(test)]
+use core::error::Error;
+
 use crate::ast_grep::{AstGrepRunner, Match};
 use crate::error::ValidatorError;
 use crate::languages::{LanguageValidator, parse_field_name_typed, parse_variant_text};
@@ -154,21 +157,19 @@ mod tests {
         golden_enum, golden_methods, golden_struct, repo_path, runner,
     };
     use crate::languages::{
-        EnumValidationResult, StructFieldValidationResult, ValidationResult, VariantCheck,
-        VariantOutcome, validate_language, validate_language_enum, validate_language_struct,
+        EnumValidationResult, FieldCheck, FieldOutcome, StructFieldValidationResult,
+        ValidationResult, VariantCheck, VariantOutcome, validate_language, validate_language_enum,
+        validate_language_struct,
     };
 
-    fn create_temp_rust_file(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
+    fn create_temp_rust_file(content: &str) -> Result<NamedTempFile, Box<dyn Error>> {
         let mut file: NamedTempFile = NamedTempFile::with_suffix(".rs")?;
         file.write_all(content.as_bytes())?;
         file.flush()?;
         Ok(file)
     }
 
-    fn validate_file(
-        methods: &[String],
-        file: &Path,
-    ) -> Result<ValidationResult, Box<dyn core::error::Error>> {
+    fn validate_file(methods: &[String], file: &Path) -> Result<ValidationResult, Box<dyn Error>> {
         let mut validator: RustValidator = RustValidator::new();
         let result: ValidationResult = validate_language(
             &mut validator,
@@ -182,7 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detects_pub_fn() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_pub_fn() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 pub fn to_str(sv: StringView) -> &'static str {
@@ -196,7 +197,7 @@ pub fn to_str(sv: StringView) -> &'static str {
     }
 
     #[test]
-    fn test_detects_private_fn() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_private_fn() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 fn internal_helper(x: i32) -> i32 {
@@ -215,7 +216,7 @@ fn internal_helper(x: i32) -> i32 {
     }
 
     #[test]
-    fn test_detects_lifetime_generic_unsafe_fn() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_lifetime_generic_unsafe_fn() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 pub unsafe fn strip_prefix<'a>(sv: &'a StringView, prefix: &str) -> &'a str {
@@ -229,7 +230,7 @@ pub unsafe fn strip_prefix<'a>(sv: &'a StringView, prefix: &str) -> &'a str {
     }
 
     #[test]
-    fn test_detects_const_fn() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_const_fn() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 pub const fn to_str(sv: &StringView) -> &str {
@@ -250,7 +251,7 @@ const fn starts_with(sv: &StringView) -> bool {
     }
 
     #[test]
-    fn test_renamed_definition_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_renamed_definition_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 pub unsafe fn to_str2(sv: &StringView) -> &str {
@@ -265,7 +266,7 @@ pub unsafe fn to_str2(sv: &StringView) -> &str {
     }
 
     #[test]
-    fn test_call_site_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_call_site_only_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 pub fn other(sv: &StringView) -> bool {
@@ -280,7 +281,7 @@ pub fn other(sv: &StringView) -> bool {
     }
 
     #[test]
-    fn test_comment_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_comment_only_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 // to_str(sv) is documented here but not defined
@@ -293,8 +294,7 @@ pub fn other(sv: &StringView) -> bool {
     }
 
     #[test]
-    fn test_per_file_semantics_method_must_be_in_all_files()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_per_file_semantics_method_must_be_in_all_files() -> Result<(), Box<dyn Error>> {
         let file1: NamedTempFile = create_temp_rust_file(
             r#"
 pub fn to_str(sv: &StringView) -> &str { "" }
@@ -328,7 +328,7 @@ pub fn starts_with(sv: &StringView, prefix: &str) -> bool { false }
     }
 
     #[test]
-    fn test_real_sdk_has_all_golden_methods() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_sdk_has_all_golden_methods() -> Result<(), Box<dyn Error>> {
         let sdk_path: PathBuf = repo_path("sdks/rust/guest/src/lib.rs");
         let result: ValidationResult = validate_file(&golden_methods(), &sdk_path)?;
         assert!(
@@ -343,7 +343,7 @@ pub fn starts_with(sv: &StringView, prefix: &str) -> bool { false }
     fn validate_enum_file(
         enum_name: &str,
         file: &Path,
-    ) -> Result<EnumValidationResult, Box<dyn core::error::Error>> {
+    ) -> Result<EnumValidationResult, Box<dyn Error>> {
         let mut validator: RustValidator = RustValidator::new();
         let result: EnumValidationResult = validate_language_enum(
             &mut validator,
@@ -356,7 +356,7 @@ pub fn starts_with(sv: &StringView, prefix: &str) -> bool { false }
     }
 
     #[test]
-    fn test_enum_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_exact_match_passes() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 #[repr(u32)]
@@ -372,8 +372,7 @@ pub enum DispatchType {
     }
 
     #[test]
-    fn test_enum_wrong_value_fails_with_expected_vs_found()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_wrong_value_fails_with_expected_vs_found() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 pub enum DispatchType {
@@ -394,7 +393,7 @@ pub enum DispatchType {
     }
 
     #[test]
-    fn test_enum_missing_variant_fails() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_missing_variant_fails() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 pub enum DispatchType {
@@ -413,7 +412,7 @@ pub enum DispatchType {
     }
 
     #[test]
-    fn test_enum_extra_variant_fails() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_extra_variant_fails() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 pub enum DispatchType {
@@ -432,7 +431,7 @@ pub enum DispatchType {
     }
 
     #[test]
-    fn test_enum_commented_out_variant_does_not_count() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_commented_out_variant_does_not_count() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 pub enum DispatchType {
@@ -454,8 +453,7 @@ pub enum DispatchType {
     }
 
     #[test]
-    fn test_enum_value_in_comment_or_string_does_not_count()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_value_in_comment_or_string_does_not_count() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 // DispatchType has VirtualMachine = 1 per the ABI.
@@ -476,8 +474,7 @@ pub enum DispatchType {
     }
 
     #[test]
-    fn test_enum_other_enum_in_same_file_is_not_confused() -> Result<(), Box<dyn core::error::Error>>
-    {
+    fn test_enum_other_enum_in_same_file_is_not_confused() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 pub enum Other {
@@ -496,7 +493,7 @@ pub enum DispatchType {
     }
 
     #[test]
-    fn test_real_abi_sources_match_golden_enums() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_abi_sources_match_golden_enums() -> Result<(), Box<dyn Error>> {
         let targets: [(&str, &str); 4] = [
             (
                 "AbiErrorCode",
@@ -524,7 +521,7 @@ pub enum DispatchType {
         struct_name: &str,
         golden_fields: &[String],
         file: &Path,
-    ) -> Result<StructFieldValidationResult, Box<dyn core::error::Error>> {
+    ) -> Result<StructFieldValidationResult, Box<dyn Error>> {
         let mut validator: RustValidator = RustValidator::new();
         let result: StructFieldValidationResult = validate_language_struct(
             &mut validator,
@@ -537,7 +534,7 @@ pub enum DispatchType {
     }
 
     #[test]
-    fn test_struct_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_exact_match_passes() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 #[repr(C)]
@@ -554,7 +551,7 @@ pub struct StringView {
     }
 
     #[test]
-    fn test_struct_renamed_field_is_missing_and_extra() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_renamed_field_is_missing_and_extra() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 #[repr(C)]
@@ -567,19 +564,19 @@ pub struct StringView {
         let result: StructFieldValidationResult =
             validate_struct_file("StringView", &golden_struct("StringView"), file.path())?;
         assert!(!result.is_complete());
-        let check: &crate::languages::FieldCheck = result
+        let check: &FieldCheck = result
             .checks
             .iter()
             .find(|c| c.field == "ptr")
             .ok_or("missing ptr check")?;
-        assert_eq!(check.outcome, crate::languages::FieldOutcome::Missing);
+        assert_eq!(check.outcome, FieldOutcome::Missing);
         assert_eq!(result.extra_fields.len(), 1);
         assert_eq!(result.extra_fields[0].field, "pointer");
         Ok(())
     }
 
     #[test]
-    fn test_struct_underscore_marker_is_skipped() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_underscore_marker_is_skipped() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 #[repr(C)]
@@ -599,7 +596,7 @@ pub struct Array<T: Sized> {
     }
 
     #[test]
-    fn test_struct_comment_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_comment_only_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 // pub struct StringView { pub ptr: *const u8, pub len: usize }
@@ -612,14 +609,13 @@ pub struct Array<T: Sized> {
             result
                 .checks
                 .iter()
-                .all(|c| c.outcome == crate::languages::FieldOutcome::Missing)
+                .all(|c| c.outcome == FieldOutcome::Missing)
         );
         Ok(())
     }
 
     #[test]
-    fn test_struct_other_struct_in_same_file_not_confused()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_other_struct_in_same_file_not_confused() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_rust_file(
             r#"
 #[repr(C)]
@@ -641,7 +637,7 @@ pub struct StringView {
     }
 
     #[test]
-    fn test_real_abi_structs_match_golden() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_abi_structs_match_golden() -> Result<(), Box<dyn Error>> {
         let targets: [(&str, &str); 2] = [
             ("StringView", "crates/polyplug_abi/src/types/string_view.rs"),
             ("AbiError", "crates/polyplug_abi/src/types/abi_error.rs"),

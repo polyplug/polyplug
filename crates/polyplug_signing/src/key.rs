@@ -12,14 +12,19 @@
 //! Total:  39 bytes
 //! ```
 
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use core::array::TryFromSliceError;
+
+use ed25519_dalek::{SignatureError, SigningKey, VerifyingKey};
 use rand_core::OsRng;
+use std::fs::{self, File, OpenOptions, Permissions};
+use std::io::Error as IoError;
 #[cfg(unix)]
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 
 use crate::SigError;
 
@@ -81,11 +86,9 @@ pub fn parse_signing_key(data: &[u8]) -> Result<SigningKey, SigError> {
     let key_bytes: [u8; 32] =
         data[7..39]
             .try_into()
-            .map_err(
-                |_: core::array::TryFromSliceError| SigError::InvalidKeyData {
-                    reason: "key bytes slice has wrong length".to_owned(),
-                },
-            )?;
+            .map_err(|_: TryFromSliceError| SigError::InvalidKeyData {
+                reason: "key bytes slice has wrong length".to_owned(),
+            })?;
     Ok(SigningKey::from_bytes(&key_bytes))
 }
 
@@ -106,15 +109,11 @@ pub fn parse_verifying_key(data: &[u8]) -> Result<VerifyingKey, SigError> {
     let key_bytes: [u8; 32] =
         data[7..39]
             .try_into()
-            .map_err(
-                |_: core::array::TryFromSliceError| SigError::InvalidKeyData {
-                    reason: "key bytes slice has wrong length".to_owned(),
-                },
-            )?;
-    VerifyingKey::from_bytes(&key_bytes).map_err(|e: ed25519_dalek::SignatureError| {
-        SigError::InvalidKeyData {
-            reason: e.to_string(),
-        }
+            .map_err(|_: TryFromSliceError| SigError::InvalidKeyData {
+                reason: "key bytes slice has wrong length".to_owned(),
+            })?;
+    VerifyingKey::from_bytes(&key_bytes).map_err(|e: SignatureError| SigError::InvalidKeyData {
+        reason: e.to_string(),
     })
 }
 
@@ -123,17 +122,17 @@ pub fn parse_verifying_key(data: &[u8]) -> Result<VerifyingKey, SigError> {
 /// The caller is responsible for creating `path` with restrictive permissions
 /// (e.g., `0o600` on Unix) before distributing or using the file.
 #[cfg(unix)]
-pub fn save_signing_key(path: &std::path::Path, signing_key: &SigningKey) -> Result<(), SigError> {
+pub fn save_signing_key(path: &Path, signing_key: &SigningKey) -> Result<(), SigError> {
     let buf: [u8; KEY_FILE_LEN] = serialize_signing_key(signing_key);
 
     // Open with mode 0o600 so a freshly-created file is never world-readable.
-    let mut file: std::fs::File = std::fs::OpenOptions::new()
+    let mut file: File = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .mode(0o600)
         .open(path)
-        .map_err(|e: std::io::Error| SigError::Io {
+        .map_err(|e: IoError| SigError::Io {
             path: path.display().to_string(),
             source: e,
         })?;
@@ -141,18 +140,17 @@ pub fn save_signing_key(path: &std::path::Path, signing_key: &SigningKey) -> Res
     // `.mode(0o600)` only applies on creation; a pre-existing file keeps its old
     // (possibly 0o644) mode. Force 0o600 on the open handle BEFORE writing any
     // secret bytes, so the seed never exists on disk with broader-than-0600 perms.
-    let permissions: std::fs::Permissions = std::fs::Permissions::from_mode(0o600);
+    let permissions: Permissions = Permissions::from_mode(0o600);
     file.set_permissions(permissions)
-        .map_err(|e: std::io::Error| SigError::Io {
+        .map_err(|e: IoError| SigError::Io {
             path: path.display().to_string(),
             source: e,
         })?;
 
-    file.write_all(&buf)
-        .map_err(|e: std::io::Error| SigError::Io {
-            path: path.display().to_string(),
-            source: e,
-        })?;
+    file.write_all(&buf).map_err(|e: IoError| SigError::Io {
+        path: path.display().to_string(),
+        source: e,
+    })?;
 
     Ok(())
 }
@@ -166,29 +164,26 @@ pub fn save_signing_key(path: &std::path::Path, signing_key: &SigningKey) -> Res
 /// secret seed is written with the platform's default permissions and the caller
 /// must rely on directory ACLs or other OS-specific mechanisms to protect it.
 #[cfg(not(unix))]
-pub fn save_signing_key(path: &std::path::Path, signing_key: &SigningKey) -> Result<(), SigError> {
+pub fn save_signing_key(path: &Path, signing_key: &SigningKey) -> Result<(), SigError> {
     let buf: [u8; KEY_FILE_LEN] = serialize_signing_key(signing_key);
-    std::fs::write(path, buf).map_err(|e: std::io::Error| SigError::Io {
+    fs::write(path, buf).map_err(|e: IoError| SigError::Io {
         path: path.display().to_string(),
         source: e,
     })
 }
 
 /// Write a verifying key to `path` in the documented key file format.
-pub fn save_verifying_key(
-    path: &std::path::Path,
-    verifying_key: &VerifyingKey,
-) -> Result<(), SigError> {
+pub fn save_verifying_key(path: &Path, verifying_key: &VerifyingKey) -> Result<(), SigError> {
     let buf: [u8; KEY_FILE_LEN] = serialize_verifying_key(verifying_key);
-    std::fs::write(path, buf).map_err(|e: std::io::Error| SigError::Io {
+    fs::write(path, buf).map_err(|e: IoError| SigError::Io {
         path: path.display().to_string(),
         source: e,
     })
 }
 
 /// Read and parse a signing key from `path`.
-pub fn load_signing_key(path: &std::path::Path) -> Result<SigningKey, SigError> {
-    let data: Vec<u8> = std::fs::read(path).map_err(|e: std::io::Error| SigError::Io {
+pub fn load_signing_key(path: &Path) -> Result<SigningKey, SigError> {
+    let data: Vec<u8> = fs::read(path).map_err(|e: IoError| SigError::Io {
         path: path.display().to_string(),
         source: e,
     })?;
@@ -196,8 +191,8 @@ pub fn load_signing_key(path: &std::path::Path) -> Result<SigningKey, SigError> 
 }
 
 /// Read and parse a verifying key from `path`.
-pub fn load_verifying_key(path: &std::path::Path) -> Result<VerifyingKey, SigError> {
-    let data: Vec<u8> = std::fs::read(path).map_err(|e: std::io::Error| SigError::Io {
+pub fn load_verifying_key(path: &Path) -> Result<VerifyingKey, SigError> {
+    let data: Vec<u8> = fs::read(path).map_err(|e: IoError| SigError::Io {
         path: path.display().to_string(),
         source: e,
     })?;
@@ -207,6 +202,9 @@ pub fn load_verifying_key(path: &std::path::Path) -> Result<VerifyingKey, SigErr
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
     use super::*;
 
     #[test]
@@ -242,16 +240,13 @@ mod tests {
     fn save_signing_key_creates_file_with_0o600_mode() {
         use std::os::unix::fs::PermissionsExt;
 
-        let tmp: tempfile::TempDir = tempfile::TempDir::new().expect("tmp dir");
-        let path: std::path::PathBuf = tmp.path().join("signing.key");
+        let tmp: TempDir = TempDir::new().expect("tmp dir");
+        let path: PathBuf = tmp.path().join("signing.key");
         let (signing_key, _): (SigningKey, VerifyingKey) = generate_keypair();
 
         save_signing_key(&path, &signing_key).expect("save signing key");
 
-        let mode: u32 = std::fs::metadata(&path)
-            .expect("metadata")
-            .permissions()
-            .mode();
+        let mode: u32 = fs::metadata(&path).expect("metadata").permissions().mode();
         assert_eq!(
             mode & 0o777,
             0o600,
@@ -265,20 +260,17 @@ mod tests {
     fn save_signing_key_tightens_preexisting_world_readable_file() {
         use std::os::unix::fs::PermissionsExt;
 
-        let tmp: tempfile::TempDir = tempfile::TempDir::new().expect("tmp dir");
-        let path: std::path::PathBuf = tmp.path().join("signing.key");
+        let tmp: TempDir = TempDir::new().expect("tmp dir");
+        let path: PathBuf = tmp.path().join("signing.key");
 
         // Pre-create a 0o644 file at the target path.
-        std::fs::write(&path, b"stale").expect("pre-create file");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("set 0o644");
+        fs::write(&path, b"stale").expect("pre-create file");
+        fs::set_permissions(&path, Permissions::from_mode(0o644)).expect("set 0o644");
 
         let (signing_key, _): (SigningKey, VerifyingKey) = generate_keypair();
         save_signing_key(&path, &signing_key).expect("overwrite signing key");
 
-        let mode: u32 = std::fs::metadata(&path)
-            .expect("metadata")
-            .permissions()
-            .mode();
+        let mode: u32 = fs::metadata(&path).expect("metadata").permissions().mode();
         assert_eq!(
             mode & 0o777,
             0o600,

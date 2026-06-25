@@ -4,10 +4,22 @@
 //!
 //! This test crate is the crate root for the `integration_dispatch` test binary.
 
+use core::cell::Ref;
+use core::cell::RefCell;
+use core::ffi::c_void;
+use core::mem;
+use core::ptr;
+use core::slice;
+use core::str;
+
+use libloading::{Library, Symbol};
 use polyplug::runtime_store::RuntimeStore;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::{
-    AbiError, AbiErrorCode, BundleInitContext, GuestContractHandle, GuestContractInstance,
-    GuestContractInterface, HostApi, PluginDescriptor, StringView,
+    AbiError, AbiErrorCode, Array, BundleInitContext, DependencyInfo, GuestContractHandle,
+    GuestContractInstance, GuestContractInterface, HostApi, HostContractInstance,
+    HostContractInterface, PluginDescriptor, StringView,
 };
 use polyplug_utils::{BundleId, GuestContractId};
 
@@ -49,15 +61,14 @@ unsafe extern "C" fn registry_register_callback(
     // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
     // &'static str contract name — guaranteed valid UTF-8 by construction.
     let contract_name: &str = unsafe {
-        let bytes: &[u8] =
-            core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
-        core::str::from_utf8_unchecked(bytes)
+        let bytes: &[u8] = slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
+        str::from_utf8_unchecked(bytes)
     };
 
     // Register with thread-local Registry.
     // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
     let result: Result<GuestContractHandle, _> = DISPATCH_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, RuntimeStore> = reg_cell.borrow();
+        let registry: Ref<'_, RuntimeStore> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
         unsafe {
             registry.register_guest_contract(
@@ -87,13 +98,13 @@ unsafe extern "C" fn registry_register_callback(
 
 /// No-op alloc callback.
 unsafe extern "C" fn noop_alloc(_this: *const HostApi, size: usize, align: usize) -> *mut u8 {
-    polyplug_abi::ffi::polyplug_host_alloc(size, align)
+    polyplug_host_alloc(size, align)
 }
 
 /// No-op free callback.
 unsafe extern "C" fn noop_free(_this: *const HostApi, ptr: *mut u8, size: usize, align: usize) {
     // SAFETY: polyplug_host_free is a safe wrapper around the system allocator.
-    unsafe { polyplug_abi::ffi::polyplug_host_free(ptr, size, align) }
+    unsafe { polyplug_host_free(ptr, size, align) }
 }
 
 /// No-op find_guest_contract callback.
@@ -110,8 +121,8 @@ unsafe extern "C" fn noop_find_all_guest_contracts(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::Array<GuestContractHandle> {
-    polyplug_abi::Array::empty()
+) -> Array<GuestContractHandle> {
+    Array::empty()
 }
 
 /// No-op resolve_guest_contract callback.
@@ -119,7 +130,7 @@ unsafe extern "C" fn noop_resolve_guest_contract(
     _this: *const HostApi,
     _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
-    core::ptr::null()
+    ptr::null()
 }
 
 /// No-op get_host_contract callback.
@@ -127,22 +138,18 @@ unsafe extern "C" fn noop_get_host_contract(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::HostContractInstance {
-    polyplug_abi::HostContractInstance::null()
+) -> HostContractInstance {
+    HostContractInstance::null()
 }
 
 /// No-op list_bundles callback.
-unsafe extern "C" fn noop_list_bundles(
-    _this: *const HostApi,
-) -> polyplug_abi::Array<polyplug_utils::BundleId> {
-    polyplug_abi::Array::empty()
+unsafe extern "C" fn noop_list_bundles(_this: *const HostApi) -> Array<BundleId> {
+    Array::empty()
 }
 
 /// No-op get_dependencies callback.
-unsafe extern "C" fn noop_get_dependencies(
-    _this: *const HostApi,
-) -> polyplug_abi::Array<polyplug_abi::DependencyInfo> {
-    polyplug_abi::Array::empty()
+unsafe extern "C" fn noop_get_dependencies(_this: *const HostApi) -> Array<DependencyInfo> {
+    Array::empty()
 }
 
 /// No-op resolve_host_contract_interface callback.
@@ -150,8 +157,8 @@ unsafe extern "C" fn noop_resolve_host_contract_interface(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractInterface {
-    core::ptr::null()
+) -> *const HostContractInterface {
+    ptr::null()
 }
 
 /// No-op load_bundle callback.
@@ -183,7 +190,7 @@ unsafe extern "C" fn noop_reload_bundle(
 /// No-op register_host_contract callback.
 unsafe extern "C" fn noop_register_host_contract(
     _this: *const HostApi,
-    _interface: *const polyplug_abi::HostContractInterface,
+    _interface: *const HostContractInterface,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -195,7 +202,7 @@ unsafe extern "C" fn noop_register_host_contract(
 /// No-op register_loader callback.
 unsafe extern "C" fn noop_register_loader(
     _this: *const HostApi,
-    _loader_ptr: *mut core::ffi::c_void,
+    _loader_ptr: *mut c_void,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -229,9 +236,8 @@ unsafe extern "C" fn noop_unload_bundle(
     }
 }
 
-std::thread_local! {
-    static DISPATCH_REGISTRY: core::cell::RefCell<RuntimeStore> =
-        core::cell::RefCell::new(RuntimeStore::new());
+thread_local! {
+    static DISPATCH_REGISTRY: RefCell<RuntimeStore> = RefCell::new(RuntimeStore::new());
 }
 
 /// AddArgs — mirrors the struct in test_plugin (must be `#[repr(C)]`).
@@ -246,13 +252,12 @@ struct AddArgs {
 #[test]
 fn test_dispatch_add_function() {
     // SAFETY: TEST_PLUGIN_SO is a compiled cdylib.
-    let library: libloading::Library = unsafe {
-        libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library")
-    };
+    let library: Library =
+        unsafe { Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library") };
 
     // Resolve init function (2-arg signature).
     // SAFETY: polyplug_init matches the expected ABI.
-    let init_fn: libloading::Symbol<
+    let init_fn: Symbol<
         '_,
         unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe {
@@ -267,7 +272,7 @@ fn test_dispatch_add_function() {
     });
 
     let host_interface: HostApi = HostApi {
-        runtime: core::ptr::null_mut(),
+        runtime: ptr::null_mut(),
         register_guest_contract: registry_register_callback,
         alloc: noop_alloc,
         free: noop_free,
@@ -289,7 +294,7 @@ fn test_dispatch_add_function() {
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
         revision_counter: stub_revision_counter,
-        reserved: core::ptr::null(),
+        reserved: ptr::null(),
     };
 
     let ctx: BundleInitContext = BundleInitContext {
@@ -343,7 +348,7 @@ fn test_dispatch_add_function() {
     let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: fn_ptr is cast to the frozen native dispatch signature. Arg
         // types are enforced by the test (AddArgs matches what test_plugin expects).
-        unsafe { core::mem::transmute(fn_ptr) };
+        unsafe { mem::transmute(fn_ptr) };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args is a valid AddArgs, out is a valid u32 location. The instance
@@ -365,18 +370,17 @@ fn test_dispatch_add_function() {
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 
     // Leak the library.
-    core::mem::forget(library);
+    mem::forget(library);
 }
 
 #[test]
 fn test_dispatch_add_with_zero() {
     // SAFETY: TEST_PLUGIN_SO is a compiled cdylib.
-    let library: libloading::Library = unsafe {
-        libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library")
-    };
+    let library: Library =
+        unsafe { Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library") };
 
     // SAFETY: polyplug_init matches the expected ABI (2-arg signature).
-    let init_fn: libloading::Symbol<
+    let init_fn: Symbol<
         '_,
         unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe {
@@ -391,7 +395,7 @@ fn test_dispatch_add_with_zero() {
     });
 
     let host_interface: HostApi = HostApi {
-        runtime: core::ptr::null_mut(),
+        runtime: ptr::null_mut(),
         register_guest_contract: registry_register_callback,
         alloc: noop_alloc,
         free: noop_free,
@@ -413,7 +417,7 @@ fn test_dispatch_add_with_zero() {
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
         revision_counter: stub_revision_counter,
-        reserved: core::ptr::null(),
+        reserved: ptr::null(),
     };
 
     let ctx: BundleInitContext = BundleInitContext {
@@ -445,7 +449,7 @@ fn test_dispatch_add_with_zero() {
     let fn_ptr: *const () = unsafe { *(*interface_ptr).dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: fn_ptr is the add function with the frozen native signature.
-        unsafe { core::mem::transmute(fn_ptr) };
+        unsafe { mem::transmute(fn_ptr) };
 
     let args: AddArgs = AddArgs { a: 0, b: 0 };
     let mut out: u32 = 99_u32;
@@ -464,18 +468,17 @@ fn test_dispatch_add_with_zero() {
     assert_eq!(result.code, AbiErrorCode::Ok as u32);
     assert_eq!(out, 0_u32, "add(0, 0) must equal 0");
 
-    core::mem::forget(library);
+    mem::forget(library);
 }
 
 #[test]
 fn test_dispatch_add_wrapping_overflow() {
     // SAFETY: TEST_PLUGIN_SO is a compiled cdylib.
-    let library: libloading::Library = unsafe {
-        libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library")
-    };
+    let library: Library =
+        unsafe { Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library") };
 
     // SAFETY: polyplug_init matches the expected ABI (2-arg signature).
-    let init_fn: libloading::Symbol<
+    let init_fn: Symbol<
         '_,
         unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe {
@@ -489,7 +492,7 @@ fn test_dispatch_add_wrapping_overflow() {
     });
 
     let host_interface: HostApi = HostApi {
-        runtime: core::ptr::null_mut(),
+        runtime: ptr::null_mut(),
         register_guest_contract: registry_register_callback,
         alloc: noop_alloc,
         free: noop_free,
@@ -511,7 +514,7 @@ fn test_dispatch_add_wrapping_overflow() {
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
         revision_counter: stub_revision_counter,
-        reserved: core::ptr::null(),
+        reserved: ptr::null(),
     };
 
     let ctx: BundleInitContext = BundleInitContext {
@@ -543,7 +546,7 @@ fn test_dispatch_add_wrapping_overflow() {
     let fn_ptr: *const () = unsafe { *(*interface_ptr).dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: fn_ptr is the add function with the frozen native signature.
-        unsafe { core::mem::transmute(fn_ptr) };
+        unsafe { mem::transmute(fn_ptr) };
 
     // u32::MAX + 1 wraps to 0 (wrapping_add).
     let args: AddArgs = AddArgs { a: u32::MAX, b: 1 };
@@ -563,37 +566,37 @@ fn test_dispatch_add_wrapping_overflow() {
     assert_eq!(result.code, AbiErrorCode::Ok as u32);
     assert_eq!(out, 0_u32, "u32::MAX + 1 wraps to 0");
 
-    core::mem::forget(library);
+    mem::forget(library);
 }
 
 /// `HostApi.log` stub for test hosts — drops the record.
 unsafe extern "C" fn stub_host_log(
-    _this: *const polyplug_abi::HostApi,
+    _this: *const HostApi,
     _level: u32,
-    _scope: polyplug_abi::StringView,
-    _message: polyplug_abi::StringView,
+    _scope: StringView,
+    _message: StringView,
 ) {
 }
 
 unsafe extern "C" fn stub_create_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _args: *const core::ffi::c_void,
-    out_instance: *mut polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _args: *const c_void,
+    out_instance: *mut GuestContractInstance,
 ) {
     if !out_instance.is_null() {
         // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+        unsafe { out_instance.write(GuestContractInstance::null()) };
     }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _instance: polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _instance: GuestContractInstance,
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const polyplug_abi::HostApi) -> *const u64 {
-    core::ptr::null()
+unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
+    ptr::null()
 }

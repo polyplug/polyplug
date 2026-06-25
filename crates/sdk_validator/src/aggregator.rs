@@ -751,6 +751,7 @@ fn calculate_overall_stats(report: &mut ValidationReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::error::Error;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -824,7 +825,7 @@ mod tests {
     }
 
     #[test]
-    fn test_aggregate_results_empty_config() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_aggregate_results_empty_config() -> Result<(), Box<dyn Error>> {
         let config: Config = empty_config();
         let report: ValidationReport = aggregate_results(&config, &runner())?;
 
@@ -837,8 +838,7 @@ mod tests {
     }
 
     #[test]
-    fn test_aggregate_results_no_targets_marks_all_missing()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_aggregate_results_no_targets_marks_all_missing() -> Result<(), Box<dyn Error>> {
         let mut config: Config = empty_config();
         config.methods.insert(
             "StringView".to_string(),
@@ -864,15 +864,14 @@ mod tests {
     }
 
     #[test]
-    fn test_aggregate_results_missing_target_file_is_fatal()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_aggregate_results_missing_target_file_is_fatal() -> Result<(), Box<dyn Error>> {
         let mut config: Config = empty_config();
         config
             .methods
             .insert("StringView".to_string(), vec!["to_str".to_string()]);
         config
             .naming
-            .insert("rust".to_string(), crate::ast_grep::NamingConvention::Snake);
+            .insert("rust".to_string(), NamingConvention::Snake);
         config.targets.insert(
             "rust".to_string(),
             vec![PathBuf::from("/nonexistent/lib.rs")],
@@ -888,7 +887,7 @@ mod tests {
     }
 
     #[test]
-    fn test_aggregate_results_enum_drift_fails_report() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_aggregate_results_enum_drift_fails_report() -> Result<(), Box<dyn Error>> {
         // ReentrantCall = 9 missing and a stale Bogus variant present.
         let mut lua_file: NamedTempFile = NamedTempFile::with_suffix(".lua")?;
         lua_file.write_all(
@@ -943,8 +942,7 @@ mod tests {
     }
 
     #[test]
-    fn test_aggregate_results_enum_exact_match_is_complete()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_aggregate_results_enum_exact_match_is_complete() -> Result<(), Box<dyn Error>> {
         let mut lua_file: NamedTempFile = NamedTempFile::with_suffix(".lua")?;
         lua_file.write_all(
             b"local M = {}\nM.DispatchType = {\n    Native = 0,\n    VirtualMachine = 1,\n}\nreturn M\n",
@@ -973,8 +971,7 @@ mod tests {
     }
 
     #[test]
-    fn test_aggregate_results_enum_missing_target_file_is_fatal()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_aggregate_results_enum_missing_target_file_is_fatal() -> Result<(), Box<dyn Error>> {
         let mut config: Config = empty_config();
         let mut golden: BTreeMap<String, i64> = BTreeMap::new();
         golden.insert("Native".to_string(), 0);
@@ -996,7 +993,7 @@ mod tests {
     }
 
     #[test]
-    fn test_real_config_structs_match_golden() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_config_structs_match_golden() -> Result<(), Box<dyn Error>> {
         let config: Config = parse_config(&repo_path("sdk_validator.yaml"))?;
         let report: ValidationReport = aggregate_results(&config, &runner())?;
 
@@ -1014,8 +1011,7 @@ mod tests {
     }
 
     #[test]
-    fn test_aggregate_results_struct_drift_fails_report() -> Result<(), Box<dyn core::error::Error>>
-    {
+    fn test_aggregate_results_struct_drift_fails_report() -> Result<(), Box<dyn Error>> {
         // `len` renamed to `length` (missing + extra) in a rust mirror.
         let mut rust_file: NamedTempFile = NamedTempFile::with_suffix(".rs")?;
         rust_file.write_all(
@@ -1070,8 +1066,7 @@ mod tests {
     }
 
     #[test]
-    fn test_aggregate_results_struct_exact_match_is_complete()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_aggregate_results_struct_exact_match_is_complete() -> Result<(), Box<dyn Error>> {
         let mut rust_file: NamedTempFile = NamedTempFile::with_suffix(".rs")?;
         rust_file.write_all(
             b"#[repr(C)]\npub struct StringView {\n    pub ptr: *const u8,\n    pub len: usize,\n}\n",
@@ -1102,8 +1097,7 @@ mod tests {
     }
 
     #[test]
-    fn test_aggregate_results_struct_missing_target_file_is_fatal()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_aggregate_results_struct_missing_target_file_is_fatal() -> Result<(), Box<dyn Error>> {
         let mut config: Config = empty_config();
         config
             .structs
@@ -1127,8 +1121,7 @@ mod tests {
     }
 
     #[test]
-    fn test_aggregate_results_reports_missing_file_per_method()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_aggregate_results_reports_missing_file_per_method() -> Result<(), Box<dyn Error>> {
         let mut lua_file: NamedTempFile = NamedTempFile::with_suffix(".lua")?;
         lua_file.write_all(b"function to_str(sv)\n    return \"\"\nend\n")?;
         lua_file.flush()?;
@@ -1140,7 +1133,7 @@ mod tests {
         );
         config
             .naming
-            .insert("lua".to_string(), crate::ast_grep::NamingConvention::Snake);
+            .insert("lua".to_string(), NamingConvention::Snake);
         config
             .targets
             .insert("lua".to_string(), vec![lua_file.path().to_path_buf()]);

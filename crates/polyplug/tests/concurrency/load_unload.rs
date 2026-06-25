@@ -15,6 +15,10 @@ use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Barrier;
+use std::thread;
+use std::thread::JoinHandle;
+
+use crossbeam_epoch::{Guard, pin as epoch_pin};
 
 use polyplug::error::RegistryError;
 use polyplug::runtime_store::RuntimeStore;
@@ -70,15 +74,14 @@ fn stress_concurrent_unload_with_resolvers() {
     let stop: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let ready: Arc<Barrier> = Arc::new(Barrier::new(RESOLVER_THREADS + 1_usize));
     let resolve_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0_usize));
-    let mut resolver_handles: Vec<std::thread::JoinHandle<()>> =
-        Vec::with_capacity(RESOLVER_THREADS);
+    let mut resolver_handles: Vec<JoinHandle<()>> = Vec::with_capacity(RESOLVER_THREADS);
 
     for _thread_idx in 0_usize..RESOLVER_THREADS {
         let reg_clone: Arc<RuntimeStore> = Arc::clone(&registry);
         let stop_clone: Arc<AtomicBool> = Arc::clone(&stop);
         let ready_clone: Arc<Barrier> = Arc::clone(&ready);
         let resolve_counter: Arc<AtomicUsize> = Arc::clone(&resolve_count);
-        let resolver_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
+        let resolver_handle: JoinHandle<()> = thread::spawn(move || {
             ready_clone.wait();
             // Guarantee at least one successful resolve before honoring `stop`
             // (mirrors the swap test): the unload loop ends on a re-register, so
@@ -90,7 +93,7 @@ fn stress_concurrent_unload_with_resolvers() {
                 // stays alive across the deref even though another thread unloads the
                 // bundle concurrently — under true unload the superseded interface is
                 // epoch-reclaimed only after every pinned reader has unpinned.
-                let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+                let _epoch_guard: Guard = epoch_pin();
                 let handle_result: Result<GuestContractHandle, RegistryError> = reg_clone
                     .find_guest_contract(GuestContractId::from_u64(UNLOAD_CONTRACT_ID), 0_u32);
                 if let Ok(found) = handle_result {
@@ -189,11 +192,11 @@ fn concurrent_load_unload_same_bundle_multiwriter_no_uaf() {
     let stop: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let resolve_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0_usize));
 
-    let mut writer_handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(WRITERS);
+    let mut writer_handles: Vec<JoinHandle<()>> = Vec::with_capacity(WRITERS);
     for _ in 0_usize..WRITERS {
         let reg: Arc<RuntimeStore> = Arc::clone(&registry);
         let ready_clone: Arc<Barrier> = Arc::clone(&ready);
-        writer_handles.push(std::thread::spawn(move || {
+        writer_handles.push(thread::spawn(move || {
             ready_clone.wait();
             for _ in 0_usize..ROUNDS_PER_WRITER {
                 // A zero-removed invalidate is fine — another writer beat us to it.
@@ -219,20 +222,20 @@ fn concurrent_load_unload_same_bundle_multiwriter_no_uaf() {
         }));
     }
 
-    let mut resolver_handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(RESOLVERS);
+    let mut resolver_handles: Vec<JoinHandle<()>> = Vec::with_capacity(RESOLVERS);
     for _ in 0_usize..RESOLVERS {
         let reg: Arc<RuntimeStore> = Arc::clone(&registry);
         let ready_clone: Arc<Barrier> = Arc::clone(&ready);
         let stop_clone: Arc<AtomicBool> = Arc::clone(&stop);
         let counter: Arc<AtomicUsize> = Arc::clone(&resolve_count);
-        resolver_handles.push(std::thread::spawn(move || {
+        resolver_handles.push(thread::spawn(move || {
             ready_clone.wait();
             while !stop_clone.load(Ordering::Relaxed) {
                 // Pin the epoch across find→resolve→deref so a resolved interface
                 // stays alive across the deref even as writers invalidate and
                 // re-register concurrently — the superseded interface is
                 // epoch-reclaimed only after every pinned reader has unpinned.
-                let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+                let _epoch_guard: Guard = epoch_pin();
                 if let Ok(found) =
                     reg.find_guest_contract(GuestContractId::from_u64(MW_CONTRACT_ID), 0_u32)
                     && let Ok(interface_ptr) = reg.resolve_guest_contract(found)

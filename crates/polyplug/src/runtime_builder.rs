@@ -1,17 +1,30 @@
 use core::ffi::c_void;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use core::ptr;
+use core::slice;
+use core::sync::atomic::AtomicUsize;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, RwLock};
 
 use ed25519_dalek::VerifyingKey;
-use polyplug_abi::runtime::{Compatibility, RuntimeConfig, SignaturePolicy};
+use polyplug_abi::runtime::{Compatibility, ReloadPhase, RuntimeConfig, SignaturePolicy};
 use polyplug_abi::types::{Array, Ed25519PublicKey, LogLevel, StringView};
 use polyplug_abi::{HostApi, SupportedLanguage};
 
 use crate::{
     compatibility::CapabilityGraph,
     error::{GraphError, LoaderError, RuntimeError},
-    loader::{BundleLoader, ManifestData},
+    loader::{BundleLoader, BundleSource, ManifestData, ScanResult, scan_dirs},
     logger::{LoggerClosure, LoggerHandle},
-    runtime::{ReloadCallback, Runtime},
+    runtime::{
+        LoadOptions, ReloadCallback, Runtime, host_alloc, host_create_guest_instance,
+        host_destroy_guest_instance, host_find_all_guest_contracts, host_find_guest_contract,
+        host_free, host_get_dependencies, host_get_error_len, host_get_host_contract,
+        host_get_last_error, host_list_bundles, host_load_bundle, host_log,
+        host_register_guest_contract, host_register_host_contract, host_register_loader,
+        host_reload_bundle, host_resolve_guest_contract, host_resolve_host_contract_interface,
+        host_revision_counter, host_unload_bundle, validate_bundle_compatibility,
+    },
     runtime_store::RuntimeStore,
 };
 
@@ -141,9 +154,9 @@ impl RuntimeBuilder {
     /// user-data pointer through [`RuntimeBuilder::config`].
     pub fn on_reload(
         mut self,
-        cb: impl Fn(*mut core::ffi::c_void, polyplug_abi::runtime::ReloadPhase) + Send + Sync + 'static,
+        cb: impl Fn(*mut c_void, ReloadPhase) + Send + Sync + 'static,
     ) -> RuntimeBuilder {
-        self.on_reload_cb = Some(ReloadCallback(std::sync::Arc::new(cb)));
+        self.on_reload_cb = Some(ReloadCallback(Arc::new(cb)));
         self
     }
 
@@ -227,7 +240,7 @@ impl RuntimeBuilder {
             // length. We only read the elements and copy their bytes out; the host
             // pointer is never retained past this block.
             let host_keys: &[Ed25519PublicKey] =
-                unsafe { core::slice::from_raw_parts(raw.items, raw.len) };
+                unsafe { slice::from_raw_parts(raw.items, raw.len) };
             trusted_keys = host_keys.to_vec();
         }
         if trusted_keys.is_empty() {
@@ -250,30 +263,30 @@ impl RuntimeBuilder {
         // Runtime is placed inside its Arc, so callbacks can recover the Runtime
         // via `(*this).runtime`.
         let host_abi: Box<HostApi> = Box::new(HostApi {
-            runtime: core::ptr::null_mut(),
-            register_guest_contract: crate::runtime::host_register_guest_contract,
-            alloc: crate::runtime::host_alloc,
-            free: crate::runtime::host_free,
-            find_guest_contract: crate::runtime::host_find_guest_contract,
-            find_all_guest_contracts: crate::runtime::host_find_all_guest_contracts,
-            resolve_guest_contract: crate::runtime::host_resolve_guest_contract,
-            get_host_contract: crate::runtime::host_get_host_contract,
-            resolve_host_contract_interface: crate::runtime::host_resolve_host_contract_interface,
-            list_bundles: crate::runtime::host_list_bundles,
-            get_dependencies: crate::runtime::host_get_dependencies,
+            runtime: ptr::null_mut(),
+            register_guest_contract: host_register_guest_contract,
+            alloc: host_alloc,
+            free: host_free,
+            find_guest_contract: host_find_guest_contract,
+            find_all_guest_contracts: host_find_all_guest_contracts,
+            resolve_guest_contract: host_resolve_guest_contract,
+            get_host_contract: host_get_host_contract,
+            resolve_host_contract_interface: host_resolve_host_contract_interface,
+            list_bundles: host_list_bundles,
+            get_dependencies: host_get_dependencies,
             // Host operations
-            load_bundle: crate::runtime::host_load_bundle,
-            reload_bundle: crate::runtime::host_reload_bundle,
-            register_host_contract: crate::runtime::host_register_host_contract,
-            register_loader: crate::runtime::host_register_loader,
-            get_last_error: crate::runtime::host_get_last_error,
-            get_error_len: crate::runtime::host_get_error_len,
-            unload_bundle: crate::runtime::host_unload_bundle,
-            log: crate::runtime::host_log,
-            create_guest_instance: crate::runtime::host_create_guest_instance,
-            destroy_guest_instance: crate::runtime::host_destroy_guest_instance,
-            revision_counter: crate::runtime::host_revision_counter,
-            reserved: core::ptr::null(),
+            load_bundle: host_load_bundle,
+            reload_bundle: host_reload_bundle,
+            register_host_contract: host_register_host_contract,
+            register_loader: host_register_loader,
+            get_last_error: host_get_last_error,
+            get_error_len: host_get_error_len,
+            unload_bundle: host_unload_bundle,
+            log: host_log,
+            create_guest_instance: host_create_guest_instance,
+            destroy_guest_instance: host_destroy_guest_instance,
+            revision_counter: host_revision_counter,
+            reserved: ptr::null(),
         });
 
         let mut loader_map: HashMap<String, Box<dyn BundleLoader>> = HashMap::new();
@@ -291,7 +304,7 @@ impl RuntimeBuilder {
         }
 
         // Phase 1: Scan plugin directories for bundles
-        let scan: crate::loader::ScanResult = crate::loader::scan_dirs(&self.plugin_dirs);
+        let scan: ScanResult = scan_dirs(&self.plugin_dirs);
 
         // Surface every scan failure as a warning. Scanning is best-effort: a
         // corrupt or unreadable bundle must not hide the others, but it must be
@@ -303,7 +316,7 @@ impl RuntimeBuilder {
         let discovered: Vec<(PathBuf, ManifestData)> = scan.found;
 
         // Snapshot manifests for hot-reload cascade detection.
-        let mut manifests_map: HashMap<String, crate::loader::ManifestData> = HashMap::new();
+        let mut manifests_map: HashMap<String, ManifestData> = HashMap::new();
         for (path, manifest) in &discovered {
             let mut stored_manifest: ManifestData = manifest.clone();
             stored_manifest.path = path.clone();
@@ -314,21 +327,21 @@ impl RuntimeBuilder {
         let runtime: Runtime = Runtime {
             registry: Arc::clone(&registry),
             host_abi,
-            loaders: std::sync::RwLock::new(loader_map),
-            bundle_manifests: std::sync::Mutex::new(manifests_map),
+            loaders: RwLock::new(loader_map),
+            bundle_manifests: Mutex::new(manifests_map),
             on_reload_cb: self.on_reload_cb,
             config: self.config,
             logger,
             _logger_closure: self.logger_closure,
             _trusted_keys: trusted_keys,
-            last_error: std::sync::Mutex::new(String::new()),
-            host_contracts: std::sync::RwLock::new(HashMap::new()),
-            singleton_instances: std::sync::RwLock::new(HashMap::new()),
+            last_error: Mutex::new(String::new()),
+            host_contracts: RwLock::new(HashMap::new()),
+            singleton_instances: RwLock::new(HashMap::new()),
             host_language: self.host_language,
-            init_bundle_stack: std::sync::Mutex::new(HashMap::new()),
-            active_init_count: core::sync::atomic::AtomicUsize::new(0),
-            reload_serialize: std::sync::Mutex::new(()),
-            instance_counts: std::sync::Mutex::new(HashMap::new()),
+            init_bundle_stack: Mutex::new(HashMap::new()),
+            active_init_count: AtomicUsize::new(0),
+            reload_serialize: Mutex::new(()),
+            instance_counts: Mutex::new(HashMap::new()),
         };
 
         let runtime: Arc<Runtime> = Arc::new(runtime);
@@ -364,7 +377,7 @@ impl RuntimeBuilder {
                     .map_err(|e: GraphError| RuntimeError::Graph(e))?;
 
             // Phase 2.5: Validate version compatibility
-            crate::runtime::validate_bundle_compatibility(&discovered, self.compatibility, logger)?;
+            validate_bundle_compatibility(&discovered, self.compatibility, logger)?;
 
             // Phase 3: Get topological load order (providers first)
             let load_order: Vec<String> = graph
@@ -396,13 +409,12 @@ impl RuntimeBuilder {
                         })
                     })?;
 
-                let source: crate::loader::BundleSource =
-                    crate::loader::BundleSource::Path(bundle_path.clone());
+                let source: BundleSource = BundleSource::Path(bundle_path.clone());
                 runtime
                     .load_manifest_with_source(
                         manifest.clone(),
                         source,
-                        crate::runtime::LoadOptions {
+                        LoadOptions {
                             compatibility: self.compatibility,
                             ignore_function_count_mismatch: false,
                         },

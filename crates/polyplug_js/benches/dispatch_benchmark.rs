@@ -12,16 +12,28 @@
 
 #![allow(clippy::expect_used)]
 
-use core::hint::black_box;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use criterion::{Criterion, criterion_group, criterion_main};
-use rquickjs::{Context, Function, Object, Persistent, Runtime};
+use core::hint::black_box;
 
-// `rquickjs::Runtime` and `polyplug::runtime::Runtime` collide on the bare name,
-// so the polyplug runtime types are referenced through fully-qualified paths in
-// the reload arm below rather than imported.
+use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
+use polyplug::runtime::Runtime as PolyplugRuntime;
+use polyplug::runtime::RuntimeBuilder as PolyplugRuntimeBuilder;
+use polyplug_abi::Compatibility;
+use polyplug_abi::RuntimeConfig as PolyplugRuntimeConfig;
+use polyplug_js::JsConfig;
+use polyplug_js::JsLoader;
+// ponytail: rquickjs::Runtime collides with polyplug::runtime::Runtime on the bare name; `Runtime`
+// stays as the rquickjs type (used throughout the bench), PolyplugRuntime is the alias.
+use rquickjs::Context;
+use rquickjs::Function;
+use rquickjs::Object;
+use rquickjs::Persistent;
+use rquickjs::Runtime;
 
 fn bench_js_dispatch(c: &mut Criterion) {
     let runtime: Runtime = Runtime::new().expect("Failed to create runtime");
@@ -740,13 +752,13 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
 /// the dir (kept alive) and the bundle dir path.
 fn write_temp_js_bundle(name: &str, content: &str) -> (tempfile::TempDir, PathBuf) {
     let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("bundle.js"), content).expect("write bundle.js");
+    fs::write(dir.path().join("bundle.js"), content).expect("write bundle.js");
     let bundle_id: u64 = polyplug_utils::bundle_id(name);
     let manifest: String = format!(
         "id = {}\nname = \"{}\"\nloader = \"js-quickjs\"\nfile = \"bundle.js\"\n",
         bundle_id, name
     );
-    std::fs::write(dir.path().join("manifest.toml"), manifest).expect("write manifest.toml");
+    fs::write(dir.path().join("manifest.toml"), manifest).expect("write manifest.toml");
     let bundle_dir: PathBuf = dir.path().to_path_buf();
     (dir, bundle_dir)
 }
@@ -765,10 +777,10 @@ fn bench_js_reload(c: &mut Criterion) {
     let (_dir, bundle_dir): (tempfile::TempDir, PathBuf) =
         write_temp_js_bundle("test.reload.contract", &bundle);
 
-    let runtime: Arc<polyplug::runtime::Runtime> = polyplug::runtime::RuntimeBuilder::new()
-        .loader(polyplug_js::JsLoader::new(polyplug_js::JsConfig {}))
-        .config(polyplug_abi::RuntimeConfig {
-            compatibility: polyplug_abi::Compatibility::Strict,
+    let runtime: Arc<PolyplugRuntime> = PolyplugRuntimeBuilder::new()
+        .loader(JsLoader::new(JsConfig {}))
+        .config(PolyplugRuntimeConfig {
+            compatibility: Compatibility::Strict,
             hot_reload_enabled: true,
             ..Default::default()
         })

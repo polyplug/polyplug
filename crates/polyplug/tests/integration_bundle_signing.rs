@@ -20,8 +20,11 @@ use polyplug::loader::BundleLoader;
 use polyplug::loader::BundleSource;
 use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
+use polyplug_abi::Array;
+use polyplug_abi::RuntimeConfig;
 use polyplug_abi::SupportedLanguage;
 use polyplug_abi::runtime::SignaturePolicy;
+use polyplug_abi::types::Ed25519PublicKey;
 use polyplug_abi::types::LogLevel;
 use polyplug_signing::{generate_keypair, sign_bundle};
 use polyplug_utils::bundle_id as compute_bundle_id;
@@ -49,16 +52,12 @@ impl BundleLoader for NoopLoader {
         _manifest: &ManifestData,
         _source: &BundleSource,
         _runtime: &Runtime,
-    ) -> Result<(), polyplug::error::LoaderError> {
+    ) -> Result<(), LoaderError> {
         Ok(())
     }
 
-    fn reload(
-        &self,
-        _manifest: &ManifestData,
-        _runtime: &Runtime,
-    ) -> Result<(), polyplug::error::LoaderError> {
-        Err(polyplug::error::LoaderError::HotReloadUnsupported {
+    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
+        Err(LoaderError::HotReloadUnsupported {
             loader_name: self.loader_name().to_owned(),
         })
     }
@@ -396,18 +395,14 @@ fn policy_off_ignores_pinned_keys() {
 fn build_via_config_with_trusted_keys(
     plugin_dir: PathBuf,
     policy: SignaturePolicy,
-    keys: &[polyplug_abi::types::Ed25519PublicKey],
+    keys: &[Ed25519PublicKey],
 ) -> Result<Arc<Runtime>, RuntimeError> {
-    let trusted_keys: polyplug_abi::Array<polyplug_abi::types::Ed25519PublicKey> =
-        if keys.is_empty() {
-            polyplug_abi::Array::empty()
-        } else {
-            polyplug_abi::Array::new(
-                keys.as_ptr() as *mut polyplug_abi::types::Ed25519PublicKey,
-                keys.len(),
-            )
-        };
-    let cfg: polyplug_abi::RuntimeConfig = polyplug_abi::RuntimeConfig {
+    let trusted_keys: Array<Ed25519PublicKey> = if keys.is_empty() {
+        Array::empty()
+    } else {
+        Array::new(keys.as_ptr() as *mut Ed25519PublicKey, keys.len())
+    };
+    let cfg: RuntimeConfig = RuntimeConfig {
         signature_policy: policy,
         trusted_keys,
         ..Default::default()
@@ -428,10 +423,9 @@ fn config_path_pinned_key_accepts_bundle_signed_with_trusted_key() {
     sign_bundle(&bundle_dir, &signing_key).expect("sign bundle");
 
     // Host-owned key buffer; must outlive the runtime returned below.
-    let keys: Vec<polyplug_abi::types::Ed25519PublicKey> =
-        vec![polyplug_abi::types::Ed25519PublicKey {
-            bytes: *verifying_key.as_bytes(),
-        }];
+    let keys: Vec<Ed25519PublicKey> = vec![Ed25519PublicKey {
+        bytes: *verifying_key.as_bytes(),
+    }];
 
     let result: Result<Arc<Runtime>, RuntimeError> = build_via_config_with_trusted_keys(
         tmp.path().to_path_buf(),
@@ -456,10 +450,9 @@ fn config_path_pinned_key_rejects_bundle_signed_with_untrusted_key() {
     sign_bundle(&bundle_dir, &signing_key_a).expect("sign bundle");
     let (_, verifying_key_b): (SigningKey, VerifyingKey) = generate_keypair();
 
-    let keys: Vec<polyplug_abi::types::Ed25519PublicKey> =
-        vec![polyplug_abi::types::Ed25519PublicKey {
-            bytes: *verifying_key_b.as_bytes(),
-        }];
+    let keys: Vec<Ed25519PublicKey> = vec![Ed25519PublicKey {
+        bytes: *verifying_key_b.as_bytes(),
+    }];
 
     let result: Result<Arc<Runtime>, RuntimeError> = build_via_config_with_trusted_keys(
         tmp.path().to_path_buf(),
@@ -501,14 +494,13 @@ fn config_path_trusted_keys_are_copied_at_create_not_retained() {
     let (_, verifying_key_b): (SigningKey, VerifyingKey) = generate_keypair();
 
     // Host-owned key buffer pinned to the UNTRUSTED key B.
-    let mut keys: Vec<polyplug_abi::types::Ed25519PublicKey> =
-        vec![polyplug_abi::types::Ed25519PublicKey {
-            bytes: *verifying_key_b.as_bytes(),
-        }];
+    let mut keys: Vec<Ed25519PublicKey> = vec![Ed25519PublicKey {
+        bytes: *verifying_key_b.as_bytes(),
+    }];
 
-    let cfg: polyplug_abi::RuntimeConfig = polyplug_abi::RuntimeConfig {
+    let cfg: RuntimeConfig = RuntimeConfig {
         signature_policy: SignaturePolicy::Required,
-        trusted_keys: polyplug_abi::Array::new(keys.as_mut_ptr(), keys.len()),
+        trusted_keys: Array::new(keys.as_mut_ptr(), keys.len()),
         ..Default::default()
     };
 
@@ -522,7 +514,7 @@ fn config_path_trusted_keys_are_copied_at_create_not_retained() {
     // Mutate the host buffer to the REAL signer (key A) AFTER create. A runtime
     // that retained the host pointer would now see A and accept; a runtime that
     // copied B at create still holds B and must reject.
-    keys[0] = polyplug_abi::types::Ed25519PublicKey {
+    keys[0] = Ed25519PublicKey {
         bytes: *verifying_key_a.as_bytes(),
     };
 

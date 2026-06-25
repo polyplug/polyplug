@@ -2,6 +2,9 @@
 
 use std::path::Path;
 
+#[cfg(test)]
+use core::error::Error;
+
 use crate::ast_grep::{AstGrepRunner, Match};
 use crate::error::ValidatorError;
 use crate::languages::{LanguageValidator, parse_field_name_trailing, parse_variant_text};
@@ -163,17 +166,14 @@ mod tests {
         validate_language_struct,
     };
 
-    fn create_temp_cpp_file(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
+    fn create_temp_cpp_file(content: &str) -> Result<NamedTempFile, Box<dyn Error>> {
         let mut file: NamedTempFile = NamedTempFile::with_suffix(".hpp")?;
         file.write_all(content.as_bytes())?;
         file.flush()?;
         Ok(file)
     }
 
-    fn validate_file(
-        methods: &[String],
-        file: &Path,
-    ) -> Result<ValidationResult, Box<dyn core::error::Error>> {
+    fn validate_file(methods: &[String], file: &Path) -> Result<ValidationResult, Box<dyn Error>> {
         let mut validator: CppValidator = CppValidator::new();
         let result: ValidationResult = validate_language(
             &mut validator,
@@ -187,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detects_inline_function() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_inline_function() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
 inline std::string to_str(StringView sv) {
@@ -201,7 +201,7 @@ inline std::string to_str(StringView sv) {
     }
 
     #[test]
-    fn test_detects_noexcept_function() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_noexcept_function() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
 inline bool starts_with(StringView sv, std::string_view prefix) noexcept {
@@ -215,7 +215,7 @@ inline bool starts_with(StringView sv, std::string_view prefix) noexcept {
     }
 
     #[test]
-    fn test_detects_templated_return_type() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_templated_return_type() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
 inline std::vector<std::string_view> split(StringView sv, std::string_view delimiter) {
@@ -229,7 +229,7 @@ inline std::vector<std::string_view> split(StringView sv, std::string_view delim
     }
 
     #[test]
-    fn test_detects_non_inline_function() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_non_inline_function() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
 bool ends_with(StringView sv, std::string_view suffix) noexcept {
@@ -243,7 +243,7 @@ bool ends_with(StringView sv, std::string_view suffix) noexcept {
     }
 
     #[test]
-    fn test_renamed_definition_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_renamed_definition_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
 inline std::string to_str2(StringView sv) {
@@ -257,7 +257,7 @@ inline std::string to_str2(StringView sv) {
     }
 
     #[test]
-    fn test_call_site_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_call_site_only_does_not_match() -> Result<(), Box<dyn Error>> {
         // The pre-rework validator matched the bare identifier `to_str`,
         // so this file falsely passed. It must not match now.
         let file: NamedTempFile = create_temp_cpp_file(
@@ -274,7 +274,7 @@ inline void other(StringView sv) {
     }
 
     #[test]
-    fn test_comment_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_comment_only_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
 // to_str(sv) converts a StringView; see also to_str overloads.
@@ -287,7 +287,7 @@ inline void unrelated() {}
     }
 
     #[test]
-    fn test_real_sdk_has_all_golden_methods() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_sdk_has_all_golden_methods() -> Result<(), Box<dyn Error>> {
         let sdk_path: PathBuf = repo_path("sdks/cpp/abi/polyplug/abi.hpp");
         let result: ValidationResult = validate_file(&golden_methods(), &sdk_path)?;
         assert!(
@@ -302,7 +302,7 @@ inline void unrelated() {}
     fn validate_enum_file(
         enum_name: &str,
         file: &Path,
-    ) -> Result<EnumValidationResult, Box<dyn core::error::Error>> {
+    ) -> Result<EnumValidationResult, Box<dyn Error>> {
         let mut validator: CppValidator = CppValidator::new();
         let result: EnumValidationResult = validate_language_enum(
             &mut validator,
@@ -315,8 +315,7 @@ inline void unrelated() {}
     }
 
     #[test]
-    fn test_enum_exact_match_passes_with_forward_declaration()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_exact_match_passes_with_forward_declaration() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
 enum class DispatchType : uint32_t;
@@ -332,8 +331,7 @@ enum class DispatchType : uint32_t {
     }
 
     #[test]
-    fn test_enum_wrong_value_fails_with_expected_vs_found()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_wrong_value_fails_with_expected_vs_found() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
 enum class DispatchType : uint32_t {
@@ -354,7 +352,7 @@ enum class DispatchType : uint32_t {
     }
 
     #[test]
-    fn test_enum_missing_and_extra_variants_fail() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_missing_and_extra_variants_fail() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
 enum class DispatchType : uint32_t {
@@ -376,7 +374,7 @@ enum class DispatchType : uint32_t {
     }
 
     #[test]
-    fn test_enum_commented_out_variant_does_not_count() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_commented_out_variant_does_not_count() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
 // DispatchType has VirtualMachine = 1 per the ABI.
@@ -398,7 +396,7 @@ enum class DispatchType : uint32_t {
     }
 
     #[test]
-    fn test_enum_value_in_string_does_not_count() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_value_in_string_does_not_count() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
 inline const char* hint() { return "VirtualMachine = 1"; }
@@ -418,7 +416,7 @@ enum class DispatchType : uint32_t {
     }
 
     #[test]
-    fn test_real_abi_mirror_matches_golden_enums() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_abi_mirror_matches_golden_enums() -> Result<(), Box<dyn Error>> {
         let path: PathBuf = repo_path("sdks/cpp/abi/polyplug/abi.hpp");
         for enum_name in [
             "AbiErrorCode",
@@ -436,7 +434,7 @@ enum class DispatchType : uint32_t {
         struct_name: &str,
         golden_fields: &[String],
         file: &Path,
-    ) -> Result<StructFieldValidationResult, Box<dyn core::error::Error>> {
+    ) -> Result<StructFieldValidationResult, Box<dyn Error>> {
         let mut validator: CppValidator = CppValidator::new();
         let result: StructFieldValidationResult = validate_language_struct(
             &mut validator,
@@ -449,7 +447,7 @@ enum class DispatchType : uint32_t {
     }
 
     #[test]
-    fn test_struct_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_exact_match_passes() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
 struct StringView {
@@ -465,7 +463,7 @@ struct StringView {
     }
 
     #[test]
-    fn test_struct_renamed_field_is_missing_and_extra() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_renamed_field_is_missing_and_extra() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
 struct StringView {
@@ -489,7 +487,7 @@ struct StringView {
     }
 
     #[test]
-    fn test_struct_forward_declaration_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_forward_declaration_does_not_match() -> Result<(), Box<dyn Error>> {
         // A bodyless forward declaration must yield no fields.
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
@@ -508,7 +506,7 @@ struct StringView;
     }
 
     #[test]
-    fn test_struct_comment_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_comment_only_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
 // struct StringView { const uint8_t* ptr; size_t len; };
@@ -526,8 +524,7 @@ struct StringView;
     }
 
     #[test]
-    fn test_struct_other_struct_in_same_file_not_confused()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_other_struct_in_same_file_not_confused() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_cpp_file(
             r#"
 struct Other {
@@ -547,7 +544,7 @@ struct StringView {
     }
 
     #[test]
-    fn test_real_abi_mirror_structs_match_golden() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_abi_mirror_structs_match_golden() -> Result<(), Box<dyn Error>> {
         let path: PathBuf = repo_path("sdks/cpp/abi/polyplug/abi.hpp");
         for struct_name in ["StringView", "AbiError"] {
             let result: StructFieldValidationResult =

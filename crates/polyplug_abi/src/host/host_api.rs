@@ -30,6 +30,7 @@ use polyplug_utils::BundleId;
 
 use crate::{
     guest::{GuestContractInstance, GuestContractInterface},
+    host::{HostContractInstance, HostContractInterface},
     plugin::{GuestContractHandle, PluginDescriptor},
     types::{AbiError, Array, DependencyInfo, StringView},
 };
@@ -186,7 +187,7 @@ pub struct HostApi {
         this: *const HostApi,
         contract_id: u64,
         min_version: u32,
-    ) -> crate::host::HostContractInstance,
+    ) -> HostContractInstance,
     /// Resolve a host contract interface by contract_id and minimum version.
     ///
     /// Returns the HostContractInterface pointer for the contract.
@@ -200,12 +201,11 @@ pub struct HostApi {
     ///
     /// # Returns
     /// Pointer to HostContractInterface, or null if invalid/not found.
-    pub resolve_host_contract_interface:
-        unsafe extern "C" fn(
-            this: *const HostApi,
-            contract_id: u64,
-            min_version: u32,
-        ) -> *const crate::host::HostContractInterface,
+    pub resolve_host_contract_interface: unsafe extern "C" fn(
+        this: *const HostApi,
+        contract_id: u64,
+        min_version: u32,
+    ) -> *const HostContractInterface,
     /// List all loaded bundles.
     ///
     /// Returns an Array of BundleId. Caller must free via `host->free`.
@@ -274,7 +274,7 @@ pub struct HostApi {
     ///   success, an error otherwise). Never null.
     pub register_host_contract: unsafe extern "C" fn(
         this: *const HostApi,
-        interface: *const crate::host::HostContractInterface,
+        interface: *const HostContractInterface,
         out_err: *mut AbiError,
     ),
     /// Register a language loader.
@@ -442,7 +442,7 @@ pub struct HostApi {
     /// mediate reloads against).
     pub revision_counter: unsafe extern "C" fn(this: *const HostApi) -> *const u64,
     /// Reserved. Producers must set this to null; consumers must not read it.
-    pub reserved: *const core::ffi::c_void,
+    pub reserved: *const c_void,
 }
 
 // SAFETY: HostApi contains an opaque pointer and function pointers.
@@ -458,6 +458,7 @@ unsafe impl Sync for HostApi {}
 
 #[cfg(test)]
 mod tests {
+    use core::ffi::c_void;
     use core::mem::{align_of, offset_of, size_of};
 
     use crate::host::host_api::HostApi;
@@ -505,7 +506,7 @@ mod tests {
     #[test]
     fn host_api_has_runtime_field() {
         assert_eq!(offset_of!(HostApi, runtime), 0);
-        assert_eq!(size_of::<*mut core::ffi::c_void>(), 8);
+        assert_eq!(size_of::<*mut c_void>(), 8);
     }
 
     /// Verify list_bundles field exists.

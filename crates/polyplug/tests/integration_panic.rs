@@ -5,20 +5,34 @@
 //!
 //! This test crate is the crate root for the `integration_panic` test binary.
 
+use core::ffi::c_void;
+use core::mem;
+use core::ptr;
+use std::env;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::ExitStatus;
 
+use libloading::{Library, Symbol};
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
+use polyplug_abi::Array;
 use polyplug_abi::BundleInitContext;
+use polyplug_abi::DependencyInfo;
+use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
+use polyplug_abi::HostContractInstance;
+use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
+use polyplug_abi::VmLoaderData;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_utils::BundleId;
 
 mod common;
 
@@ -31,7 +45,7 @@ use common::polyplugc_bin;
 /// # Safety
 /// Only written by `capture_register_callback` which is called once during
 /// `polyplug_init`, before the interface pointer is read in the test.
-static mut CAPTURED_INTERFACE_PTR: *const GuestContractInterface = core::ptr::null();
+static mut CAPTURED_INTERFACE_PTR: *const GuestContractInterface = ptr::null();
 
 /// A register_guest_contract callback that captures the interface pointer.
 ///
@@ -75,8 +89,8 @@ unsafe extern "C" fn noop_find_guest_contract(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::GuestContractHandle {
-    polyplug_abi::GuestContractHandle::null()
+) -> GuestContractHandle {
+    GuestContractHandle::null()
 }
 
 /// No-op find_all_by_contract callback.
@@ -84,16 +98,16 @@ unsafe extern "C" fn noop_find_all_guest_contracts(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::Array<polyplug_abi::GuestContractHandle> {
-    polyplug_abi::Array::empty()
+) -> Array<GuestContractHandle> {
+    Array::empty()
 }
 
 /// No-op resolve_guest_contract callback.
 unsafe extern "C" fn noop_resolve_guest_contract(
     _this: *const HostApi,
-    _handle: polyplug_abi::GuestContractHandle,
+    _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
-    core::ptr::null()
+    ptr::null()
 }
 
 /// No-op get_host_contract callback.
@@ -101,22 +115,18 @@ unsafe extern "C" fn noop_get_host_contract(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::HostContractInstance {
-    polyplug_abi::HostContractInstance::null()
+) -> HostContractInstance {
+    HostContractInstance::null()
 }
 
 /// No-op list_bundles callback.
-unsafe extern "C" fn noop_list_bundles(
-    _this: *const HostApi,
-) -> polyplug_abi::Array<polyplug_utils::BundleId> {
-    polyplug_abi::Array::empty()
+unsafe extern "C" fn noop_list_bundles(_this: *const HostApi) -> Array<BundleId> {
+    Array::empty()
 }
 
 /// No-op get_dependencies callback.
-unsafe extern "C" fn noop_get_dependencies(
-    _this: *const HostApi,
-) -> polyplug_abi::Array<polyplug_abi::DependencyInfo> {
-    polyplug_abi::Array::empty()
+unsafe extern "C" fn noop_get_dependencies(_this: *const HostApi) -> Array<DependencyInfo> {
+    Array::empty()
 }
 
 /// No-op resolve_host_contract_interface callback.
@@ -124,8 +134,8 @@ unsafe extern "C" fn noop_resolve_host_contract_interface(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractInterface {
-    core::ptr::null()
+) -> *const HostContractInterface {
+    ptr::null()
 }
 
 /// No-op load_bundle callback.
@@ -157,7 +167,7 @@ unsafe extern "C" fn noop_reload_bundle(
 /// No-op register_host_contract callback.
 unsafe extern "C" fn noop_register_host_contract(
     _this: *const HostApi,
-    _interface: *const polyplug_abi::HostContractInterface,
+    _interface: *const HostContractInterface,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -169,7 +179,7 @@ unsafe extern "C" fn noop_register_host_contract(
 /// No-op register_loader callback.
 unsafe extern "C" fn noop_register_loader(
     _this: *const HostApi,
-    _loader_ptr: *mut core::ffi::c_void,
+    _loader_ptr: *mut c_void,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -194,7 +204,7 @@ unsafe extern "C" fn noop_get_error_len(_this: *const HostApi) -> usize {
 
 unsafe extern "C" fn noop_unload_bundle(
     _this: *const HostApi,
-    _bundle_id: polyplug_utils::BundleId,
+    _bundle_id: BundleId,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -222,9 +232,9 @@ fn test_panic_returns_abi_error_panic() {
         .join("test_panic_api.toml");
 
     // -- Step 2: Create a temp directory for the panic plugin crate --
-    let tmp_dir: PathBuf = std::env::temp_dir().join("polyplug_panic_plugin_test");
-    std::fs::create_dir_all(&tmp_dir).expect("create tmp dir");
-    std::fs::create_dir_all(tmp_dir.join("src")).expect("create tmp src dir");
+    let tmp_dir: PathBuf = env::temp_dir().join("polyplug_panic_plugin_test");
+    fs::create_dir_all(&tmp_dir).expect("create tmp dir");
+    fs::create_dir_all(tmp_dir.join("src")).expect("create tmp src dir");
 
     // -- Step 2b: Create a minimal bundle.toml referencing the API --
     let bundle_toml_content: String = format!(
@@ -245,7 +255,7 @@ fn test_panic_returns_abi_error_panic() {
         api_toml.to_string_lossy().replace('\\', "/")
     );
     let bundle_toml_path: PathBuf = tmp_dir.join("bundle.toml");
-    std::fs::write(&bundle_toml_path, bundle_toml_content).expect("write bundle.toml");
+    fs::write(&bundle_toml_path, bundle_toml_content).expect("write bundle.toml");
 
     // -- Step 3: Run polyplugc generate into tmp_dir/src --
     let gen_status: ExitStatus = Command::new(polyplugc_bin())
@@ -291,7 +301,7 @@ fn test_panic_returns_abi_error_panic() {
         guest_lib_path.to_string_lossy().replace('\\', "/"),
         utils_lib_path.to_string_lossy().replace('\\', "/")
     );
-    std::fs::write(tmp_dir.join("Cargo.toml"), &cargo_toml_content).expect("write Cargo.toml");
+    fs::write(tmp_dir.join("Cargo.toml"), &cargo_toml_content).expect("write Cargo.toml");
 
     // -- Step 5: Write src/lib.rs implementing TestPanicPlugin --
     // The generated src/guest/interfaces.rs, src/guest/contracts.rs, src/guest/types.rs already exist.
@@ -377,7 +387,7 @@ fn test_panic_returns_abi_error_panic() {
         "    err\n",
         "}\n",
     );
-    std::fs::write(tmp_dir.join("src").join("lib.rs"), lib_rs_content).expect("write src/lib.rs");
+    fs::write(tmp_dir.join("src").join("lib.rs"), lib_rs_content).expect("write src/lib.rs");
 
     // -- Step 6: Build the cdylib --
     let build_status: ExitStatus = Command::new(env!("CARGO"))
@@ -406,13 +416,12 @@ fn test_panic_returns_abi_error_panic() {
 
     // -- Step 8: Load with libloading --
     // SAFETY: so_path is a compiled cdylib.
-    let library: libloading::Library = unsafe {
-        libloading::Library::new(&so_path).expect("failed to load panic_plugin shared library")
-    };
+    let library: Library =
+        unsafe { Library::new(&so_path).expect("failed to load panic_plugin shared library") };
 
     // -- Step 9: Resolve and call polyplug_init --
     // SAFETY: polyplug_init matches the expected ABI signature (2-arg).
-    let init_fn: libloading::Symbol<
+    let init_fn: Symbol<
         '_,
         unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe {
@@ -422,7 +431,7 @@ fn test_panic_returns_abi_error_panic() {
     };
 
     let host_interface: HostApi = HostApi {
-        runtime: core::ptr::null_mut(),
+        runtime: ptr::null_mut(),
         register_guest_contract: capture_register_callback,
         alloc: noop_alloc,
         free: noop_free,
@@ -444,7 +453,7 @@ fn test_panic_returns_abi_error_panic() {
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
         revision_counter: stub_revision_counter,
-        reserved: core::ptr::null(),
+        reserved: ptr::null(),
     };
 
     let ctx: BundleInitContext = BundleInitContext {
@@ -482,15 +491,14 @@ fn test_panic_returns_abi_error_panic() {
     // The generated create_instance constructs the implementation via the
     // author factory and carries it in instance.data — dispatch needs a real
     // instance.
-    let mut instance: polyplug_abi::GuestContractInstance =
-        polyplug_abi::GuestContractInstance::null();
+    let mut instance: GuestContractInstance = GuestContractInstance::null();
     // SAFETY: host_interface outlives the instance; create_instance is the
     // generated factory thunk on the captured interface.
     unsafe {
         (interface.create_instance)(
-            polyplug_abi::VmLoaderData::null(),
+            VmLoaderData::null(),
             &host_interface as *const HostApi,
-            core::ptr::null(),
+            ptr::null(),
             &mut instance,
         )
     };
@@ -501,28 +509,16 @@ fn test_panic_returns_abi_error_panic() {
 
     // SAFETY: fn_ptr is function 0 in the interface (do_panic).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(
-        polyplug_abi::GuestContractInstance,
-        *const (),
-        *mut (),
-        *mut AbiError,
-    ) =
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
         // SAFETY: fn_ptr is the do_panic ABI wrapper -- the canonical 4-arg
         // native dispatch signature (trailing out_err). The catch_unwind wrapper
         // inside the plugin catches the panic before it crosses the FFI boundary.
-        unsafe { core::mem::transmute(fn_ptr) };
+        unsafe { mem::transmute(fn_ptr) };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: do_panic ignores args and out entirely (void function, no params);
     // instance was created by the generated create_instance above.
-    unsafe {
-        dispatch_fn(
-            instance,
-            core::ptr::null(),
-            core::ptr::null_mut(),
-            &mut call_result,
-        )
-    };
+    unsafe { dispatch_fn(instance, ptr::null(), ptr::null_mut(), &mut call_result) };
 
     // -- Step 11: Assert panic was caught and returned Panic --
     assert_eq!(
@@ -535,37 +531,37 @@ fn test_panic_returns_abi_error_panic() {
     // Process continues here -- no abort occurred. Test completing IS the proof.
 
     // Leak the library to avoid dlclose issues on some platforms.
-    core::mem::forget(library);
+    mem::forget(library);
 }
 
 /// `HostApi.log` stub for test hosts — drops the record.
 unsafe extern "C" fn stub_host_log(
-    _this: *const polyplug_abi::HostApi,
+    _this: *const HostApi,
     _level: u32,
-    _scope: polyplug_abi::StringView,
-    _message: polyplug_abi::StringView,
+    _scope: StringView,
+    _message: StringView,
 ) {
 }
 
 unsafe extern "C" fn stub_create_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _args: *const core::ffi::c_void,
-    out_instance: *mut polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _args: *const c_void,
+    out_instance: *mut GuestContractInstance,
 ) {
     if !out_instance.is_null() {
         // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+        unsafe { out_instance.write(GuestContractInstance::null()) };
     }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _instance: polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _instance: GuestContractInstance,
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const polyplug_abi::HostApi) -> *const u64 {
-    core::ptr::null()
+unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
+    ptr::null()
 }

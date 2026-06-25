@@ -9,6 +9,8 @@
 
 use core::ffi::c_void;
 use core::hint::black_box;
+use core::ptr;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -258,7 +260,7 @@ unsafe extern "C" fn scalar_log_sink(
 fn bench_lua_log_trampoline(c: &mut Criterion) {
     let mut bridge: PolyplugLuaLogBridge = PolyplugLuaLogBridge {
         callback: Some(scalar_log_sink),
-        user_data: core::ptr::null_mut(),
+        user_data: ptr::null_mut(),
     };
     let bridge_ptr: *mut c_void = &mut bridge as *mut PolyplugLuaLogBridge as *mut c_void;
     let scope: StringView = StringView::from_static(b"loader.lua");
@@ -310,14 +312,13 @@ end
 /// Lua loader. Returns the dir (kept alive) and the bundle dir path.
 fn write_temp_lua_bundle(name: &str) -> (tempfile::TempDir, PathBuf) {
     let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("bundle.lua"), reload_plugin_script())
-        .expect("write bundle.lua");
+    fs::write(dir.path().join("bundle.lua"), reload_plugin_script()).expect("write bundle.lua");
     let bundle_id: u64 = polyplug_utils::bundle_id(name);
     let manifest: String = format!(
         "id = {}\nname = \"{}\"\nloader = \"lua\"\nfile = \"bundle.lua\"\n",
         bundle_id, name
     );
-    std::fs::write(dir.path().join("manifest.toml"), manifest).expect("write manifest.toml");
+    fs::write(dir.path().join("manifest.toml"), manifest).expect("write manifest.toml");
     let bundle_dir: PathBuf = dir.path().to_path_buf();
     (dir, bundle_dir)
 }

@@ -37,6 +37,8 @@
 //! count is overridable via `POLYPLUG_LEAK_CYCLES` so the default `cargo test` run
 //! stays fast while a soak run can crank it up.
 
+use std::env::var;
+use std::fs::read_to_string;
 use std::sync::Arc;
 
 use polyplug::Runtime;
@@ -60,7 +62,7 @@ const MAX_TAIL_GROWTH_KIB: u64 = 1024;
 /// Returns `None` on non-Linux or if the proc file is unreadable, so the test
 /// degrades to a build/drop exerciser (no RSS assertion) where unavailable.
 fn current_rss_kib() -> Option<u64> {
-    let status: String = std::fs::read_to_string("/proc/self/status").ok()?;
+    let status: String = read_to_string("/proc/self/status").ok()?;
     for line in status.lines() {
         if let Some(rest) = line.strip_prefix("VmRSS:") {
             return rest.split_whitespace().next()?.parse::<u64>().ok();
@@ -71,7 +73,7 @@ fn current_rss_kib() -> Option<u64> {
 
 /// Parse a positive-integer environment variable, falling back to `default`.
 fn env_u64(name: &str, default: u64) -> u64 {
-    match std::env::var(name) {
+    match var(name) {
         Ok(raw) => raw.trim().parse::<u64>().unwrap_or(default).max(1),
         Err(_) => default,
     }

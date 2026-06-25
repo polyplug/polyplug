@@ -1,5 +1,6 @@
 //! C# code generator for polyplugc.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use super::CALL_ARENA_BUF_LEN;
@@ -20,6 +21,7 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use polyplug_codegen::PolyplugcError;
+use polyplug_codegen::ResolvedBundleFile;
 
 /// The C# code generator.
 pub(crate) struct CSharpGenerator;
@@ -84,7 +86,7 @@ fn generate_cs_enum(e: &EnumDef) -> String {
 }
 
 /// Returns true if the function needs an arg-pack struct (2+ parameters).
-fn needs_arg_pack(params: &[crate::ir::ResolvedParam]) -> bool {
+fn needs_arg_pack(params: &[ResolvedParam]) -> bool {
     params.len() >= 2
 }
 
@@ -113,12 +115,10 @@ fn contract_needs_arena(contract: &ResolvedContract) -> bool {
 /// (`Single`) or a per-platform map of `.dll` paths (`PlatformMap`) — every entry
 /// shares the same assembly name, so the first stem is authoritative. Returns
 /// `None` when no `.dll` file is declared (nothing to namespace).
-fn cs_assembly_namespace(file: &polyplug_codegen::ResolvedBundleFile) -> Option<String> {
+fn cs_assembly_namespace(file: &ResolvedBundleFile) -> Option<String> {
     let raw_path: &str = match file {
-        polyplug_codegen::ResolvedBundleFile::Single(path) => path.as_str(),
-        polyplug_codegen::ResolvedBundleFile::PlatformMap(map) => {
-            map.values().next().map(String::as_str)?
-        }
+        ResolvedBundleFile::Single(path) => path.as_str(),
+        ResolvedBundleFile::PlatformMap(map) => map.values().next().map(String::as_str)?,
     };
     // Take the file stem: drop any directory prefix and the trailing extension.
     let file_name: &str = raw_path.rsplit(['/', '\\']).next().unwrap_or(raw_path);
@@ -221,7 +221,7 @@ fn emit_cs_call_arena_helpers(out: &mut String) {
 }
 
 /// Emit a C# arg-pack struct for a function with 2+ primitive parameters.
-fn emit_cs_arg_pack(contract_struct: &str, func: &crate::ir::ResolvedFunction) -> String {
+fn emit_cs_arg_pack(contract_struct: &str, func: &ResolvedFunction) -> String {
     let mut out: String = String::new();
     out.push_str("[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]\n");
     out.push_str(&format!(
@@ -896,7 +896,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     let assembly_namespace: Option<String> = ir
         .bundle
         .as_ref()
-        .and_then(|b: &crate::ir::ResolvedBundle| cs_assembly_namespace(&b.file));
+        .and_then(|b: &ResolvedBundle| cs_assembly_namespace(&b.file));
     if let Some(ns) = &assembly_namespace {
         out.push_str(&format!("namespace {ns};\n\n"));
     }
@@ -2125,7 +2125,7 @@ fn generate_bundle_manifest_csharp(ir: &ValidatedIr) -> String {
     };
 
     // Build function_count inline table: only for contracts this bundle PROVIDES
-    let provides_set: std::collections::HashSet<String> = provides.iter().cloned().collect();
+    let provides_set: HashSet<String> = provides.iter().cloned().collect();
     let fn_count_entries: Vec<String> = ir
         .contracts
         .iter()
@@ -3338,7 +3338,11 @@ impl CodeGenerator for CSharpGenerator {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
-    use crate::ir::*;
+    use crate::ir::EnumVariant;
+    use crate::ir::ReprType;
+    use crate::ir::ResolvedDependency;
+    use crate::ir::Version;
+    use polyplug_utils::guest_contract_id;
 
     #[test]
     fn generate_cs_enum_non_bitflag() {
@@ -4191,7 +4195,7 @@ mod tests {
         let generator: CSharpGenerator = CSharpGenerator;
         // pipeline.Validator@1 — contract_id must match the dep's contract_id so the
         // gating logic (collect_peer_contracts) maps the dep to the contract.
-        let validator_contract_id: u64 = polyplug_utils::guest_contract_id("pipeline.Validator", 1);
+        let validator_contract_id: u64 = guest_contract_id("pipeline.Validator", 1);
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
             enums: vec![],
@@ -4222,7 +4226,7 @@ mod tests {
                     patch: 0,
                 },
                 loader: "dotnet".to_owned(),
-                file: polyplug_codegen::ResolvedBundleFile::Single("transformer.dll".to_owned()),
+                file: ResolvedBundleFile::Single("transformer.dll".to_owned()),
                 plugins: vec![],
                 bundle_id: 0xDEAD_BEEF_CAFE_0001_u64,
                 dependencies: vec![ResolvedDependency::ByContract {
@@ -4291,7 +4295,7 @@ mod tests {
             enums: vec![],
             contracts: vec![ResolvedContract {
                 name: "pipeline.Validator".to_owned(),
-                contract_id: polyplug_utils::guest_contract_id("pipeline.Validator", 1),
+                contract_id: guest_contract_id("pipeline.Validator", 1),
                 version: Version {
                     major: 1,
                     minor: 0,
@@ -4322,7 +4326,7 @@ mod tests {
             enums: vec![],
             contracts: vec![ResolvedContract {
                 name: "pipeline.Encoder".to_owned(),
-                contract_id: polyplug_utils::guest_contract_id("pipeline.Encoder", 1),
+                contract_id: guest_contract_id("pipeline.Encoder", 1),
                 version: Version {
                     major: 1,
                     minor: 0,
@@ -4339,7 +4343,7 @@ mod tests {
                     patch: 0,
                 },
                 loader: "dotnet".to_owned(),
-                file: polyplug_codegen::ResolvedBundleFile::Single("encoder.dll".to_owned()),
+                file: ResolvedBundleFile::Single("encoder.dll".to_owned()),
                 plugins: vec![],
                 bundle_id: 0xAAAA_BBBB_0000_0001_u64,
                 dependencies: vec![],

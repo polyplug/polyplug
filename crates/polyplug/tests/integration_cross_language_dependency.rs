@@ -22,18 +22,26 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use polyplug::error::LoaderError;
-use polyplug::loader::{BundleLoader, ManifestData};
+use polyplug::loader::BundleLoader;
+use polyplug::loader::BundleSource;
+use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
+use polyplug_abi::SupportedLanguage;
+use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::{
     DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInstance,
     GuestContractInterface, HostApi, NativeDispatch, PluginDescriptor, StringView, Version,
 };
+use polyplug_utils::bundle_id;
+use polyplug_utils::guest_contract_id;
 use polyplug_utils::{BundleId, GuestContractId};
+use std::fs;
+use tempfile::TempDir;
 
 const MOCK_FNS_EMPTY: [*const (); 0] = [];
 
 unsafe extern "C" fn noop_create_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -45,7 +53,7 @@ unsafe extern "C" fn noop_create_instance(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
@@ -61,8 +69,8 @@ impl BundleLoader for RustProviderLoader {
         "rust-provider"
     }
 
-    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
-        polyplug_abi::SupportedLanguage::Rust
+    fn loader_language(&self) -> SupportedLanguage {
+        SupportedLanguage::Rust
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -72,7 +80,7 @@ impl BundleLoader for RustProviderLoader {
     fn load(
         &self,
         manifest: &ManifestData,
-        _source: &polyplug::loader::BundleSource,
+        _source: &BundleSource,
         runtime: &Runtime,
     ) -> Result<(), LoaderError> {
         let interface: &'static GuestContractInterface =
@@ -136,8 +144,8 @@ impl BundleLoader for LuaDependerLoader {
         "lua-depender"
     }
 
-    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
-        polyplug_abi::SupportedLanguage::Lua
+    fn loader_language(&self) -> SupportedLanguage {
+        SupportedLanguage::Lua
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -147,7 +155,7 @@ impl BundleLoader for LuaDependerLoader {
     fn load(
         &self,
         manifest: &ManifestData,
-        _source: &polyplug::loader::BundleSource,
+        _source: &BundleSource,
         runtime: &Runtime,
     ) -> Result<(), LoaderError> {
         let host: *const HostApi = runtime.host_abi();
@@ -179,35 +187,31 @@ impl BundleLoader for LuaDependerLoader {
 /// Write a provider bundle (no dependencies) for the `rust-provider` runtime. The
 /// contract is registered by the loader at load time; the depender resolves it by
 /// the declared dependency id, so no `provides` entry is needed here.
-fn write_provider(temp: &tempfile::TempDir, bundle_name: &str) -> PathBuf {
+fn write_provider(temp: &TempDir, bundle_name: &str) -> PathBuf {
     let bundle_dir: PathBuf = temp.path().join(bundle_name);
-    std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
-    std::fs::write(bundle_dir.join("dummy.so"), b"").expect("write dummy so");
-    let bundle_id: u64 = polyplug_utils::bundle_id(bundle_name);
+    fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+    fs::write(bundle_dir.join("dummy.so"), b"").expect("write dummy so");
+    let bundle_id_val: u64 = bundle_id(bundle_name);
     let manifest: String = format!(
-        "id = {bundle_id}\n\
+        "id = {bundle_id_val}\n\
          name = \"{bundle_name}\"\n\
          loader = \"rust-provider\"\n\
          file = \"dummy.so\"\n\
          version = \"1.0\"\n"
     );
-    std::fs::write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
+    fs::write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
     bundle_dir
 }
 
 /// Write a depender bundle for the `lua-depender` runtime that declares a
 /// `[[dependency]]` on the provider's contract.
-fn write_depender(
-    temp: &tempfile::TempDir,
-    bundle_name: &str,
-    provider_contract_id: u64,
-) -> PathBuf {
+fn write_depender(temp: &TempDir, bundle_name: &str, provider_contract_id: u64) -> PathBuf {
     let bundle_dir: PathBuf = temp.path().join(bundle_name);
-    std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
-    std::fs::write(bundle_dir.join("dummy.lua"), b"").expect("write dummy lua");
-    let bundle_id: u64 = polyplug_utils::bundle_id(bundle_name);
+    fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+    fs::write(bundle_dir.join("dummy.lua"), b"").expect("write dummy lua");
+    let bundle_id_val: u64 = bundle_id(bundle_name);
     let manifest: String = format!(
-        "id = {bundle_id}\n\
+        "id = {bundle_id_val}\n\
          name = \"{bundle_name}\"\n\
          loader = \"lua-depender\"\n\
          file = \"dummy.lua\"\n\
@@ -218,14 +222,14 @@ fn write_depender(
          min_version = \"1.0\"\n\
          contract_id = {provider_contract_id}\n"
     );
-    std::fs::write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
+    fs::write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
     bundle_dir
 }
 
 #[test]
 fn lua_depender_resolves_rust_provider_across_languages() {
-    let temp: tempfile::TempDir = tempfile::TempDir::new().expect("temp dir");
-    let provider_contract_id: u64 = polyplug_utils::guest_contract_id("provider.contract", 1_u32);
+    let temp: TempDir = TempDir::new().expect("temp dir");
+    let provider_contract_id: u64 = guest_contract_id("provider.contract", 1_u32);
     let resolved: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
 
     let runtime: Arc<Runtime> = Runtime::builder()
@@ -259,8 +263,8 @@ fn lua_depender_resolves_rust_provider_across_languages() {
 
 #[test]
 fn lua_depender_missing_rust_provider_does_not_resolve() {
-    let temp: tempfile::TempDir = tempfile::TempDir::new().expect("temp dir");
-    let provider_contract_id: u64 = polyplug_utils::guest_contract_id("provider.contract", 1_u32);
+    let temp: TempDir = TempDir::new().expect("temp dir");
+    let provider_contract_id: u64 = guest_contract_id("provider.contract", 1_u32);
     let resolved: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
 
     // Note: the provider loader is NOT registered and the provider bundle is NOT

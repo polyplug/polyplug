@@ -18,7 +18,10 @@
 //! The `align` field is required for proper freeing. Generic code must
 //! track alignment of `T` to free correctly.
 
+use core::fmt;
 use core::marker::PhantomData;
+use core::mem;
+use core::ptr;
 
 /// FFI-safe array with caller-frees ownership model.
 ///
@@ -65,9 +68,9 @@ impl<T: Sized> Array<T> {
     /// Create an empty array.
     pub const fn empty() -> Self {
         Self {
-            items: core::ptr::null_mut(),
+            items: ptr::null_mut(),
             len: 0,
-            align: core::mem::align_of::<T>(),
+            align: mem::align_of::<T>(),
             _marker: PhantomData,
         }
     }
@@ -77,7 +80,7 @@ impl<T: Sized> Array<T> {
         Self {
             items,
             len,
-            align: core::mem::align_of::<T>(),
+            align: mem::align_of::<T>(),
             _marker: PhantomData,
         }
     }
@@ -106,8 +109,8 @@ impl<T: Sized> Copy for Array<T> {}
 // Manual `Debug` (no `T: Debug` bound): the array does not own a borrow it may
 // safely dereference here, so it prints only the FFI fields (pointer, length,
 // alignment) — never the pointed-to elements.
-impl<T: Sized> core::fmt::Debug for Array<T> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<T: Sized> fmt::Debug for Array<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Array")
             .field("items", &self.items)
             .field("len", &self.len)

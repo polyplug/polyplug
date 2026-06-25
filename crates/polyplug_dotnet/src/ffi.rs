@@ -1,6 +1,9 @@
 #![allow(clippy::std_instead_of_core)]
 
 use core::ffi::c_void;
+use std::ptr;
+use std::slice;
+use std::str;
 
 use polyplug::loader::BundleLoader;
 
@@ -32,20 +35,20 @@ pub unsafe extern "C" fn polyplug_dotnet_loader_create(
     config: *const PolyplugDotnetConfig,
 ) -> *mut c_void {
     if config.is_null() {
-        return std::ptr::null_mut();
+        return ptr::null_mut();
     }
     // SAFETY: caller guarantees config is a valid, non-null pointer.
     let cfg: &PolyplugDotnetConfig = unsafe { &*config };
     if cfg.min_framework_ptr.is_null() {
-        return std::ptr::null_mut();
+        return ptr::null_mut();
     }
     // SAFETY: caller guarantees min_framework_ptr points to min_framework_len
     // valid, initialised bytes for the duration of this call.
     let bytes: &[u8] =
-        unsafe { std::slice::from_raw_parts(cfg.min_framework_ptr, cfg.min_framework_len) };
-    let min_framework: String = match std::str::from_utf8(bytes) {
+        unsafe { slice::from_raw_parts(cfg.min_framework_ptr, cfg.min_framework_len) };
+    let min_framework: String = match str::from_utf8(bytes) {
         Ok(s) => s.to_string(),
-        Err(_) => return std::ptr::null_mut(),
+        Err(_) => return ptr::null_mut(),
     };
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig {
         min_framework,

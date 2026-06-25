@@ -2,11 +2,12 @@
 
 use polyplug_codegen::{GenerateConfig, Lang, Side};
 use polyplugc::generate;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
 fn create_test_api_with_host_contracts(tmp_dir: &Path) -> PathBuf {
-    std::fs::create_dir_all(tmp_dir).expect("create tmp_dir");
+    fs::create_dir_all(tmp_dir).expect("create tmp_dir");
     let api_toml_path: PathBuf = tmp_dir.join("test_host_contract_api.toml");
     let content: &str = r#"# Test API with host contracts
 [[plugin_contract]]
@@ -27,7 +28,7 @@ name = "log"
 params = [{ name = "message", type = "StringView" }]
 returns = "void"
 "#;
-    std::fs::write(&api_toml_path, content).expect("failed to write test api.toml");
+    fs::write(&api_toml_path, content).expect("failed to write test api.toml");
     api_toml_path
 }
 
@@ -49,9 +50,9 @@ fn test_rust_host_contract_generates_host_contracts_file() {
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 
     let host_contracts_path: PathBuf = tmp_dir.join("host").join("host_contracts.rs");
@@ -60,8 +61,7 @@ fn test_rust_host_contract_generates_host_contracts_file() {
         "host/host_contracts.rs must exist"
     );
 
-    let content: String =
-        std::fs::read_to_string(&host_contracts_path).expect("read host_contracts.rs");
+    let content: String = fs::read_to_string(&host_contracts_path).expect("read host_contracts.rs");
 
     assert!(
         content.contains("trait HostLogger"),
@@ -94,9 +94,9 @@ fn test_rust_host_contract_guest_generates_caller() {
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 
     let caller_path: PathBuf = tmp_dir.join("guest").join("host_contract_callers.rs");
@@ -105,8 +105,7 @@ fn test_rust_host_contract_guest_generates_caller() {
         "guest/host_contract_callers.rs must exist"
     );
 
-    let content: String =
-        std::fs::read_to_string(&caller_path).expect("read host_contract_callers.rs");
+    let content: String = fs::read_to_string(&caller_path).expect("read host_contract_callers.rs");
 
     assert!(
         content.contains("struct HostLoggerCaller"),
@@ -136,9 +135,9 @@ fn test_cpp_host_contract_generates_host_contracts_file() {
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 
     let host_contracts_path: PathBuf = tmp_dir.join("host").join("host_contracts.hpp");
@@ -148,7 +147,7 @@ fn test_cpp_host_contract_generates_host_contracts_file() {
     );
 
     let content: String =
-        std::fs::read_to_string(&host_contracts_path).expect("read host_contracts.hpp");
+        fs::read_to_string(&host_contracts_path).expect("read host_contracts.hpp");
 
     assert!(
         content.contains("class HostLogger"),
@@ -181,16 +180,15 @@ fn test_cpp_host_contract_guest_generates_caller() {
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 
     let caller_path: PathBuf = tmp_dir.join("guest").join("host_contracts.hpp");
     assert!(caller_path.exists(), "guest/host_contracts.hpp must exist");
 
-    let content: String =
-        std::fs::read_to_string(&caller_path).expect("read guest/host_contracts.hpp");
+    let content: String = fs::read_to_string(&caller_path).expect("read guest/host_contracts.hpp");
 
     assert!(
         content.contains("HostLoggerContract"),
@@ -220,15 +218,15 @@ fn test_csharp_host_contract_generates_contracts_file() {
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 
     let contracts_path: PathBuf = tmp_dir.join("host").join("Contracts.cs");
     assert!(contracts_path.exists(), "host/Contracts.cs must exist");
 
-    let content: String = std::fs::read_to_string(&contracts_path).expect("read Contracts.cs");
+    let content: String = fs::read_to_string(&contracts_path).expect("read Contracts.cs");
 
     assert!(
         content.contains("interface IHostLogger"),
@@ -261,16 +259,15 @@ fn test_csharp_host_contract_guest_generates_caller() {
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 
     let caller_path: PathBuf = tmp_dir.join("guest").join("HostContracts.cs");
     assert!(caller_path.exists(), "guest/HostContracts.cs must exist");
 
-    let content: String =
-        std::fs::read_to_string(&caller_path).expect("read guest/HostContracts.cs");
+    let content: String = fs::read_to_string(&caller_path).expect("read guest/HostContracts.cs");
 
     assert!(content.contains("HostLogger"), "must contain HostLogger");
     assert!(content.contains("FromHost"), "must contain FromHost");
@@ -292,15 +289,14 @@ fn generate_csharp_host_side(tmp_dir: &Path) -> (String, String) {
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
     let callers: String =
-        std::fs::read_to_string(tmp_dir.join("host").join("Callers.cs")).expect("read Callers.cs");
-    let factories: String =
-        std::fs::read_to_string(tmp_dir.join("host").join("InterfaceFactories.cs"))
-            .expect("read InterfaceFactories.cs");
+        fs::read_to_string(tmp_dir.join("host").join("Callers.cs")).expect("read Callers.cs");
+    let factories: String = fs::read_to_string(tmp_dir.join("host").join("InterfaceFactories.cs"))
+        .expect("read InterfaceFactories.cs");
     (callers, factories)
 }
 
@@ -400,11 +396,11 @@ fn generate_csharp_guest_host_contracts(tmp_dir: &Path) -> String {
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
-    std::fs::read_to_string(tmp_dir.join("guest").join("HostContracts.cs"))
+    fs::read_to_string(tmp_dir.join("guest").join("HostContracts.cs"))
         .expect("read guest/HostContracts.cs")
 }
 
@@ -487,15 +483,15 @@ fn test_python_host_contract_generates_contracts_file() {
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 
     let contracts_path: PathBuf = tmp_dir.join("host").join("contracts.py");
     assert!(contracts_path.exists(), "host/contracts.py must exist");
 
-    let content: String = std::fs::read_to_string(&contracts_path).expect("read contracts.py");
+    let content: String = fs::read_to_string(&contracts_path).expect("read contracts.py");
 
     assert!(
         content.contains("class HostLogger"),
@@ -529,16 +525,15 @@ fn test_python_host_contract_guest_generates_caller() {
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 
     let caller_path: PathBuf = tmp_dir.join("guest").join("host_contracts.py");
     assert!(caller_path.exists(), "guest/host_contracts.py must exist");
 
-    let content: String =
-        std::fs::read_to_string(&caller_path).expect("read guest/host_contracts.py");
+    let content: String = fs::read_to_string(&caller_path).expect("read guest/host_contracts.py");
 
     assert!(
         content.contains("HostLoggerContract"),
@@ -572,15 +567,15 @@ fn test_python_host_caller_branches_on_dispatch_type() {
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 
     let callers_path: PathBuf = tmp_dir.join("host").join("callers.py");
     assert!(callers_path.exists(), "host/callers.py must exist");
 
-    let content: String = std::fs::read_to_string(&callers_path).expect("read host/callers.py");
+    let content: String = fs::read_to_string(&callers_path).expect("read host/callers.py");
 
     // DispatchType must be imported and the caller must branch on it.
     assert!(
@@ -628,15 +623,15 @@ fn test_lua_host_contract_generates_contracts_file() {
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 
     let contracts_path: PathBuf = tmp_dir.join("host").join("contracts.lua");
     assert!(contracts_path.exists(), "host/contracts.lua must exist");
 
-    let content: String = std::fs::read_to_string(&contracts_path).expect("read contracts.lua");
+    let content: String = fs::read_to_string(&contracts_path).expect("read contracts.lua");
 
     assert!(content.contains("HostLogger"), "must contain HostLogger");
     assert!(
@@ -669,16 +664,15 @@ fn test_lua_host_contract_guest_generates_caller() {
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 
     let caller_path: PathBuf = tmp_dir.join("guest").join("host_contracts.lua");
     assert!(caller_path.exists(), "guest/host_contracts.lua must exist");
 
-    let content: String =
-        std::fs::read_to_string(&caller_path).expect("read guest/host_contracts.lua");
+    let content: String = fs::read_to_string(&caller_path).expect("read guest/host_contracts.lua");
 
     assert!(
         content.contains("HostLoggerContract"),
@@ -742,15 +736,15 @@ fn test_js_quickjs_host_contract_generates_contracts_file() {
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 
     let contracts_path: PathBuf = tmp_dir.join("host").join("contracts.ts");
     assert!(contracts_path.exists(), "host/contracts.ts must exist");
 
-    let content: String = std::fs::read_to_string(&contracts_path).expect("read contracts.ts");
+    let content: String = fs::read_to_string(&contracts_path).expect("read contracts.ts");
 
     assert!(
         content.contains("interface HostLogger"),
@@ -783,16 +777,15 @@ fn test_js_quickjs_host_contract_guest_generates_caller() {
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 
     let caller_path: PathBuf = tmp_dir.join("guest").join("host_contracts.ts");
     assert!(caller_path.exists(), "guest/host_contracts.ts must exist");
 
-    let content: String =
-        std::fs::read_to_string(&caller_path).expect("read guest/host_contracts.ts");
+    let content: String = fs::read_to_string(&caller_path).expect("read guest/host_contracts.ts");
 
     assert!(
         content.contains("HostLoggerContract"),

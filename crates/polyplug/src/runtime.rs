@@ -12,20 +12,31 @@
 //!  - find_guest_contract() is a read-only RwLock read guard
 //!  - No locks in the hot path
 
+use core::ffi::c_void;
 use core::str::FromStr;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
+use core::{mem, ptr, slice, str};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
 use std::sync::RwLock;
+use std::sync::RwLockReadGuard;
+use std::sync::RwLockWriteGuard;
+use std::thread;
 use std::thread::ThreadId;
 
-use polyplug_abi::runtime::{Compatibility, RuntimeConfig, SignaturePolicy};
-use polyplug_abi::types::LogLevel;
+use crossbeam_epoch::{Guard as EpochGuard, pin as epoch_pin};
+use ed25519_dalek::VerifyingKey;
+use polyplug_abi::dispatch::{DispatchType, VmLoaderData};
+use polyplug_abi::ffi::{polyplug_host_alloc, polyplug_host_free};
+use polyplug_abi::guest::GuestContractInstance;
+use polyplug_abi::runtime::{Compatibility, ReloadPhase, RuntimeConfig, SignaturePolicy};
+use polyplug_abi::types::{Ed25519PublicKey, LogLevel};
 use polyplug_abi::{
     AbiError, AbiErrorCode, Array, DependencyInfo, GuestContractHandle, GuestContractInterface,
     HostApi, HostContractInstance, HostContractInterface, PluginDescriptor, StringView,
@@ -42,10 +53,15 @@ use crate::error::LoaderError;
 use crate::error::RegistryError;
 use crate::error::RuntimeError;
 use crate::loader::BundleLoader;
+use crate::loader::BundleSource;
 use crate::loader::ManifestData;
 use crate::loader::ManifestDependency;
-use crate::logger::{LoggerHandle, RecoverPoisoned, RecoveringGuard};
+use crate::loader::RawManifestDependency;
+use crate::loader::parse_manifest;
+use crate::logger::{LoggerClosure, LoggerHandle, RecoverPoisoned, RecoveringGuard};
 pub use crate::runtime_builder::RuntimeBuilder;
+use crate::runtime_store::BundleDependency;
+use crate::runtime_store::BundleDescriptor;
 use crate::runtime_store::RuntimeStore;
 
 // ─── Runtime Configuration ───────────────────────────────────────────────────
@@ -54,9 +70,7 @@ use crate::runtime_store::RuntimeStore;
 ///
 /// The first argument is the opaque `on_reload_user_data` pointer from
 /// `RuntimeConfig`, forwarded unchanged on every invocation.
-pub(crate) struct ReloadCallback(
-    pub(crate) Arc<dyn Fn(*mut core::ffi::c_void, polyplug_abi::runtime::ReloadPhase) + Send + Sync>,
-);
+pub(crate) struct ReloadCallback(pub(crate) Arc<dyn Fn(*mut c_void, ReloadPhase) + Send + Sync>);
 
 /// Options for `Runtime::load_bundle_with`.
 ///
@@ -89,7 +103,7 @@ pub struct Runtime {
     /// Keeps the Rust closure installed via `RuntimeBuilder::logger` alive for
     /// the runtime's lifetime — `config.log_user_data` points into this box.
     /// Never read after construction; it exists purely as an owner.
-    pub(crate) _logger_closure: Option<Box<crate::logger::LoggerClosure>>,
+    pub(crate) _logger_closure: Option<Box<LoggerClosure>>,
     /// Owns the runtime's copy of the trusted Ed25519 verifying keys for the
     /// runtime's lifetime.
     ///
@@ -108,7 +122,7 @@ pub struct Runtime {
     /// purely as an owner.
     ///
     /// [`RuntimeBuilder::trusted_keys`]: crate::runtime_builder::RuntimeBuilder::trusted_keys
-    pub(crate) _trusted_keys: Vec<polyplug_abi::types::Ed25519PublicKey>,
+    pub(crate) _trusted_keys: Vec<Ed25519PublicKey>,
     /// Last error message for FFI error reporting.
     pub(crate) last_error: Mutex<String>,
     /// Registered host contracts, keyed by contract_id.
@@ -272,7 +286,7 @@ impl Runtime {
         interface: &'static HostContractInterface,
     ) -> Result<(), HostContractError> {
         let mut guard: RecoveringGuard<
-            std::sync::RwLockWriteGuard<'_, HashMap<u64, &'static HostContractInterface>>,
+            RwLockWriteGuard<'_, HashMap<u64, &'static HostContractInterface>>,
         > = self
             .host_contracts
             .write()
@@ -288,7 +302,7 @@ impl Runtime {
     /// Returns `true` if the contract was registered and removed, `false` if it was not found.
     pub fn unregister_host_contract(&self, contract_id: u64) -> bool {
         let mut guard: RecoveringGuard<
-            std::sync::RwLockWriteGuard<'_, HashMap<u64, &'static HostContractInterface>>,
+            RwLockWriteGuard<'_, HashMap<u64, &'static HostContractInterface>>,
         > = self
             .host_contracts
             .write()
@@ -304,7 +318,7 @@ impl Runtime {
         min_version: u32,
     ) -> Option<&'static HostContractInterface> {
         let guard: RecoveringGuard<
-            std::sync::RwLockReadGuard<'_, HashMap<u64, &'static HostContractInterface>>,
+            RwLockReadGuard<'_, HashMap<u64, &'static HostContractInterface>>,
         > = self
             .host_contracts
             .read()
@@ -378,13 +392,13 @@ impl Runtime {
     /// it in their per-bundle data so dispatch-time and teardown paths can log
     /// through the host callback. Same callback contract as
     /// `RuntimeConfig::log` — never invoke it while holding a lock guard.
-    pub fn logger(&self) -> crate::logger::LoggerHandle {
+    pub fn logger(&self) -> LoggerHandle {
         self.logger
     }
 
     /// Set the last error message for FFI error reporting.
     pub(crate) fn set_last_error(&self, msg: impl Into<String>) {
-        let mut guard: RecoveringGuard<std::sync::MutexGuard<'_, String>> = self
+        let mut guard: RecoveringGuard<MutexGuard<'_, String>> = self
             .last_error
             .lock()
             .recover_poisoned(self.logger, "runtime");
@@ -396,10 +410,10 @@ impl Runtime {
     /// Increments the per-contract live count. Called by
     /// `host_create_guest_instance` only for non-null (stateful) instances.
     fn note_instance_created(&self, contract_id: GuestContractId) {
-        let mut guard: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<GuestContractId, u64>>> =
-            self.instance_counts
-                .lock()
-                .recover_poisoned(self.logger, "runtime");
+        let mut guard: RecoveringGuard<MutexGuard<'_, HashMap<GuestContractId, u64>>> = self
+            .instance_counts
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
         let entry: &mut u64 = guard.entry(contract_id).or_insert(0);
         *entry += 1;
     }
@@ -410,10 +424,10 @@ impl Runtime {
     /// map only ever holds contracts with live instances. Called by
     /// `host_destroy_guest_instance` only for non-null (stateful) instances.
     fn note_instance_destroyed(&self, contract_id: GuestContractId) {
-        let mut guard: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<GuestContractId, u64>>> =
-            self.instance_counts
-                .lock()
-                .recover_poisoned(self.logger, "runtime");
+        let mut guard: RecoveringGuard<MutexGuard<'_, HashMap<GuestContractId, u64>>> = self
+            .instance_counts
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
         if let Some(entry) = guard.get_mut(&contract_id) {
             *entry = entry.saturating_sub(1);
             if *entry == 0 {
@@ -434,10 +448,10 @@ impl Runtime {
     /// (never destroyed through the now-dead interface) would inflate the diagnostic
     /// count permanently.
     pub(crate) fn reset_instance_counts_for_contracts(&self, contracts: &[GuestContractId]) {
-        let mut guard: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<GuestContractId, u64>>> =
-            self.instance_counts
-                .lock()
-                .recover_poisoned(self.logger, "runtime");
+        let mut guard: RecoveringGuard<MutexGuard<'_, HashMap<GuestContractId, u64>>> = self
+            .instance_counts
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
         contracts.iter().for_each(|cid: &GuestContractId| {
             guard.remove(cid);
         });
@@ -448,7 +462,7 @@ impl Runtime {
     /// Used by the reload/unload UB-warning to report how many guest instances a
     /// bundle's contracts still hold before its interfaces are vacated or freed.
     pub(crate) fn live_instance_count_for_contracts(&self, contracts: &[GuestContractId]) -> u64 {
-        let guard: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<GuestContractId, u64>>> = self
+        let guard: RecoveringGuard<MutexGuard<'_, HashMap<GuestContractId, u64>>> = self
             .instance_counts
             .lock()
             .recover_poisoned(self.logger, "runtime");
@@ -461,7 +475,7 @@ impl Runtime {
     /// Get the last error message for FFI error reporting.
     /// Returns the number of bytes written to the buffer.
     pub(crate) fn get_last_error(&self, buf: &mut [u8]) -> usize {
-        let guard: RecoveringGuard<std::sync::MutexGuard<'_, String>> = self
+        let guard: RecoveringGuard<MutexGuard<'_, String>> = self
             .last_error
             .lock()
             .recover_poisoned(self.logger, "runtime");
@@ -475,7 +489,7 @@ impl Runtime {
 
     /// Clear the last error message.
     pub(crate) fn clear_last_error(&self) {
-        let mut guard: RecoveringGuard<std::sync::MutexGuard<'_, String>> = self
+        let mut guard: RecoveringGuard<MutexGuard<'_, String>> = self
             .last_error
             .lock()
             .recover_poisoned(self.logger, "runtime");
@@ -484,7 +498,7 @@ impl Runtime {
 
     /// Get the length of the last error message.
     pub(crate) fn last_error_len(&self) -> usize {
-        let guard: RecoveringGuard<std::sync::MutexGuard<'_, String>> = self
+        let guard: RecoveringGuard<MutexGuard<'_, String>> = self
             .last_error
             .lock()
             .recover_poisoned(self.logger, "runtime");
@@ -505,7 +519,7 @@ impl Runtime {
     pub fn register_loader(&self, loader: Box<dyn BundleLoader>) -> Result<(), RuntimeError> {
         let name: String = loader.loader_name().to_string();
         let mut loaders: RecoveringGuard<
-            std::sync::RwLockWriteGuard<'_, HashMap<String, Box<dyn BundleLoader>>>,
+            RwLockWriteGuard<'_, HashMap<String, Box<dyn BundleLoader>>>,
         > = self
             .loaders
             .write()
@@ -532,9 +546,8 @@ impl Runtime {
     /// `host_register_loader` and take the `loaders` write guard — holding a read
     /// guard on the same thread would deadlock.
     pub(crate) fn loader_for(&self, loader_name: &str) -> Option<&dyn BundleLoader> {
-        let loaders: RecoveringGuard<
-            std::sync::RwLockReadGuard<'_, HashMap<String, Box<dyn BundleLoader>>>,
-        > = self.loaders.read().recover_poisoned(self.logger, "runtime");
+        let loaders: RecoveringGuard<RwLockReadGuard<'_, HashMap<String, Box<dyn BundleLoader>>>> =
+            self.loaders.read().recover_poisoned(self.logger, "runtime");
         let loader_ptr: *const dyn BundleLoader = loaders.get(loader_name).map(Box::as_ref)?;
         // SAFETY: loaders are append-only (never removed or replaced for the runtime
         // lifetime), so the `Box`'s heap allocation behind `loader_ptr` stays valid and
@@ -549,12 +562,12 @@ impl Runtime {
     /// [`Runtime::pop_init_bundle_id`] MUST be called afterwards (including on the
     /// panic path) so the stack does not leak entries.
     pub fn push_init_bundle_id(&self, bundle_id: u64) {
-        let mut stack: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<ThreadId, Vec<u64>>>> =
-            self.init_bundle_stack
-                .lock()
-                .recover_poisoned(self.logger, "runtime");
+        let mut stack: RecoveringGuard<MutexGuard<'_, HashMap<ThreadId, Vec<u64>>>> = self
+            .init_bundle_stack
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
         stack
-            .entry(std::thread::current().id())
+            .entry(thread::current().id())
             .or_default()
             .push(bundle_id);
         // Bump the fast-path hint AFTER inserting into the stack but while still
@@ -567,11 +580,11 @@ impl Runtime {
     ///
     /// Restores the previous (outer) bundle_id for reentrant loads on the same thread.
     pub fn pop_init_bundle_id(&self) {
-        let thread_id: ThreadId = std::thread::current().id();
-        let mut stack: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<ThreadId, Vec<u64>>>> =
-            self.init_bundle_stack
-                .lock()
-                .recover_poisoned(self.logger, "runtime");
+        let thread_id: ThreadId = thread::current().id();
+        let mut stack: RecoveringGuard<MutexGuard<'_, HashMap<ThreadId, Vec<u64>>>> = self
+            .init_bundle_stack
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
         if let Some(thread_stack) = stack.get_mut(&thread_id) {
             // Only decrement the hint when an entry was actually removed, so the
             // counter never drifts below the real number of pushed ids. A pop with
@@ -599,8 +612,8 @@ impl Runtime {
         if self.active_init_count.load(Ordering::Relaxed) == 0 {
             return 0;
         }
-        let thread_id: ThreadId = std::thread::current().id();
-        let stack: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<ThreadId, Vec<u64>>>> = self
+        let thread_id: ThreadId = thread::current().id();
+        let stack: RecoveringGuard<MutexGuard<'_, HashMap<ThreadId, Vec<u64>>>> = self
             .init_bundle_stack
             .lock()
             .recover_poisoned(self.logger, "runtime");
@@ -639,7 +652,7 @@ impl Runtime {
     pub fn load_bundle_from_source(
         &self,
         manifest: ManifestData,
-        source: crate::loader::BundleSource,
+        source: BundleSource,
     ) -> Result<(), RuntimeError> {
         let compatibility: Compatibility = self.config.compatibility;
         self.load_manifest_with_source(
@@ -692,7 +705,7 @@ impl Runtime {
     ///   this bundle provides. Use [`Runtime::unload_bundle_cascade`] to unload the
     ///   dependents first.
     pub fn unload_bundle(&self, bundle_id: BundleId) -> Result<(), RuntimeError> {
-        let descriptor: crate::runtime_store::BundleDescriptor = self
+        let descriptor: BundleDescriptor = self
             .registry
             .get_bundle_descriptor(bundle_id)
             .ok_or_else(|| RuntimeError::BundleNotFound {
@@ -716,7 +729,7 @@ impl Runtime {
             .filter_map(|dep: BundleId| {
                 self.registry
                     .get_bundle_descriptor(dep)
-                    .map(|d: crate::runtime_store::BundleDescriptor| d.name)
+                    .map(|d: BundleDescriptor| d.name)
             })
             .collect();
         if !dependents.is_empty() {
@@ -765,13 +778,13 @@ impl Runtime {
     /// the caller-owned `bundle_name`, which outlives this synchronous invocation.
     fn fire_unloading(&self, bundle_id: BundleId, bundle_name: &str) {
         if let Some(cb) = self.on_reload_cb() {
-            let name_view: polyplug_abi::types::StringView = polyplug_abi::types::StringView {
+            let name_view: StringView = StringView {
                 ptr: bundle_name.as_ptr(),
                 len: bundle_name.len(),
             };
             (cb.0)(
                 self.config().on_reload_user_data,
-                polyplug_abi::runtime::ReloadPhase::unloading(bundle_id, name_view),
+                ReloadPhase::unloading(bundle_id, name_view),
             );
         }
     }
@@ -783,10 +796,10 @@ impl Runtime {
     /// back to a `BundleLoader::loader_name()`. It is read from `bundle_manifests`,
     /// which must be consulted BEFORE `invalidate_bundle` removes the bundle.
     fn bundle_loader_name(&self, bundle_name: &str) -> Option<String> {
-        let manifests: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<String, ManifestData>>> =
-            self.bundle_manifests
-                .lock()
-                .recover_poisoned(self.logger, "runtime");
+        let manifests: RecoveringGuard<MutexGuard<'_, HashMap<String, ManifestData>>> = self
+            .bundle_manifests
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
         manifests
             .get(bundle_name)
             .map(|m: &ManifestData| m.loader.clone())
@@ -865,7 +878,7 @@ impl Runtime {
         let bundle_name: String = self
             .registry
             .get_bundle_descriptor(bundle_id)
-            .map(|d: crate::runtime_store::BundleDescriptor| d.name)
+            .map(|d: BundleDescriptor| d.name)
             .unwrap_or_default();
         let loader_name: Option<String> = self.bundle_loader_name(&bundle_name);
 
@@ -905,10 +918,9 @@ impl Runtime {
             path
         };
 
-        let manifest: ManifestData = crate::loader::parse_manifest(bundle_dir)
-            .map_err(|e: LoaderError| RuntimeError::Loader(e))?;
-        let source: crate::loader::BundleSource =
-            crate::loader::BundleSource::Path(manifest.path.clone());
+        let manifest: ManifestData =
+            parse_manifest(bundle_dir).map_err(|e: LoaderError| RuntimeError::Loader(e))?;
+        let source: BundleSource = BundleSource::Path(manifest.path.clone());
         self.load_manifest_with_source(manifest, source, opts)
     }
 
@@ -927,7 +939,7 @@ impl Runtime {
         bundle_dir: &Path,
         bundle_name: &str,
     ) -> Result<(), RuntimeError> {
-        let trusted: Vec<ed25519_dalek::VerifyingKey> = self.collect_trusted_keys(bundle_name)?;
+        let trusted: Vec<VerifyingKey> = self.collect_trusted_keys(bundle_name)?;
 
         if trusted.is_empty() {
             signing_verify_bundle(bundle_dir)
@@ -951,11 +963,8 @@ impl Runtime {
     /// `VerifyingKey`s per call; the `Array` pointer itself is never retained.
     ///
     /// [`Runtime::_trusted_keys`]: Runtime#structfield._trusted_keys
-    fn collect_trusted_keys(
-        &self,
-        bundle_name: &str,
-    ) -> Result<Vec<ed25519_dalek::VerifyingKey>, RuntimeError> {
-        let raw: &Array<polyplug_abi::types::Ed25519PublicKey> = &self.config.trusted_keys;
+    fn collect_trusted_keys(&self, bundle_name: &str) -> Result<Vec<VerifyingKey>, RuntimeError> {
+        let raw: &Array<Ed25519PublicKey> = &self.config.trusted_keys;
         if raw.is_empty() {
             return Ok(Vec::new());
         }
@@ -967,18 +976,17 @@ impl Runtime {
         // null pointer / zero length. We only READ the elements and COPY their
         // bytes out — no element is retained or mutated, so no aliasing or
         // lifetime obligation outlives this borrow.
-        let keys: &[polyplug_abi::types::Ed25519PublicKey] =
-            unsafe { core::slice::from_raw_parts(raw.items, raw.len) };
+        let keys: &[Ed25519PublicKey] = unsafe { slice::from_raw_parts(raw.items, raw.len) };
 
-        let mut out: Vec<ed25519_dalek::VerifyingKey> = Vec::with_capacity(keys.len());
+        let mut out: Vec<VerifyingKey> = Vec::with_capacity(keys.len());
         for key in keys {
-            let verifying_key: ed25519_dalek::VerifyingKey = verifying_key_from_bytes(&key.bytes)
-                .map_err(|e: SigError| {
-                RuntimeError::Loader(LoaderError::MalformedTrustedKey {
-                    bundle: bundle_name.to_owned(),
-                    reason: e.to_string(),
-                })
-            })?;
+            let verifying_key: VerifyingKey =
+                verifying_key_from_bytes(&key.bytes).map_err(|e: SigError| {
+                    RuntimeError::Loader(LoaderError::MalformedTrustedKey {
+                        bundle: bundle_name.to_owned(),
+                        reason: e.to_string(),
+                    })
+                })?;
             out.push(verifying_key);
         }
         Ok(out)
@@ -1012,7 +1020,7 @@ impl Runtime {
     pub(crate) fn load_manifest_with_source(
         &self,
         manifest: ManifestData,
-        source: crate::loader::BundleSource,
+        source: BundleSource,
         opts: LoadOptions,
     ) -> Result<(), RuntimeError> {
         // Full manifest validation (required fields, id == FNV1a-64(name), well-formed
@@ -1095,7 +1103,7 @@ impl Runtime {
         let declared_contract_ids: Vec<GuestContractId> = manifest
             .dependencies
             .iter()
-            .map(|dep: &crate::loader::RawManifestDependency| dep.contract_id)
+            .map(|dep: &RawManifestDependency| dep.contract_id)
             .collect();
         let bundle_id: BundleId = BundleId::new(&manifest.name);
         if let Err(e) = self
@@ -1112,8 +1120,7 @@ impl Runtime {
             let bundle_name: String = manifest.name.clone();
 
             // Parse bundle dependencies from new bundle-level format
-            let bundle_deps: Vec<crate::runtime_store::BundleDependency> =
-                manifest.parsed_bundle_dependencies();
+            let bundle_deps: Vec<BundleDependency> = manifest.parsed_bundle_dependencies();
 
             // Parse version from manifest. A malformed version is malformed manifest
             // content — reject it rather than silently coercing to 0.0.0.
@@ -1155,12 +1162,10 @@ impl Runtime {
                 self.validate_loaded_function_counts(bundle_id, &manifest, opts.compatibility)?;
             }
 
-            let mut manifests: RecoveringGuard<
-                std::sync::MutexGuard<'_, HashMap<String, ManifestData>>,
-            > = self
-                .bundle_manifests
-                .lock()
-                .recover_poisoned(self.logger, "runtime");
+            let mut manifests: RecoveringGuard<MutexGuard<'_, HashMap<String, ManifestData>>> =
+                self.bundle_manifests
+                    .lock()
+                    .recover_poisoned(self.logger, "runtime");
             manifests.insert(bundle_name, manifest);
         }
         result
@@ -1355,7 +1360,7 @@ pub(crate) fn validate_bundle_compatibility(
 fn parse_manifest_version(
     v: &str,
     _bundle_name: &str,
-    manifest_path: &std::path::Path,
+    manifest_path: &Path,
 ) -> Result<Version, RuntimeError> {
     if v.is_empty() {
         return Ok(Version {
@@ -1435,15 +1440,15 @@ fn is_known_runtime_language(s: &str) -> bool {
 /// # Safety
 /// `sv.ptr` must be valid for `sv.len` bytes for the duration of this call, or be null.
 unsafe fn string_view_to_string_owned(
-    sv: &polyplug_abi::types::StringView,
+    sv: &StringView,
     context: &str,
 ) -> Result<String, RuntimeError> {
     if sv.ptr.is_null() || sv.len == 0 {
         return Ok(String::new());
     }
     // SAFETY: caller guarantees ptr/len describe a valid byte range for this call.
-    let slice: &[u8] = unsafe { core::slice::from_raw_parts(sv.ptr, sv.len) };
-    match core::str::from_utf8(slice) {
+    let slice: &[u8] = unsafe { slice::from_raw_parts(sv.ptr, sv.len) };
+    match str::from_utf8(slice) {
         Ok(s) => Ok(s.to_owned()),
         Err(_) => Err(RuntimeError::InvalidUtf8 {
             context: context.to_owned(),
@@ -1489,10 +1494,7 @@ unsafe fn validate_interface_fn_ptrs(
     // read below is in-bounds and reads pointer/integer bits only (never an
     // `fn`-typed value), so null bits are observed safely.
     unsafe {
-        let create_ptr: *const core::ffi::c_void = base
-            .add(create_offset)
-            .cast::<*const core::ffi::c_void>()
-            .read();
+        let create_ptr: *const c_void = base.add(create_offset).cast::<*const c_void>().read();
         if create_ptr.is_null() {
             return Some(match context {
                 ValidationContext::Guest => {
@@ -1503,10 +1505,7 @@ unsafe fn validate_interface_fn_ptrs(
                 }
             });
         }
-        let destroy_ptr: *const core::ffi::c_void = base
-            .add(destroy_offset)
-            .cast::<*const core::ffi::c_void>()
-            .read();
+        let destroy_ptr: *const c_void = base.add(destroy_offset).cast::<*const c_void>().read();
         if destroy_ptr.is_null() {
             return Some(match context {
                 ValidationContext::Guest => {
@@ -1519,12 +1518,9 @@ unsafe fn validate_interface_fn_ptrs(
         }
 
         let dispatch_type_raw: u32 = base.add(dispatch_type_offset).cast::<u32>().read();
-        if dispatch_type_raw == polyplug_abi::dispatch::DispatchType::VirtualMachine as u32 {
+        if dispatch_type_raw == DispatchType::VirtualMachine as u32 {
             // DispatchMechanisms union, vm variant: call fn pointer at offset 0.
-            let call_ptr: *const core::ffi::c_void = base
-                .add(dispatch_offset)
-                .cast::<*const core::ffi::c_void>()
-                .read();
+            let call_ptr: *const c_void = base.add(dispatch_offset).cast::<*const c_void>().read();
             if call_ptr.is_null() {
                 return Some(match context {
                     ValidationContext::Guest => {
@@ -1535,13 +1531,13 @@ unsafe fn validate_interface_fn_ptrs(
                     }
                 });
             }
-        } else if dispatch_type_raw == polyplug_abi::dispatch::DispatchType::Native as u32 {
+        } else if dispatch_type_raw == DispatchType::Native as u32 {
             // DispatchMechanisms union, native variant: function_count at
             // offset 0, functions pointer at offset 8.
             let function_count: u32 = base.add(dispatch_offset).cast::<u32>().read();
-            let functions: *const *const core::ffi::c_void = base
+            let functions: *const *const c_void = base
                 .add(dispatch_offset + 8)
-                .cast::<*const *const core::ffi::c_void>()
+                .cast::<*const *const c_void>()
                 .read();
             if function_count > 0 {
                 if functions.is_null() {
@@ -1592,11 +1588,11 @@ pub(crate) unsafe extern "C" fn host_register_guest_contract(
     this: *const HostApi,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
-    out_err: *mut polyplug_abi::types::AbiError,
+    out_err: *mut AbiError,
 ) {
     // SAFETY: the runtime is the sole producer of the HostApi table; the ABI
     // contract requires callers to pass a valid, non-null out_err pointer.
-    let result: polyplug_abi::types::AbiError =
+    let result: AbiError =
         unsafe { host_register_guest_contract_impl(this, descriptor, interface) };
     if !out_err.is_null() {
         // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
@@ -1608,30 +1604,28 @@ unsafe fn host_register_guest_contract_impl(
     this: *const HostApi,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
-) -> polyplug_abi::types::AbiError {
+) -> AbiError {
     if this.is_null() {
-        return polyplug_abi::types::AbiError {
-            code: polyplug_abi::types::AbiErrorCode::Generic as u32,
-            message: polyplug_abi::types::StringView::null(),
+        return AbiError {
+            code: AbiErrorCode::Generic as u32,
+            message: StringView::null(),
         };
     }
     // Guard both plugin-provided pointers before any dereference. `descriptor` is
     // read below and `interface` is dereferenced inside the registry; a null in
     // either is a contract violation that must not become UB.
     if descriptor.is_null() {
-        return polyplug_abi::types::AbiError {
-            code: polyplug_abi::types::AbiErrorCode::InvalidPointer as u32,
-            message: polyplug_abi::types::StringView::from_static(
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer as u32,
+            message: StringView::from_static(
                 b"register_guest_contract: descriptor pointer is null",
             ),
         };
     }
     if interface.is_null() {
-        return polyplug_abi::types::AbiError {
-            code: polyplug_abi::types::AbiErrorCode::InvalidPointer as u32,
-            message: polyplug_abi::types::StringView::from_static(
-                b"register_guest_contract: interface pointer is null",
-            ),
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer as u32,
+            message: StringView::from_static(b"register_guest_contract: interface pointer is null"),
         };
     }
     // Reject null bits in the REQUIRED fn-pointer fields before any typed
@@ -1642,16 +1636,16 @@ unsafe fn host_register_guest_contract_impl(
     if let Some(violation) = unsafe {
         validate_interface_fn_ptrs(
             interface.cast::<u8>(),
-            core::mem::offset_of!(GuestContractInterface, create_instance),
-            core::mem::offset_of!(GuestContractInterface, destroy_instance),
-            core::mem::offset_of!(GuestContractInterface, dispatch_type),
-            core::mem::offset_of!(GuestContractInterface, dispatch),
+            mem::offset_of!(GuestContractInterface, create_instance),
+            mem::offset_of!(GuestContractInterface, destroy_instance),
+            mem::offset_of!(GuestContractInterface, dispatch_type),
+            mem::offset_of!(GuestContractInterface, dispatch),
             ValidationContext::Guest,
         )
     } {
-        return polyplug_abi::types::AbiError {
-            code: polyplug_abi::types::AbiErrorCode::InvalidPointer as u32,
-            message: polyplug_abi::types::StringView::from_static(violation.as_bytes()),
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer as u32,
+            message: StringView::from_static(violation.as_bytes()),
         };
     }
     // SAFETY: this is a valid HostApi pointer passed during polyplug_init.
@@ -1667,11 +1661,9 @@ unsafe fn host_register_guest_contract_impl(
     let desc: PluginDescriptor = unsafe { *descriptor };
 
     if desc.contract_name.ptr.is_null() || desc.contract_name.len == 0 {
-        return polyplug_abi::types::AbiError {
-            code: polyplug_abi::types::AbiErrorCode::Generic as u32,
-            message: polyplug_abi::types::StringView::from_static(
-                b"PluginDescriptor.contract_name is null or empty",
-            ),
+        return AbiError {
+            code: AbiErrorCode::Generic as u32,
+            message: StringView::from_static(b"PluginDescriptor.contract_name is null or empty"),
         };
     }
 
@@ -1685,9 +1677,9 @@ unsafe fn host_register_guest_contract_impl(
             runtime.logger.log(LogLevel::Error, "registry", || {
                 format!("registration rejected for bundle {bundle_id}: {e}")
             });
-            return polyplug_abi::types::AbiError {
-                code: polyplug_abi::types::AbiErrorCode::Generic as u32,
-                message: polyplug_abi::types::StringView::null(),
+            return AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: StringView::null(),
             };
         }
     };
@@ -1701,7 +1693,7 @@ unsafe fn host_register_guest_contract_impl(
             BundleId::from_u64(bundle_id),
         )
     } {
-        Ok(_handle) => polyplug_abi::types::AbiError::ok(),
+        Ok(_handle) => AbiError::ok(),
         Err(e) => {
             runtime.logger.log(LogLevel::Error, "registry", || {
                 format!("registration failed for bundle {bundle_id}: {e}")
@@ -1711,15 +1703,13 @@ unsafe fn host_register_guest_contract_impl(
             // specific ABI code where one exists, so guests can distinguish a
             // same-bundle duplicate from a hash collision or bad input.
             runtime.set_last_error(e.to_string());
-            let code: polyplug_abi::types::AbiErrorCode = match e {
-                crate::error::RegistryError::DuplicateProvider { .. } => {
-                    polyplug_abi::types::AbiErrorCode::DuplicateProvider
-                }
-                _ => polyplug_abi::types::AbiErrorCode::Generic,
+            let code: AbiErrorCode = match e {
+                RegistryError::DuplicateProvider { .. } => AbiErrorCode::DuplicateProvider,
+                _ => AbiErrorCode::Generic,
             };
-            polyplug_abi::types::AbiError {
+            AbiError {
                 code: code as u32,
-                message: polyplug_abi::types::StringView::null(),
+                message: StringView::null(),
             }
         }
     }
@@ -1734,7 +1724,7 @@ pub(crate) unsafe extern "C" fn host_alloc(
     size: usize,
     align: usize,
 ) -> *mut u8 {
-    polyplug_abi::ffi::polyplug_host_alloc(size, align)
+    polyplug_host_alloc(size, align)
 }
 
 /// HostApi.free callback — free memory via the host allocator.
@@ -1748,7 +1738,7 @@ pub(crate) unsafe extern "C" fn host_free(
     align: usize,
 ) {
     // SAFETY: polyplug_host_free is a safe wrapper around the system allocator.
-    unsafe { polyplug_abi::ffi::polyplug_host_free(ptr, size, align) }
+    unsafe { polyplug_host_free(ptr, size, align) }
 }
 
 /// HostApi.find_guest_contract callback — dispatches to runtime's registry with dependency enforcement.
@@ -1795,7 +1785,7 @@ pub(crate) unsafe extern "C" fn host_find_all_guest_contracts(
     this: *const HostApi,
     contract_id: u64,
     min_version: u32,
-) -> polyplug_abi::Array<GuestContractHandle> {
+) -> Array<GuestContractHandle> {
     if this.is_null() {
         return Array::empty();
     }
@@ -1832,8 +1822,8 @@ pub(crate) unsafe extern "C" fn host_find_all_guest_contracts(
 
     // Allocate via the host allocator, sized to exactly the collected handles.
     let count: usize = handles.len();
-    let size: usize = count * core::mem::size_of::<GuestContractHandle>();
-    let align: usize = core::mem::align_of::<GuestContractHandle>();
+    let size: usize = count * mem::size_of::<GuestContractHandle>();
+    let align: usize = mem::align_of::<GuestContractHandle>();
     // SAFETY: host_alloc is safe to call from this unsafe context.
     let ptr: *mut GuestContractHandle =
         unsafe { host_alloc(this, size, align) as *mut GuestContractHandle };
@@ -1847,7 +1837,7 @@ pub(crate) unsafe extern "C" fn host_find_all_guest_contracts(
     // and is valid for `count` elements; `handles` holds exactly `count` initialised
     // elements; source and destination are distinct allocations (non-overlapping).
     unsafe {
-        core::ptr::copy_nonoverlapping(handles.as_ptr(), ptr, count);
+        ptr::copy_nonoverlapping(handles.as_ptr(), ptr, count);
     }
 
     Array::new(ptr, count)
@@ -1862,7 +1852,7 @@ pub unsafe extern "C" fn host_resolve_guest_contract(
     handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     if this.is_null() {
-        return core::ptr::null();
+        return ptr::null();
     }
     // SAFETY: this is a valid HostApi pointer passed by the host.
     // (*this).runtime contains a valid pointer to Runtime.
@@ -1871,7 +1861,7 @@ pub unsafe extern "C" fn host_resolve_guest_contract(
 
     match registry.resolve_guest_contract(handle) {
         Ok(ptr) => ptr,
-        Err(_) => core::ptr::null(),
+        Err(_) => ptr::null(),
     }
 }
 
@@ -1891,7 +1881,7 @@ pub unsafe extern "C" fn host_resolve_guest_contract(
 /// `Runtime`.
 pub(crate) unsafe extern "C" fn host_revision_counter(this: *const HostApi) -> *const u64 {
     if this.is_null() {
-        return core::ptr::null();
+        return ptr::null();
     }
     // SAFETY: this is a valid HostApi pointer passed by the host.
     // (*this).runtime contains a valid pointer to Runtime.
@@ -1919,7 +1909,7 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
 
     let host_contracts_guard: RecoveringGuard<
-        std::sync::RwLockReadGuard<'_, HashMap<u64, &'static HostContractInterface>>,
+        RwLockReadGuard<'_, HashMap<u64, &'static HostContractInterface>>,
     > = runtime
         .host_contracts
         .read()
@@ -1945,7 +1935,7 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
             if interface.singleton {
                 // Singleton: check cache first
                 let singleton_guard: RecoveringGuard<
-                    std::sync::RwLockReadGuard<'_, HashMap<u64, HostContractInstance>>,
+                    RwLockReadGuard<'_, HashMap<u64, HostContractInstance>>,
                 > = runtime
                     .singleton_instances
                     .read()
@@ -1957,7 +1947,7 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
 
                 // Create singleton and cache it
                 let mut singleton_guard: RecoveringGuard<
-                    std::sync::RwLockWriteGuard<'_, HashMap<u64, HostContractInstance>>,
+                    RwLockWriteGuard<'_, HashMap<u64, HostContractInstance>>,
                 > = runtime
                     .singleton_instances
                     .write()
@@ -1973,7 +1963,7 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
                 unsafe {
                     (interface.create_instance)(
                         interface as *const HostContractInterface,
-                        core::ptr::null(),
+                        ptr::null(),
                         &mut instance,
                     )
                 };
@@ -1993,7 +1983,7 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
                 unsafe {
                     (interface.create_instance)(
                         interface as *const HostContractInterface,
-                        core::ptr::null(),
+                        ptr::null(),
                         &mut instance,
                     )
                 };
@@ -2020,14 +2010,14 @@ pub(crate) unsafe extern "C" fn host_resolve_host_contract_interface(
     min_version: u32,
 ) -> *const HostContractInterface {
     if this.is_null() {
-        return core::ptr::null();
+        return ptr::null();
     }
     // SAFETY: this is a valid HostApi pointer passed by the host.
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
 
     let host_contracts_guard: RecoveringGuard<
-        std::sync::RwLockReadGuard<'_, HashMap<u64, &'static HostContractInterface>>,
+        RwLockReadGuard<'_, HashMap<u64, &'static HostContractInterface>>,
     > = runtime
         .host_contracts
         .read()
@@ -2045,7 +2035,7 @@ pub(crate) unsafe extern "C" fn host_resolve_host_contract_interface(
                 "host contract interface not found: id={}, min_version={}",
                 contract_id, min_version
             ));
-            core::ptr::null()
+            ptr::null()
         })
 }
 
@@ -2053,20 +2043,17 @@ pub(crate) unsafe extern "C" fn host_resolve_host_contract_interface(
 ///
 /// # Safety
 /// this must be a valid HostApi pointer with valid runtime field.
-pub(crate) unsafe extern "C" fn host_list_bundles(
-    this: *const HostApi,
-) -> polyplug_abi::Array<polyplug_utils::BundleId> {
+pub(crate) unsafe extern "C" fn host_list_bundles(this: *const HostApi) -> Array<BundleId> {
     if this.is_null() {
         return Array::empty();
     }
     // SAFETY: this is a valid HostApi pointer.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
 
-    let manifests: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<String, ManifestData>>> =
-        runtime
-            .bundle_manifests
-            .lock()
-            .recover_poisoned(runtime.logger, "runtime");
+    let manifests: RecoveringGuard<MutexGuard<'_, HashMap<String, ManifestData>>> = runtime
+        .bundle_manifests
+        .lock()
+        .recover_poisoned(runtime.logger, "runtime");
 
     let count = manifests.len();
     if count == 0 {
@@ -2074,8 +2061,8 @@ pub(crate) unsafe extern "C" fn host_list_bundles(
     }
 
     // Allocate via host allocator
-    let size = count * core::mem::size_of::<BundleId>();
-    let align = core::mem::align_of::<BundleId>();
+    let size = count * mem::size_of::<BundleId>();
+    let align = mem::align_of::<BundleId>();
     // SAFETY: host_alloc is safe to call
     let ptr = unsafe { host_alloc(this, size, align) as *mut BundleId };
 
@@ -2105,7 +2092,7 @@ pub(crate) unsafe extern "C" fn host_list_bundles(
 /// this must be a valid HostApi pointer with valid runtime field.
 pub(crate) unsafe extern "C" fn host_get_dependencies(
     this: *const HostApi,
-) -> polyplug_abi::Array<polyplug_abi::DependencyInfo> {
+) -> Array<DependencyInfo> {
     if this.is_null() {
         return Array::empty();
     }
@@ -2118,11 +2105,10 @@ pub(crate) unsafe extern "C" fn host_get_dependencies(
         return Array::empty();
     }
 
-    let manifests: RecoveringGuard<std::sync::MutexGuard<'_, HashMap<String, ManifestData>>> =
-        runtime
-            .bundle_manifests
-            .lock()
-            .recover_poisoned(runtime.logger, "runtime");
+    let manifests: RecoveringGuard<MutexGuard<'_, HashMap<String, ManifestData>>> = runtime
+        .bundle_manifests
+        .lock()
+        .recover_poisoned(runtime.logger, "runtime");
 
     // Find manifest by ID
     let manifest = match manifests.values().find(|m| m.id == caller_bundle_id) {
@@ -2136,8 +2122,8 @@ pub(crate) unsafe extern "C" fn host_get_dependencies(
     }
 
     let count = deps.len();
-    let size = count * core::mem::size_of::<DependencyInfo>();
-    let align = core::mem::align_of::<DependencyInfo>();
+    let size = count * mem::size_of::<DependencyInfo>();
+    let align = mem::align_of::<DependencyInfo>();
     // SAFETY: host_alloc is safe to call
     let ptr = unsafe { host_alloc(this, size, align) as *mut DependencyInfo };
 
@@ -2150,9 +2136,7 @@ pub(crate) unsafe extern "C" fn host_get_dependencies(
         let info = DependencyInfo {
             contract_id: dep.contract_id,
             min_version: dep.min_version.parse().unwrap_or(0),
-            bundle_id: dep
-                .bundle_id
-                .unwrap_or_else(|| polyplug_utils::BundleId::from_u64(0)),
+            bundle_id: dep.bundle_id.unwrap_or_else(|| BundleId::from_u64(0)),
         };
         // SAFETY: ptr was allocated with count elements of DependencyInfo and i < count.
         unsafe {
@@ -2177,11 +2161,11 @@ pub unsafe extern "C" fn host_load_bundle(
     this: *const HostApi,
     path: *const u8,
     path_len: usize,
-    out_err: *mut polyplug_abi::AbiError,
+    out_err: *mut AbiError,
 ) {
     // SAFETY: the runtime is the sole producer of the HostApi table; the ABI
     // contract requires callers to pass a valid, non-null out_err pointer.
-    let result: polyplug_abi::AbiError = unsafe { host_load_bundle_impl(this, path, path_len) };
+    let result: AbiError = unsafe { host_load_bundle_impl(this, path, path_len) };
     if !out_err.is_null() {
         // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
         unsafe { out_err.write(result) };
@@ -2192,7 +2176,7 @@ unsafe fn host_load_bundle_impl(
     this: *const HostApi,
     path: *const u8,
     path_len: usize,
-) -> polyplug_abi::AbiError {
+) -> AbiError {
     if this.is_null() {
         return AbiError {
             code: AbiErrorCode::InvalidPointer as u32,
@@ -2211,8 +2195,8 @@ unsafe fn host_load_bundle_impl(
     }
 
     // SAFETY: path is non-null and points to path_len valid bytes per ABI contract.
-    let bytes: &[u8] = unsafe { core::slice::from_raw_parts(path, path_len) };
-    let s: &str = match core::str::from_utf8(bytes) {
+    let bytes: &[u8] = unsafe { slice::from_raw_parts(path, path_len) };
+    let s: &str = match str::from_utf8(bytes) {
         Ok(s) => s,
         Err(e) => {
             runtime.set_last_error(e.to_string());
@@ -2223,7 +2207,7 @@ unsafe fn host_load_bundle_impl(
         }
     };
 
-    match runtime.load_bundle(std::path::Path::new(s)) {
+    match runtime.load_bundle(Path::new(s)) {
         Ok(()) => AbiError::ok(),
         Err(e) => {
             runtime.set_last_error(e.to_string());
@@ -2246,11 +2230,11 @@ pub unsafe extern "C" fn host_reload_bundle(
     this: *const HostApi,
     path: *const u8,
     path_len: usize,
-    out_err: *mut polyplug_abi::AbiError,
+    out_err: *mut AbiError,
 ) {
     // SAFETY: the runtime is the sole producer of the HostApi table; the ABI
     // contract requires callers to pass a valid, non-null out_err pointer.
-    let result: polyplug_abi::AbiError = unsafe { host_reload_bundle_impl(this, path, path_len) };
+    let result: AbiError = unsafe { host_reload_bundle_impl(this, path, path_len) };
     if !out_err.is_null() {
         // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
         unsafe { out_err.write(result) };
@@ -2261,7 +2245,7 @@ unsafe fn host_reload_bundle_impl(
     this: *const HostApi,
     path: *const u8,
     path_len: usize,
-) -> polyplug_abi::AbiError {
+) -> AbiError {
     if this.is_null() {
         return AbiError {
             code: AbiErrorCode::InvalidPointer as u32,
@@ -2280,8 +2264,8 @@ unsafe fn host_reload_bundle_impl(
     }
 
     // SAFETY: path is non-null and points to path_len valid bytes per ABI contract.
-    let bytes: &[u8] = unsafe { core::slice::from_raw_parts(path, path_len) };
-    let s: &str = match core::str::from_utf8(bytes) {
+    let bytes: &[u8] = unsafe { slice::from_raw_parts(path, path_len) };
+    let s: &str = match str::from_utf8(bytes) {
         Ok(s) => s,
         Err(e) => {
             runtime.set_last_error(e.to_string());
@@ -2292,7 +2276,7 @@ unsafe fn host_reload_bundle_impl(
         }
     };
 
-    match runtime.reload_bundle(std::path::Path::new(s)) {
+    match runtime.reload_bundle(Path::new(s)) {
         Ok(()) => AbiError::ok(),
         Err(e) => {
             runtime.set_last_error(e.to_string());
@@ -2316,21 +2300,18 @@ unsafe fn host_reload_bundle_impl(
 pub unsafe extern "C" fn host_unload_bundle(
     this: *const HostApi,
     bundle_id: BundleId,
-    out_err: *mut polyplug_abi::AbiError,
+    out_err: *mut AbiError,
 ) {
     // SAFETY: the runtime is the sole producer of the HostApi table; the ABI
     // contract requires callers to pass a valid, non-null out_err pointer.
-    let result: polyplug_abi::AbiError = unsafe { host_unload_bundle_impl(this, bundle_id) };
+    let result: AbiError = unsafe { host_unload_bundle_impl(this, bundle_id) };
     if !out_err.is_null() {
         // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
         unsafe { out_err.write(result) };
     }
 }
 
-unsafe fn host_unload_bundle_impl(
-    this: *const HostApi,
-    bundle_id: BundleId,
-) -> polyplug_abi::AbiError {
+unsafe fn host_unload_bundle_impl(this: *const HostApi, bundle_id: BundleId) -> AbiError {
     if this.is_null() {
         return AbiError {
             code: AbiErrorCode::InvalidPointer as u32,
@@ -2361,13 +2342,12 @@ unsafe fn host_unload_bundle_impl(
 /// - interface must be a valid HostContractInterface pointer that remains valid for runtime lifetime
 pub(crate) unsafe extern "C" fn host_register_host_contract(
     this: *const HostApi,
-    interface: *const polyplug_abi::HostContractInterface,
-    out_err: *mut polyplug_abi::AbiError,
+    interface: *const HostContractInterface,
+    out_err: *mut AbiError,
 ) {
     // SAFETY: the runtime is the sole producer of the HostApi table; the ABI
     // contract requires callers to pass a valid, non-null out_err pointer.
-    let result: polyplug_abi::AbiError =
-        unsafe { host_register_host_contract_impl(this, interface) };
+    let result: AbiError = unsafe { host_register_host_contract_impl(this, interface) };
     if !out_err.is_null() {
         // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
         unsafe { out_err.write(result) };
@@ -2376,8 +2356,8 @@ pub(crate) unsafe extern "C" fn host_register_host_contract(
 
 unsafe fn host_register_host_contract_impl(
     this: *const HostApi,
-    interface: *const polyplug_abi::HostContractInterface,
-) -> polyplug_abi::AbiError {
+    interface: *const HostContractInterface,
+) -> AbiError {
     if this.is_null() || interface.is_null() {
         return AbiError {
             code: AbiErrorCode::InvalidPointer as u32,
@@ -2393,10 +2373,10 @@ unsafe fn host_register_host_contract_impl(
     if let Some(violation) = unsafe {
         validate_interface_fn_ptrs(
             interface.cast::<u8>(),
-            core::mem::offset_of!(polyplug_abi::HostContractInterface, create_instance),
-            core::mem::offset_of!(polyplug_abi::HostContractInterface, destroy_instance),
-            core::mem::offset_of!(polyplug_abi::HostContractInterface, dispatch_type),
-            core::mem::offset_of!(polyplug_abi::HostContractInterface, dispatch),
+            mem::offset_of!(HostContractInterface, create_instance),
+            mem::offset_of!(HostContractInterface, destroy_instance),
+            mem::offset_of!(HostContractInterface, dispatch_type),
+            mem::offset_of!(HostContractInterface, dispatch),
             ValidationContext::Host,
         )
     } {
@@ -2409,11 +2389,11 @@ unsafe fn host_register_host_contract_impl(
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
     // SAFETY: interface is a valid HostContractInterface pointer that passed the
     // fn-pointer validation above. Caller guarantees it remains valid for runtime lifetime.
-    let interface_ref: &'static polyplug_abi::HostContractInterface = unsafe { &*interface };
+    let interface_ref: &'static HostContractInterface = unsafe { &*interface };
 
     match runtime.register_host_contract(interface_ref.contract_id.id(), interface_ref) {
         Ok(()) => AbiError::ok(),
-        Err(crate::error::HostContractError::DuplicateContract { .. }) => AbiError {
+        Err(HostContractError::DuplicateContract { .. }) => AbiError {
             code: AbiErrorCode::Generic as u32,
             message: StringView::from_static(b"duplicate host contract registration"),
         },
@@ -2444,22 +2424,19 @@ unsafe fn host_register_host_contract_impl(
 ///   compiled against the same polyplug rlib
 pub(crate) unsafe extern "C" fn host_register_loader(
     this: *const HostApi,
-    loader_ptr: *mut core::ffi::c_void,
-    out_err: *mut polyplug_abi::AbiError,
+    loader_ptr: *mut c_void,
+    out_err: *mut AbiError,
 ) {
     // SAFETY: the runtime is the sole producer of the HostApi table; the ABI
     // contract requires callers to pass a valid, non-null out_err pointer.
-    let result: polyplug_abi::AbiError = unsafe { host_register_loader_impl(this, loader_ptr) };
+    let result: AbiError = unsafe { host_register_loader_impl(this, loader_ptr) };
     if !out_err.is_null() {
         // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
         unsafe { out_err.write(result) };
     }
 }
 
-unsafe fn host_register_loader_impl(
-    this: *const HostApi,
-    loader_ptr: *mut core::ffi::c_void,
-) -> polyplug_abi::AbiError {
+unsafe fn host_register_loader_impl(this: *const HostApi, loader_ptr: *mut c_void) -> AbiError {
     if this.is_null() || loader_ptr.is_null() {
         return AbiError {
             code: AbiErrorCode::InvalidPointer as u32,
@@ -2518,7 +2495,7 @@ pub unsafe extern "C" fn host_get_last_error(
         return 0;
     }
     // SAFETY: buf is valid for buf_len bytes per ABI contract.
-    let buf_slice: &mut [u8] = unsafe { core::slice::from_raw_parts_mut(buf, buf_len) };
+    let buf_slice: &mut [u8] = unsafe { slice::from_raw_parts_mut(buf, buf_len) };
     let len = runtime.get_last_error(buf_slice);
     runtime.clear_last_error();
     len
@@ -2591,12 +2568,12 @@ pub(crate) unsafe extern "C" fn host_log(
 pub(crate) unsafe extern "C" fn host_create_guest_instance(
     this: *const HostApi,
     interface: *const GuestContractInterface,
-    args: *const core::ffi::c_void,
-    out_instance: *mut polyplug_abi::guest::GuestContractInstance,
+    args: *const c_void,
+    out_instance: *mut GuestContractInstance,
 ) {
     // SAFETY: the runtime is the sole producer of the HostApi table; the ABI
     // contract requires callers to pass a valid, non-null out_instance pointer.
-    let result: polyplug_abi::guest::GuestContractInstance =
+    let result: GuestContractInstance =
         unsafe { host_create_guest_instance_impl(this, interface, args) };
     if !out_instance.is_null() {
         // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
@@ -2617,27 +2594,25 @@ pub(crate) unsafe extern "C" fn host_create_guest_instance(
 /// # Safety
 /// `interface` must be a live, runtime-issued `GuestContractInterface` pointer kept
 /// alive by an epoch pin held by the caller for the duration of the read.
-unsafe fn guest_instance_loader_data(
-    interface: *const GuestContractInterface,
-) -> polyplug_abi::dispatch::VmLoaderData {
+unsafe fn guest_instance_loader_data(interface: *const GuestContractInterface) -> VmLoaderData {
     // SAFETY: interface is a live runtime-issued pointer per the caller's pin.
-    let dispatch_type: polyplug_abi::dispatch::DispatchType = unsafe { (*interface).dispatch_type };
-    if dispatch_type == polyplug_abi::dispatch::DispatchType::VirtualMachine {
+    let dispatch_type: DispatchType = unsafe { (*interface).dispatch_type };
+    if dispatch_type == DispatchType::VirtualMachine {
         // SAFETY: dispatch_type == VirtualMachine guarantees the `vm` union variant is
         // the active one, so reading `dispatch.vm.loader_data` is sound.
         unsafe { (*interface).dispatch.vm.loader_data }
     } else {
-        polyplug_abi::dispatch::VmLoaderData::null()
+        VmLoaderData::null()
     }
 }
 
 unsafe fn host_create_guest_instance_impl(
     this: *const HostApi,
     interface: *const GuestContractInterface,
-    args: *const core::ffi::c_void,
-) -> polyplug_abi::guest::GuestContractInstance {
+    args: *const c_void,
+) -> GuestContractInstance {
     if this.is_null() || interface.is_null() {
-        return polyplug_abi::guest::GuestContractInstance::null();
+        return GuestContractInstance::null();
     }
 
     // SAFETY: this is a valid HostApi pointer passed by the host;
@@ -2648,18 +2623,16 @@ unsafe fn host_create_guest_instance_impl(
     // the interface's snapshot for epoch reclamation; holding this pin across the
     // create call keeps that snapshot alive so `create_instance` cannot run against
     // a freed interface. The guard is named (not `let _ =`) so it lives to the end.
-    let _g: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+    let _g: EpochGuard = epoch_pin();
 
     // SAFETY: interface is non-null and points to a runtime-issued
     // GuestContractInterface kept alive by the pin above; reading its fields is sound.
     let contract_id: GuestContractId = unsafe { (*interface).contract_id };
     // SAFETY: same live, pinned interface; selects the per-instance loader_data
     // (VM contracts route construction through their loader; native ignore it).
-    let loader_data: polyplug_abi::dispatch::VmLoaderData =
-        unsafe { guest_instance_loader_data(interface) };
+    let loader_data: VmLoaderData = unsafe { guest_instance_loader_data(interface) };
 
-    let mut inst: polyplug_abi::guest::GuestContractInstance =
-        polyplug_abi::guest::GuestContractInstance::null();
+    let mut inst: GuestContractInstance = GuestContractInstance::null();
     // SAFETY: `create_instance` is non-null by ABI contract (register_guest_contract
     // rejects null bits); the interface stays alive across the call via the pin;
     // `loader_data` is this interface's VM handle (null for native); `args` satisfies
@@ -2687,7 +2660,7 @@ unsafe fn host_create_guest_instance_impl(
 pub(crate) unsafe extern "C" fn host_destroy_guest_instance(
     this: *const HostApi,
     interface: *const GuestContractInterface,
-    instance: polyplug_abi::guest::GuestContractInstance,
+    instance: GuestContractInstance,
 ) {
     if this.is_null() || interface.is_null() {
         return;
@@ -2702,11 +2675,10 @@ pub(crate) unsafe extern "C" fn host_destroy_guest_instance(
     // Pin the epoch across teardown for the same reason as creation: keep the
     // interface's snapshot alive so `destroy_instance` cannot run against a freed
     // interface during a concurrent unload.
-    let _g: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+    let _g: EpochGuard = epoch_pin();
 
     // SAFETY: same live, pinned interface; selects the per-instance loader_data.
-    let loader_data: polyplug_abi::dispatch::VmLoaderData =
-        unsafe { guest_instance_loader_data(interface) };
+    let loader_data: VmLoaderData = unsafe { guest_instance_loader_data(interface) };
 
     // SAFETY: `destroy_instance` is non-null by ABI contract; the interface stays
     // alive across the call via the pin; `loader_data` is this interface's VM handle
@@ -2721,14 +2693,22 @@ pub(crate) unsafe extern "C" fn host_destroy_guest_instance(
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
+    use core::cell::Cell;
+    use std::fs;
+    use std::panic;
+
+    use polyplug_abi::{DispatchMechanisms, NativeDispatch};
+    use polyplug_utils::{HostContractId, guest_contract_id, host_contract_id};
+    use tempfile::TempDir;
+
     use super::*;
 
     /// `HostApi.log` stub for test hosts — drops the record.
     unsafe extern "C" fn stub_host_log(
         _this: *const HostApi,
         _level: u32,
-        _scope: polyplug_abi::StringView,
-        _message: polyplug_abi::StringView,
+        _scope: StringView,
+        _message: StringView,
     ) {
     }
 
@@ -2755,22 +2735,22 @@ mod tests {
     /// negotiation tests (other fields are inert).
     fn host_contract_interface_with_version(major: u32, minor: u32) -> HostContractInterface {
         HostContractInterface {
-            contract_id: polyplug_utils::HostContractId::from(0xABCD_u64),
+            contract_id: HostContractId::from(0xABCD_u64),
             contract_version: Version {
                 major,
                 minor,
                 patch: 0,
             },
             singleton: true,
-            dispatch_type: polyplug_abi::dispatch::dispatch_type::DispatchType::Native,
-            runtime: core::ptr::null_mut(),
-            user_data: core::ptr::null_mut(),
+            dispatch_type: DispatchType::Native,
+            runtime: ptr::null_mut(),
+            user_data: ptr::null_mut(),
             create_instance: test_create_instance,
             destroy_instance: test_destroy_instance,
-            dispatch: polyplug_abi::DispatchMechanisms {
-                native: polyplug_abi::NativeDispatch {
+            dispatch: DispatchMechanisms {
+                native: NativeDispatch {
                     function_count: 0,
-                    functions: core::ptr::null(),
+                    functions: ptr::null(),
                 },
             },
         }
@@ -2839,11 +2819,8 @@ mod tests {
 
     #[test]
     fn abi_ok_constant() {
-        assert_eq!(
-            polyplug_abi::AbiErrorCode::Ok,
-            polyplug_abi::AbiErrorCode::Ok
-        );
-        assert_eq!(polyplug_abi::AbiErrorCode::Ok as u32, 0_u32);
+        assert_eq!(AbiErrorCode::Ok, AbiErrorCode::Ok);
+        assert_eq!(AbiErrorCode::Ok as u32, 0_u32);
     }
 
     /// TH-06: Verify host callbacks in runtime.rs use HostApi self-passing pattern.
@@ -2858,14 +2835,14 @@ mod tests {
         // The self-passing pattern allows extracting runtime from (*this).runtime.
         //
         // HostApi is pointer-sized (8 bytes on x86_64), ensuring ABI compatibility.
-        assert_eq!(core::mem::size_of::<*const HostApi>(), 8);
+        assert_eq!(mem::size_of::<*const HostApi>(), 8);
     }
 
     #[test]
     fn host_find_guest_contract_null_this_returns_null() {
         // SAFETY: host_find_guest_contract handles null HostApi gracefully
         let handle: GuestContractHandle =
-            unsafe { host_find_guest_contract(core::ptr::null(), 0_u64, 0_u32) };
+            unsafe { host_find_guest_contract(ptr::null(), 0_u64, 0_u32) };
         assert!(
             handle.is_null(),
             "host_find_guest_contract must return null when this is null"
@@ -2883,7 +2860,7 @@ mod tests {
 
         // Create a HostApi with runtime pointer
         let host_interface: HostApi = HostApi {
-            runtime: Arc::as_ptr(&runtime) as *mut core::ffi::c_void,
+            runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
             alloc: host_alloc,
             free: host_free,
@@ -2906,7 +2883,7 @@ mod tests {
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
             revision_counter: host_revision_counter,
-            reserved: core::ptr::null(),
+            reserved: ptr::null(),
         };
 
         // SAFETY: host_interface is valid with runtime pointer; init bundle_id is set
@@ -2926,13 +2903,13 @@ mod tests {
         runtime.pop_init_bundle_id();
     }
 
-    fn create_bundle_dir(temp: &tempfile::TempDir, bundle_name: &str, runtime: &str) -> PathBuf {
+    fn create_bundle_dir(temp: &TempDir, bundle_name: &str, runtime: &str) -> PathBuf {
         let bundle_dir: PathBuf = temp.path().join(bundle_name);
-        if let Err(e) = std::fs::create_dir_all(&bundle_dir) {
+        if let Err(e) = fs::create_dir_all(&bundle_dir) {
             panic!("failed to create bundle dir {}: {e}", bundle_dir.display());
         }
         let so_path: PathBuf = bundle_dir.join("dummy.so");
-        if let Err(e) = std::fs::write(&so_path, b"") {
+        if let Err(e) = fs::write(&so_path, b"") {
             panic!("failed to write dummy so {}: {e}", so_path.display());
         }
         // Emit the canonical id = FNV1a-64(name) so the manifest passes validation.
@@ -2943,14 +2920,14 @@ mod tests {
             runtime
         );
         let manifest_path: PathBuf = bundle_dir.join("manifest.toml");
-        if let Err(e) = std::fs::write(&manifest_path, manifest) {
+        if let Err(e) = fs::write(&manifest_path, manifest) {
             panic!("failed to write manifest {}: {e}", manifest_path.display());
         }
         bundle_dir
     }
 
     fn register_guest_contract(
-        registry: &crate::runtime_store::RuntimeStore,
+        registry: &RuntimeStore,
         contract_id: u64,
         bundle_id: u64,
     ) -> GuestContractHandle {
@@ -2960,7 +2937,7 @@ mod tests {
         };
 
         unsafe extern "C" fn stub_create_instance(
-            _loader_data: polyplug_abi::dispatch::VmLoaderData,
+            _loader_data: VmLoaderData,
             _host: *const HostApi,
             _args: *const (),
             out_instance: *mut GuestContractInstance,
@@ -2972,7 +2949,7 @@ mod tests {
         }
 
         unsafe extern "C" fn stub_destroy_instance(
-            _loader_data: polyplug_abi::dispatch::VmLoaderData,
+            _loader_data: VmLoaderData,
             _host: *const HostApi,
             _instance: GuestContractInstance,
         ) {
@@ -2980,7 +2957,7 @@ mod tests {
 
         let interface: &'static GuestContractInterface =
             Box::leak(Box::new(GuestContractInterface {
-                contract_id: polyplug_utils::GuestContractId::from_u64(contract_id),
+                contract_id: GuestContractId::from_u64(contract_id),
                 contract_version: Version {
                     major: 0,
                     minor: 0,
@@ -2992,13 +2969,13 @@ mod tests {
                 dispatch: DispatchMechanisms {
                     native: NativeDispatch {
                         function_count: 0,
-                        functions: core::ptr::null(),
+                        functions: ptr::null(),
                     },
                 },
             }));
-        let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
-            name: polyplug_abi::StringView::from_static(b"stub"),
-            contract_name: polyplug_abi::StringView::from_static(b"stub.contract"),
+        let descriptor: PluginDescriptor = PluginDescriptor {
+            name: StringView::from_static(b"stub"),
+            contract_name: StringView::from_static(b"stub.contract"),
             version: Version {
                 major: 1,
                 minor: 0,
@@ -3006,7 +2983,7 @@ mod tests {
             },
         };
         // SAFETY: interface is leaked and lives for the process lifetime.
-        let result: Result<GuestContractHandle, crate::error::RegistryError> = unsafe {
+        let result: Result<GuestContractHandle, RegistryError> = unsafe {
             registry.register_guest_contract(
                 descriptor,
                 interface,
@@ -3024,10 +3001,10 @@ mod tests {
 
     /// Native dispatch target: writes the i32 at `args` plus one into `out`.
     unsafe extern "C" fn native_add_one(
-        _instance: polyplug_abi::guest::GuestContractInstance,
+        _instance: GuestContractInstance,
         args: *const (),
         out: *mut (),
-        out_err: *mut polyplug_abi::types::AbiError,
+        out_err: *mut AbiError,
     ) {
         // SAFETY: the test passes a valid *const i32 / *mut i32.
         unsafe {
@@ -3036,7 +3013,7 @@ mod tests {
         }
         if !out_err.is_null() {
             // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
-            unsafe { out_err.write(polyplug_abi::types::AbiError::ok()) };
+            unsafe { out_err.write(AbiError::ok()) };
         }
     }
 
@@ -3053,18 +3030,14 @@ mod tests {
     static NATIVE_FNS: NativeFnTable = NativeFnTable([native_add_one as *const ()]);
 
     /// Register a native-dispatch contract whose function 0 is `native_add_one`.
-    fn register_native_caller_contract(
-        registry: &crate::runtime_store::RuntimeStore,
-        contract_id: u64,
-        bundle_id: u64,
-    ) {
+    fn register_native_caller_contract(registry: &RuntimeStore, contract_id: u64, bundle_id: u64) {
         use polyplug_abi::{
             DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface,
             NativeDispatch,
         };
 
         unsafe extern "C" fn stub_create(
-            _loader_data: polyplug_abi::dispatch::VmLoaderData,
+            _loader_data: VmLoaderData,
             _host: *const HostApi,
             _args: *const (),
             out_instance: *mut GuestContractInstance,
@@ -3075,7 +3048,7 @@ mod tests {
             }
         }
         unsafe extern "C" fn stub_destroy(
-            _loader_data: polyplug_abi::dispatch::VmLoaderData,
+            _loader_data: VmLoaderData,
             _host: *const HostApi,
             _instance: GuestContractInstance,
         ) {
@@ -3099,9 +3072,9 @@ mod tests {
                     },
                 },
             }));
-        let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
-            name: polyplug_abi::StringView::from_static(b"caller"),
-            contract_name: polyplug_abi::StringView::from_static(b"caller.contract"),
+        let descriptor: PluginDescriptor = PluginDescriptor {
+            name: StringView::from_static(b"caller"),
+            contract_name: StringView::from_static(b"caller.contract"),
             version: Version {
                 major: 1,
                 minor: 0,
@@ -3109,7 +3082,7 @@ mod tests {
             },
         };
         // SAFETY: interface is leaked for the process lifetime.
-        let result: Result<GuestContractHandle, crate::error::RegistryError> = unsafe {
+        let result: Result<GuestContractHandle, RegistryError> = unsafe {
             registry.register_guest_contract(
                 descriptor,
                 interface,
@@ -3138,17 +3111,16 @@ mod tests {
     /// so the runtime counts it as a live stateful instance, stamped with the
     /// contract id like a real generated factory.
     unsafe extern "C" fn stateful_create_instance(
-        _loader_data: polyplug_abi::dispatch::VmLoaderData,
+        _loader_data: VmLoaderData,
         _host: *const HostApi,
         _args: *const (),
-        out_instance: *mut polyplug_abi::guest::GuestContractInstance,
+        out_instance: *mut GuestContractInstance,
     ) {
         let boxed: Box<u8> = Box::new(0u8);
-        let instance: polyplug_abi::guest::GuestContractInstance =
-            polyplug_abi::guest::GuestContractInstance {
-                data: Box::into_raw(boxed) as *mut core::ffi::c_void,
-                contract_id: GuestContractId::from_u64(STATEFUL_CONTRACT_ID),
-            };
+        let instance: GuestContractInstance = GuestContractInstance {
+            data: Box::into_raw(boxed) as *mut c_void,
+            contract_id: GuestContractId::from_u64(STATEFUL_CONTRACT_ID),
+        };
         if !out_instance.is_null() {
             // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
             unsafe { out_instance.write(instance) };
@@ -3157,9 +3129,9 @@ mod tests {
 
     /// Destroy the boxed unit created by `stateful_create_instance`.
     unsafe extern "C" fn stateful_destroy_instance(
-        _loader_data: polyplug_abi::dispatch::VmLoaderData,
+        _loader_data: VmLoaderData,
         _host: *const HostApi,
-        instance: polyplug_abi::guest::GuestContractInstance,
+        instance: GuestContractInstance,
     ) {
         if !instance.data.is_null() {
             // SAFETY: `data` was produced by `stateful_create_instance` via
@@ -3172,14 +3144,10 @@ mod tests {
     /// non-null (stateful) instance, returning the leaked interface pointer so the
     /// test can drive `host_create_guest_instance` / `host_destroy_guest_instance`.
     fn register_stateful_contract(
-        registry: &crate::runtime_store::RuntimeStore,
+        registry: &RuntimeStore,
         contract_id: u64,
         bundle_id: u64,
     ) -> *const GuestContractInterface {
-        use polyplug_abi::{
-            DispatchMechanisms, DispatchType, GuestContractInterface, NativeDispatch,
-        };
-
         let interface: &'static GuestContractInterface =
             Box::leak(Box::new(GuestContractInterface {
                 contract_id: GuestContractId::from_u64(contract_id),
@@ -3194,13 +3162,13 @@ mod tests {
                 dispatch: DispatchMechanisms {
                     native: NativeDispatch {
                         function_count: 0,
-                        functions: core::ptr::null(),
+                        functions: ptr::null(),
                     },
                 },
             }));
-        let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
-            name: polyplug_abi::StringView::from_static(b"stateful"),
-            contract_name: polyplug_abi::StringView::from_static(b"stateful.contract"),
+        let descriptor: PluginDescriptor = PluginDescriptor {
+            name: StringView::from_static(b"stateful"),
+            contract_name: StringView::from_static(b"stateful.contract"),
             version: Version {
                 major: 1,
                 minor: 0,
@@ -3208,7 +3176,7 @@ mod tests {
             },
         };
         // SAFETY: interface is leaked for the process lifetime.
-        let result: Result<GuestContractHandle, crate::error::RegistryError> = unsafe {
+        let result: Result<GuestContractHandle, RegistryError> = unsafe {
             registry.register_guest_contract(
                 descriptor,
                 interface,
@@ -3238,15 +3206,13 @@ mod tests {
         );
 
         // Create two stateful instances through the host-mediated path.
-        let mut inst_a: polyplug_abi::guest::GuestContractInstance =
-            polyplug_abi::guest::GuestContractInstance::null();
+        let mut inst_a: GuestContractInstance = GuestContractInstance::null();
         // SAFETY: host and interface are valid; create_instance ignores args;
         // inst_a is a valid out-param.
-        unsafe { host_create_guest_instance(host, interface, core::ptr::null(), &mut inst_a) };
-        let mut inst_b: polyplug_abi::guest::GuestContractInstance =
-            polyplug_abi::guest::GuestContractInstance::null();
+        unsafe { host_create_guest_instance(host, interface, ptr::null(), &mut inst_a) };
+        let mut inst_b: GuestContractInstance = GuestContractInstance::null();
         // SAFETY: as above; inst_b is a valid out-param.
-        unsafe { host_create_guest_instance(host, interface, core::ptr::null(), &mut inst_b) };
+        unsafe { host_create_guest_instance(host, interface, ptr::null(), &mut inst_b) };
         assert!(!inst_a.data.is_null() && !inst_b.data.is_null());
         assert_eq!(
             runtime.live_instance_count_for_contracts(&[cid]),
@@ -3285,10 +3251,9 @@ mod tests {
 
         // The stateless contract's create_instance returns a null `data`, so the
         // host must not count it.
-        let mut inst: polyplug_abi::guest::GuestContractInstance =
-            polyplug_abi::guest::GuestContractInstance::null();
+        let mut inst: GuestContractInstance = GuestContractInstance::null();
         // SAFETY: host and interface are valid; `inst` is a valid out-param.
-        unsafe { host_create_guest_instance(host, interface, core::ptr::null(), &mut inst) };
+        unsafe { host_create_guest_instance(host, interface, ptr::null(), &mut inst) };
         assert!(inst.data.is_null(), "stateless instance has null data");
         assert_eq!(
             runtime.live_instance_count_for_contracts(&[cid]),
@@ -3366,13 +3331,13 @@ mod tests {
         error_bundle_id: u64,
     }
 
-    impl crate::loader::BundleLoader for EnforceLoader {
+    impl BundleLoader for EnforceLoader {
         fn loader_name(&self) -> &'static str {
             "enforce"
         }
 
-        fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
-            polyplug_abi::SupportedLanguage::Rust
+        fn loader_language(&self) -> SupportedLanguage {
+            SupportedLanguage::Rust
         }
 
         fn supports_hot_reload(&self) -> bool {
@@ -3382,16 +3347,16 @@ mod tests {
         fn load(
             &self,
             _manifest: &ManifestData,
-            _source: &crate::loader::BundleSource,
+            _source: &BundleSource,
             runtime: &Runtime,
-        ) -> Result<(), crate::error::LoaderError> {
+        ) -> Result<(), LoaderError> {
             // Drive the runtime's real dependency-enforcement path: probe an
             // undeclared contract inside the init window. The runtime records the
             // bundle_id-zero escape and the resolve is denied. The mock then reports
             // the denial as the loader-level init failure the runtime surfaces.
             runtime.push_init_bundle_id(self.error_bundle_id);
             runtime.pop_init_bundle_id();
-            Err(crate::error::LoaderError::InitFailed {
+            Err(LoaderError::InitFailed {
                 bundle: "enforce".to_owned(),
                 error: format!(
                     "undeclared dependency: bundle_id={:#x} contract_id={:#x}",
@@ -3400,28 +3365,24 @@ mod tests {
             })
         }
 
-        fn reload(
-            &self,
-            _manifest: &ManifestData,
-            _runtime: &Runtime,
-        ) -> Result<(), crate::error::LoaderError> {
-            Err(crate::error::LoaderError::HotReloadUnsupported {
+        fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
+            Err(LoaderError::HotReloadUnsupported {
                 loader_name: self.loader_name().to_owned(),
             })
         }
     }
 
     struct ProbeLoader {
-        observed_init: Arc<std::sync::Mutex<Option<bool>>>,
+        observed_init: Arc<Mutex<Option<bool>>>,
     }
 
-    impl crate::loader::BundleLoader for ProbeLoader {
+    impl BundleLoader for ProbeLoader {
         fn loader_name(&self) -> &'static str {
             "probe"
         }
 
-        fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
-            polyplug_abi::SupportedLanguage::Rust
+        fn loader_language(&self) -> SupportedLanguage {
+            SupportedLanguage::Rust
         }
 
         fn supports_hot_reload(&self) -> bool {
@@ -3431,11 +3392,10 @@ mod tests {
         fn load(
             &self,
             _manifest: &ManifestData,
-            _source: &crate::loader::BundleSource,
+            _source: &BundleSource,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::LoaderError> {
-            let mut guard: std::sync::MutexGuard<'_, Option<bool>> = match self.observed_init.lock()
-            {
+        ) -> Result<(), LoaderError> {
+            let mut guard: MutexGuard<'_, Option<bool>> = match self.observed_init.lock() {
                 Ok(g) => g,
                 Err(e) => e.into_inner(),
             };
@@ -3443,12 +3403,8 @@ mod tests {
             Ok(())
         }
 
-        fn reload(
-            &self,
-            _manifest: &ManifestData,
-            _runtime: &Runtime,
-        ) -> Result<(), crate::error::LoaderError> {
-            Err(crate::error::LoaderError::HotReloadUnsupported {
+        fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
+            Err(LoaderError::HotReloadUnsupported {
                 loader_name: self.loader_name().to_owned(),
             })
         }
@@ -3456,13 +3412,13 @@ mod tests {
 
     struct PanicLoader;
 
-    impl crate::loader::BundleLoader for PanicLoader {
+    impl BundleLoader for PanicLoader {
         fn loader_name(&self) -> &'static str {
             "panic"
         }
 
-        fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
-            polyplug_abi::SupportedLanguage::Rust
+        fn loader_language(&self) -> SupportedLanguage {
+            SupportedLanguage::Rust
         }
 
         fn supports_hot_reload(&self) -> bool {
@@ -3472,18 +3428,14 @@ mod tests {
         fn load(
             &self,
             _manifest: &ManifestData,
-            _source: &crate::loader::BundleSource,
+            _source: &BundleSource,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::LoaderError> {
+        ) -> Result<(), LoaderError> {
             panic!("intentional panic in PanicLoader");
         }
 
-        fn reload(
-            &self,
-            _manifest: &ManifestData,
-            _runtime: &Runtime,
-        ) -> Result<(), crate::error::LoaderError> {
-            Err(crate::error::LoaderError::HotReloadUnsupported {
+        fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
+            Err(LoaderError::HotReloadUnsupported {
                 loader_name: self.loader_name().to_owned(),
             })
         }
@@ -3496,16 +3448,16 @@ mod tests {
     }
 
     struct ReentrantLoader {
-        state: Arc<std::sync::Mutex<ReentrantState>>,
+        state: Arc<Mutex<ReentrantState>>,
     }
 
-    impl crate::loader::BundleLoader for ReentrantLoader {
+    impl BundleLoader for ReentrantLoader {
         fn loader_name(&self) -> &'static str {
             "reentrant"
         }
 
-        fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
-            polyplug_abi::SupportedLanguage::Rust
+        fn loader_language(&self) -> SupportedLanguage {
+            SupportedLanguage::Rust
         }
 
         fn supports_hot_reload(&self) -> bool {
@@ -3515,16 +3467,16 @@ mod tests {
         fn load(
             &self,
             _manifest: &ManifestData,
-            _source: &crate::loader::BundleSource,
+            _source: &BundleSource,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::LoaderError> {
-            let state: std::sync::MutexGuard<'_, ReentrantState> = match self.state.lock() {
+        ) -> Result<(), LoaderError> {
+            let state: MutexGuard<'_, ReentrantState> = match self.state.lock() {
                 Ok(g) => g,
                 Err(e) => e.into_inner(),
             };
             let runtime_ptr: usize = state.runtime_ptr;
             if runtime_ptr == 0 {
-                return Err(crate::error::LoaderError::InitFailed {
+                return Err(LoaderError::InitFailed {
                     bundle: "reentrant".to_owned(),
                     error: "runtime pointer not initialized".to_owned(),
                 });
@@ -3534,23 +3486,22 @@ mod tests {
             drop(state);
             // SAFETY: runtime_ptr was set from a valid &Runtime during load_bundle.
             let runtime_ref: &Runtime = unsafe { &*(runtime_ptr as *const Runtime) };
-            let inner_result: Result<(), crate::error::RuntimeError> = runtime_ref
-                .load_bundle_with(
-                    inner_bundle.as_path(),
-                    LoadOptions {
-                        compatibility: polyplug_abi::runtime::Compatibility::default(),
-                        ignore_function_count_mismatch: false,
-                    },
-                );
+            let inner_result: Result<(), RuntimeError> = runtime_ref.load_bundle_with(
+                inner_bundle.as_path(),
+                LoadOptions {
+                    compatibility: Compatibility::default(),
+                    ignore_function_count_mismatch: false,
+                },
+            );
             // The nested load returns a top-level RuntimeError; the mock surfaces a
             // failed nested load as its own init failure.
             if let Err(e) = inner_result {
-                return Err(crate::error::LoaderError::InitFailed {
+                return Err(LoaderError::InitFailed {
                     bundle: "reentrant".to_owned(),
                     error: e.to_string(),
                 });
             }
-            let mut st2: std::sync::MutexGuard<'_, ReentrantState> = match self.state.lock() {
+            let mut st2: MutexGuard<'_, ReentrantState> = match self.state.lock() {
                 Ok(g) => g,
                 Err(e) => e.into_inner(),
             };
@@ -3560,12 +3511,8 @@ mod tests {
             Ok(())
         }
 
-        fn reload(
-            &self,
-            _manifest: &ManifestData,
-            _runtime: &Runtime,
-        ) -> Result<(), crate::error::LoaderError> {
-            Err(crate::error::LoaderError::HotReloadUnsupported {
+        fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
+            Err(LoaderError::HotReloadUnsupported {
                 loader_name: self.loader_name().to_owned(),
             })
         }
@@ -3576,16 +3523,16 @@ mod tests {
     }
 
     struct LazyLoader {
-        state: Arc<std::sync::Mutex<LazyState>>,
+        state: Arc<Mutex<LazyState>>,
     }
 
-    impl crate::loader::BundleLoader for LazyLoader {
+    impl BundleLoader for LazyLoader {
         fn loader_name(&self) -> &'static str {
             "lazy"
         }
 
-        fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
-            polyplug_abi::SupportedLanguage::Rust
+        fn loader_language(&self) -> SupportedLanguage {
+            SupportedLanguage::Rust
         }
 
         fn supports_hot_reload(&self) -> bool {
@@ -3595,10 +3542,10 @@ mod tests {
         fn load(
             &self,
             _manifest: &ManifestData,
-            _source: &crate::loader::BundleSource,
+            _source: &BundleSource,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::LoaderError> {
-            let mut state: std::sync::MutexGuard<'_, LazyState> = match self.state.lock() {
+        ) -> Result<(), LoaderError> {
+            let mut state: MutexGuard<'_, LazyState> = match self.state.lock() {
                 Ok(g) => g,
                 Err(e) => e.into_inner(),
             };
@@ -3608,12 +3555,8 @@ mod tests {
             Ok(())
         }
 
-        fn reload(
-            &self,
-            _manifest: &ManifestData,
-            _runtime: &Runtime,
-        ) -> Result<(), crate::error::LoaderError> {
-            Err(crate::error::LoaderError::HotReloadUnsupported {
+        fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
+            Err(LoaderError::HotReloadUnsupported {
                 loader_name: self.loader_name().to_owned(),
             })
         }
@@ -3621,11 +3564,11 @@ mod tests {
 
     #[test]
     fn bundle_id_zero_escape_returns_undeclared_dependency_error() {
-        let temp: tempfile::TempDir = match tempfile::TempDir::new() {
+        let temp: TempDir = match TempDir::new() {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = polyplug_utils::guest_contract_id("trust.test", 1_u32);
+        let contract: u64 = guest_contract_id("trust.test", 1_u32);
         let bundle_name: &str = "enforce_bundle";
         let bundle_path: PathBuf = create_bundle_dir(&temp, bundle_name, "enforce");
         let runtime: Arc<Runtime> = match Runtime::builder()
@@ -3641,13 +3584,9 @@ mod tests {
         let registry: &Arc<RuntimeStore> = runtime.registry();
         let _handle: GuestContractHandle =
             register_guest_contract(registry.as_ref(), contract, 0xBEEF_u64);
-        let result: Result<(), crate::error::RuntimeError> =
-            runtime.load_bundle(bundle_path.as_path());
+        let result: Result<(), RuntimeError> = runtime.load_bundle(bundle_path.as_path());
         match result {
-            Err(RuntimeError::Loader(crate::error::LoaderError::InitFailed {
-                bundle: _,
-                error,
-            })) => {
+            Err(RuntimeError::Loader(LoaderError::InitFailed { bundle: _, error })) => {
                 assert!(error.contains("undeclared dependency"), "got: {error}");
                 assert!(error.contains("0x0"), "bundle_id zero escape: {error}");
                 assert!(
@@ -3662,12 +3601,12 @@ mod tests {
 
     #[test]
     fn tls_state_cleared_after_init_completes() {
-        let temp: tempfile::TempDir = match tempfile::TempDir::new() {
+        let temp: TempDir = match TempDir::new() {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = polyplug_utils::guest_contract_id("trust.tls", 1_u32);
-        let observed: Arc<std::sync::Mutex<Option<bool>>> = Arc::new(std::sync::Mutex::new(None));
+        let contract: u64 = guest_contract_id("trust.tls", 1_u32);
+        let observed: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
         let bundle_path: PathBuf = create_bundle_dir(&temp, "probe_bundle", "probe");
         let runtime: Arc<Runtime> = match Runtime::builder()
             .loader(ProbeLoader {
@@ -3681,8 +3620,7 @@ mod tests {
         let registry: &Arc<RuntimeStore> = runtime.registry();
         let _handle: GuestContractHandle =
             register_guest_contract(registry.as_ref(), contract, 0xCAFE_u64);
-        let result: Result<(), crate::error::RuntimeError> =
-            runtime.load_bundle(bundle_path.as_path());
+        let result: Result<(), RuntimeError> = runtime.load_bundle(bundle_path.as_path());
         if let Err(e) = result {
             panic!("load_bundle failed: {e}");
         }
@@ -3705,13 +3643,13 @@ mod tests {
 
     #[test]
     fn panic_during_init_is_caught() {
-        let temp: tempfile::TempDir = match tempfile::TempDir::new() {
+        let temp: TempDir = match TempDir::new() {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
         let _bundle_root: PathBuf = create_bundle_dir(&temp, "panic_bundle", "panic");
         let plugin_dir: PathBuf = temp.path().to_path_buf();
-        let result = std::panic::catch_unwind(|| {
+        let result = panic::catch_unwind(|| {
             let _rt: Arc<Runtime> = Runtime::builder()
                 .plugin_dir(plugin_dir)
                 .loader(PanicLoader)
@@ -3725,25 +3663,24 @@ mod tests {
 
     #[test]
     fn reentrant_load_on_same_thread_works() {
-        let temp: tempfile::TempDir = match tempfile::TempDir::new() {
+        let temp: TempDir = match TempDir::new() {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = polyplug_utils::guest_contract_id("trust.reentrant", 1_u32);
+        let contract: u64 = guest_contract_id("trust.reentrant", 1_u32);
         let outer_bundle: PathBuf = create_bundle_dir(&temp, "outer_bundle", "reentrant");
         let inner_bundle: PathBuf = create_bundle_dir(&temp, "inner_bundle", "probe");
-        let state: Arc<std::sync::Mutex<ReentrantState>> =
-            Arc::new(std::sync::Mutex::new(ReentrantState {
-                runtime_ptr: 0,
-                inner_bundle: inner_bundle.clone(),
-                inner_load_completed: None,
-            }));
+        let state: Arc<Mutex<ReentrantState>> = Arc::new(Mutex::new(ReentrantState {
+            runtime_ptr: 0,
+            inner_bundle: inner_bundle.clone(),
+            inner_load_completed: None,
+        }));
         let runtime: Arc<Runtime> = match Runtime::builder()
             .loader(ReentrantLoader {
                 state: Arc::clone(&state),
             })
             .loader(ProbeLoader {
-                observed_init: Arc::new(std::sync::Mutex::new(None)),
+                observed_init: Arc::new(Mutex::new(None)),
             })
             .build()
         {
@@ -3754,16 +3691,16 @@ mod tests {
         let _handle: GuestContractHandle =
             register_guest_contract(registry.as_ref(), contract, 0xABCD_u64);
         {
-            let mut guard: std::sync::MutexGuard<'_, ReentrantState> = match state.lock() {
+            let mut guard: MutexGuard<'_, ReentrantState> = match state.lock() {
                 Ok(g) => g,
                 Err(e) => e.into_inner(),
             };
             guard.runtime_ptr = Arc::as_ptr(&runtime) as usize;
         }
-        let result: Result<(), crate::error::RuntimeError> = runtime.load_bundle_with(
+        let result: Result<(), RuntimeError> = runtime.load_bundle_with(
             outer_bundle.as_path(),
             LoadOptions {
-                compatibility: polyplug_abi::runtime::Compatibility::default(),
+                compatibility: Compatibility::default(),
                 ignore_function_count_mismatch: false,
             },
         );
@@ -3784,14 +3721,14 @@ mod tests {
 
     #[test]
     fn lazy_load_during_init_works() {
-        let temp: tempfile::TempDir = match tempfile::TempDir::new() {
+        let temp: TempDir = match TempDir::new() {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = polyplug_utils::guest_contract_id("trust.lazy", 1_u32);
+        let contract: u64 = guest_contract_id("trust.lazy", 1_u32);
         let outer_bundle: PathBuf = create_bundle_dir(&temp, "lazy_outer", "lazy");
         let inner_bundle: PathBuf = create_bundle_dir(&temp, "lazy_inner", "probe");
-        let state: Arc<std::sync::Mutex<LazyState>> = Arc::new(std::sync::Mutex::new(LazyState {
+        let state: Arc<Mutex<LazyState>> = Arc::new(Mutex::new(LazyState {
             observed_init: None,
         }));
         let runtime: Arc<Runtime> = match Runtime::builder()
@@ -3799,7 +3736,7 @@ mod tests {
                 state: Arc::clone(&state),
             })
             .loader(ProbeLoader {
-                observed_init: Arc::new(std::sync::Mutex::new(None)),
+                observed_init: Arc::new(Mutex::new(None)),
             })
             .build()
         {
@@ -3809,8 +3746,7 @@ mod tests {
         let registry: &Arc<RuntimeStore> = runtime.registry();
         let _handle: GuestContractHandle =
             register_guest_contract(registry.as_ref(), contract, 0xFACE_u64);
-        let result: Result<(), crate::error::RuntimeError> =
-            runtime.load_bundle(outer_bundle.as_path());
+        let result: Result<(), RuntimeError> = runtime.load_bundle(outer_bundle.as_path());
         if let Err(e) = result {
             panic!("outer load failed: {e}");
         }
@@ -3823,10 +3759,10 @@ mod tests {
             Some(true),
             "init should have been observed during lazy loader init"
         );
-        let inner_result: Result<(), crate::error::RuntimeError> = runtime.load_bundle_with(
+        let inner_result: Result<(), RuntimeError> = runtime.load_bundle_with(
             inner_bundle.as_path(),
             LoadOptions {
-                compatibility: polyplug_abi::runtime::Compatibility::default(),
+                compatibility: Compatibility::default(),
                 ignore_function_count_mismatch: false,
             },
         );
@@ -3842,10 +3778,6 @@ mod tests {
         major: u32,
         minor: u32,
     ) -> &'static HostContractInterface {
-        use polyplug_abi::{
-            DispatchMechanisms, DispatchType, HostContractInstance, NativeDispatch,
-        };
-
         unsafe extern "C" fn stub_create_instance(
             _this: *const HostContractInterface,
             _args: *const (),
@@ -3857,7 +3789,7 @@ mod tests {
                 // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
                 unsafe {
                     out_instance.write(HostContractInstance {
-                        data: &raw mut DUMMY as *mut core::ffi::c_void,
+                        data: &raw mut DUMMY as *mut c_void,
                     })
                 };
             }
@@ -3870,22 +3802,22 @@ mod tests {
         }
 
         Box::leak(Box::new(HostContractInterface {
-            contract_id: polyplug_utils::HostContractId::from(contract_id),
-            contract_version: polyplug_abi::types::Version {
+            contract_id: HostContractId::from(contract_id),
+            contract_version: Version {
                 major,
                 minor,
                 patch: 0,
             },
             singleton: true,
             dispatch_type: DispatchType::Native,
-            runtime: core::ptr::null_mut(),
-            user_data: core::ptr::null_mut(),
+            runtime: ptr::null_mut(),
+            user_data: ptr::null_mut(),
             create_instance: stub_create_instance,
             destroy_instance: stub_destroy_instance,
             dispatch: DispatchMechanisms {
                 native: NativeDispatch {
                     function_count: 0,
-                    functions: core::ptr::null(),
+                    functions: ptr::null(),
                 },
             },
         }))
@@ -3897,7 +3829,7 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        let contract_id: u64 = polyplug_utils::host_contract_id("host.logger", 1);
+        let contract_id: u64 = host_contract_id("host.logger", 1);
         let interface: &'static HostContractInterface =
             create_host_contract_interface(contract_id, 1, 0);
 
@@ -3919,7 +3851,7 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        let contract_id: u64 = polyplug_utils::host_contract_id("host.logger", 1);
+        let contract_id: u64 = host_contract_id("host.logger", 1);
         let interface1: &'static HostContractInterface =
             create_host_contract_interface(contract_id, 1, 0);
         let interface2: &'static HostContractInterface =
@@ -3947,7 +3879,7 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        let contract_id: u64 = polyplug_utils::host_contract_id("host.logger", 1);
+        let contract_id: u64 = host_contract_id("host.logger", 1);
         let interface: &'static HostContractInterface =
             create_host_contract_interface(contract_id, 1, 0);
 
@@ -3981,7 +3913,7 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        let contract_id: u64 = polyplug_utils::host_contract_id("host.logger", 2);
+        let contract_id: u64 = host_contract_id("host.logger", 2);
         let interface: &'static HostContractInterface =
             create_host_contract_interface(contract_id, 2, 5);
 
@@ -4035,7 +3967,7 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        let contract_id: u64 = polyplug_utils::host_contract_id("host.test", 1);
+        let contract_id: u64 = host_contract_id("host.test", 1);
         let interface: &'static HostContractInterface =
             create_host_contract_interface(contract_id, 1, 0);
 
@@ -4045,7 +3977,7 @@ mod tests {
 
         // Create a HostApi with runtime pointer
         let host_interface: HostApi = HostApi {
-            runtime: Arc::as_ptr(&runtime) as *mut core::ffi::c_void,
+            runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
             alloc: host_alloc,
             free: host_free,
@@ -4056,7 +3988,6 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
-            // Host operations (implemented in 18-02)
             load_bundle: host_load_bundle,
             reload_bundle: host_reload_bundle,
             register_host_contract: host_register_host_contract,
@@ -4068,7 +3999,7 @@ mod tests {
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
             revision_counter: host_revision_counter,
-            reserved: core::ptr::null(),
+            reserved: ptr::null(),
         };
 
         // SAFETY: host_interface is valid with runtime pointer, runtime is live
@@ -4086,11 +4017,11 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        let contract_id: u64 = polyplug_utils::host_contract_id("host.nonexistent", 1);
+        let contract_id: u64 = host_contract_id("host.nonexistent", 1);
 
         // Create a HostApi with runtime pointer
         let host_interface: HostApi = HostApi {
-            runtime: Arc::as_ptr(&runtime) as *mut core::ffi::c_void,
+            runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
             alloc: host_alloc,
             free: host_free,
@@ -4101,7 +4032,6 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
-            // Host operations (implemented in 18-02)
             load_bundle: host_load_bundle,
             reload_bundle: host_reload_bundle,
             register_host_contract: host_register_host_contract,
@@ -4113,7 +4043,7 @@ mod tests {
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
             revision_counter: host_revision_counter,
-            reserved: core::ptr::null(),
+            reserved: ptr::null(),
         };
 
         // SAFETY: host_interface is valid with runtime pointer, runtime is live
@@ -4130,7 +4060,7 @@ mod tests {
     // Create instance callback that returns a unique "magic" pointer per call.
     // Uses a thread-local counter to ensure unique values per call within a test.
     std::thread_local! {
-        static LOCAL_INSTANCE_COUNTER: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        static LOCAL_INSTANCE_COUNTER: Cell<usize> = const { Cell::new(0) };
     }
 
     /// Create instance callback that returns a unique instance per call.
@@ -4146,7 +4076,7 @@ mod tests {
             // Use the count as a "unique" pointer value - we don't actually allocate
             // since these are just test instances
             HostContractInstance {
-                data: (count + 1) as *mut core::ffi::c_void, // +1 to avoid null for count=0
+                data: (count + 1) as *mut c_void, // +1 to avoid null for count=0
             }
         });
         if !out_instance.is_null() {
@@ -4169,25 +4099,23 @@ mod tests {
         major: u32,
         singleton: bool,
     ) -> &'static HostContractInterface {
-        use polyplug_abi::{DispatchMechanisms, DispatchType, NativeDispatch};
-
         Box::leak(Box::new(HostContractInterface {
-            contract_id: polyplug_utils::HostContractId::from(contract_id),
-            contract_version: polyplug_abi::types::Version {
+            contract_id: HostContractId::from(contract_id),
+            contract_version: Version {
                 major,
                 minor: 0,
                 patch: 0,
             },
             singleton,
             dispatch_type: DispatchType::Native,
-            runtime: core::ptr::null_mut(),
-            user_data: core::ptr::null_mut(),
+            runtime: ptr::null_mut(),
+            user_data: ptr::null_mut(),
             create_instance: counting_create_instance,
             destroy_instance: counting_destroy_instance,
             dispatch: DispatchMechanisms {
                 native: NativeDispatch {
                     function_count: 0,
-                    functions: core::ptr::null(),
+                    functions: ptr::null(),
                 },
             },
         }))
@@ -4202,7 +4130,7 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        let contract_id: u64 = polyplug_utils::host_contract_id("singleton.test", 1);
+        let contract_id: u64 = host_contract_id("singleton.test", 1);
         let interface: &'static HostContractInterface =
             create_counting_host_contract_interface(contract_id, 1, true); // singleton=true
 
@@ -4212,7 +4140,7 @@ mod tests {
 
         // Create a HostApi with runtime pointer
         let host_interface: HostApi = HostApi {
-            runtime: Arc::as_ptr(&runtime) as *mut core::ffi::c_void,
+            runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
             alloc: host_alloc,
             free: host_free,
@@ -4223,7 +4151,6 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
-            // Host operations (implemented in 18-02)
             load_bundle: host_load_bundle,
             reload_bundle: host_reload_bundle,
             register_host_contract: host_register_host_contract,
@@ -4235,7 +4162,7 @@ mod tests {
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
             revision_counter: host_revision_counter,
-            reserved: core::ptr::null(),
+            reserved: ptr::null(),
         };
 
         // First call - creates instance
@@ -4293,7 +4220,7 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        let contract_id: u64 = polyplug_utils::host_contract_id("multi.test", 1);
+        let contract_id: u64 = host_contract_id("multi.test", 1);
         let interface: &'static HostContractInterface =
             create_counting_host_contract_interface(contract_id, 1, false); // singleton=false
 
@@ -4303,7 +4230,7 @@ mod tests {
 
         // Create a HostApi with runtime pointer
         let host_interface: HostApi = HostApi {
-            runtime: Arc::as_ptr(&runtime) as *mut core::ffi::c_void,
+            runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
             alloc: host_alloc,
             free: host_free,
@@ -4314,7 +4241,6 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
-            // Host operations (implemented in 18-02)
             load_bundle: host_load_bundle,
             reload_bundle: host_reload_bundle,
             register_host_contract: host_register_host_contract,
@@ -4326,7 +4252,7 @@ mod tests {
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
             revision_counter: host_revision_counter,
-            reserved: core::ptr::null(),
+            reserved: ptr::null(),
         };
 
         // First call - creates instance (counter becomes 101)
@@ -4388,8 +4314,8 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        let singleton_id: u64 = polyplug_utils::host_contract_id("singleton.mixed", 1);
-        let multi_id: u64 = polyplug_utils::host_contract_id("multi.mixed", 1);
+        let singleton_id: u64 = host_contract_id("singleton.mixed", 1);
+        let multi_id: u64 = host_contract_id("multi.mixed", 1);
 
         let singleton_interface: &'static HostContractInterface =
             create_counting_host_contract_interface(singleton_id, 1, true);
@@ -4405,7 +4331,7 @@ mod tests {
 
         // Create a HostApi with runtime pointer
         let host_interface: HostApi = HostApi {
-            runtime: Arc::as_ptr(&runtime) as *mut core::ffi::c_void,
+            runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
             alloc: host_alloc,
             free: host_free,
@@ -4416,7 +4342,6 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
-            // Host operations (implemented in 18-02)
             load_bundle: host_load_bundle,
             reload_bundle: host_reload_bundle,
             register_host_contract: host_register_host_contract,
@@ -4428,7 +4353,7 @@ mod tests {
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
             revision_counter: host_revision_counter,
-            reserved: core::ptr::null(),
+            reserved: ptr::null(),
         };
 
         // Call singleton twice - should get same instance

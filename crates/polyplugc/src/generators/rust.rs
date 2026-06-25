@@ -11,6 +11,9 @@ use super::GeneratedFiles;
 use super::collect_peer_contracts;
 use super::is_native_runtime;
 use super::peer_min_version;
+use std::collections::HashSet;
+use std::path::PathBuf;
+
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -120,7 +123,7 @@ impl CodeGenerator for RustGenerator {
         types_out.push('\n');
 
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("host/types.rs"),
+            path: PathBuf::from("host/types.rs"),
             content: types_out,
             force_regenerate: false,
         });
@@ -169,7 +172,7 @@ impl CodeGenerator for RustGenerator {
         }
 
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("host/host_callers.rs"),
+            path: PathBuf::from("host/host_callers.rs"),
             content: callers_out,
             force_regenerate: false,
         });
@@ -178,7 +181,7 @@ impl CodeGenerator for RustGenerator {
         if !ir.host_contracts.is_empty() {
             let host_contracts_out: String = generate_host_contracts_file(ir);
             files.files.push(GeneratedFile {
-                path: std::path::PathBuf::from("host/host_contracts.rs"),
+                path: PathBuf::from("host/host_contracts.rs"),
                 content: host_contracts_out,
                 force_regenerate: false,
             });
@@ -188,7 +191,7 @@ impl CodeGenerator for RustGenerator {
         if !ir.host_contracts.is_empty() {
             let interface_factories_out: String = generate_host_interface_factories_file(ir);
             files.files.push(GeneratedFile {
-                path: std::path::PathBuf::from("host/interface_factories.rs"),
+                path: PathBuf::from("host/interface_factories.rs"),
                 content: interface_factories_out,
                 force_regenerate: false,
             });
@@ -204,7 +207,7 @@ impl CodeGenerator for RustGenerator {
             host_mod_content.push_str("pub mod interface_factories;\n");
         }
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("host/mod.rs"),
+            path: PathBuf::from("host/mod.rs"),
             content: host_mod_content,
             force_regenerate: true,
         });
@@ -214,7 +217,7 @@ impl CodeGenerator for RustGenerator {
         root_mod_content.push_str(RUST_FILE_HEADER);
         root_mod_content.push_str("pub mod host;\n");
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("mod.rs"),
+            path: PathBuf::from("mod.rs"),
             content: root_mod_content,
             force_regenerate: true,
         });
@@ -230,7 +233,7 @@ impl CodeGenerator for RustGenerator {
         .concat();
 
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("manifest.toml"),
+            path: PathBuf::from("manifest.toml"),
             content: manifest_content,
             force_regenerate: true,
         });
@@ -279,7 +282,7 @@ impl CodeGenerator for RustGenerator {
         }
 
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("guest/types.rs"),
+            path: PathBuf::from("guest/types.rs"),
             content: types_out,
             force_regenerate: false,
         });
@@ -296,7 +299,7 @@ impl CodeGenerator for RustGenerator {
         }
 
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("guest/contracts.rs"),
+            path: PathBuf::from("guest/contracts.rs"),
             content: contracts_out,
             force_regenerate: false,
         });
@@ -307,7 +310,7 @@ impl CodeGenerator for RustGenerator {
         generate_guest_interfaces_file(&mut interfaces_out, ir)?;
 
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("guest/interfaces.rs"),
+            path: PathBuf::from("guest/interfaces.rs"),
             content: interfaces_out,
             force_regenerate: false,
         });
@@ -318,7 +321,7 @@ impl CodeGenerator for RustGenerator {
         generate_guest_init_file(&mut init_out, ir);
 
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("guest/init.rs"),
+            path: PathBuf::from("guest/init.rs"),
             content: init_out,
             force_regenerate: false,
         });
@@ -327,7 +330,7 @@ impl CodeGenerator for RustGenerator {
         if !ir.host_contracts.is_empty() {
             let host_contract_callers_out: String = generate_guest_host_contracts_file(ir);
             files.files.push(GeneratedFile {
-                path: std::path::PathBuf::from("guest/host_contract_callers.rs"),
+                path: PathBuf::from("guest/host_contract_callers.rs"),
                 content: host_contract_callers_out,
                 force_regenerate: false,
             });
@@ -338,7 +341,7 @@ impl CodeGenerator for RustGenerator {
         if !peer_contracts.is_empty() {
             let peer_callers_out: String = generate_peer_callers_file(ir, &peer_contracts);
             files.files.push(GeneratedFile {
-                path: std::path::PathBuf::from("guest/peer_callers.rs"),
+                path: PathBuf::from("guest/peer_callers.rs"),
                 content: peer_callers_out,
                 force_regenerate: false,
             });
@@ -347,7 +350,7 @@ impl CodeGenerator for RustGenerator {
         // ── guest/mod.rs ────────────────────────────────────────────────────────
         let guest_mod_content: String = generate_guest_mod_rs(ir);
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("guest/mod.rs"),
+            path: PathBuf::from("guest/mod.rs"),
             content: guest_mod_content,
             force_regenerate: true,
         });
@@ -356,7 +359,7 @@ impl CodeGenerator for RustGenerator {
         if ir.bundle.is_some() {
             let manifest_content: String = generate_bundle_manifest(ir);
             files.files.push(GeneratedFile {
-                path: std::path::PathBuf::from("manifest.toml"),
+                path: PathBuf::from("manifest.toml"),
                 content: manifest_content,
                 force_regenerate: true,
             });
@@ -421,7 +424,7 @@ fn generate_bundle_manifest(ir: &ValidatedIr) -> String {
 
     // Build function_count inline table: only for contracts this bundle PROVIDES
     // Contract names use @major format only (never @major.minor)
-    let provides_set: std::collections::HashSet<String> = provides
+    let provides_set: HashSet<String> = provides
         .iter()
         .map(|s: &String| {
             if let Some(at_pos) = s.find('@') {
@@ -3866,6 +3869,8 @@ mod tests {
     use super::*;
     use crate::ir::ReprType;
     use crate::ir::Version;
+    use polyplug_codegen::ResolvedBundleFile;
+    use std::path::Path;
 
     #[test]
     fn contract_name_to_struct_conversion() {
@@ -4878,7 +4883,7 @@ mod tests {
                     patch: 0,
                 },
                 loader: "native".to_owned(),
-                file: polyplug_codegen::ResolvedBundleFile::Single("test.so".to_owned()),
+                file: ResolvedBundleFile::Single("test.so".to_owned()),
                 plugins: vec![ResolvedPlugin {
                     name: "test_plugin".to_owned(),
                     implements: vec!["pipeline.encoder".to_owned()],
@@ -4903,7 +4908,7 @@ mod tests {
         let peer_file: Option<&GeneratedFile> = files
             .files
             .iter()
-            .find(|f: &&GeneratedFile| f.path == std::path::Path::new("guest/peer_callers.rs"));
+            .find(|f: &&GeneratedFile| f.path == Path::new("guest/peer_callers.rs"));
         assert!(
             peer_file.is_some(),
             "guest/peer_callers.rs should be emitted"
@@ -4959,7 +4964,7 @@ mod tests {
         let mod_file: Option<&GeneratedFile> = files
             .files
             .iter()
-            .find(|f: &&GeneratedFile| f.path == std::path::Path::new("guest/mod.rs"));
+            .find(|f: &&GeneratedFile| f.path == Path::new("guest/mod.rs"));
         assert!(mod_file.is_some(), "guest/mod.rs must be emitted");
         assert!(
             mod_file
@@ -4977,16 +4982,16 @@ mod tests {
         // must never default-initialize the out-slot via `core::mem::zeroed` — a
         // zeroed invalid discriminant is instant UB. The slot must be
         // `MaybeUninit`, filled by dispatch, then `assume_init`ed only on success.
-        let status_enum: crate::ir::EnumDef = crate::ir::EnumDef {
+        let status_enum: EnumDef = EnumDef {
             name: "Status".to_owned(),
-            repr: crate::ir::ReprType::U32,
+            repr: ReprType::U32,
             bitflag: false,
             variants: vec![
-                crate::ir::EnumVariant {
+                EnumVariant {
                     name: "Active".to_owned(),
                     value: "1".to_owned(),
                 },
-                crate::ir::EnumVariant {
+                EnumVariant {
                     name: "Inactive".to_owned(),
                     value: "2".to_owned(),
                 },
@@ -4996,7 +5001,7 @@ mod tests {
         let decoder: ResolvedContract = ResolvedContract {
             name: "pipeline.decoder".to_owned(),
             contract_id: 0x1111_2222_3333_4444_u64,
-            version: crate::ir::Version {
+            version: Version {
                 major: 2,
                 minor: 0,
                 patch: 0,
@@ -5017,22 +5022,22 @@ mod tests {
             enums: vec![status_enum],
             contracts: vec![decoder],
             host_contracts: vec![],
-            bundle: Some(crate::ir::ResolvedBundle {
+            bundle: Some(ResolvedBundle {
                 name: "test.bundle".to_owned(),
-                version: crate::ir::Version {
+                version: Version {
                     major: 1,
                     minor: 0,
                     patch: 0,
                 },
                 loader: "native".to_owned(),
-                file: polyplug_codegen::ResolvedBundleFile::Single("test.so".to_owned()),
-                plugins: vec![crate::ir::ResolvedPlugin {
+                file: ResolvedBundleFile::Single("test.so".to_owned()),
+                plugins: vec![ResolvedPlugin {
                     name: "test_plugin".to_owned(),
                     implements: vec![],
                     optional: vec![],
                 }],
                 bundle_id: 0xDEAD_BEEF_CAFE_BABE_u64,
-                dependencies: vec![crate::ir::ResolvedDependency::ByContract {
+                dependencies: vec![ResolvedDependency::ByContract {
                     contract: "pipeline.decoder".to_owned(),
                     contract_id: 0x1111_2222_3333_4444_u64,
                     min_version: 2,
@@ -5050,7 +5055,7 @@ mod tests {
         let content: &str = &files
             .files
             .iter()
-            .find(|f: &&GeneratedFile| f.path == std::path::Path::new("guest/peer_callers.rs"))
+            .find(|f: &&GeneratedFile| f.path == Path::new("guest/peer_callers.rs"))
             .expect("peer_callers.rs should be emitted")
             .content;
 
@@ -5106,7 +5111,7 @@ mod tests {
         let mod_content: String = files
             .files
             .iter()
-            .find(|f: &&GeneratedFile| f.path == std::path::Path::new("guest/mod.rs"))
+            .find(|f: &&GeneratedFile| f.path == Path::new("guest/mod.rs"))
             .map(|f: &GeneratedFile| f.content.clone())
             .unwrap_or_default();
         assert!(

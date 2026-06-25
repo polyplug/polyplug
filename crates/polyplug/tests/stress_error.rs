@@ -10,9 +10,24 @@ use libloading::os::unix::Library as UnixLibrary;
 use libloading::os::unix::RTLD_GLOBAL;
 #[cfg(unix)]
 use libloading::os::unix::RTLD_LAZY;
+use libloading::{Library, Symbol};
+
+use core::cell::Ref;
+use core::cell::RefCell;
+use core::ffi::c_void;
+use core::mem::forget;
+use core::mem::transmute;
+use core::ptr::null;
+use core::ptr::null_mut;
+use core::slice::from_raw_parts;
+use core::str::from_utf8_unchecked;
 
 use polyplug::runtime_store::RuntimeStore;
+use polyplug_abi::Array;
+use polyplug_abi::DependencyInfo;
 use polyplug_abi::GuestContractInstance;
+use polyplug_abi::HostContractInstance;
+use polyplug_abi::HostContractInterface;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::tracking::TrackingAllocator;
@@ -47,9 +62,8 @@ struct ChainArgs {
 
 // --- Thread-local registry ---------------------------------------------------
 
-std::thread_local! {
-    static ERROR_REGISTRY: core::cell::RefCell<RuntimeStore> =
-        core::cell::RefCell::new(RuntimeStore::new());
+thread_local! {
+    static ERROR_REGISTRY: RefCell<RuntimeStore> = RefCell::new(RuntimeStore::new());
 }
 
 // --- HostApi callbacks (for Test 3 chain dispatch) -----------------------
@@ -64,7 +78,7 @@ unsafe extern "C" fn chain_find_guest_contract(
     _min_version: u32,
 ) -> GuestContractHandle {
     ERROR_REGISTRY.with(|cell| {
-        let registry: core::cell::Ref<'_, RuntimeStore> = cell.borrow();
+        let registry: Ref<'_, RuntimeStore> = cell.borrow();
         match registry.find(GuestContractId::from_u64(contract_id), 0) {
             Ok(handle) => handle,
             Err(_) => GuestContractHandle::null(),
@@ -80,8 +94,8 @@ unsafe extern "C" fn chain_find_all_guest_contracts(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::Array<GuestContractHandle> {
-    polyplug_abi::Array::empty()
+) -> Array<GuestContractHandle> {
+    Array::empty()
 }
 
 /// resolve_guest_contract that dispatches through the thread-local ERROR_REGISTRY.
@@ -93,10 +107,8 @@ unsafe extern "C" fn chain_resolve_guest_contract(
     handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     ERROR_REGISTRY.with(|cell| {
-        let registry: core::cell::Ref<'_, RuntimeStore> = cell.borrow();
-        registry
-            .resolve_guest_contract(handle)
-            .unwrap_or(core::ptr::null())
+        let registry: Ref<'_, RuntimeStore> = cell.borrow();
+        registry.resolve_guest_contract(handle).unwrap_or(null())
     })
 }
 
@@ -105,8 +117,8 @@ unsafe extern "C" fn stub_get_host_contract(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::HostContractInstance {
-    polyplug_abi::HostContractInstance::null()
+) -> HostContractInstance {
+    HostContractInstance::null()
 }
 
 /// Stub resolve_host_contract_interface -- returns null.
@@ -114,8 +126,8 @@ unsafe extern "C" fn stub_resolve_host_contract_interface(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractInterface {
-    core::ptr::null()
+) -> *const HostContractInterface {
+    null()
 }
 
 /// Stub alloc callback.
@@ -143,8 +155,8 @@ unsafe extern "C" fn noop_find_all_guest_contracts(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::Array<GuestContractHandle> {
-    polyplug_abi::Array::empty()
+) -> Array<GuestContractHandle> {
+    Array::empty()
 }
 
 /// No-op resolve_guest_contract callback.
@@ -152,7 +164,7 @@ unsafe extern "C" fn noop_resolve_guest_contract(
     _this: *const HostApi,
     _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
-    core::ptr::null()
+    null()
 }
 
 /// No-op get_host_contract callback.
@@ -160,22 +172,18 @@ unsafe extern "C" fn noop_get_host_contract(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::HostContractInstance {
-    polyplug_abi::HostContractInstance::null()
+) -> HostContractInstance {
+    HostContractInstance::null()
 }
 
 /// No-op list_bundles callback.
-unsafe extern "C" fn noop_list_bundles(
-    _this: *const HostApi,
-) -> polyplug_abi::Array<polyplug_utils::BundleId> {
-    polyplug_abi::Array::empty()
+unsafe extern "C" fn noop_list_bundles(_this: *const HostApi) -> Array<BundleId> {
+    Array::empty()
 }
 
 /// No-op get_dependencies callback.
-unsafe extern "C" fn noop_get_dependencies(
-    _this: *const HostApi,
-) -> polyplug_abi::Array<polyplug_abi::DependencyInfo> {
-    polyplug_abi::Array::empty()
+unsafe extern "C" fn noop_get_dependencies(_this: *const HostApi) -> Array<DependencyInfo> {
+    Array::empty()
 }
 
 /// No-op resolve_host_contract_interface callback.
@@ -183,8 +191,8 @@ unsafe extern "C" fn noop_resolve_host_contract_interface(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractInterface {
-    core::ptr::null()
+) -> *const HostContractInterface {
+    null()
 }
 
 /// No-op load_bundle callback.
@@ -216,7 +224,7 @@ unsafe extern "C" fn noop_reload_bundle(
 /// No-op register_host_contract callback.
 unsafe extern "C" fn noop_register_host_contract(
     _this: *const HostApi,
-    _interface: *const polyplug_abi::HostContractInterface,
+    _interface: *const HostContractInterface,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -228,7 +236,7 @@ unsafe extern "C" fn noop_register_host_contract(
 /// No-op register_loader callback.
 unsafe extern "C" fn noop_register_loader(
     _this: *const HostApi,
-    _loader_ptr: *mut core::ffi::c_void,
+    _loader_ptr: *mut c_void,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -296,14 +304,13 @@ unsafe extern "C" fn registry_register_callback(
     // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
     // &'static str contract name -- guaranteed valid UTF-8 by construction.
     let contract_name: &str = unsafe {
-        let bytes: &[u8] =
-            core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
-        core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
+        let bytes: &[u8] = from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
+        from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
 
     // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
     let result: Result<GuestContractHandle, _> = ERROR_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, RuntimeStore> = reg_cell.borrow();
+        let registry: Ref<'_, RuntimeStore> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
         unsafe {
             registry.register_guest_contract(
@@ -334,7 +341,7 @@ unsafe extern "C" fn registry_register_callback(
 /// Build a HostApi with all callbacks.
 fn make_host_interface() -> HostApi {
     HostApi {
-        runtime: core::ptr::null_mut(),
+        runtime: null_mut(),
         register_guest_contract: registry_register_callback,
         alloc: stub_alloc,
         free: stub_free,
@@ -356,7 +363,7 @@ fn make_host_interface() -> HostApi {
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
         revision_counter: stub_revision_counter,
-        reserved: core::ptr::null(),
+        reserved: null(),
     }
 }
 
@@ -364,7 +371,7 @@ fn make_host_interface() -> HostApi {
 
 /// Loads the error_plugin shared library with RTLD_GLOBAL so that the plugin can
 /// resolve `polyplug_host_alloc` and `polyplug_host_free` from the host binary.
-fn load_error_plugin() -> libloading::Library {
+fn load_error_plugin() -> Library {
     #[cfg(unix)]
     {
         // SAFETY: ERROR_PLUGIN_SO is a compiled cdylib built by build.rs.
@@ -374,28 +381,26 @@ fn load_error_plugin() -> libloading::Library {
             UnixLibrary::open(Some(ERROR_PLUGIN_SO), RTLD_LAZY | RTLD_GLOBAL)
                 .expect("failed to load error_plugin .so")
         };
-        // UnixLibrary converts to libloading::Library via From<imp::Library>.
-        libloading::Library::from(raw)
+        // UnixLibrary converts to Library via From<imp::Library>.
+        Library::from(raw)
     }
     #[cfg(not(unix))]
     {
         // SAFETY: ERROR_PLUGIN_SO is a compiled cdylib built by build.rs.
-        unsafe {
-            libloading::Library::new(ERROR_PLUGIN_SO).expect("failed to load error_plugin .so")
-        }
+        unsafe { Library::new(ERROR_PLUGIN_SO).expect("failed to load error_plugin .so") }
     }
 }
 
 /// Initialise error_plugin and return the interface pointer.
 /// Also resets the thread-local registry.
-fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInterface {
+fn init_error_plugin(library: &Library) -> *const GuestContractInterface {
     // Reset registry before each use.
     ERROR_REGISTRY.with(|cell| {
         *cell.borrow_mut() = RuntimeStore::new();
     });
 
     // SAFETY: polyplug_init matches the expected ABI signature (2-arg).
-    let init_fn: libloading::Symbol<
+    let init_fn: Symbol<
         '_,
         unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe {
@@ -443,7 +448,7 @@ fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInter
 /// to the out pointer, and the message must be freed after reading.
 #[test]
 fn stress_error_code_and_message_received_correctly() {
-    let library: libloading::Library = load_error_plugin();
+    let library: Library = load_error_plugin();
     let interface_ptr: *const GuestContractInterface = init_error_plugin(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
@@ -458,7 +463,7 @@ fn stress_error_code_and_message_received_correctly() {
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { core::mem::transmute(fn_ptr) };
+    ) = unsafe { transmute(fn_ptr) };
 
     let host_interface: HostApi = make_host_interface();
     let message_args: MessageArgs = MessageArgs {
@@ -499,7 +504,7 @@ fn stress_error_code_and_message_received_correctly() {
     // Read the message bytes.
     // SAFETY: out.message.ptr is valid for out.message.len bytes, allocated by error_plugin
     // via polyplug_host_alloc(22, 1). The memory remains valid until we free it.
-    let msg_bytes: &[u8] = unsafe { core::slice::from_raw_parts(out.message.ptr, out.message.len) };
+    let msg_bytes: &[u8] = unsafe { from_raw_parts(out.message.ptr, out.message.len) };
     assert_eq!(msg_bytes, b"test error from plugin", "message must match");
 
     // Free the message: caller owns the allocation per error_plugin ABI contract.
@@ -514,14 +519,14 @@ fn stress_error_code_and_message_received_correctly() {
     let tracker: TrackingAllocator = TrackingAllocator::new();
     tracker.assert_no_leaks();
 
-    core::mem::forget(library);
+    forget(library);
 }
 
 /// Test 2: error_panic catches an intentional panic and returns Panic (code=3).
 /// The message is from_static -- must NOT be freed. Process continues after the call.
 #[test]
 fn stress_panic_returns_abi_error_panic_process_continues() {
-    let library: libloading::Library = load_error_plugin();
+    let library: Library = load_error_plugin();
     let interface_ptr: *const GuestContractInterface = init_error_plugin(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
@@ -536,7 +541,7 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { core::mem::transmute(fn_ptr) };
+    ) = unsafe { transmute(fn_ptr) };
 
     // fn 1 returns the AbiError via out_err. Both args and out are null.
     let mut result: AbiError = AbiError::ok();
@@ -544,8 +549,8 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
     unsafe {
         dispatch_fn(
             GuestContractInstance::null(),
-            core::ptr::null(),
-            core::ptr::null_mut(),
+            null(),
+            null_mut(),
             &mut result,
         )
     };
@@ -559,8 +564,7 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
 
     // The message is from_static ("plugin panicked") -- do NOT free it.
     // SAFETY: result.message.ptr points to 'static bytes that remain valid indefinitely.
-    let msg_bytes: &[u8] =
-        unsafe { core::slice::from_raw_parts(result.message.ptr, result.message.len) };
+    let msg_bytes: &[u8] = unsafe { from_raw_parts(result.message.ptr, result.message.len) };
     assert_eq!(
         msg_bytes, b"plugin panicked",
         "panic message must be 'plugin panicked'"
@@ -569,7 +573,7 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
     let tracker: TrackingAllocator = TrackingAllocator::new();
     tracker.assert_no_leaks();
 
-    core::mem::forget(library);
+    forget(library);
 }
 
 /// Test 3: error_chain_propagate (fn 2) calls another plugin via a real HostApi
@@ -578,7 +582,7 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
 /// The propagated error code is written to *out by error_chain_propagate.
 #[test]
 fn stress_error_chain_b_errors_a_propagates() {
-    let library: libloading::Library = load_error_plugin();
+    let library: Library = load_error_plugin();
     let interface_ptr: *const GuestContractInterface = init_error_plugin(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
@@ -587,7 +591,7 @@ fn stress_error_chain_b_errors_a_propagates() {
     // Build a HostApi that routes find_guest_contract and resolve_guest_contract through the
     // thread-local ERROR_REGISTRY that contains error_plugin's interface.
     let chain_host_interface: HostApi = HostApi {
-        runtime: core::ptr::null_mut(),
+        runtime: null_mut(),
         register_guest_contract: registry_register_callback,
         alloc: stub_alloc,
         free: stub_free,
@@ -609,7 +613,7 @@ fn stress_error_chain_b_errors_a_propagates() {
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
         revision_counter: stub_revision_counter,
-        reserved: core::ptr::null(),
+        reserved: null(),
     };
 
     // error.test contract_id is FNV-1a("error.test@1").
@@ -638,7 +642,7 @@ fn stress_error_chain_b_errors_a_propagates() {
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { core::mem::transmute(fn_ptr) };
+    ) = unsafe { transmute(fn_ptr) };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: chain_args is a valid ChainArgs with a live HostApi.
@@ -674,7 +678,7 @@ fn stress_error_chain_b_errors_a_propagates() {
     let tracker: TrackingAllocator = TrackingAllocator::new();
     tracker.assert_no_leaks();
 
-    core::mem::forget(library);
+    forget(library);
 }
 
 /// Test 4: error_return_with_message (fn 0) produces a StringView message that remains
@@ -682,7 +686,7 @@ fn stress_error_chain_b_errors_a_propagates() {
 /// then free after all reads complete.
 #[test]
 fn stress_error_message_lifetime_valid_during_read() {
-    let library: libloading::Library = load_error_plugin();
+    let library: Library = load_error_plugin();
     let interface_ptr: *const GuestContractInterface = init_error_plugin(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
@@ -697,7 +701,7 @@ fn stress_error_message_lifetime_valid_during_read() {
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { core::mem::transmute(fn_ptr) };
+    ) = unsafe { transmute(fn_ptr) };
 
     let host_interface: HostApi = make_host_interface();
     let message_args: MessageArgs = MessageArgs {
@@ -738,7 +742,7 @@ fn stress_error_message_lifetime_valid_during_read() {
         // SAFETY: out.message.ptr is valid for out.message.len bytes.
         // The allocation was made by error_plugin via polyplug_host_alloc(22, 1)
         // and remains valid until we explicitly free it below.
-        let bytes: &[u8] = unsafe { core::slice::from_raw_parts(out.message.ptr, out.message.len) };
+        let bytes: &[u8] = unsafe { from_raw_parts(out.message.ptr, out.message.len) };
         assert_eq!(
             bytes, b"test error from plugin",
             "message must remain stable across 1000 reads"
@@ -756,37 +760,37 @@ fn stress_error_message_lifetime_valid_during_read() {
     let tracker: TrackingAllocator = TrackingAllocator::new();
     tracker.assert_no_leaks();
 
-    core::mem::forget(library);
+    forget(library);
 }
 
 /// `HostApi.log` stub for test hosts — drops the record.
 unsafe extern "C" fn stub_host_log(
-    _this: *const polyplug_abi::HostApi,
+    _this: *const HostApi,
     _level: u32,
-    _scope: polyplug_abi::StringView,
-    _message: polyplug_abi::StringView,
+    _scope: StringView,
+    _message: StringView,
 ) {
 }
 
 unsafe extern "C" fn stub_create_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _args: *const core::ffi::c_void,
-    out_instance: *mut polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _args: *const c_void,
+    out_instance: *mut GuestContractInstance,
 ) {
     if !out_instance.is_null() {
         // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+        unsafe { out_instance.write(GuestContractInstance::null()) };
     }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _instance: polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _instance: GuestContractInstance,
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const polyplug_abi::HostApi) -> *const u64 {
-    core::ptr::null()
+unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
+    null()
 }

@@ -20,14 +20,22 @@
 //! step the reload driver runs after a bundle re-initializes;
 //! `swap_guest_contract_interface` is its single-slot, publicly reachable equivalent.
 
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::hint::spin_loop;
+use core::mem::transmute;
+use core::ptr::{fn_addr_eq, null};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use core::time::Duration;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
+use std::thread::JoinHandle;
 
+use crossbeam_epoch::{Guard, pin as epoch_pin};
+
+use polyplug::error::{RegistryError, RuntimeError};
 use polyplug::runtime::Runtime;
 use polyplug::runtime_store::RuntimeStore;
+use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::{
     DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInstance,
     GuestContractInterface, HostApi, NativeDispatch, PluginDescriptor, StringView, Version,
@@ -50,7 +58,7 @@ const MOCK_FNS: [*const (); 0] = [];
 /// `create_instance` for the pre-reload interface. Returns a tagged instance so
 /// readers can distinguish which interface version they resolved.
 unsafe extern "C" fn create_instance_v1(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -64,7 +72,7 @@ unsafe extern "C" fn create_instance_v1(
 /// `create_instance` for the reloaded interface — a distinct function pointer so
 /// callers can confirm the swap took effect.
 unsafe extern "C" fn create_instance_v2(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -76,7 +84,7 @@ unsafe extern "C" fn create_instance_v2(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
@@ -155,7 +163,7 @@ fn dispatch_concurrent_with_reload_is_safe() {
                         // interface stays alive across the deref while the swapper thread
                         // republishes concurrently — true unload epoch-reclaims the
                         // superseded interface only after every pinned reader unpins.
-                        let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+                        let _epoch_guard: Guard = epoch_pin();
                         let resolved: GuestContractHandle = registry_ref
                             .find_guest_contract(contract_id, 0)
                             .expect("contract must always resolve during reload");
@@ -171,18 +179,13 @@ fn dispatch_concurrent_with_reload_is_safe() {
                         // concurrently on another thread.
                         unsafe {
                             let create_fn: unsafe extern "C" fn(
-                                polyplug_abi::dispatch::VmLoaderData,
+                                VmLoaderData,
                                 *const HostApi,
                                 *const (),
                                 *mut GuestContractInstance,
                             ) = (*interface_ptr).create_instance;
                             let mut instance: GuestContractInstance = GuestContractInstance::null();
-                            create_fn(
-                                polyplug_abi::dispatch::VmLoaderData::null(),
-                                core::ptr::null(),
-                                core::ptr::null(),
-                                &mut instance,
-                            );
+                            create_fn(VmLoaderData::null(), null(), null(), &mut instance);
                             assert!(instance.is_null(), "mock create_instance returns null");
                         }
 
@@ -197,7 +200,7 @@ fn dispatch_concurrent_with_reload_is_safe() {
         // Wait until readers are actively dispatching before swapping the slot,
         // so the swap genuinely races in-flight resolves.
         while dispatch_count.load(Ordering::Relaxed) < 1_000 {
-            core::hint::spin_loop();
+            spin_loop();
         }
 
         let new_interface: Arc<GuestContractInterface> = Arc::new(INTERFACE_V2);
@@ -232,19 +235,19 @@ fn dispatch_concurrent_with_reload_is_safe() {
     // SAFETY: same retained slot interface; reading the function pointer field is
     // a plain pointer comparison against the known reloaded callback.
     let create_after: unsafe extern "C" fn(
-        polyplug_abi::dispatch::VmLoaderData,
+        VmLoaderData,
         *const HostApi,
         *const (),
         *mut GuestContractInstance,
     ) = unsafe { (*interface_after).create_instance };
     let expected_create: unsafe extern "C" fn(
-        polyplug_abi::dispatch::VmLoaderData,
+        VmLoaderData,
         *const HostApi,
         *const (),
         *mut GuestContractInstance,
     ) = create_instance_v2;
     assert!(
-        core::ptr::fn_addr_eq(create_after, expected_create),
+        fn_addr_eq(create_after, expected_create),
         "reloaded interface must expose the v2 create_instance pointer"
     );
 }
@@ -289,7 +292,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
     };
 
     // SAFETY: INTERFACE_QU_A is 'static and valid for the test lifetime.
-    let handle: polyplug_abi::GuestContractHandle = unsafe {
+    let handle: GuestContractHandle = unsafe {
         registry
             .register_guest_contract(
                 descriptor,
@@ -300,34 +303,29 @@ fn stress_direct_swap_under_concurrent_reader_load() {
             .expect("register must succeed")
     };
 
-    let stop_flag: Arc<core::sync::atomic::AtomicBool> =
-        Arc::new(core::sync::atomic::AtomicBool::new(false));
+    let stop_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
-    let mut reader_handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(READER_THREADS);
+    let mut reader_handles: Vec<JoinHandle<()>> = Vec::with_capacity(READER_THREADS);
 
     for _thread_idx in 0_usize..READER_THREADS {
         let reg_clone: Arc<RuntimeStore> = Arc::clone(&registry);
-        let stop_clone: Arc<core::sync::atomic::AtomicBool> = Arc::clone(&stop_flag);
+        let stop_clone: Arc<AtomicBool> = Arc::clone(&stop_flag);
 
-        let reader_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
+        let reader_handle: JoinHandle<()> = thread::spawn(move || {
             while !stop_clone.load(Ordering::Relaxed) {
                 // Pin the epoch across find→resolve→deref so the resolved interface
                 // stays alive across the deref while the reloader thread republishes
                 // concurrently (true unload epoch-reclaims the superseded interface
                 // only after every pinned reader has unpinned).
-                let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
-                let find_result: Result<
-                    polyplug_abi::GuestContractHandle,
-                    polyplug::error::RegistryError,
-                > = reg_clone.find_guest_contract(
-                    GuestContractId::from_u64(0xCAFE_BABE_0000_0001_u64),
-                    0_u32,
-                );
+                let _epoch_guard: Guard = epoch_pin();
+                let find_result: Result<GuestContractHandle, RegistryError> = reg_clone
+                    .find_guest_contract(
+                        GuestContractId::from_u64(0xCAFE_BABE_0000_0001_u64),
+                        0_u32,
+                    );
                 if let Ok(resolved_handle) = find_result {
-                    let resolve_result: Result<
-                        *const GuestContractInterface,
-                        polyplug::error::RegistryError,
-                    > = reg_clone.resolve_guest_contract(resolved_handle);
+                    let resolve_result: Result<*const GuestContractInterface, RegistryError> =
+                        reg_clone.resolve_guest_contract(resolved_handle);
                     if let Ok(interface_ptr) = resolve_result {
                         // SAFETY: the epoch guard pinned above keeps the resolved
                         // interface alive across this deref despite a concurrent reload.
@@ -345,7 +343,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
     }
 
     // Give readers time to start.
-    std::thread::sleep(Duration::from_millis(20_u64));
+    thread::sleep(Duration::from_millis(20_u64));
 
     for round in 0_usize..SWAP_ROUNDS {
         let new_interface: &'static GuestContractInterface = if round % 2_usize == 0_usize {
@@ -378,40 +376,33 @@ fn stress_interface_handoff_correctness_no_torn_reads() {
     const RELOAD_ROUNDS: u32 = 80_u32;
 
     let rt: Arc<Runtime> = make_hot_reload_runtime();
-    rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
-        .expect("load v1");
+    rt.load_bundle(Path::new(RELOAD_V1_DIR)).expect("load v1");
 
     let contract_id: u64 = GuestContractId::new("reload.test", 1).id();
 
-    let stop_flag: Arc<core::sync::atomic::AtomicBool> =
-        Arc::new(core::sync::atomic::AtomicBool::new(false));
+    let stop_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let torn_reads: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
 
-    let mut dispatcher_handles: Vec<std::thread::JoinHandle<()>> =
-        Vec::with_capacity(DISPATCHER_THREADS);
+    let mut dispatcher_handles: Vec<JoinHandle<()>> = Vec::with_capacity(DISPATCHER_THREADS);
 
     for _thread_idx in 0_usize..DISPATCHER_THREADS {
         let rt_clone: Arc<Runtime> = Arc::clone(&rt);
-        let stop_clone: Arc<core::sync::atomic::AtomicBool> = Arc::clone(&stop_flag);
+        let stop_clone: Arc<AtomicBool> = Arc::clone(&stop_flag);
         let torn_clone: Arc<AtomicUsize> = Arc::clone(&torn_reads);
 
-        let dispatcher_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
+        let dispatcher_handle: JoinHandle<()> = thread::spawn(move || {
             while !stop_clone.load(Ordering::Relaxed) {
                 // Pin the epoch across find→resolve→dispatch so the resolved interface
                 // (and its native function table) stays alive across the call while the
                 // reloader thread republishes concurrently — true unload epoch-reclaims
                 // the superseded interface only after every pinned reader has unpinned.
-                let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
-                let handle_result: Result<
-                    polyplug_abi::GuestContractHandle,
-                    polyplug::error::RegistryError,
-                > = rt_clone.find_guest_contract(contract_id, 0_u32);
+                let _epoch_guard: Guard = epoch_pin();
+                let handle_result: Result<GuestContractHandle, RegistryError> =
+                    rt_clone.find_guest_contract(contract_id, 0_u32);
 
                 if let Ok(plugin_handle) = handle_result {
-                    let resolve_result: Result<
-                        *const GuestContractInterface,
-                        polyplug::error::RegistryError,
-                    > = rt_clone.resolve_guest_contract(plugin_handle);
+                    let resolve_result: Result<*const GuestContractInterface, RegistryError> =
+                        rt_clone.resolve_guest_contract(plugin_handle);
 
                     if let Ok(vt_ptr) = resolve_result {
                         // SAFETY: the epoch guard pinned above keeps the resolved
@@ -421,7 +412,7 @@ fn stress_interface_handoff_correctness_no_torn_reads() {
                         // `extern "C" fn() -> u32` signature the test plugins export.
                         let version: u32 = unsafe {
                             let fn_ptr: *const () = *(*vt_ptr).dispatch.native.functions;
-                            let version_fn: extern "C" fn() -> u32 = core::mem::transmute(fn_ptr);
+                            let version_fn: extern "C" fn() -> u32 = transmute(fn_ptr);
                             version_fn()
                         };
 
@@ -437,7 +428,7 @@ fn stress_interface_handoff_correctness_no_torn_reads() {
     }
 
     // Give dispatchers time to start.
-    std::thread::sleep(Duration::from_millis(10_u64));
+    thread::sleep(Duration::from_millis(10_u64));
 
     for i in 0_u32..RELOAD_ROUNDS {
         let so_path: PathBuf = if i % 2_u32 == 0_u32 {
@@ -447,7 +438,7 @@ fn stress_interface_handoff_correctness_no_torn_reads() {
         };
 
         rt.reload_bundle(so_path.as_path())
-            .unwrap_or_else(|e: polyplug::error::RuntimeError| {
+            .unwrap_or_else(|e: RuntimeError| {
                 panic!("reload failed at round {i}: {e}");
             });
     }

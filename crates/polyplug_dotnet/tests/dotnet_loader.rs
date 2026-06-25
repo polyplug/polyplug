@@ -3,7 +3,10 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
+use core::mem;
+use core::ptr;
 use std::collections::HashMap;
+use std::io::Error as IoError;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -14,13 +17,22 @@ use tempfile::NamedTempFile;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::BundleSource;
 use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime_builder::RuntimeBuilder;
+use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
+use polyplug_abi::DispatchType;
+use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
+use polyplug_abi::GuestContractInterface;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
 use polyplug_dotnet::version::read_target_framework;
+use polyplug_utils::BundleId;
+use std::fs;
 
 fn temp_file_with_bytes(bytes: &[u8]) -> NamedTempFile {
     let mut f: NamedTempFile = NamedTempFile::new().expect("tempfile creation failed");
@@ -230,7 +242,7 @@ fn load_nonexistent_assembly_returns_init_failed() {
     let manifest: ManifestData = make_manifest(&path, "nonexistent");
     let result: Result<(), LoaderError> = loader.load(
         &manifest,
-        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     match result {
@@ -252,7 +264,7 @@ fn load_invalid_pe_file_returns_init_failed() {
     let manifest: ManifestData = make_manifest(tmp.path(), "invalid_pe");
     let result: Result<(), LoaderError> = loader.load(
         &manifest,
-        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     match result {
@@ -279,7 +291,7 @@ fn load_with_invalid_hostfxr_path_and_missing_dll_returns_init_failed() {
     let manifest: ManifestData = make_manifest(&path, "missing_dll");
     let result: Result<(), LoaderError> = loader.load(
         &manifest,
-        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     assert!(
@@ -308,7 +320,7 @@ fn load_dll_net10_against_net6_requirement_returns_init_failed() {
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
     let result: Result<(), LoaderError> = loader.load(
         &manifest,
-        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     match result {
@@ -334,7 +346,7 @@ fn load_dll_with_matching_version_passes_tfm_check() {
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
     let result: Result<(), LoaderError> = loader.load(
         &manifest,
-        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     assert!(
@@ -363,7 +375,7 @@ fn load_with_bad_hostfxr_path_and_valid_dll_is_rejected() {
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
     let result: Result<(), LoaderError> = loader.load(
         &manifest,
-        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     // CLR_CONTEXT is a process-wide OnceCell (see "Known Limitations" in CLAUDE.md):
@@ -417,7 +429,7 @@ fn full_clr_init_reaches_init_symbol_check() {
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
     let result: Result<(), LoaderError> = loader.load(
         &manifest,
-        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     assert!(
@@ -488,7 +500,7 @@ fn code_source_returns_unsupported_bundle_source() {
     let manifest: ManifestData = make_manifest(Path::new("/tmp/x/Plugin.dll"), "csharp_code_x");
     let result: Result<(), LoaderError> = loader.load(
         &manifest,
-        &polyplug::loader::BundleSource::Code(String::from("// not loadable: .NET is compiled")),
+        &BundleSource::Code(String::from("// not loadable: .NET is compiled")),
         &runtime,
     );
     match result {
@@ -514,7 +526,7 @@ fn bytes_source_invalid_pe_returns_init_failed() {
         make_manifest(Path::new("/tmp/x/CsharpPlugin.dll"), "csharp_bytes_bad");
     let result: Result<(), LoaderError> = loader.load(
         &manifest,
-        &polyplug::loader::BundleSource::Bytes(b"not a PE file".to_vec()),
+        &BundleSource::Bytes(b"not a PE file".to_vec()),
         &runtime,
     );
     match result {
@@ -535,11 +547,8 @@ fn bytes_source_missing_manifest_file_returns_manifest_missing_file() {
     let runtime: Arc<Runtime> = test_runtime();
     let mut manifest: ManifestData = make_manifest(Path::new("/tmp/x/x.dll"), "csharp_no_file");
     manifest.file = String::new();
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &polyplug::loader::BundleSource::Bytes(vec![0u8; 16]),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> =
+        loader.load(&manifest, &BundleSource::Bytes(vec![0u8; 16]), &runtime);
     assert!(
         matches!(result, Err(LoaderError::ManifestMissingFile { .. })),
         "expected ManifestMissingFile, got {result:?}"
@@ -559,7 +568,7 @@ fn bytes_source_loads_fixture_and_dispatches() {
         eprintln!("skipping: CsharpPlugin.dll fixture not built at {dll:?}");
         return;
     }
-    let bytes: Vec<u8> = std::fs::read(&dll).expect("failed to read fixture dll");
+    let bytes: Vec<u8> = fs::read(&dll).expect("failed to read fixture dll");
     let bundle_dir: &Path = dll.parent().expect("fixture dll must have a parent dir");
 
     // The fixture is NOT self-contained: CsharpPlugin.dll references Polyplug.Abi and
@@ -582,8 +591,8 @@ fn bytes_source_loads_fixture_and_dispatches() {
             eprintln!("skipping: {dep_name} dependency not built next to fixture");
             return;
         }
-        let dep_bytes: Vec<u8> = std::fs::read(&dep_dll)
-            .unwrap_or_else(|e: std::io::Error| panic!("failed to read {dep_name}: {e}"));
+        let dep_bytes: Vec<u8> = fs::read(&dep_dll)
+            .unwrap_or_else(|e: IoError| panic!("failed to read {dep_name}: {e}"));
         preloader
             .preload_dependency_from_bytes(&runtime, manifest.id, &dep_bytes)
             .unwrap_or_else(|e: LoaderError| {
@@ -592,7 +601,7 @@ fn bytes_source_loads_fixture_and_dispatches() {
     }
 
     let load_result: Result<(), RuntimeError> =
-        runtime.load_bundle_from_source(manifest, polyplug::loader::BundleSource::Bytes(bytes));
+        runtime.load_bundle_from_source(manifest, BundleSource::Bytes(bytes));
     assert!(
         load_result.is_ok(),
         "load_bundle_from_source(Bytes) failed: {:?}",
@@ -601,20 +610,20 @@ fn bytes_source_loads_fixture_and_dispatches() {
 
     // Resolve test.add@1 and dispatch add(3, 5) == 8 (native dispatch parity with Path).
     let contract_id: u64 = polyplug_utils::guest_contract_id("test.add", 1);
-    let handle: polyplug_abi::GuestContractHandle = runtime
+    let handle: GuestContractHandle = runtime
         .find_guest_contract(contract_id, 0)
         .expect("test.add must be registered after byte-source load");
-    let interface_ptr: *const polyplug_abi::GuestContractInterface = runtime
+    let interface_ptr: *const GuestContractInterface = runtime
         .resolve_guest_contract(handle)
         .expect("handle must resolve to an interface");
     assert!(!interface_ptr.is_null(), "interface must be non-null");
 
     // SAFETY: interface_ptr is valid; the CLR keeps the byte-loaded assembly alive for the
     // process lifetime. The C# fixture uses native dispatch (function pointer table).
-    let interface: &polyplug_abi::GuestContractInterface = unsafe { &*interface_ptr };
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     assert_eq!(
         interface.dispatch_type,
-        polyplug_abi::DispatchType::Native,
+        DispatchType::Native,
         "C# fixture must use native dispatch"
     );
 
@@ -625,26 +634,26 @@ fn bytes_source_loads_fixture_and_dispatches() {
     // SAFETY: fn_ptr is the add wrapper; its ABI is the frozen native dispatch
     // signature `(instance, args, out, *mut AbiError) -> void` (out-param convention).
     let dispatch_fn: unsafe extern "C" fn(
-        polyplug_abi::GuestContractInstance,
+        GuestContractInstance,
         *const (),
         *mut (),
-        *mut polyplug_abi::AbiError,
-    ) = unsafe { core::mem::transmute(fn_ptr) };
-    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+        *mut AbiError,
+    ) = unsafe { mem::transmute(fn_ptr) };
+    let mut result: AbiError = AbiError::ok();
     // SAFETY: args and out point to valid, correctly-typed storage for AddArgs/u32;
     // the native `add` wrapper is stateless so a null instance handle is valid; `result`
     // is a valid, writable out-param for the call's AbiError.
     unsafe {
         dispatch_fn(
-            polyplug_abi::GuestContractInstance::null(),
-            core::ptr::addr_of!(args) as *const (),
-            core::ptr::addr_of_mut!(out) as *mut (),
-            core::ptr::addr_of_mut!(result),
+            GuestContractInstance::null(),
+            ptr::addr_of!(args) as *const (),
+            ptr::addr_of_mut!(out) as *mut (),
+            ptr::addr_of_mut!(result),
         )
     };
     assert_eq!(
         result.code,
-        polyplug_abi::AbiErrorCode::Ok as u32,
+        AbiErrorCode::Ok as u32,
         "add must return AbiErrorCode::Ok"
     );
     assert_eq!(
@@ -682,7 +691,7 @@ fn load_named_fixture(name: &str) -> Option<(Arc<Runtime>, u64)> {
         eprintln!("skipping: CsharpPlugin.dll fixture not built at {dll:?}");
         return None;
     }
-    let bytes: Vec<u8> = std::fs::read(&dll).expect("failed to read fixture dll");
+    let bytes: Vec<u8> = fs::read(&dll).expect("failed to read fixture dll");
     let bundle_dir: &Path = dll.parent().expect("fixture dll must have a parent dir");
     let manifest: ManifestData = make_named_fixture_manifest(bundle_dir, name);
     let bundle_id: u64 = manifest.id;
@@ -701,14 +710,14 @@ fn load_named_fixture(name: &str) -> Option<(Arc<Runtime>, u64)> {
             eprintln!("skipping: {dep_name} dependency not built next to fixture");
             return None;
         }
-        let dep_bytes: Vec<u8> = std::fs::read(&dep_dll)
-            .unwrap_or_else(|e: std::io::Error| panic!("failed to read {dep_name}: {e}"));
+        let dep_bytes: Vec<u8> = fs::read(&dep_dll)
+            .unwrap_or_else(|e: IoError| panic!("failed to read {dep_name}: {e}"));
         preloader
             .preload_dependency_from_bytes(&runtime, bundle_id, &dep_bytes)
             .unwrap_or_else(|e: LoaderError| panic!("preload {dep_name} dependency: {e:?}"));
     }
     runtime
-        .load_bundle_from_source(manifest, polyplug::loader::BundleSource::Bytes(bytes))
+        .load_bundle_from_source(manifest, BundleSource::Bytes(bytes))
         .expect("load_bundle_from_source(Bytes) failed");
     Some((runtime, bundle_id))
 }
@@ -717,14 +726,14 @@ fn load_named_fixture(name: &str) -> Option<(Arc<Runtime>, u64)> {
 /// collectible ALC is live and dispatch through it works.
 fn assert_add_dispatch_works(runtime: &Runtime) {
     let contract_id: u64 = polyplug_utils::guest_contract_id("test.add", 1);
-    let handle: polyplug_abi::GuestContractHandle = runtime
+    let handle: GuestContractHandle = runtime
         .find_guest_contract(contract_id, 0)
         .expect("test.add must be registered after load");
-    let interface_ptr: *const polyplug_abi::GuestContractInterface = runtime
+    let interface_ptr: *const GuestContractInterface = runtime
         .resolve_guest_contract(handle)
         .expect("handle must resolve");
     // SAFETY: interface_ptr is a live, non-null interface for the loaded bundle.
-    let interface: &polyplug_abi::GuestContractInterface = unsafe { &*interface_ptr };
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     let args: AddArgs = AddArgs { a: 3, b: 5 };
     let mut out: u32 = 0;
     // SAFETY: functions[0] is the `add` wrapper for the test.add contract.
@@ -732,23 +741,23 @@ fn assert_add_dispatch_works(runtime: &Runtime) {
     // SAFETY: fn_ptr is the add wrapper; its ABI is the frozen native dispatch
     // signature `(instance, args, out, *mut AbiError) -> void` (out-param convention).
     let dispatch_fn: unsafe extern "C" fn(
-        polyplug_abi::GuestContractInstance,
+        GuestContractInstance,
         *const (),
         *mut (),
-        *mut polyplug_abi::AbiError,
-    ) = unsafe { core::mem::transmute(fn_ptr) };
-    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+        *mut AbiError,
+    ) = unsafe { mem::transmute(fn_ptr) };
+    let mut result: AbiError = AbiError::ok();
     // SAFETY: args/out point to valid storage for AddArgs/u32; the native `add` wrapper
     // is stateless so a null instance handle is valid; `result` is a valid out-param.
     unsafe {
         dispatch_fn(
-            polyplug_abi::GuestContractInstance::null(),
-            core::ptr::addr_of!(args) as *const (),
-            core::ptr::addr_of_mut!(out) as *mut (),
-            core::ptr::addr_of_mut!(result),
+            GuestContractInstance::null(),
+            ptr::addr_of!(args) as *const (),
+            ptr::addr_of_mut!(out) as *mut (),
+            ptr::addr_of_mut!(result),
         )
     };
-    assert_eq!(result.code, polyplug_abi::AbiErrorCode::Ok as u32);
+    assert_eq!(result.code, AbiErrorCode::Ok as u32);
     assert_eq!(out, 8, "add(3,5) must equal 8 before unload");
 }
 
@@ -769,7 +778,7 @@ fn unload_reclaims_alc() {
     );
 
     runtime
-        .unload_bundle(polyplug_utils::BundleId::from_u64(bundle_id))
+        .unload_bundle(BundleId::from_u64(bundle_id))
         .expect("unload_bundle must succeed");
 
     assert!(
@@ -795,7 +804,7 @@ fn two_runtimes_same_bundle_id_have_isolated_alcs() {
         eprintln!("skipping: CsharpPlugin.dll fixture not built at {dll:?}");
         return;
     }
-    let bytes: Vec<u8> = std::fs::read(&dll).expect("failed to read fixture dll");
+    let bytes: Vec<u8> = fs::read(&dll).expect("failed to read fixture dll");
     let bundle_dir: &Path = dll.parent().expect("fixture dll must have a parent dir");
     // ONE shared name → ONE shared bundle id across both runtimes.
     let manifest_a: ManifestData = make_named_fixture_manifest(bundle_dir, "csharp_two_rt_probe");
@@ -821,20 +830,17 @@ fn two_runtimes_same_bundle_id_have_isolated_alcs() {
                 eprintln!("skipping: {dep_name} dependency not built next to fixture");
                 return;
             }
-            let dep_bytes: Vec<u8> = std::fs::read(&dep_dll)
-                .unwrap_or_else(|e: std::io::Error| panic!("failed to read {dep_name}: {e}"));
+            let dep_bytes: Vec<u8> = fs::read(&dep_dll)
+                .unwrap_or_else(|e: IoError| panic!("failed to read {dep_name}: {e}"));
             preloader
                 .preload_dependency_from_bytes(rt, bundle_id, &dep_bytes)
                 .unwrap_or_else(|e: LoaderError| panic!("preload {dep_name}: {e:?}"));
         }
     }
 
-    rt_a.load_bundle_from_source(
-        manifest_a,
-        polyplug::loader::BundleSource::Bytes(bytes.clone()),
-    )
-    .expect("runtime A must load the bundle");
-    rt_b.load_bundle_from_source(manifest_b, polyplug::loader::BundleSource::Bytes(bytes))
+    rt_a.load_bundle_from_source(manifest_a, BundleSource::Bytes(bytes.clone()))
+        .expect("runtime A must load the bundle");
+    rt_b.load_bundle_from_source(manifest_b, BundleSource::Bytes(bytes))
         .expect("runtime B must load the same bundle id");
 
     // Both runtimes hold their own live ALC for the same bundle id.
@@ -850,7 +856,7 @@ fn two_runtimes_same_bundle_id_have_isolated_alcs() {
     assert_add_dispatch_works(&rt_b);
 
     // Reclaim the bundle in runtime A only.
-    rt_a.unload_bundle(polyplug_utils::BundleId::from_u64(bundle_id))
+    rt_a.unload_bundle(BundleId::from_u64(bundle_id))
         .expect("runtime A unload must succeed");
 
     assert!(

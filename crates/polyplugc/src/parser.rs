@@ -3,11 +3,15 @@
 //! Parses `api.toml` and `bundle.toml` using serde+toml.
 //! Produces raw AST structs that are later lowered to `ValidatedIr`.
 
+use core::mem;
 use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 
 use serde::Deserialize;
 
+use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
 use crate::ir::ReprType;
@@ -28,6 +32,7 @@ use polyplug_codegen::PlatformKey;
 use polyplug_codegen::PolyplugcError;
 use polyplug_codegen::ResolvedBundleFile;
 use polyplug_codegen::error::SourceLocation;
+use polyplug_codegen::reserved;
 use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
 use polyplug_utils::host_contract_id;
@@ -191,7 +196,7 @@ fn parse_version_spanned(
     spanned: &toml::Spanned<String>,
     file: &str,
     source: &str,
-) -> core::result::Result<Version, PolyplugcError> {
+) -> Result<Version, PolyplugcError> {
     match Version::parse(spanned.get_ref().as_str()) {
         Ok(version) => Ok(version),
         Err(PolyplugcError::VersionOverflow {
@@ -291,7 +296,7 @@ fn resolve_type_ref_spanned(
     all_known_names: &[String],
     file: &str,
     source: &str,
-) -> core::result::Result<ResolvedTypeRef, PolyplugcError> {
+) -> Result<ResolvedTypeRef, PolyplugcError> {
     let ty: &str = spanned_ty.get_ref().as_str();
     resolve_type_ref(ty, contract, all_known_names).map_err(|_| {
         let location: Option<SourceLocation> =
@@ -313,23 +318,19 @@ fn resolve_type_ref_spanned(
 
 // ─── Parse entry points ───────────────────────────────────────────────────────
 
-pub fn parse_api(path: &Path) -> core::result::Result<ValidatedIr, PolyplugcError> {
-    let content: String =
-        std::fs::read_to_string(path).map_err(|e| PolyplugcError::ReadFailed {
-            path: path.to_string_lossy().into_owned(),
-            source: e,
-        })?;
+pub fn parse_api(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
+    let content: String = fs::read_to_string(path).map_err(|e| PolyplugcError::ReadFailed {
+        path: path.to_string_lossy().into_owned(),
+        source: e,
+    })?;
     parse_api_str_with_file(&content, &path.to_string_lossy())
 }
 
-pub fn parse_api_str(content: &str) -> core::result::Result<ValidatedIr, PolyplugcError> {
+pub fn parse_api_str(content: &str) -> Result<ValidatedIr, PolyplugcError> {
     parse_api_str_with_file(content, "<input>")
 }
 
-fn parse_api_str_with_file(
-    content: &str,
-    file: &str,
-) -> core::result::Result<ValidatedIr, PolyplugcError> {
+fn parse_api_str_with_file(content: &str, file: &str) -> Result<ValidatedIr, PolyplugcError> {
     if content.contains("[[contract]]") && !content.contains("[[plugin_contract]]") {
         eprintln!("warning: [[contract]] is deprecated, use [[plugin_contract]] instead");
     }
@@ -346,14 +347,11 @@ fn parse_api_str_with_file(
 }
 
 #[allow(dead_code)]
-pub fn parse_bundle_str(content: &str) -> core::result::Result<ValidatedIr, PolyplugcError> {
+pub fn parse_bundle_str(content: &str) -> Result<ValidatedIr, PolyplugcError> {
     parse_bundle_str_with_file(content, "<input>")
 }
 
-fn parse_bundle_str_with_file(
-    content: &str,
-    file: &str,
-) -> core::result::Result<ValidatedIr, PolyplugcError> {
+fn parse_bundle_str_with_file(content: &str, file: &str) -> Result<ValidatedIr, PolyplugcError> {
     let raw: RawBundleSchema = toml::from_str(content).map_err(|e| {
         let location: Option<SourceLocation> = e
             .span()
@@ -366,12 +364,11 @@ fn parse_bundle_str_with_file(
     lower_bundle(raw, content, file)
 }
 
-pub fn parse_bundle_with_api(path: &Path) -> core::result::Result<ValidatedIr, PolyplugcError> {
-    let content: String =
-        std::fs::read_to_string(path).map_err(|e| PolyplugcError::ReadFailed {
-            path: path.to_string_lossy().into_owned(),
-            source: e,
-        })?;
+pub fn parse_bundle_with_api(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
+    let content: String = fs::read_to_string(path).map_err(|e| PolyplugcError::ReadFailed {
+        path: path.to_string_lossy().into_owned(),
+        source: e,
+    })?;
     let file: String = path.to_string_lossy().into_owned();
     let raw: RawBundleSchema = toml::from_str(&content).map_err(|e| {
         let location: Option<SourceLocation> = e
@@ -383,10 +380,10 @@ pub fn parse_bundle_with_api(path: &Path) -> core::result::Result<ValidatedIr, P
         }
     })?;
 
-    let bundle_dir: &std::path::Path = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let bundle_dir: &Path = path.parent().unwrap_or_else(|| Path::new("."));
 
     let api_ir: ValidatedIr = if let Some(ref api_path_str) = raw.bundle.api {
-        let api_path: std::path::PathBuf = bundle_dir.join(api_path_str);
+        let api_path: PathBuf = bundle_dir.join(api_path_str);
         parse_api(&api_path)?
     } else {
         ValidatedIr {
@@ -412,7 +409,7 @@ pub fn parse_bundle_with_api(path: &Path) -> core::result::Result<ValidatedIr, P
 fn check_bundle_name_conflict(
     bundle_name: &str,
     contracts: &[ResolvedContract],
-) -> core::result::Result<(), PolyplugcError> {
+) -> Result<(), PolyplugcError> {
     for contract in contracts {
         if contract.name == bundle_name {
             return Err(PolyplugcError::BundleNameConflict {
@@ -428,7 +425,7 @@ fn validate_enum_value_expr(
     enum_name: &str,
     variant_name: &str,
     declared_variants: &[String],
-) -> core::result::Result<(), PolyplugcError> {
+) -> Result<(), PolyplugcError> {
     let chars: Vec<char> = expr.chars().collect();
     let len: usize = chars.len();
     let mut i: usize = 0;
@@ -513,7 +510,7 @@ fn validate_enum_value_expr(
 fn check_enum_chained_refs(
     enum_name: &str,
     variants: &[EnumVariant],
-) -> core::result::Result<(), PolyplugcError> {
+) -> Result<(), PolyplugcError> {
     let expr_contains_variant_ref = |expr: &str, variant_names: &[&str]| -> bool {
         let chars: Vec<char> = expr.chars().collect();
         let len: usize = chars.len();
@@ -580,12 +577,8 @@ fn is_valid_identifier(name: &str) -> bool {
 /// Reject `name` if it is a reserved keyword in any target language (or a
 /// polyplug-reserved name). Such names flow verbatim into generated source and
 /// would produce uncompilable output, so they must be caught at parse time.
-fn validate_not_reserved(
-    name: &str,
-    kind: &str,
-    context: &str,
-) -> core::result::Result<(), PolyplugcError> {
-    match polyplug_codegen::reserved::reserved_in(name) {
+fn validate_not_reserved(name: &str, kind: &str, context: &str) -> Result<(), PolyplugcError> {
+    match reserved::reserved_in(name) {
         Some(languages) => Err(PolyplugcError::ReservedIdentifier {
             kind: kind.to_owned(),
             name: name.to_owned(),
@@ -599,11 +592,7 @@ fn validate_not_reserved(
 
 /// Validate a plain identifier (function/param name). Names flow verbatim into
 /// generated source, so invalid identifiers must be rejected before codegen.
-fn validate_identifier(
-    name: &str,
-    kind: &str,
-    context: &str,
-) -> core::result::Result<(), PolyplugcError> {
+fn validate_identifier(name: &str, kind: &str, context: &str) -> Result<(), PolyplugcError> {
     if !is_valid_identifier(name) {
         return Err(PolyplugcError::InvalidIdentifier {
             kind: kind.to_owned(),
@@ -617,7 +606,7 @@ fn validate_identifier(
 
 /// Validate a (possibly dotted) contract name. Each dot-separated segment must
 /// be a valid identifier — e.g. `pipeline.Decoder`, `host.fs.reader`.
-fn validate_contract_name(name: &str, kind: &str) -> core::result::Result<(), PolyplugcError> {
+fn validate_contract_name(name: &str, kind: &str) -> Result<(), PolyplugcError> {
     if name.is_empty() || !name.split('.').all(is_valid_identifier) {
         return Err(PolyplugcError::InvalidIdentifier {
             kind: kind.to_owned(),
@@ -640,7 +629,7 @@ fn validate_contract_members(
     contract_name: &str,
     kind: &str,
     functions: &[RawFunction],
-) -> core::result::Result<(), PolyplugcError> {
+) -> Result<(), PolyplugcError> {
     validate_contract_name(contract_name, kind)?;
     let mut seen_functions: Vec<&str> = Vec::with_capacity(functions.len());
     for raw_fn in functions {
@@ -660,11 +649,7 @@ fn validate_contract_members(
     Ok(())
 }
 
-fn lower_api(
-    raw: RawApiSchema,
-    source: &str,
-    file: &str,
-) -> core::result::Result<ValidatedIr, PolyplugcError> {
+fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr, PolyplugcError> {
     let known_type_names: Vec<String> = raw.types.iter().map(|t| t.name.clone()).collect();
 
     let known_enum_names: Vec<String> = raw.r#enum.iter().map(|e| e.name.clone()).collect();
@@ -796,7 +781,7 @@ fn lower_api(
                 // An explicit `return = "void"` means "no return"; normalize it to
                 // None so all generators treat it uniformly as a void function.
                 .filter(|ty: &ResolvedTypeRef| {
-                    !matches!(ty, ResolvedTypeRef::AbiType(crate::ir::AbiBuiltin::Void))
+                    !matches!(ty, ResolvedTypeRef::AbiType(AbiBuiltin::Void))
                 });
             functions.push(ResolvedFunction {
                 name: raw_fn.name.clone(),
@@ -856,7 +841,7 @@ fn lower_api(
                 // An explicit `return = "void"` means "no return"; normalize it to
                 // None so all generators treat it uniformly as a void function.
                 .filter(|ty: &ResolvedTypeRef| {
-                    !matches!(ty, ResolvedTypeRef::AbiType(crate::ir::AbiBuiltin::Void))
+                    !matches!(ty, ResolvedTypeRef::AbiType(AbiBuiltin::Void))
                 });
             functions.push(ResolvedFunction {
                 name: raw_fn.name.clone(),
@@ -917,7 +902,7 @@ fn lower_bundle(
     raw: RawBundleSchema,
     source: &str,
     file: &str,
-) -> core::result::Result<ValidatedIr, PolyplugcError> {
+) -> Result<ValidatedIr, PolyplugcError> {
     let bundle_version: Version = parse_version_spanned(&raw.bundle.version, file, source)?;
     let mut plugins: Vec<ResolvedPlugin> = Vec::new();
     for raw_plugin in &raw.plugin {
@@ -964,8 +949,7 @@ fn lower_bundle(
     let is_native: bool = loader == "rust" || loader == "cpp" || loader == "native";
     let resolved_file: ResolvedBundleFile = match &raw.bundle.file {
         RawBundleFile::PlatformMap(os_map) if is_native => {
-            let mut map: std::collections::HashMap<PlatformKey, String> =
-                std::collections::HashMap::new();
+            let mut map: HashMap<PlatformKey, String> = HashMap::new();
             for (os, arch_map) in os_map {
                 for (arch, path) in arch_map {
                     map.insert(
@@ -1026,7 +1010,7 @@ fn lower_bundle(
 }
 
 const _: () = {
-    let _ = core::mem::size_of::<HashMap<String, String>>();
+    let _ = mem::size_of::<HashMap<String, String>>();
 };
 
 #[cfg(test)]
@@ -1078,8 +1062,7 @@ mod tests {
             },
             functions: Vec::new(),
         }];
-        let result: core::result::Result<(), PolyplugcError> =
-            check_bundle_name_conflict("test.add", &contracts);
+        let result: Result<(), PolyplugcError> = check_bundle_name_conflict("test.add", &contracts);
         assert!(
             matches!(result, Err(PolyplugcError::BundleNameConflict { .. })),
             "expected BundleNameConflict, got {result:?}",
@@ -1098,7 +1081,7 @@ mod tests {
             },
             functions: Vec::new(),
         }];
-        let result: core::result::Result<(), PolyplugcError> =
+        let result: Result<(), PolyplugcError> =
             check_bundle_name_conflict("image_bundle", &contracts);
         assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
@@ -1117,7 +1100,7 @@ mod tests {
     #[test]
     fn test_enum_forward_ref_rejected() {
         let declared: Vec<String> = vec!["A".to_owned()];
-        let result: core::result::Result<(), PolyplugcError> =
+        let result: Result<(), PolyplugcError> =
             validate_enum_value_expr("C | 1", "MyEnum", "B", &declared);
         assert!(
             matches!(result, Err(PolyplugcError::EnumForwardRef { ref ref_name, .. }) if ref_name == "C"),
@@ -1141,8 +1124,7 @@ mod tests {
                 value: "B | 2".to_owned(),
             },
         ];
-        let result: core::result::Result<(), PolyplugcError> =
-            check_enum_chained_refs("MyEnum", &variants);
+        let result: Result<(), PolyplugcError> = check_enum_chained_refs("MyEnum", &variants);
         assert!(
             matches!(result, Err(PolyplugcError::EnumChainedRef { ref variant_name, ref ref_name, .. }) if variant_name == "C" && ref_name == "B"),
             "expected EnumChainedRef for C->B, got {result:?}",
@@ -1166,22 +1148,22 @@ mod tests {
     #[test]
     fn test_enum_valid_bitflag_expr() {
         let declared_a: Vec<String> = vec![];
-        let r_a: core::result::Result<(), PolyplugcError> =
+        let r_a: Result<(), PolyplugcError> =
             validate_enum_value_expr("0", "Flags", "A", &declared_a);
         assert!(r_a.is_ok(), "A=0 should be valid, got {r_a:?}");
 
         let declared_b: Vec<String> = vec!["A".to_owned()];
-        let r_b: core::result::Result<(), PolyplugcError> =
+        let r_b: Result<(), PolyplugcError> =
             validate_enum_value_expr("1", "Flags", "B", &declared_b);
         assert!(r_b.is_ok(), "B=1 should be valid, got {r_b:?}");
 
         let declared_c: Vec<String> = vec!["A".to_owned(), "B".to_owned()];
-        let r_c: core::result::Result<(), PolyplugcError> =
+        let r_c: Result<(), PolyplugcError> =
             validate_enum_value_expr("1 << 1", "Flags", "C", &declared_c);
         assert!(r_c.is_ok(), "C=1<<1 should be valid, got {r_c:?}");
 
         let declared_d: Vec<String> = vec!["A".to_owned(), "B".to_owned(), "C".to_owned()];
-        let r_d: core::result::Result<(), PolyplugcError> =
+        let r_d: Result<(), PolyplugcError> =
             validate_enum_value_expr("B | C", "Flags", "D", &declared_d);
         assert!(r_d.is_ok(), "D=B|C should be valid, got {r_d:?}");
     }
@@ -1219,7 +1201,7 @@ mod tests {
     #[test]
     fn parse_host_contract_missing_prefix_rejected() {
         let toml: &str = "[[host_contract]]\nname = \"logger\"\nversion = \"1.0.0\"\n";
-        let result: core::result::Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
         assert!(
             matches!(result, Err(PolyplugcError::HostContractNameMissingPrefix { ref name }) if name == "logger"),
             "expected HostContractNameMissingPrefix for 'logger', got {result:?}",
@@ -1232,7 +1214,7 @@ mod tests {
             "[[plugin_contract]]\nname = \"host.logger\"\nversion = \"1.0.0\"\n\n",
             "[[host_contract]]\nname = \"host.logger\"\nversion = \"1.0.0\"\n"
         );
-        let result: core::result::Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
         assert!(
             matches!(result, Err(PolyplugcError::DuplicateContractName { ref name, .. }) if name == "host.logger"),
             "expected DuplicateContractName for 'host.logger', got {result:?}",
@@ -1245,7 +1227,7 @@ mod tests {
             "[[host_contract]]\nname = \"host.logger\"\nversion = \"1.0.0\"\n\n",
             "[[host_contract]]\nname = \"host.logger\"\nversion = \"2.0.0\"\n"
         );
-        let result: core::result::Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
         assert!(
             matches!(result, Err(PolyplugcError::DuplicateContractName { ref name, .. }) if name == "host.logger"),
             "expected DuplicateContractName for 'host.logger', got {result:?}",
@@ -1266,7 +1248,7 @@ mod tests {
     #[test]
     fn parse_host_contract_invalid_version_rejected() {
         let toml: &str = "[[host_contract]]\nname = \"host.logger\"\nversion = \"invalid\"\n";
-        let result: core::result::Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
         assert!(
             matches!(result, Err(PolyplugcError::ValidationFailed { .. })),
             "expected ValidationFailed for invalid version format, got {result:?}",
@@ -1276,7 +1258,7 @@ mod tests {
     #[test]
     fn parse_host_contract_version_overflow_rejected() {
         let toml: &str = "[[host_contract]]\nname = \"host.logger\"\nversion = \"4294967296.0\"\n";
-        let result: core::result::Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
         assert!(
             matches!(result, Err(PolyplugcError::ValidationFailed { .. })),
             "expected ValidationFailed for version overflow, got {result:?}",
@@ -1292,7 +1274,7 @@ mod tests {
             "[[plugin_contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n",
             "[[plugin_contract.functions]]\nname = \"class\"\n"
         );
-        let result: core::result::Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
         match result {
             Err(PolyplugcError::ReservedIdentifier {
                 ref kind,
@@ -1318,7 +1300,7 @@ mod tests {
             "[[types]]\nname = \"Frame\"\n",
             "[[types.fields]]\nname = \"end\"\ntype = \"u32\"\n"
         );
-        let result: core::result::Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
         match result {
             Err(PolyplugcError::ReservedIdentifier {
                 ref kind,
@@ -1344,7 +1326,7 @@ mod tests {
             "[[enum]]\nname = \"Kind\"\nrepr = \"u32\"\n\n",
             "[[enum.variants]]\nname = \"def\"\nvalue = \"0\"\n"
         );
-        let result: core::result::Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
         match result {
             Err(PolyplugcError::ReservedIdentifier {
                 ref kind,
@@ -1367,7 +1349,7 @@ mod tests {
     fn parse_contract_segment_named_reserved_keyword_rejected() {
         // A dotted contract segment that is reserved (`int` is a C++ keyword).
         let toml: &str = "[[plugin_contract]]\nname = \"image.int\"\nversion = \"1.0.0\"\n";
-        let result: core::result::Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
         assert!(
             matches!(result, Err(PolyplugcError::ReservedIdentifier { ref name, .. }) if name == "int"),
             "expected ReservedIdentifier for `int`, got {result:?}",
@@ -1380,7 +1362,7 @@ mod tests {
             "[[plugin_contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n",
             "[[plugin_contract.functions]]\nname = \"polyplug_init\"\n"
         );
-        let result: core::result::Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
         assert!(
             matches!(result, Err(PolyplugcError::ReservedIdentifier { ref name, ref languages, .. }) if name == "polyplug_init" && languages.contains("polyplug")),
             "expected ReservedIdentifier for `polyplug_init`, got {result:?}",

@@ -4,12 +4,20 @@
 //! Each bundle gets its own Lua VM for complete isolation between bundles
 //! and between polyplug Runtime instances.
 
+use core::ffi::c_void;
+use core::ptr;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering;
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::fs;
+use std::io;
+use std::path::PathBuf;
+use std::string::FromUtf8Error;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
 use std::sync::PoisonError;
+use std::thread;
 use std::thread::ThreadId;
 
 use mlua::Function;
@@ -27,6 +35,7 @@ use polyplug::loader::ManifestData;
 use polyplug::logger::LoggerHandle;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
+use polyplug_abi::BundleInitContext;
 use polyplug_abi::CallArena;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractInstance;
@@ -207,12 +216,12 @@ struct LuaDispatchGuard<'a> {
 
 impl Drop for LuaDispatchGuard<'_> {
     fn drop(&mut self) {
-        let this: ThreadId = std::thread::current().id();
+        let this: ThreadId = thread::current().id();
         // Recover from poisoning: a panic in another dispatch may have poisoned
         // the lock, but the data is a plain Vec<ThreadId> that cannot be left
         // logically corrupt between lock/unlock, so reusing the inner value is
         // sound. This is production code, so we never unwrap.
-        let mut guard: std::sync::MutexGuard<'_, Vec<ThreadId>> =
+        let mut guard: MutexGuard<'_, Vec<ThreadId>> =
             self.threads.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(pos) = guard.iter().position(|&id| id == this) {
             guard.swap_remove(pos);
@@ -270,11 +279,11 @@ unsafe extern "C" fn lua_create_instance(
     // Refuse a same-thread nested create: running the factory would re-enter mlua's
     // non-reentrant VM lock already held by the in-flight dispatch on this thread
     // and deadlock. There is no error out-param here, so write a null instance.
-    let this_thread: ThreadId = std::thread::current().id();
+    let this_thread: ThreadId = thread::current().id();
     {
         // Poison recovery: the Vec<ThreadId> cannot be left logically corrupt
         // between lock/unlock, so reusing it is sound. Production code, no unwrap.
-        let threads: std::sync::MutexGuard<'_, Vec<ThreadId>> = data
+        let threads: MutexGuard<'_, Vec<ThreadId>> = data
             .in_dispatch_threads
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -293,13 +302,13 @@ unsafe extern "C" fn lua_create_instance(
                 let id: u64 = data.next_id.fetch_add(1, Ordering::Relaxed);
                 // Poison recovery: a poisoned registry between lock/unlock leaves the
                 // HashMap usable. Production code, no unwrap.
-                let mut map: std::sync::MutexGuard<'_, HashMap<u64, RegistryKey>> = data
+                let mut map: MutexGuard<'_, HashMap<u64, RegistryKey>> = data
                     .instances
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
                 map.insert(id, key);
                 GuestContractInstance {
-                    data: id as usize as *mut core::ffi::c_void,
+                    data: id as usize as *mut c_void,
                     contract_id: data.contract_id,
                 }
             }
@@ -354,7 +363,7 @@ unsafe extern "C" fn lua_destroy_instance(
     let data: &LuaLoaderData = unsafe { &*(_loader_data.data as *const LuaLoaderData) };
     // Poison recovery: a poisoned registry between lock/unlock leaves the HashMap
     // usable. Production code, no unwrap. RegistryKey drop is deferred-unref-safe.
-    let mut map: std::sync::MutexGuard<'_, HashMap<u64, RegistryKey>> = data
+    let mut map: MutexGuard<'_, HashMap<u64, RegistryKey>> = data
         .instances
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -408,12 +417,12 @@ unsafe fn lua_dispatch_impl(
     // dispatching concurrently is NOT reentrancy: it is allowed to proceed and
     // mlua's internal lock serializes it safely. The tracking Mutex is held only
     // around the membership check/insert below, never across the VM call.
-    let this_thread: ThreadId = std::thread::current().id();
+    let this_thread: ThreadId = thread::current().id();
     {
         // Recover from poisoning (a prior dispatch panic): the Vec<ThreadId>
         // cannot be left logically corrupt between lock/unlock, so the inner
         // value is reusable. Production code, so no unwrap.
-        let mut threads: std::sync::MutexGuard<'_, Vec<ThreadId>> = data
+        let mut threads: MutexGuard<'_, Vec<ThreadId>> = data
             .in_dispatch_threads
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -462,7 +471,7 @@ unsafe fn lua_dispatch_impl(
     } else {
         // Poison recovery: the HashMap cannot be left logically corrupt between
         // lock/unlock, so reusing it is sound. Production code, no unwrap.
-        let map: std::sync::MutexGuard<'_, HashMap<u64, RegistryKey>> = data
+        let map: MutexGuard<'_, HashMap<u64, RegistryKey>> = data
             .instances
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -499,7 +508,7 @@ unsafe fn lua_dispatch_impl(
     // code, so no unwrap. The lock scope ends with the call: the logger callback
     // below must run with no guard held (RuntimeConfig::log lock rule).
     let call_result: Result<(), mlua::Error> = {
-        let _dispatch_lock: std::sync::MutexGuard<'_, ()> = data
+        let _dispatch_lock: MutexGuard<'_, ()> = data
             .dispatch_lock
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -655,7 +664,7 @@ impl LuaLoader {
                 let ptr: *mut u8 = if arena.is_null() {
                     let host: *const HostApi = host_addr as *const HostApi;
                     if host.is_null() {
-                        core::ptr::null_mut()
+                        ptr::null_mut()
                     } else {
                         // SAFETY: host points to 'static HostApi data for the runtime
                         // lifetime; align 1 is valid for raw byte buffers.
@@ -701,7 +710,7 @@ impl LuaLoader {
     ) -> Result<(String, String, Option<String>), LoaderError> {
         match source {
             BundleSource::Path(_) => {
-                let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
+                let bundle_path: PathBuf = if !manifest.file.is_empty() {
                     manifest.path.join(&manifest.file)
                 } else {
                     return Err(LoaderError::ManifestMissingFile {
@@ -720,7 +729,7 @@ impl LuaLoader {
                 }
 
                 let source_text: String =
-                    std::fs::read_to_string(&bundle_path).map_err(|e: std::io::Error| {
+                    fs::read_to_string(&bundle_path).map_err(|e: io::Error| {
                         LoaderError::InitFailed {
                             bundle: manifest.name.clone(),
                             error: format!(
@@ -742,7 +751,7 @@ impl LuaLoader {
             BundleSource::Code(code) => Ok((code.clone(), manifest.name.clone(), None)),
             BundleSource::Bytes(bytes) => {
                 let source_text: String =
-                    String::from_utf8(bytes.clone()).map_err(|_: std::string::FromUtf8Error| {
+                    String::from_utf8(bytes.clone()).map_err(|_: FromUtf8Error| {
                         LoaderError::InvalidSourceEncoding {
                             loader: "lua",
                             source_kind: source.kind(),
@@ -864,8 +873,8 @@ impl LuaLoader {
         // Signature: polyplug_init(host, ctx) - self-passing pattern.
         // SAFETY: bundle_path_static outlives this call; leaked intentionally.
         let bundle_path_static: &'static str = Box::leak(bundle_dir_str.clone().into_boxed_str());
-        let ctx: polyplug_abi::BundleInitContext = polyplug_abi::BundleInitContext {
-            bundle_path: polyplug_abi::StringView {
+        let ctx: BundleInitContext = BundleInitContext {
+            bundle_path: StringView {
                 ptr: bundle_path_static.as_ptr(),
                 len: bundle_path_static.len(),
             },
@@ -875,7 +884,7 @@ impl LuaLoader {
         // The HostApi uses self-passing pattern - Lua guest code will pass it back
         // as the first parameter to each HostApi function call.
         let host_interface_i64: i64 = host_interface as usize as i64;
-        let ctx_ptr: i64 = &ctx as *const polyplug_abi::BundleInitContext as i64;
+        let ctx_ptr: i64 = &ctx as *const BundleInitContext as i64;
 
         // polyplug_init RETURNS (registrations, abi_error): the per-contract handler
         // table plus the canonical AbiError `{ code, message }`. Nothing is deposited
@@ -1052,7 +1061,7 @@ impl LuaLoader {
                     vm: VmDispatch {
                         call: lua_dispatch,
                         loader_data: VmLoaderData {
-                            data: loader_data_ptr as *mut LuaLoaderData as *mut core::ffi::c_void,
+                            data: loader_data_ptr as *mut LuaLoaderData as *mut c_void,
                         },
                     },
                 },
@@ -1145,7 +1154,7 @@ impl LuaLoader {
         // alive for any in-flight dispatch and frees them once no reader is pinned,
         // rather than parking them until unload.
         let superseded: Option<Vec<LuaVm>> = {
-            let mut live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
+            let mut live: MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
                 self.live.lock().unwrap_or_else(PoisonError::into_inner);
             live.insert(BundleId::from_u64(bundle_id), bundle_vm_state)
         };
@@ -1159,7 +1168,7 @@ impl LuaLoader {
     /// Number of live VM-state entries currently owned for `bundle_id`.
     #[cfg(test)]
     fn live_vm_count(&self, bundle_id: BundleId) -> usize {
-        let live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
+        let live: MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
             self.live.lock().unwrap_or_else(PoisonError::into_inner);
         live.get(&bundle_id).map(Vec::len).unwrap_or(0)
     }
@@ -1228,7 +1237,7 @@ impl BundleLoader for LuaLoader {
     /// The VM is always epoch-reclaimed (never parked alive forever).
     fn unload(&self, bundle_id: BundleId, _runtime: &Runtime) -> Result<(), LoaderError> {
         let state: Vec<LuaVm> = {
-            let mut live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
+            let mut live: MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
                 self.live.lock().unwrap_or_else(PoisonError::into_inner);
             match live.remove(&bundle_id) {
                 Some(v) => v,
@@ -1249,6 +1258,9 @@ mod tests {
     use core::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::sync::Barrier;
+
+    use polyplug::runtime::RuntimeBuilder;
+    use polyplug_utils::bundle_id;
 
     use super::*;
 
@@ -1284,17 +1296,16 @@ end
     /// dir (kept alive) plus a ManifestData for it.
     fn write_unload_bundle(name: &str) -> (tempfile::TempDir, ManifestData) {
         let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("bundle.lua"), unload_plugin_script())
-            .expect("write bundle.lua");
+        fs::write(dir.path().join("bundle.lua"), unload_plugin_script()).expect("write bundle.lua");
         let manifest: ManifestData = ManifestData {
-            id: polyplug_utils::bundle_id(name),
+            id: bundle_id(name),
             name: name.to_owned(),
             loader: "lua".to_owned(),
             file: "bundle.lua".to_owned(),
             path: dir.path().to_path_buf(),
             version: String::new(),
             provides: Vec::new(),
-            function_count: std::collections::HashMap::new(),
+            function_count: HashMap::new(),
             dependencies: Vec::new(),
             needs_reinit_on_dep_reload: false,
             bundle_dependencies: Vec::new(),
@@ -1309,7 +1320,7 @@ end
     #[test]
     fn unload_removes_live_and_schedules_reclaim() {
         let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-        let runtime: std::sync::Arc<polyplug::Runtime> = polyplug::runtime::RuntimeBuilder::new()
+        let runtime: Arc<Runtime> = RuntimeBuilder::new()
             .loader(LuaLoader::new(LuaConfig::default()))
             .build()
             .expect("runtime build must succeed");
@@ -1350,7 +1361,7 @@ end
     #[test]
     fn unload_load_loop_is_bounded() {
         let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-        let runtime: std::sync::Arc<polyplug::Runtime> = polyplug::runtime::RuntimeBuilder::new()
+        let runtime: Arc<Runtime> = RuntimeBuilder::new()
             .loader(LuaLoader::new(LuaConfig::default()))
             .build()
             .expect("runtime build must succeed");
@@ -1405,7 +1416,7 @@ end
     #[test]
     fn reload_replaces_live_and_reclaims_superseded_vm() {
         let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-        let runtime: std::sync::Arc<polyplug::Runtime> = polyplug::runtime::RuntimeBuilder::new()
+        let runtime: Arc<Runtime> = RuntimeBuilder::new()
             .loader(LuaLoader::new(LuaConfig::default()))
             .build()
             .expect("runtime build must succeed");
@@ -1466,7 +1477,7 @@ end
     #[test]
     fn unload_schedules_reclaim_even_when_in_flight() {
         let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-        let runtime: std::sync::Arc<polyplug::Runtime> = polyplug::runtime::RuntimeBuilder::new()
+        let runtime: Arc<Runtime> = RuntimeBuilder::new()
             .loader(LuaLoader::new(LuaConfig::default()))
             .build()
             .expect("runtime build must succeed");
@@ -1486,15 +1497,15 @@ end
         // state the dispatch guard would leave while a call is mid-flight on another
         // thread. An in-flight mark must not change the uniform epoch-reclaim outcome.
         {
-            let live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
+            let live: MutexGuard<'_, HashMap<BundleId, Vec<LuaVm>>> =
                 loader.live.lock().unwrap_or_else(PoisonError::into_inner);
             let state: &Vec<LuaVm> = live.get(&bundle_id).expect("bundle must be live");
-            let mut threads: std::sync::MutexGuard<'_, Vec<ThreadId>> = state[0]
+            let mut threads: MutexGuard<'_, Vec<ThreadId>> = state[0]
                 .data()
                 .in_dispatch_threads
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            threads.push(std::thread::current().id());
+            threads.push(thread::current().id());
         }
 
         loader
@@ -1534,7 +1545,7 @@ end
             ))
             .expect("register default impl");
         let arena_alloc: Function =
-            LuaLoader::build_arena_alloc(&vm, "make_loader_data", core::ptr::null())
+            LuaLoader::build_arena_alloc(&vm, "make_loader_data", ptr::null())
                 .expect("build arena allocator");
         let boxed: Box<LuaLoaderData> = Box::new(LuaLoaderData {
             _vm: vm,
@@ -1554,7 +1565,7 @@ end
         // test, so the &'static borrow is valid for the test's lifetime.
         let data_ref: &'static LuaLoaderData = unsafe { &*ptr };
         let vm_loader_data: VmLoaderData = VmLoaderData {
-            data: ptr as *mut core::ffi::c_void,
+            data: ptr as *mut c_void,
         };
         (vm_loader_data, data_ref)
     }
@@ -1580,9 +1591,9 @@ end
                 vm_loader_data,
                 GuestContractInstance::null(),
                 0,
-                core::ptr::null(),
+                ptr::null(),
                 &mut out_buf as *mut i32 as *mut (),
-                core::ptr::null_mut(),
+                ptr::null_mut(),
             )
         };
         assert!(err.is_ok(), "normal dispatch should return Ok");
@@ -1617,7 +1628,7 @@ end
                 move |lua_ctx: &Lua, (_instance, _a, _o): (Value, i64, i64)| {
                     let ptr_usize: usize = cell_for_fn.load(Ordering::Acquire);
                     let vm_loader_data: VmLoaderData = VmLoaderData {
-                        data: ptr_usize as *mut core::ffi::c_void,
+                        data: ptr_usize as *mut c_void,
                     };
                     // SAFETY: the cell holds the live leaked LuaLoaderData pointer set
                     // up by the test before dispatch; the guest function ignores the
@@ -1627,9 +1638,9 @@ end
                             vm_loader_data,
                             GuestContractInstance::null(),
                             0,
-                            core::ptr::null(),
-                            core::ptr::null_mut(),
-                            core::ptr::null_mut(),
+                            ptr::null(),
+                            ptr::null_mut(),
+                            ptr::null_mut(),
                         )
                     };
                     lua_ctx.globals().set("_nested_code", nested.code as i64)?;
@@ -1649,9 +1660,9 @@ end
                 vm_loader_data,
                 GuestContractInstance::null(),
                 0,
-                core::ptr::null(),
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
+                ptr::null(),
+                ptr::null_mut(),
+                ptr::null_mut(),
             )
         };
         assert!(outer.is_ok(), "outer dispatch should complete Ok");
@@ -1683,9 +1694,9 @@ end
                 vm_loader_data,
                 GuestContractInstance::null(),
                 0,
-                core::ptr::null(),
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
+                ptr::null(),
+                ptr::null_mut(),
+                ptr::null_mut(),
             )
         };
         assert!(
@@ -1743,9 +1754,9 @@ end
         // thread boundary as a usize to satisfy Send, then rebuild it inside.
         let data_addr: usize = vm_loader_data.data as usize;
 
-        let handle: std::thread::JoinHandle<AbiError> = std::thread::spawn(move || {
+        let handle: thread::JoinHandle<AbiError> = thread::spawn(move || {
             let vm_loader_data_a: VmLoaderData = VmLoaderData {
-                data: data_addr as *mut core::ffi::c_void,
+                data: data_addr as *mut c_void,
             };
             // SAFETY: data_addr is the live leaked LuaLoaderData pointer; it
             // outlives all threads in this test. The guest fn ignores its args.
@@ -1754,9 +1765,9 @@ end
                     vm_loader_data_a,
                     GuestContractInstance::null(),
                     0,
-                    core::ptr::null(),
-                    core::ptr::null_mut(),
-                    core::ptr::null_mut(),
+                    ptr::null(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
                 )
             }
         });
@@ -1766,9 +1777,9 @@ end
 
         // Now, from THIS (different) thread, dispatch into the SAME VM. This must
         // not be rejected; it blocks on mlua's lock until A releases it.
-        let main_handle: std::thread::JoinHandle<AbiError> = std::thread::spawn(move || {
+        let main_handle: thread::JoinHandle<AbiError> = thread::spawn(move || {
             let vm_loader_data_b: VmLoaderData = VmLoaderData {
-                data: data_addr as *mut core::ffi::c_void,
+                data: data_addr as *mut c_void,
             };
             // SAFETY: same live leaked pointer as above. fn_id 1 is the no-op
             // function — dispatching fn_id 0 here would re-enter the barrier
@@ -1778,9 +1789,9 @@ end
                     vm_loader_data_b,
                     GuestContractInstance::null(),
                     1,
-                    core::ptr::null(),
-                    core::ptr::null_mut(),
-                    core::ptr::null_mut(),
+                    ptr::null(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
                 )
             }
         });
@@ -1871,9 +1882,9 @@ end
         let b_lo: usize = buf_b.as_ptr() as usize;
         let b_hi: usize = b_lo + buf_b.len();
         let arena_a: &'static mut CallArena =
-            Box::leak(Box::new(CallArena::new(buf_a, core::ptr::null())));
+            Box::leak(Box::new(CallArena::new(buf_a, ptr::null())));
         let arena_b: &'static mut CallArena =
-            Box::leak(Box::new(CallArena::new(buf_b, core::ptr::null())));
+            Box::leak(Box::new(CallArena::new(buf_b, ptr::null())));
         let arena_a_addr: usize = arena_a as *mut CallArena as usize;
         let arena_b_addr: usize = arena_b as *mut CallArena as usize;
 
@@ -1884,7 +1895,7 @@ end
 
         // Worker A: fn_id 0, arena_a, buffer [a_lo, a_hi). Each iteration resets its
         // arena, dispatches, and verifies the allocation landed in its own buffer.
-        let handle_a: std::thread::JoinHandle<Result<(), String>> = std::thread::spawn(move || {
+        let handle_a: thread::JoinHandle<Result<(), String>> = thread::spawn(move || {
             start_a.wait();
             for i in 0..ITERS {
                 // SAFETY: arena_a_addr is the live leaked CallArena for this
@@ -1893,7 +1904,7 @@ end
                 arena.reset();
                 let mut out: i64 = 0;
                 let vm: VmLoaderData = VmLoaderData {
-                    data: data_addr as *mut core::ffi::c_void,
+                    data: data_addr as *mut c_void,
                 };
                 // SAFETY: data_addr is the live leaked LuaLoaderData; out is a
                 // valid local; arena_a_addr is a valid CallArena.
@@ -1902,7 +1913,7 @@ end
                         vm,
                         GuestContractInstance::null(),
                         0,
-                        core::ptr::null(),
+                        ptr::null(),
                         &mut out as *mut i64 as *mut (),
                         arena_a_addr as *mut CallArena,
                     )
@@ -1921,7 +1932,7 @@ end
         });
 
         // Worker B: fn_id 1, arena_b, buffer [b_lo, b_hi).
-        let handle_b: std::thread::JoinHandle<Result<(), String>> = std::thread::spawn(move || {
+        let handle_b: thread::JoinHandle<Result<(), String>> = thread::spawn(move || {
             start_b.wait();
             for i in 0..ITERS {
                 // SAFETY: arena_b_addr is the live leaked CallArena for this
@@ -1930,7 +1941,7 @@ end
                 arena.reset();
                 let mut out: i64 = 0;
                 let vm: VmLoaderData = VmLoaderData {
-                    data: data_addr as *mut core::ffi::c_void,
+                    data: data_addr as *mut c_void,
                 };
                 // SAFETY: data_addr is the live leaked LuaLoaderData; out is a
                 // valid local; arena_b_addr is a valid CallArena.
@@ -1939,7 +1950,7 @@ end
                         vm,
                         GuestContractInstance::null(),
                         1,
-                        core::ptr::null(),
+                        ptr::null(),
                         &mut out as *mut i64 as *mut (),
                         arena_b_addr as *mut CallArena,
                     )

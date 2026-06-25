@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use super::CALL_ARENA_BUF_LEN;
@@ -2666,7 +2667,7 @@ fn generate_bundle_manifest_python(ir: &ValidatedIr) -> String {
         )
     };
 
-    let provides_set: std::collections::HashSet<String> = provides.iter().cloned().collect();
+    let provides_set: HashSet<String> = provides.iter().cloned().collect();
     let fn_count_entries: Vec<String> = ir
         .contracts
         .iter()
@@ -3648,7 +3649,6 @@ fn generate_peer_caller_method(
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
-    use crate::ir::ReprType;
     use crate::ir::ResolvedDependency;
     use crate::ir::Version;
     use polyplug_codegen::ResolvedBundleFile;
@@ -4024,7 +4024,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -4068,7 +4068,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.fs.reader".to_owned(),
             contract_id: 0xDEADBEEF,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -4115,7 +4115,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -4145,7 +4145,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -4249,7 +4249,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -4325,7 +4325,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.fs.reader".to_owned(),
             contract_id: 0xDEADBEEF,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -4372,7 +4372,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -4402,7 +4402,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -4444,7 +4444,7 @@ mod tests {
         ResolvedContract {
             name: "pipeline.Validator".to_owned(),
             contract_id: 0xABCD_EF01_2345_6789,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -4461,7 +4461,7 @@ mod tests {
         }
     }
 
-    fn make_bundle_with_dep(contract_id: u64) -> crate::ir::ResolvedBundle {
+    fn make_bundle_with_dep(contract_id: u64) -> ResolvedBundle {
         ResolvedBundle {
             name: "python_transformer".to_owned(),
             version: Version {
@@ -4485,7 +4485,7 @@ mod tests {
     #[test]
     fn peer_caller_emitted_for_declared_dependency() {
         let contract: ResolvedContract = make_validator_contract();
-        let bundle: crate::ir::ResolvedBundle = make_bundle_with_dep(contract.contract_id);
+        let bundle: ResolvedBundle = make_bundle_with_dep(contract.contract_id);
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
             enums: vec![],
@@ -4563,8 +4563,7 @@ mod tests {
 
         // IR with a bundle whose dependency does NOT match the contract's id
         let contract2: ResolvedContract = make_validator_contract();
-        let bundle_wrong_dep: crate::ir::ResolvedBundle =
-            make_bundle_with_dep(0xDEAD_BEEF_CAFE_BABE);
+        let bundle_wrong_dep: ResolvedBundle = make_bundle_with_dep(0xDEAD_BEEF_CAFE_BABE);
         let ir_wrong_dep: ValidatedIr = ValidatedIr {
             types: vec![],
             enums: vec![],

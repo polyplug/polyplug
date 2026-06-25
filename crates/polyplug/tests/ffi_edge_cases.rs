@@ -7,14 +7,21 @@
 //! Tests null pointers, stale handles, and buffer boundary conditions
 //! for HostApi operations (find_guest_contract, find_all_guest_contracts, resolve_guest_contract).
 
+use core::mem::{align_of, size_of};
+use core::ptr::null;
+use core::slice::from_raw_parts;
+use core::str::from_utf8;
+use std::fs::{copy, create_dir_all, write};
 use std::path::PathBuf;
 
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
-use polyplug_abi::GuestContractHandle;
+use polyplug::runtime::host_resolve_guest_contract;
 use polyplug_abi::HostApi;
+use polyplug_abi::{AbiError, AbiErrorCode, Array, GuestContractHandle, GuestContractInterface};
 use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
+use tempfile::TempDir;
 
 mod common;
 
@@ -35,8 +42,8 @@ fn test_resolve_plugin_null_host() {
     // SAFETY: Passing null host is explicitly testing the null-safety contract.
     // Call the underlying host_resolve_guest_contract function directly.
     let handle: GuestContractHandle = GuestContractHandle::null();
-    let interface: *const polyplug_abi::GuestContractInterface =
-        unsafe { polyplug::runtime::host_resolve_guest_contract(core::ptr::null(), handle) };
+    let interface: *const GuestContractInterface =
+        unsafe { host_resolve_guest_contract(null(), handle) };
     assert!(
         interface.is_null(),
         "resolve_guest_contract(null host) must return null"
@@ -48,11 +55,11 @@ fn test_resolve_plugin_null_host() {
 #[test]
 fn test_resolve_plugin_null_handle() {
     // SAFETY: polyplug_runtime_create returns a valid HostApi or null on OOM.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     // SAFETY: host is valid; null handle is the sentinel.
-    let interface: *const polyplug_abi::GuestContractInterface =
+    let interface: *const GuestContractInterface =
         unsafe { ((*host).resolve_guest_contract)(host, GuestContractHandle::null()) };
     assert!(
         interface.is_null(),
@@ -68,7 +75,7 @@ fn test_resolve_plugin_null_handle() {
 #[test]
 fn test_resolve_plugin_stale_handle() {
     // SAFETY: polyplug_runtime_create returns a valid HostApi or null on OOM.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     // SAFETY: host is a valid HostApi from polyplug_runtime_create.
@@ -76,14 +83,10 @@ fn test_resolve_plugin_stale_handle() {
 
     // Load a plugin to get a valid slot
     let path_bytes: &[u8] = TEST_PLUGIN_DIR.as_bytes();
-    let mut rc: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+    let mut rc: AbiError = AbiError::ok();
     // SAFETY: host is valid; path_bytes is valid UTF-8 for the duration of the call.
     unsafe { ((*host).load_bundle)(host, path_bytes.as_ptr(), path_bytes.len(), &mut rc) };
-    assert_eq!(
-        rc.code,
-        polyplug_abi::AbiErrorCode::Ok as u32,
-        "plugin load must succeed"
-    );
+    assert_eq!(rc.code, AbiErrorCode::Ok as u32, "plugin load must succeed");
 
     // Find the plugin to get a valid handle
     let contract_id: u64 = guest_contract_id("test.add", 1);
@@ -99,7 +102,7 @@ fn test_resolve_plugin_stale_handle() {
     };
 
     // SAFETY: host is valid; invalid_handle is a deliberately invalid handle.
-    let interface: *const polyplug_abi::GuestContractInterface =
+    let interface: *const GuestContractInterface =
         unsafe { ((*host).resolve_guest_contract)(host, invalid_handle) };
     assert!(
         interface.is_null(),
@@ -119,11 +122,11 @@ fn test_resolve_plugin_stale_handle() {
 #[test]
 fn test_find_all_guest_contracts_empty_registry() {
     // SAFETY: polyplug_runtime_create returns a valid HostApi or null on OOM.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     // SAFETY: host is valid.
-    let arr: polyplug_abi::Array<GuestContractHandle> =
+    let arr: Array<GuestContractHandle> =
         unsafe { ((*host).find_all_guest_contracts)(host, 0xDEAD_BEEF_u64, 0) };
     assert_eq!(
         arr.len, 0,
@@ -139,7 +142,7 @@ fn test_find_all_guest_contracts_empty_registry() {
 #[test]
 fn test_find_all_guest_contracts_single_plugin() {
     // SAFETY: polyplug_runtime_create returns a valid HostApi or null on OOM.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     // SAFETY: host is a valid HostApi from polyplug_runtime_create.
@@ -147,25 +150,24 @@ fn test_find_all_guest_contracts_single_plugin() {
 
     // Load reload_plugin_v1 which provides "reload.test@1"
     let v1_path_bytes: &[u8] = RELOAD_PLUGIN_V1_DIR.as_bytes();
-    let mut rc: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+    let mut rc: AbiError = AbiError::ok();
     // SAFETY: host is valid; v1_path_bytes is valid UTF-8.
     unsafe { ((*host).load_bundle)(host, v1_path_bytes.as_ptr(), v1_path_bytes.len(), &mut rc) };
     assert_eq!(
         rc.code,
-        polyplug_abi::AbiErrorCode::Ok as u32,
+        AbiErrorCode::Ok as u32,
         "reload_plugin_v1 load must succeed"
     );
 
     let contract_id: u64 = guest_contract_id("reload.test", 1);
 
     // SAFETY: host is valid.
-    let arr: polyplug_abi::Array<GuestContractHandle> =
+    let arr: Array<GuestContractHandle> =
         unsafe { ((*host).find_all_guest_contracts)(host, contract_id, 0) };
     assert_eq!(arr.len, 1, "find_all must return exactly 1 result");
     assert!(!arr.items.is_null(), "array items must not be null");
     // SAFETY: arr.items is valid for arr.len elements.
-    let handles: &[GuestContractHandle] =
-        unsafe { core::slice::from_raw_parts(arr.items, arr.len) };
+    let handles: &[GuestContractHandle] = unsafe { from_raw_parts(arr.items, arr.len) };
     assert!(!handles[0].is_null(), "handle must not be null");
 
     // Free the array via host->free
@@ -174,8 +176,8 @@ fn test_find_all_guest_contracts_single_plugin() {
         ((*host).free)(
             host,
             arr.items as *mut u8,
-            arr.len * core::mem::size_of::<GuestContractHandle>(),
-            core::mem::align_of::<GuestContractHandle>(),
+            arr.len * size_of::<GuestContractHandle>(),
+            align_of::<GuestContractHandle>(),
         );
     }
 
@@ -195,7 +197,7 @@ fn test_find_all_guest_contracts_multiple_plugins() {
     }
 
     // SAFETY: polyplug_runtime_create returns a valid HostApi or null on OOM.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     // SAFETY: host is a valid HostApi from polyplug_runtime_create.
@@ -203,7 +205,7 @@ fn test_find_all_guest_contracts_multiple_plugins() {
 
     // Load test_plugin (Rust) which provides "test.add@1"
     let rust_path_bytes: &[u8] = TEST_PLUGIN_DIR.as_bytes();
-    let mut rc_rust: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+    let mut rc_rust: AbiError = AbiError::ok();
     // SAFETY: host is valid; rust_path_bytes is valid UTF-8.
     unsafe {
         ((*host).load_bundle)(
@@ -215,14 +217,14 @@ fn test_find_all_guest_contracts_multiple_plugins() {
     };
     assert_eq!(
         rc_rust.code,
-        polyplug_abi::AbiErrorCode::Ok as u32,
+        AbiErrorCode::Ok as u32,
         "test_plugin load must succeed"
     );
 
     // Create a temporary bundle directory for the C++ plugin
-    let temp_dir: tempfile::TempDir = tempfile::TempDir::new().expect("failed to create temp dir");
+    let temp_dir: TempDir = TempDir::new().expect("failed to create temp dir");
     let cpp_bundle_dir: PathBuf = temp_dir.path().join("cpp_test_plugin");
-    std::fs::create_dir_all(&cpp_bundle_dir).expect("failed to create cpp bundle dir");
+    create_dir_all(&cpp_bundle_dir).expect("failed to create cpp bundle dir");
 
     // Copy the C++ .so to the bundle directory
     let cpp_so_path: PathBuf = PathBuf::from(TEST_PLUGIN_CPP_SO);
@@ -231,21 +233,19 @@ fn test_find_all_guest_contracts_multiple_plugins() {
         .expect("cpp so has filename")
         .to_str()
         .unwrap();
-    std::fs::copy(&cpp_so_path, cpp_bundle_dir.join(cpp_so_filename))
-        .expect("failed to copy cpp so");
+    copy(&cpp_so_path, cpp_bundle_dir.join(cpp_so_filename)).expect("failed to copy cpp so");
 
     let manifest_toml: String = format!(
         "id = {}\nname = \"cpp_test_adder\"\nloader = \"native\"\nfile = \"{}\"\nversion = \"1.0\"\nprovides = [\"test.add\"]\nfunction_count = {{ \"test.add@1\" = 1 }}\n",
         bundle_id("cpp_test_adder"),
         cpp_so_filename
     );
-    std::fs::write(cpp_bundle_dir.join("manifest.toml"), manifest_toml)
-        .expect("failed to write manifest");
+    write(cpp_bundle_dir.join("manifest.toml"), manifest_toml).expect("failed to write manifest");
 
     // Load the C++ plugin (also provides "test.add@1")
     let cpp_path_str: String = cpp_bundle_dir.to_string_lossy().into_owned();
     let cpp_path_bytes: &[u8] = cpp_path_str.as_bytes();
-    let mut rc_cpp: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+    let mut rc_cpp: AbiError = AbiError::ok();
     // SAFETY: host is valid; cpp_path_bytes is valid UTF-8.
     unsafe {
         ((*host).load_bundle)(
@@ -255,12 +255,12 @@ fn test_find_all_guest_contracts_multiple_plugins() {
             &mut rc_cpp,
         )
     };
-    if rc_cpp.code != polyplug_abi::AbiErrorCode::Ok as u32 {
+    if rc_cpp.code != AbiErrorCode::Ok as u32 {
         let mut err_buf: [u8; 512] = [0_u8; 512];
         // SAFETY: err_buf is a valid stack-allocated buffer; host is valid.
         let err_len: usize =
             unsafe { ((*host).get_last_error)(host, err_buf.as_mut_ptr(), err_buf.len()) };
-        let err_msg: &str = core::str::from_utf8(&err_buf[..err_len]).unwrap_or("invalid UTF-8");
+        let err_msg: &str = from_utf8(&err_buf[..err_len]).unwrap_or("invalid UTF-8");
         panic!(
             "cpp_test_plugin load failed: {} (path: {})",
             err_msg, cpp_path_str
@@ -268,7 +268,7 @@ fn test_find_all_guest_contracts_multiple_plugins() {
     }
 
     // SAFETY: host is valid.
-    let arr: polyplug_abi::Array<GuestContractHandle> =
+    let arr: Array<GuestContractHandle> =
         unsafe { ((*host).find_all_guest_contracts)(host, guest_contract_id("test.add", 1), 0) };
     assert_eq!(arr.len, 2, "find_all must find both plugins");
 
@@ -278,8 +278,8 @@ fn test_find_all_guest_contracts_multiple_plugins() {
         ((*host).free)(
             host,
             arr.items as *mut u8,
-            arr.len * core::mem::size_of::<GuestContractHandle>(),
-            core::mem::align_of::<GuestContractHandle>(),
+            arr.len * size_of::<GuestContractHandle>(),
+            align_of::<GuestContractHandle>(),
         );
     }
 

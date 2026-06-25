@@ -10,12 +10,15 @@
 
 use std::sync::Arc;
 use std::sync::Barrier;
+use std::thread;
+use std::thread::JoinHandle;
 
 use polyplug::error::RegistryError;
 use polyplug::runtime_store::RuntimeStore;
+use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::{
-    DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInterface, HostApi,
-    NativeDispatch, PluginDescriptor, StringView, Version,
+    DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInstance,
+    GuestContractInterface, HostApi, NativeDispatch, PluginDescriptor, StringView, Version,
 };
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
@@ -24,22 +27,22 @@ const MOCK_FUNCTIONS: [*const (); 0] = [];
 
 /// No-op create_instance callback.
 unsafe extern "C" fn noop_create_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
-    out_instance: *mut polyplug_abi::GuestContractInstance,
+    out_instance: *mut GuestContractInstance,
 ) {
     if !out_instance.is_null() {
         // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+        unsafe { out_instance.write(GuestContractInstance::null()) };
     }
 }
 
 /// No-op destroy_instance callback.
 unsafe extern "C" fn noop_destroy_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
-    _instance: polyplug_abi::GuestContractInstance,
+    _instance: GuestContractInstance,
 ) {
 }
 
@@ -339,8 +342,7 @@ static CONCURRENT_INTERFACES: [GuestContractInterface; CONCURRENT_THREADS] = [
 fn resolve_concurrent_access_thread_safety() {
     let registry: Arc<RuntimeStore> = Arc::new(RuntimeStore::new());
     let barrier: Arc<Barrier> = Arc::new(Barrier::new(CONCURRENT_THREADS));
-    let mut thread_handles: Vec<std::thread::JoinHandle<()>> =
-        Vec::with_capacity(CONCURRENT_THREADS);
+    let mut thread_handles: Vec<JoinHandle<()>> = Vec::with_capacity(CONCURRENT_THREADS);
 
     let mut handles: Vec<GuestContractHandle> = Vec::with_capacity(CONCURRENT_THREADS);
     for idx in 0_usize..CONCURRENT_THREADS {
@@ -366,7 +368,7 @@ fn resolve_concurrent_access_thread_safety() {
         let handle: GuestContractHandle = handles[idx];
         let expected_contract_id: u64 = CONCURRENT_CONTRACT_IDS[idx];
 
-        let thread_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
+        let thread_handle: JoinHandle<()> = thread::spawn(move || {
             barrier_clone.wait();
 
             for _round in 0_usize..CONCURRENT_ROUNDS {

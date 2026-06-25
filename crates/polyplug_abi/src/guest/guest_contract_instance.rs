@@ -18,6 +18,7 @@
 //! - `contract_id`: Contract ID stamped at instance creation
 
 use core::ffi::c_void;
+use core::ptr;
 
 use polyplug_utils::GuestContractId;
 
@@ -73,7 +74,7 @@ impl GuestContractInstance {
     /// Create a null instance handle.
     pub fn null() -> Self {
         Self {
-            data: core::ptr::null_mut(),
+            data: ptr::null_mut(),
             contract_id: GuestContractId::from_u64(0),
         }
     }

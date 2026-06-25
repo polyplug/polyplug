@@ -68,9 +68,15 @@ use polyplug_abi::HostApi;
 use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
+use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::types::Version;
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
+
+use core::mem;
+use core::ptr;
+use criterion::BenchmarkGroup;
+use criterion::measurement::WallTime;
 
 // ─── Native target + provider ─────────────────────────────────────────────────
 
@@ -104,7 +110,7 @@ unsafe extern "C" fn bench_add(
 }
 
 unsafe extern "C" fn noop_create_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -116,7 +122,7 @@ unsafe extern "C" fn noop_create_instance(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
@@ -210,10 +216,10 @@ unsafe fn cached_dispatch(interface: *const GuestContractInterface, contract_id:
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { core::mem::transmute(fn_ptr) };
+    ) = unsafe { mem::transmute(fn_ptr) };
 
     let instance: GuestContractInstance = GuestContractInstance {
-        data: core::ptr::null_mut(),
+        data: ptr::null_mut(),
         contract_id: GuestContractId::from_u64(contract_id),
     };
     let args: AddArgs = AddArgs {
@@ -376,8 +382,7 @@ fn bench_contention(c: &mut Criterion) {
 
     let thread_counts: [usize; 4] = [1, 2, 4, 8];
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("contention");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("contention");
     // Threaded measurements are heavier than the single-shot benches; trim the
     // sample count so a full run stays in the low-seconds range per thread count.
     group.sample_size(30);
@@ -412,7 +417,7 @@ fn bench_contention(c: &mut Criterion) {
     group.finish();
     // The runtime owns the leaked interface for the process lifetime; keep it
     // alive for the whole bench. Never dropped (the leaked interface is 'static).
-    core::mem::forget(runtime);
+    mem::forget(runtime);
 }
 
 // ─── criterion_group / criterion_main ────────────────────────────────────────

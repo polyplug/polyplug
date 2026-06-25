@@ -1,21 +1,35 @@
 //! DotnetContext — CLR runtime context, cached across all plugin loads.
 
+use core::ffi::c_void;
+use core::mem;
+use std::env;
+use std::ffi::OsStr;
 use std::fs;
-
-use polyplug::logger::LoggerHandle;
-use polyplug_abi::types::LogLevel;
+use std::io::Error as IoError;
 use std::io::Write as _;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
+
+use polyplug::logger::LoggerHandle;
+use polyplug_abi::AbiError;
+use polyplug_abi::BundleInitContext;
+use polyplug_abi::HostApi;
+use polyplug_abi::types::LogLevel;
 
 use netcorehost::hostfxr::AssemblyDelegateLoader;
+use netcorehost::hostfxr::Hostfxr;
 use netcorehost::hostfxr::HostfxrContext;
 use netcorehost::hostfxr::InitializedForRuntimeConfig;
 use netcorehost::hostfxr::ManagedFunction;
 use netcorehost::pdcstring::PdCString;
 
 use once_cell::sync::OnceCell;
+use tempfile::Builder as TempfileBuilder;
+use tempfile::NamedTempFile;
+use tempfile::TempDir;
 
 use polyplug::error::LoaderError;
 
@@ -33,10 +47,8 @@ use crate::config::HostfxrLocation;
 ///   value, identical to every other generator's `polyplug_init`. The C#
 ///   `[UnmanagedCallersOnly]` cdecl thunk returns the struct via the platform
 ///   C ABI (sret), which `extern "system"` matches on every supported target.
-pub(crate) type InitFn = unsafe extern "system" fn(
-    *const polyplug_abi::HostApi,
-    *const polyplug_abi::BundleInitContext,
-) -> polyplug_abi::types::AbiError;
+pub(crate) type InitFn =
+    unsafe extern "system" fn(*const HostApi, *const BundleInitContext) -> AbiError;
 
 /// Embedded bytes of the managed byte-load bridge assembly, staged by `build.rs` into
 /// `OUT_DIR/byte_bridge.dll`. When the .NET SDK is unavailable at build time the staged file
@@ -54,7 +66,7 @@ pub(crate) const BYTE_BRIDGE_AVAILABLE: bool = matches!(
 /// (null on failure)`. The assembly is loaded into the (runtime, bundle) collectible ALC —
 /// the composite key isolates two Runtimes loading the same bundle id.
 pub(crate) type BridgeLoadAndGetInitFn =
-    unsafe extern "system" fn(u64, u64, *const u8, i32, *const u8, i32) -> *const core::ffi::c_void;
+    unsafe extern "system" fn(u64, u64, *const u8, i32, *const u8, i32) -> *const c_void;
 
 /// Signature of the bridge's `PolyplugByteBridgeLoadFromPathAndGetInit` entry point:
 /// `(runtime_id, bundle_id, path_ptr, path_len, type_name_ptr, type_name_len) -> init_fn_ptr
@@ -62,7 +74,7 @@ pub(crate) type BridgeLoadAndGetInitFn =
 /// ALC (with sibling-dependency probing), so on-disk (`Path`) bundles also support true
 /// managed unload.
 pub(crate) type BridgeLoadFromPathAndGetInitFn =
-    unsafe extern "system" fn(u64, u64, *const u8, i32, *const u8, i32) -> *const core::ffi::c_void;
+    unsafe extern "system" fn(u64, u64, *const u8, i32, *const u8, i32) -> *const c_void;
 
 /// Signature of the bridge's `PolyplugByteBridgePreloadDependency` entry point:
 /// `(runtime_id, bundle_id, asm_ptr, asm_len) -> u32 (0 on success)`. Loads into the
@@ -124,7 +136,7 @@ pub(crate) static CLR_CONTEXT: OnceCell<Arc<DotnetContext>> = OnceCell::new();
 /// via `OnceCell::get_or_try_init`.
 pub(crate) fn init_context(
     config: &DotnetConfig,
-    bundle_dir: &std::path::Path,
+    bundle_dir: &Path,
     logger: LoggerHandle,
 ) -> Result<Arc<DotnetContext>, LoaderError> {
     // Step 1: Parse version from "net10.0" → "10.0" → "10.0.0"
@@ -155,23 +167,23 @@ pub(crate) fn init_context(
     // hostfxr requires the runtimeconfig file to have a ".json" extension —
     // it uses the filename to detect the file type. tempfile::NamedTempFile::new()
     // creates files with no extension, causing hostfxr to reject the config.
-    let mut tmp: tempfile::NamedTempFile = tempfile::Builder::new()
-        .suffix(".json")
-        .tempfile()
-        .map_err(|e: std::io::Error| LoaderError::InitFailed {
-            bundle: "<tempfile>".to_owned(),
-            error: format!("CLR init failed: {}", e),
-        })?;
+    let mut tmp: NamedTempFile =
+        TempfileBuilder::new()
+            .suffix(".json")
+            .tempfile()
+            .map_err(|e: IoError| LoaderError::InitFailed {
+                bundle: "<tempfile>".to_owned(),
+                error: format!("CLR init failed: {}", e),
+            })?;
     tmp.write_all(json.as_bytes())
-        .map_err(|e: std::io::Error| LoaderError::InitFailed {
+        .map_err(|e: IoError| LoaderError::InitFailed {
             bundle: "<tempfile>".to_owned(),
             error: format!("CLR init failed: {}", e),
         })?;
-    tmp.flush()
-        .map_err(|e: std::io::Error| LoaderError::InitFailed {
-            bundle: "<tempfile>".to_owned(),
-            error: format!("CLR init failed: {}", e),
-        })?;
+    tmp.flush().map_err(|e: IoError| LoaderError::InitFailed {
+        bundle: "<tempfile>".to_owned(),
+        error: format!("CLR init failed: {}", e),
+    })?;
 
     // Close the write handle before hostfxr reads the file, but keep the file on disk.
     // On Windows, hostfxr opens the runtimeconfig with CreateFileW(GENERIC_READ,
@@ -196,7 +208,7 @@ pub(crate) fn init_context(
     // causing hostpolicy to reject the context init with "Arguments to hostpolicy are invalid".
     // Instead we scan for libhostfxr.so ourselves — identical to what the C++ reference
     // implementation does — and call Hostfxr::load_from_path() directly.
-    let hostfxr: netcorehost::hostfxr::Hostfxr = match &config.hostfxr {
+    let hostfxr: Hostfxr = match &config.hostfxr {
         HostfxrLocation::Auto => {
             let fxr_path: PathBuf =
                 find_hostfxr_auto(logger).ok_or_else(|| LoaderError::InitFailed {
@@ -204,19 +216,15 @@ pub(crate) fn init_context(
                     error: "CLR init failed: hostfxr not found; install .NET or set DOTNET_ROOT"
                         .to_owned(),
                 })?;
-            netcorehost::hostfxr::Hostfxr::load_from_path(&fxr_path).map_err(|e| {
-                LoaderError::InitFailed {
-                    bundle: fxr_path.to_string_lossy().into_owned(),
-                    error: format!("CLR init failed: {}", e),
-                }
+            Hostfxr::load_from_path(&fxr_path).map_err(|e| LoaderError::InitFailed {
+                bundle: fxr_path.to_string_lossy().into_owned(),
+                error: format!("CLR init failed: {}", e),
             })?
         }
         HostfxrLocation::Path(p) => {
-            netcorehost::hostfxr::Hostfxr::load_from_path(p).map_err(|e| {
-                LoaderError::InitFailed {
-                    bundle: p.to_string_lossy().into_owned(),
-                    error: format!("CLR init failed: {}", e),
-                }
+            Hostfxr::load_from_path(p).map_err(|e| LoaderError::InitFailed {
+                bundle: p.to_string_lossy().into_owned(),
+                error: format!("CLR init failed: {}", e),
             })?
         }
     };
@@ -234,7 +242,7 @@ pub(crate) fn init_context(
 
     // Step 6: Explicitly delete the temp file now that hostfxr has read it synchronously.
     // Intentionally ignore the error — best-effort cleanup only.
-    let _: Result<(), std::io::Error> = tmp_path_guard.close();
+    let _: Result<(), IoError> = tmp_path_guard.close();
 
     Ok(Arc::new(DotnetContext {
         _context: Mutex::new(context),
@@ -264,19 +272,17 @@ impl DotnetContext {
         // hostfxr keys delegate loaders by assembly filename, and the bridge resolves its own
         // type by the assembly simple name, so the staged file must be named after the bridge
         // assembly: `Polyplug.Loaders.DotnetByteBridge.dll`.
-        let dir: tempfile::TempDir = tempfile::Builder::new()
+        let dir: TempDir = TempfileBuilder::new()
             .prefix("polyplug-dotnet-bridge")
             .tempdir()
-            .map_err(|e: std::io::Error| LoaderError::InitFailed {
+            .map_err(|e: IoError| LoaderError::InitFailed {
                 bundle: "<byte-bridge>".to_owned(),
                 error: format!("byte-bridge stage failed: {e}"),
             })?;
         let dll_path: PathBuf = dir.path().join("Polyplug.Loaders.DotnetByteBridge.dll");
-        std::fs::write(&dll_path, BYTE_BRIDGE_DLL).map_err(|e: std::io::Error| {
-            LoaderError::InitFailed {
-                bundle: "<byte-bridge>".to_owned(),
-                error: format!("byte-bridge write failed: {e}"),
-            }
+        fs::write(&dll_path, BYTE_BRIDGE_DLL).map_err(|e: IoError| LoaderError::InitFailed {
+            bundle: "<byte-bridge>".to_owned(),
+            error: format!("byte-bridge write failed: {e}"),
         })?;
 
         let asm_pdc: PdCString =
@@ -286,7 +292,7 @@ impl DotnetContext {
             })?;
 
         let loader: AssemblyDelegateLoader = {
-            let ctx: std::sync::MutexGuard<'_, HostfxrContext<InitializedForRuntimeConfig>> =
+            let ctx: MutexGuard<'_, HostfxrContext<InitializedForRuntimeConfig>> =
                 self._context.lock().map_err(|_| LoaderError::InitFailed {
                     bundle: "<byte-bridge>".to_owned(),
                     error: "CLR context mutex poisoned (bridge)".to_owned(),
@@ -435,7 +441,7 @@ impl DotnetContext {
         // SAFETY: `load_and_get_init` is a valid CLR fn ptr resolved in `init_bridge`.
         // Both buffers are valid and correctly sized; the bridge copies them during the call
         // and returns either a valid native fn ptr or null.
-        let raw: *const core::ffi::c_void = unsafe {
+        let raw: *const c_void = unsafe {
             (bridge.load_and_get_init)(
                 runtime_id,
                 bundle_id,
@@ -455,8 +461,7 @@ impl DotnetContext {
         // SAFETY: a non-null return is the native entry of the guest's `[UnmanagedCallersOnly]`
         // PolyplugInit, whose ABI matches `InitFn` (host, ctx) -> AbiError. Transmuting a raw fn
         // pointer of identical ABI is sound; the CLR keeps the method alive for the run.
-        let init_fn: InitFn =
-            unsafe { core::mem::transmute::<*const core::ffi::c_void, InitFn>(raw) };
+        let init_fn: InitFn = unsafe { mem::transmute::<*const c_void, InitFn>(raw) };
         Ok(init_fn)
     }
 
@@ -467,7 +472,7 @@ impl DotnetContext {
         &self,
         runtime_id: u64,
         bundle_id: u64,
-        asm_path: &std::path::Path,
+        asm_path: &Path,
         asm_name: &str,
         simple_type_name: &str,
     ) -> Result<InitFn, LoaderError> {
@@ -478,7 +483,7 @@ impl DotnetContext {
         // SAFETY: `load_from_path_and_get_init` is a valid CLR fn ptr resolved in `init_bridge`.
         // Both buffers are valid and correctly sized; the bridge copies them during the call and
         // returns either a valid native fn ptr or null.
-        let raw: *const core::ffi::c_void = unsafe {
+        let raw: *const c_void = unsafe {
             (bridge.load_from_path_and_get_init)(
                 runtime_id,
                 bundle_id,
@@ -498,8 +503,7 @@ impl DotnetContext {
         // SAFETY: a non-null return is the native entry of the guest's `[UnmanagedCallersOnly]`
         // PolyplugInit, whose ABI matches `InitFn` (host, ctx) -> AbiError. Transmuting a raw fn
         // pointer of identical ABI is sound; the ALC keeps the method alive until Unload.
-        let init_fn: InitFn =
-            unsafe { core::mem::transmute::<*const core::ffi::c_void, InitFn>(raw) };
+        let init_fn: InitFn = unsafe { mem::transmute::<*const c_void, InitFn>(raw) };
         Ok(init_fn)
     }
 
@@ -544,7 +548,7 @@ impl DotnetContext {
 /// Build a `PdCString` for a bridge type/method name, mapping nul-byte errors to a
 /// structured loader error.
 fn bridge_pdc(s: &str) -> Result<PdCString, LoaderError> {
-    PdCString::from_os_str(std::ffi::OsStr::new(s)).map_err(|_| LoaderError::InitFailed {
+    PdCString::from_os_str(OsStr::new(s)).map_err(|_| LoaderError::InitFailed {
         bundle: "<byte-bridge>".to_owned(),
         error: format!("bridge name contains embedded nul byte: {s}"),
     })
@@ -565,7 +569,7 @@ fn find_hostfxr_auto(logger: LoggerHandle) -> Option<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
 
     // 1. DOTNET_ROOT env var.
-    if let Some(val) = std::env::var_os("DOTNET_ROOT") {
+    if let Some(val) = env::var_os("DOTNET_ROOT") {
         roots.push(PathBuf::from(val));
     }
 
@@ -575,8 +579,8 @@ fn find_hostfxr_auto(logger: LoggerHandle) -> Option<PathBuf> {
     } else {
         "dotnet"
     };
-    if let Some(path_val) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path_val) {
+    if let Some(path_val) = env::var_os("PATH") {
+        for dir in env::split_paths(&path_val) {
             let candidate: PathBuf = dir.join(dotnet_bin);
             if candidate.exists() {
                 roots.push(dir);
@@ -587,10 +591,10 @@ fn find_hostfxr_auto(logger: LoggerHandle) -> Option<PathBuf> {
     // 3. Well-known system paths.
     #[cfg(target_os = "windows")]
     {
-        if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        if let Some(program_files) = env::var_os("ProgramFiles") {
             roots.push(PathBuf::from(program_files).join("dotnet"));
         }
-        if let Some(program_files_x86) = std::env::var_os("ProgramFiles(x86)") {
+        if let Some(program_files_x86) = env::var_os("ProgramFiles(x86)") {
             roots.push(PathBuf::from(program_files_x86).join("dotnet"));
         }
     }
@@ -598,7 +602,7 @@ fn find_hostfxr_auto(logger: LoggerHandle) -> Option<PathBuf> {
     {
         roots.push(PathBuf::from("/usr/share/dotnet"));
         roots.push(PathBuf::from("/usr/lib/dotnet"));
-        if let Some(home) = std::env::var_os("HOME") {
+        if let Some(home) = env::var_os("HOME") {
             roots.push(PathBuf::from(home).join(".dotnet"));
         }
     }
@@ -617,7 +621,7 @@ fn find_hostfxr_auto(logger: LoggerHandle) -> Option<PathBuf> {
 /// Within `<dotnet_root>/host/fxr/`, enumerate version subdirectories and return
 /// the path to `libhostfxr.so` (or `hostfxr.dll` on Windows) inside the highest
 /// version found. Returns `None` if the directory does not exist or is empty.
-fn highest_version_hostfxr(dotnet_root: &std::path::Path, logger: LoggerHandle) -> Option<PathBuf> {
+fn highest_version_hostfxr(dotnet_root: &Path, logger: LoggerHandle) -> Option<PathBuf> {
     let fxr_dir: PathBuf = dotnet_root.join("host").join("fxr");
     if !fxr_dir.is_dir() {
         return None;
@@ -626,7 +630,7 @@ fn highest_version_hostfxr(dotnet_root: &std::path::Path, logger: LoggerHandle) 
     // Collect all subdirectory names that look like version strings.
     let mut versions: Vec<(Vec<u64>, PathBuf)> = Vec::new();
     let entries: fs::ReadDir = fs::read_dir(&fxr_dir)
-        .map_err(|e: std::io::Error| {
+        .map_err(|e: IoError| {
             logger.log(LogLevel::Error, "loader.dotnet", || {
                 format!(
                     "highest_version_hostfxr: failed to read dir '{}': {}",

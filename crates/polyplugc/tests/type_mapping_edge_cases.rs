@@ -11,16 +11,19 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{GenerateConfig, Lang, Side};
+use polyplug_codegen::{GenerateConfig, GeneratedFile, Lang, Side};
 use polyplugc::generate;
 use std::io::Write as _;
+use std::path::PathBuf;
+use tempfile::Builder;
+use tempfile::NamedTempFile;
 
 // ─── TOML helpers ─────────────────────────────────────────────────────────────
 
 /// Write `content` to a named temp file and return the `tempfile::NamedTempFile`.
 /// The caller must keep the returned value alive for as long as the path is used.
-fn write_temp_toml(content: &str) -> tempfile::NamedTempFile {
-    let mut file: tempfile::NamedTempFile = tempfile::Builder::new()
+fn write_temp_toml(content: &str) -> NamedTempFile {
+    let mut file: NamedTempFile = Builder::new()
         .suffix(".toml")
         .tempfile()
         .expect("create temp file");
@@ -56,17 +59,13 @@ return = "TimestampPair"
 ///
 /// Returns the list of generated files (path + content) produced by the
 /// specified language / side combination.
-fn run_generate(
-    toml_content: &str,
-    lang: Lang,
-    side: Side,
-) -> Vec<polyplug_codegen::GeneratedFile> {
-    let tmp: tempfile::NamedTempFile = write_temp_toml(toml_content);
+fn run_generate(toml_content: &str, lang: Lang, side: Side) -> Vec<GeneratedFile> {
+    let tmp: NamedTempFile = write_temp_toml(toml_content);
     let config: GenerateConfig = GenerateConfig {
         api_toml: tmp.path().to_path_buf(),
         lang,
         side,
-        out_dir: std::path::PathBuf::from("/tmp/polyplug_type_mapping_edge_cases"),
+        out_dir: PathBuf::from("/tmp/polyplug_type_mapping_edge_cases"),
     };
     generate(config)
         .expect("generate() must not fail for valid API TOML")
@@ -74,13 +73,10 @@ fn run_generate(
 }
 
 /// Find the first generated file whose path ends with `suffix`.
-fn find_file<'a>(
-    files: &'a [polyplug_codegen::GeneratedFile],
-    suffix: &str,
-) -> &'a polyplug_codegen::GeneratedFile {
+fn find_file<'a>(files: &'a [GeneratedFile], suffix: &str) -> &'a GeneratedFile {
     files
         .iter()
-        .find(|f: &&polyplug_codegen::GeneratedFile| f.path.to_string_lossy().ends_with(suffix))
+        .find(|f: &&GeneratedFile| f.path.to_string_lossy().ends_with(suffix))
         .unwrap_or_else(|| panic!("generated file ending with '{suffix}' not found"))
 }
 
@@ -92,9 +88,8 @@ fn find_file<'a>(
 /// native BigInt. 64-bit values are therefore split into two u32 halves.
 #[test]
 fn quickjs_u64_field_maps_to_lo_hi_pair() {
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);
-    let types_ts: &polyplug_codegen::GeneratedFile = find_file(&files, "types.ts");
+    let files: Vec<GeneratedFile> = run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);
+    let types_ts: &GeneratedFile = find_file(&files, "types.ts");
     let content: &str = &types_ts.content;
 
     // `start_ns` is u64 — must appear as `{ lo: number; hi: number }`.
@@ -107,9 +102,8 @@ fn quickjs_u64_field_maps_to_lo_hi_pair() {
 /// `i64` fields must map to `{ lo: number; hi: number }` in QuickJS TypeScript.
 #[test]
 fn quickjs_i64_field_maps_to_lo_hi_pair() {
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);
-    let types_ts: &polyplug_codegen::GeneratedFile = find_file(&files, "types.ts");
+    let files: Vec<GeneratedFile> = run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);
+    let types_ts: &GeneratedFile = find_file(&files, "types.ts");
     let content: &str = &types_ts.content;
 
     // `end_ns` is i64 — must appear as `{ lo: number; hi: number }`.
@@ -122,9 +116,8 @@ fn quickjs_i64_field_maps_to_lo_hi_pair() {
 /// `u64` parameters must map to `{ lo: number; hi: number }` in QuickJS contracts.
 #[test]
 fn quickjs_u64_param_maps_to_lo_hi_pair() {
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);
-    let contracts_ts: &polyplug_codegen::GeneratedFile = find_file(&files, "types.ts");
+    let files: Vec<GeneratedFile> = run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);
+    let contracts_ts: &GeneratedFile = find_file(&files, "types.ts");
     let content: &str = &contracts_ts.content;
 
     // The `elapsed` function takes a u64 `start` param — must use lo/hi.
@@ -137,8 +130,7 @@ fn quickjs_u64_param_maps_to_lo_hi_pair() {
 /// `u64` must NOT become `bigint` in QuickJS (QuickJS has no native BigInt).
 #[test]
 fn quickjs_u64_never_maps_to_bigint() {
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);
+    let files: Vec<GeneratedFile> = run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);
     for file in &files {
         // `callers.ts` is the Deno HOST caller surface (it runs under Deno, not
         // QuickJS), so it correctly uses native `bigint` for 64-bit values. The
@@ -169,9 +161,8 @@ fn quickjs_u64_never_maps_to_bigint() {
 /// current, intentional behaviour: no `alignas` leaks into the output.
 #[test]
 fn cpp_u64_field_maps_to_uint64_t() {
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::Cpp, Side::Guest);
-    let types_hpp: &polyplug_codegen::GeneratedFile = find_file(&files, "types.hpp");
+    let files: Vec<GeneratedFile> = run_generate(U64_I64_API_TOML, Lang::Cpp, Side::Guest);
+    let types_hpp: &GeneratedFile = find_file(&files, "types.hpp");
     let content: &str = &types_hpp.content;
 
     // Struct `TimestampPair` must declare `uint64_t start_ns`.
@@ -184,9 +175,8 @@ fn cpp_u64_field_maps_to_uint64_t() {
 /// C++ struct emitter maps `i64` fields to `int64_t`.
 #[test]
 fn cpp_i64_field_maps_to_int64_t() {
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::Cpp, Side::Guest);
-    let types_hpp: &polyplug_codegen::GeneratedFile = find_file(&files, "types.hpp");
+    let files: Vec<GeneratedFile> = run_generate(U64_I64_API_TOML, Lang::Cpp, Side::Guest);
+    let types_hpp: &GeneratedFile = find_file(&files, "types.hpp");
     let content: &str = &types_hpp.content;
 
     // `end_ns` is i64 — must be `int64_t`.
@@ -202,9 +192,8 @@ fn cpp_i64_field_maps_to_int64_t() {
 /// SIMD alignment requirements must be handled by the caller, not codegen.
 #[test]
 fn cpp_struct_has_no_alignas_specifier() {
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::Cpp, Side::Guest);
-    let types_hpp: &polyplug_codegen::GeneratedFile = find_file(&files, "types.hpp");
+    let files: Vec<GeneratedFile> = run_generate(U64_I64_API_TOML, Lang::Cpp, Side::Guest);
+    let types_hpp: &GeneratedFile = find_file(&files, "types.hpp");
     let content: &str = &types_hpp.content;
 
     assert!(
@@ -242,9 +231,8 @@ name = "kind"
 return = "EventKind"
 "#;
 
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_ENUM_TOML, Lang::Cpp, Side::Guest);
-    let types_hpp: &polyplug_codegen::GeneratedFile = find_file(&files, "types.hpp");
+    let files: Vec<GeneratedFile> = run_generate(U64_ENUM_TOML, Lang::Cpp, Side::Guest);
+    let types_hpp: &GeneratedFile = find_file(&files, "types.hpp");
     let content: &str = &types_hpp.content;
 
     assert!(
@@ -261,9 +249,8 @@ return = "EventKind"
 /// This is mandatory for interop with the native polyplug host runtime.
 #[test]
 fn csharp_user_struct_has_sequential_layout() {
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::CSharp, Side::Guest);
-    let types_cs: &polyplug_codegen::GeneratedFile = find_file(&files, "Types.cs");
+    let files: Vec<GeneratedFile> = run_generate(U64_I64_API_TOML, Lang::CSharp, Side::Guest);
+    let types_cs: &GeneratedFile = find_file(&files, "Types.cs");
     let content: &str = &types_cs.content;
 
     // The TimestampPair struct must carry the Sequential StructLayout attribute.
@@ -280,9 +267,8 @@ fn csharp_user_struct_has_sequential_layout() {
 /// a `TypeLoadException` at runtime.
 #[test]
 fn csharp_user_struct_never_explicit_layout() {
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::CSharp, Side::Guest);
-    let types_cs: &polyplug_codegen::GeneratedFile = find_file(&files, "Types.cs");
+    let files: Vec<GeneratedFile> = run_generate(U64_I64_API_TOML, Lang::CSharp, Side::Guest);
+    let types_cs: &GeneratedFile = find_file(&files, "Types.cs");
     let content: &str = &types_cs.content;
 
     assert!(
@@ -294,9 +280,8 @@ fn csharp_user_struct_never_explicit_layout() {
 /// C# `u64` fields must map to `ulong` (not `bigint` or any other type).
 #[test]
 fn csharp_u64_field_maps_to_ulong() {
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::CSharp, Side::Guest);
-    let types_cs: &polyplug_codegen::GeneratedFile = find_file(&files, "Types.cs");
+    let files: Vec<GeneratedFile> = run_generate(U64_I64_API_TOML, Lang::CSharp, Side::Guest);
+    let types_cs: &GeneratedFile = find_file(&files, "Types.cs");
     let content: &str = &types_cs.content;
 
     assert!(
@@ -308,9 +293,8 @@ fn csharp_u64_field_maps_to_ulong() {
 /// C# `i64` fields must map to `long`.
 #[test]
 fn csharp_i64_field_maps_to_long() {
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::CSharp, Side::Guest);
-    let types_cs: &polyplug_codegen::GeneratedFile = find_file(&files, "Types.cs");
+    let files: Vec<GeneratedFile> = run_generate(U64_I64_API_TOML, Lang::CSharp, Side::Guest);
+    let types_cs: &GeneratedFile = find_file(&files, "Types.cs");
     let content: &str = &types_cs.content;
 
     assert!(
@@ -336,9 +320,8 @@ params = [
 return = "u64"
 "#;
 
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(TWO_PARAM_TOML, Lang::CSharp, Side::Guest);
-    let types_cs: &polyplug_codegen::GeneratedFile = find_file(&files, "Types.cs");
+    let files: Vec<GeneratedFile> = run_generate(TWO_PARAM_TOML, Lang::CSharp, Side::Guest);
+    let types_cs: &GeneratedFile = find_file(&files, "Types.cs");
     let content: &str = &types_cs.content;
 
     // The generated arg-pack struct for `add_longs(u64, i64)` must be Sequential.

@@ -51,13 +51,18 @@
 use core::cell::Cell;
 use core::ffi::c_void;
 use core::hint::black_box;
+use core::mem;
+use core::ptr;
 
+use criterion::BenchmarkGroup;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
 use criterion::criterion_group;
 use criterion::criterion_main;
+use criterion::measurement::WallTime;
 
+use libloading::{Library, Symbol};
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::Array;
@@ -124,7 +129,7 @@ extern "C" fn fill_abi(args: *const (), out: *mut ()) -> AbiError {
 
 thread_local! {
     static CAPTURED_INTERFACE: Cell<*const GuestContractInterface> =
-        const { Cell::new(core::ptr::null()) };
+        const { Cell::new(ptr::null()) };
 }
 
 /// Register callback that captures the interface pointer.
@@ -175,7 +180,7 @@ unsafe extern "C" fn stub_resolve(
     _this: *const HostApi,
     _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
-    core::ptr::null()
+    ptr::null()
 }
 
 unsafe extern "C" fn stub_get_host_contract(
@@ -191,7 +196,7 @@ unsafe extern "C" fn stub_resolve_host_iface(
     _contract_id: u64,
     _min_version: u32,
 ) -> *const HostContractInterface {
-    core::ptr::null()
+    ptr::null()
 }
 
 unsafe extern "C" fn stub_list_bundles(_this: *const HostApi) -> Array<BundleId> {
@@ -292,7 +297,7 @@ unsafe extern "C" fn stub_unload_bundle(
 }
 
 unsafe extern "C" fn stub_alloc(_this: *const HostApi, _size: usize, _align: usize) -> *mut u8 {
-    core::ptr::null_mut()
+    ptr::null_mut()
 }
 
 unsafe extern "C" fn stub_free(_this: *const HostApi, _ptr: *mut u8, _size: usize, _align: usize) {}
@@ -300,7 +305,7 @@ unsafe extern "C" fn stub_free(_this: *const HostApi, _ptr: *mut u8, _size: usiz
 /// A `HostApi` whose `register_guest_contract` captures the interface pointer.
 fn capture_host() -> HostApi {
     HostApi {
-        runtime: core::ptr::null_mut(),
+        runtime: ptr::null_mut(),
         register_guest_contract: capture_register_callback,
         alloc: stub_alloc,
         free: stub_free,
@@ -322,21 +327,20 @@ fn capture_host() -> HostApi {
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
         revision_counter: stub_revision_counter,
-        reserved: core::ptr::null(),
+        reserved: ptr::null(),
     }
 }
 
 /// Load `memory_plugin`, run `polyplug_init`, and return the dispatch function
 /// for `memory.test` fn 0 (`fill_preallocated_buffer`) plus the kept-alive lib.
 fn load_fill_dispatch() -> (
-    libloading::Library,
+    Library,
     unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError),
 ) {
     // SAFETY: MEMORY_PLUGIN_SO is a valid cdylib built by build_all.sh.
-    let library: libloading::Library =
-        unsafe { libloading::Library::new(MEMORY_PLUGIN_SO).expect("load memory plugin") };
+    let library: Library = unsafe { Library::new(MEMORY_PLUGIN_SO).expect("load memory plugin") };
     // SAFETY: polyplug_init matches the 2-arg ABI.
-    let init_fn: libloading::Symbol<
+    let init_fn: Symbol<
         '_,
         unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe { library.get(b"polyplug_init\0").expect("polyplug_init") };
@@ -369,7 +373,7 @@ fn load_fill_dispatch() -> (
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { core::mem::transmute(fn_ptr) };
+    ) = unsafe { mem::transmute(fn_ptr) };
 
     (library, dispatch_fn)
 }
@@ -383,12 +387,11 @@ fn bench_payload_scaling(c: &mut Criterion) {
     assert!(!buf_ptr.is_null(), "bench alloc failed");
 
     let (library, dispatch_fn): (
-        libloading::Library,
+        Library,
         unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError),
     ) = load_fill_dispatch();
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("payload_scaling");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("payload_scaling");
 
     for &size in SIZES.iter() {
         // Throughput in bytes so criterion also reports MB/s per arm per size.
@@ -453,7 +456,7 @@ fn bench_payload_scaling(c: &mut Criterion) {
     // SAFETY: buf_ptr was allocated with polyplug_host_alloc(MAX_SIZE, 8); the
     // benchmark loop is complete, so no dispatch holds it any more.
     unsafe { polyplug_host_free(buf_ptr, MAX_SIZE, 8) };
-    core::mem::forget(library);
+    mem::forget(library);
 }
 
 criterion_group!(benches, bench_payload_scaling);
@@ -461,32 +464,32 @@ criterion_main!(benches);
 
 /// `HostApi.log` stub for test hosts — drops the record.
 unsafe extern "C" fn stub_host_log(
-    _this: *const polyplug_abi::HostApi,
+    _this: *const HostApi,
     _level: u32,
-    _scope: polyplug_abi::StringView,
-    _message: polyplug_abi::StringView,
+    _scope: StringView,
+    _message: StringView,
 ) {
 }
 
 unsafe extern "C" fn stub_create_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _args: *const core::ffi::c_void,
-    out_instance: *mut polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _args: *const c_void,
+    out_instance: *mut GuestContractInstance,
 ) {
     if !out_instance.is_null() {
         // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+        unsafe { out_instance.write(GuestContractInstance::null()) };
     }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _instance: polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _instance: GuestContractInstance,
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const polyplug_abi::HostApi) -> *const u64 {
-    core::ptr::null()
+unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
+    ptr::null()
 }

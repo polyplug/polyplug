@@ -26,33 +26,44 @@
 // plugins below take `impl` and ignore it.
 #![allow(clippy::expect_used)]
 
+use core::ptr;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::thread;
+use std::thread::JoinHandle;
 use tempfile::TempDir;
 
 use polyplug::error::LoaderError;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::BundleSource;
 use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime_builder::RuntimeBuilder;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
+use polyplug_abi::CallArena;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
+use polyplug_abi::GuestContractInterface;
+use polyplug_abi::VmDispatch;
 use polyplug_abi::dispatch::DispatchType;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
 use polyplug_utils::bundle_id;
+use pyo3::Bound;
+use pyo3::PyAny;
 use pyo3::Python;
 use pyo3::types::PyAnyMethods;
+use pyo3::types::PyCFunction;
 use pyo3::types::PyDict;
 use pyo3::types::PyDictMethods;
 use pyo3::types::PyModule;
+use pyo3::types::PyTuple;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -124,13 +135,13 @@ unsafe fn dispatch(
         .registry()
         .find(cid, 0)
         .expect("contract must be registered");
-    let interface_ptr: *const polyplug_abi::GuestContractInterface = runtime
+    let interface_ptr: *const GuestContractInterface = runtime
         .registry()
         .resolve_guest_contract(handle)
         .expect("contract must resolve to an interface");
     // SAFETY: resolved interface is a non-null, runtime-owned GuestContractInterface
     // leaked for the runtime lifetime; reading it and its VM dispatch fields is sound.
-    let interface: &polyplug_abi::GuestContractInterface = unsafe { &*interface_ptr };
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     assert_eq!(
         interface.dispatch_type,
         DispatchType::VirtualMachine,
@@ -138,7 +149,7 @@ unsafe fn dispatch(
     );
     // SAFETY: dispatch_type == VirtualMachine guarantees the `vm` union arm is
     // active, so reading it is sound.
-    let vm: polyplug_abi::dispatch::vm_dispatch::VmDispatch = unsafe { interface.dispatch.vm };
+    let vm: VmDispatch = unsafe { interface.dispatch.vm };
     let mut err: AbiError = AbiError::ok();
     // SAFETY: the call function is the loader's python_vm_dispatch; loader_data
     // wraps a live leaked PythonLoaderData; args/out are caller-provided.
@@ -149,7 +160,7 @@ unsafe fn dispatch(
             fn_id,
             args,
             out,
-            core::ptr::null_mut(),
+            ptr::null_mut(),
             &mut err as *mut AbiError,
         );
     }
@@ -169,21 +180,21 @@ unsafe fn dispatch_with_arena(
     fn_id: u32,
     args: *const (),
     out: *mut (),
-    arena: *mut polyplug_abi::CallArena,
+    arena: *mut CallArena,
 ) -> AbiError {
     let cid: GuestContractId = GuestContractId::from_u64(contract_id);
     let handle: GuestContractHandle = runtime
         .registry()
         .find(cid, 0)
         .expect("contract must be registered");
-    let interface_ptr: *const polyplug_abi::GuestContractInterface = runtime
+    let interface_ptr: *const GuestContractInterface = runtime
         .registry()
         .resolve_guest_contract(handle)
         .expect("contract must resolve to an interface");
     // SAFETY: resolved interface is a non-null, runtime-owned interface.
-    let interface: &polyplug_abi::GuestContractInterface = unsafe { &*interface_ptr };
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: Python contracts always register VM dispatch.
-    let vm: polyplug_abi::dispatch::vm_dispatch::VmDispatch = unsafe { interface.dispatch.vm };
+    let vm: VmDispatch = unsafe { interface.dispatch.vm };
     let mut err: AbiError = AbiError::ok();
     // SAFETY: loader_data wraps a live leaked PythonLoaderData; args/out/arena are
     // caller-provided and valid for this call.
@@ -321,7 +332,7 @@ fn test_interpreter_initializes_without_panic() {
     let manifest: ManifestData = make_manifest(&path, "noop_init");
     let result: Result<(), LoaderError> = loader.load(
         &manifest,
-        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     assert!(result.is_ok(), "unexpected error: {result:?}");
@@ -337,7 +348,7 @@ fn test_default_config_version_check_passes() {
     let manifest: ManifestData = make_manifest(&path, "ver_check");
     let result: Result<(), LoaderError> = PythonLoader::new(PythonConfig::default()).load(
         &manifest,
-        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     assert!(result.is_ok(), "version check failed: {result:?}");
@@ -357,7 +368,7 @@ fn test_version_too_old_returns_version_mismatch() {
     let err: LoaderError = PythonLoader::new(config)
         .load(
             &manifest,
-            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect_err("expected version mismatch");
@@ -386,7 +397,7 @@ fn test_valid_plugin_registers_vm_contract() {
     let manifest: ManifestData = make_manifest(&path, "valid_plugin");
     let result: Result<(), LoaderError> = loader.load(
         &manifest,
-        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     assert!(result.is_ok(), "load failed: {result:?}");
@@ -396,12 +407,12 @@ fn test_valid_plugin_registers_vm_contract() {
         .registry()
         .find(cid, 0)
         .expect("contract must be registered");
-    let interface_ptr: *const polyplug_abi::GuestContractInterface = runtime
+    let interface_ptr: *const GuestContractInterface = runtime
         .registry()
         .resolve_guest_contract(handle)
         .expect("contract must resolve");
     // SAFETY: runtime-owned interface; reading dispatch_type is sound.
-    let interface: &polyplug_abi::GuestContractInterface = unsafe { &*interface_ptr };
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     assert_eq!(
         interface.dispatch_type,
         DispatchType::VirtualMachine,
@@ -419,7 +430,7 @@ fn test_vm_dispatch_writes_out_and_returns_ok() {
     loader
         .load(
             &manifest,
-            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect("load must succeed");
@@ -431,7 +442,7 @@ fn test_vm_dispatch_writes_out_and_returns_ok() {
             &runtime,
             writeout_contract_id(),
             0,
-            core::ptr::null(),
+            ptr::null(),
             &mut out_buf as *mut i32 as *mut (),
         )
     };
@@ -453,7 +464,7 @@ fn test_vm_dispatch_exception_maps_to_generic() {
     loader
         .load(
             &manifest,
-            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect("load must succeed");
@@ -464,8 +475,8 @@ fn test_vm_dispatch_exception_maps_to_generic() {
             &runtime,
             raiser_contract_id(),
             0,
-            core::ptr::null(),
-            core::ptr::null_mut(),
+            ptr::null(),
+            ptr::null_mut(),
         )
     };
     assert_eq!(
@@ -485,7 +496,7 @@ fn test_vm_dispatch_fn_id_out_of_range() {
     loader
         .load(
             &manifest,
-            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect("load must succeed");
@@ -497,8 +508,8 @@ fn test_vm_dispatch_fn_id_out_of_range() {
             &runtime,
             writeout_contract_id(),
             5,
-            core::ptr::null(),
-            core::ptr::null_mut(),
+            ptr::null(),
+            ptr::null_mut(),
         )
     };
     assert_eq!(
@@ -518,7 +529,7 @@ fn test_vm_dispatch_arena_forwarded_zero_when_null() {
     loader
         .load(
             &manifest,
-            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect("load must succeed");
@@ -531,7 +542,7 @@ fn test_vm_dispatch_arena_forwarded_zero_when_null() {
             &runtime,
             arenafwd_contract_id(),
             0,
-            core::ptr::null(),
+            ptr::null(),
             &mut out_buf as *mut i64 as *mut (),
         )
     };
@@ -552,7 +563,7 @@ fn test_syntax_error_returns_init_failed() {
     let err: LoaderError = loader
         .load(
             &manifest,
-            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect_err("expected failure for syntax error plugin");
@@ -568,7 +579,7 @@ fn test_import_error_returns_init_failed() {
     let err: LoaderError = loader
         .load(
             &manifest,
-            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect_err("expected failure for import-error plugin");
@@ -584,7 +595,7 @@ fn test_missing_init_returns_init_symbol_missing() {
     let err: LoaderError = loader
         .load(
             &manifest,
-            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect_err("expected failure");
@@ -600,7 +611,7 @@ fn test_raising_init_returns_init_failed() {
     let err: LoaderError = loader
         .load(
             &manifest,
-            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect_err("expected failure");
@@ -625,7 +636,7 @@ fn test_missing_registrations_attr_fails() {
     let err: LoaderError = loader
         .load(
             &manifest,
-            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect_err("expected failure for non-tuple polyplug_init return");
@@ -650,7 +661,7 @@ fn test_empty_registrations_fails() {
     let err: LoaderError = loader
         .load(
             &manifest,
-            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect_err("expected failure for empty registrations");
@@ -680,7 +691,7 @@ fn test_many_sequential_loads() {
         let manifest: ManifestData = make_manifest(&path, &name);
         let result: Result<(), LoaderError> = loader.load(
             &manifest,
-            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &BundleSource::Path(manifest.path.clone()),
             &runtime,
         );
         // Only the first load registers `writeout@1`; later loads collide on the
@@ -708,7 +719,7 @@ fn test_valid_load_after_failed_load_succeeds() {
         loader
             .load(
                 &bad_manifest,
-                &polyplug::loader::BundleSource::Path(bad_manifest.path.clone()),
+                &BundleSource::Path(bad_manifest.path.clone()),
                 &runtime
             )
             .is_err(),
@@ -717,7 +728,7 @@ fn test_valid_load_after_failed_load_succeeds() {
 
     let result: Result<(), LoaderError> = loader.load(
         &good_manifest,
-        &polyplug::loader::BundleSource::Path(good_manifest.path.clone()),
+        &BundleSource::Path(good_manifest.path.clone()),
         &runtime,
     );
     assert!(result.is_ok(), "recovery load failed: {result:?}");
@@ -753,7 +764,7 @@ def polyplug_init(_host_interface: int, ctx_addr: int):
     let manifest: ManifestData = make_manifest(&path, "ctx_check");
     let result: Result<(), LoaderError> = loader.load(
         &manifest,
-        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     assert!(result.is_ok(), "context check plugin failed: {result:?}");
@@ -810,7 +821,7 @@ from _splitmod_helper import polyplug_init
 
     let result: Result<(), LoaderError> = loader.load(
         &manifest,
-        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     assert!(result.is_ok(), "split-module load failed: {result:?}");
@@ -822,7 +833,7 @@ from _splitmod_helper import polyplug_init
             &runtime,
             GuestContractId::new("splitmod", 1).id(),
             0,
-            core::ptr::null(),
+            ptr::null(),
             &mut out_buf as *mut i32 as *mut (),
         )
     };
@@ -837,11 +848,9 @@ from _splitmod_helper import polyplug_init
 /// module name), holding the GIL via `Python::attach` to mirror the crate.
 fn count_bundle_modules(helper_substr: &str) -> usize {
     Python::attach(|py: Python<'_>| -> usize {
-        let sys_mod: pyo3::Bound<'_, PyModule> = PyModule::import(py, "sys").expect("sys import");
-        let modules: pyo3::Bound<'_, pyo3::PyAny> =
-            sys_mod.getattr("modules").expect("sys.modules");
-        let dict: pyo3::Bound<'_, PyDict> =
-            modules.cast_into::<PyDict>().expect("sys.modules dict");
+        let sys_mod: Bound<'_, PyModule> = PyModule::import(py, "sys").expect("sys import");
+        let modules: Bound<'_, PyAny> = sys_mod.getattr("modules").expect("sys.modules");
+        let dict: Bound<'_, PyDict> = modules.cast_into::<PyDict>().expect("sys.modules dict");
         let mut count: usize = 0;
         for (key, _value) in dict.iter() {
             let key_str: String = match key.extract::<String>() {
@@ -903,7 +912,7 @@ fn unload_purges_bundle_modules_from_sys_modules() {
     loader
         .load(
             &manifest,
-            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect("load must succeed");
@@ -990,7 +999,7 @@ fn test_nested_dispatch_preserves_outer_arena() {
     loader
         .load(
             &manifest,
-            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect("load must succeed");
@@ -1002,13 +1011,11 @@ fn test_nested_dispatch_preserves_outer_arena() {
     // usize (raw pointers are not Send, but it stays valid for the test).
     let runtime_addr: usize = Arc::as_ptr(&runtime) as usize;
     Python::attach(|py: Python<'_>| {
-        let trampoline = pyo3::types::PyCFunction::new_closure(
+        let trampoline = PyCFunction::new_closure(
             py,
             None,
             None,
-            move |_args: &pyo3::Bound<'_, pyo3::types::PyTuple>,
-                  _kwargs: Option<&pyo3::Bound<'_, PyDict>>|
-                  -> i64 {
+            move |_args: &Bound<'_, PyTuple>, _kwargs: Option<&Bound<'_, PyDict>>| -> i64 {
                 // SAFETY: runtime_addr is the live Runtime for the test's lifetime.
                 let rt: &Runtime = unsafe { &*(runtime_addr as *const Runtime) };
                 // SAFETY: fn_id 1 (inner) only allocates from its (null) arena.
@@ -1017,16 +1024,16 @@ fn test_nested_dispatch_preserves_outer_arena() {
                         rt,
                         contract_id,
                         1,
-                        core::ptr::null(),
-                        core::ptr::null_mut(),
-                        core::ptr::null_mut(),
+                        ptr::null(),
+                        ptr::null_mut(),
+                        ptr::null_mut(),
                     )
                 };
                 err.code as i64
             },
         )
         .expect("trampoline creation must succeed");
-        let builtins: pyo3::Bound<'_, PyModule> =
+        let builtins: Bound<'_, PyModule> =
             PyModule::import(py, "builtins").expect("builtins import");
         builtins
             .setattr("__polyplug_test_nested_dispatch", trampoline)
@@ -1038,8 +1045,7 @@ fn test_nested_dispatch_preserves_outer_arena() {
     let mut buf: Vec<u8> = vec![0_u8; 4096];
     let lo: usize = buf.as_ptr() as usize;
     let hi: usize = lo + buf.len();
-    let mut arena: polyplug_abi::CallArena =
-        polyplug_abi::CallArena::new(&mut buf, core::ptr::null());
+    let mut arena: CallArena = CallArena::new(&mut buf, ptr::null());
 
     let mut out: i64 = 0;
     // SAFETY: out is a valid local i64; arena is a valid CallArena over `buf`,
@@ -1049,9 +1055,9 @@ fn test_nested_dispatch_preserves_outer_arena() {
             &runtime,
             contract_id,
             0,
-            core::ptr::null(),
+            ptr::null(),
             &mut out as *mut i64 as *mut (),
-            &mut arena as *mut polyplug_abi::CallArena,
+            &mut arena as *mut CallArena,
         )
     };
     assert!(
@@ -1107,7 +1113,7 @@ fn test_concurrent_dispatch_distinct_arenas_isolated() {
     loader
         .load(
             &manifest,
-            &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+            &BundleSource::Path(manifest.path.clone()),
             &runtime,
         )
         .expect("load must succeed");
@@ -1120,24 +1126,19 @@ fn test_concurrent_dispatch_distinct_arenas_isolated() {
     let a_hi: usize = a_lo + buf_a.len();
     let b_lo: usize = buf_b.as_ptr() as usize;
     let b_hi: usize = b_lo + buf_b.len();
-    let arena_a: &'static mut polyplug_abi::CallArena = Box::leak(Box::new(
-        polyplug_abi::CallArena::new(buf_a, core::ptr::null()),
-    ));
-    let arena_b: &'static mut polyplug_abi::CallArena = Box::leak(Box::new(
-        polyplug_abi::CallArena::new(buf_b, core::ptr::null()),
-    ));
-    let arena_a_addr: usize = arena_a as *mut polyplug_abi::CallArena as usize;
-    let arena_b_addr: usize = arena_b as *mut polyplug_abi::CallArena as usize;
+    let arena_a: &'static mut CallArena = Box::leak(Box::new(CallArena::new(buf_a, ptr::null())));
+    let arena_b: &'static mut CallArena = Box::leak(Box::new(CallArena::new(buf_b, ptr::null())));
+    let arena_a_addr: usize = arena_a as *mut CallArena as usize;
+    let arena_b_addr: usize = arena_b as *mut CallArena as usize;
 
     const ITERS: usize = 500;
     let runtime_a: Arc<Runtime> = Arc::clone(&runtime);
     let runtime_b: Arc<Runtime> = Arc::clone(&runtime);
 
-    let handle_a: std::thread::JoinHandle<Result<(), String>> = std::thread::spawn(move || {
+    let handle_a: JoinHandle<Result<(), String>> = thread::spawn(move || {
         for i in 0..ITERS {
             // SAFETY: arena_a_addr is the live leaked arena for this worker.
-            let arena: &mut polyplug_abi::CallArena =
-                unsafe { &mut *(arena_a_addr as *mut polyplug_abi::CallArena) };
+            let arena: &mut CallArena = unsafe { &mut *(arena_a_addr as *mut CallArena) };
             arena.reset();
             let mut out: i64 = 0;
             // SAFETY: out is a valid local; arena_a is valid; contract is loaded.
@@ -1146,9 +1147,9 @@ fn test_concurrent_dispatch_distinct_arenas_isolated() {
                     &runtime_a,
                     contract_id,
                     0,
-                    core::ptr::null(),
+                    ptr::null(),
                     &mut out as *mut i64 as *mut (),
-                    arena_a_addr as *mut polyplug_abi::CallArena,
+                    arena_a_addr as *mut CallArena,
                 )
             };
             if !err.is_ok() {
@@ -1164,11 +1165,10 @@ fn test_concurrent_dispatch_distinct_arenas_isolated() {
         Ok(())
     });
 
-    let handle_b: std::thread::JoinHandle<Result<(), String>> = std::thread::spawn(move || {
+    let handle_b: JoinHandle<Result<(), String>> = thread::spawn(move || {
         for i in 0..ITERS {
             // SAFETY: arena_b_addr is the live leaked arena for this worker.
-            let arena: &mut polyplug_abi::CallArena =
-                unsafe { &mut *(arena_b_addr as *mut polyplug_abi::CallArena) };
+            let arena: &mut CallArena = unsafe { &mut *(arena_b_addr as *mut CallArena) };
             arena.reset();
             let mut out: i64 = 0;
             // SAFETY: out is a valid local; arena_b is valid; contract is loaded.
@@ -1177,9 +1177,9 @@ fn test_concurrent_dispatch_distinct_arenas_isolated() {
                     &runtime_b,
                     contract_id,
                     0,
-                    core::ptr::null(),
+                    ptr::null(),
                     &mut out as *mut i64 as *mut (),
-                    arena_b_addr as *mut polyplug_abi::CallArena,
+                    arena_b_addr as *mut CallArena,
                 )
             };
             if !err.is_ok() {
@@ -1294,14 +1294,14 @@ fn two_runtimes_same_named_bundle_do_not_collide_in_sys_modules() {
     loader_a
         .load(
             &manifest_a,
-            &polyplug::loader::BundleSource::Path(manifest_a.path.clone()),
+            &BundleSource::Path(manifest_a.path.clone()),
             &runtime_a,
         )
         .expect("runtime A load must succeed");
     loader_b
         .load(
             &manifest_b,
-            &polyplug::loader::BundleSource::Path(manifest_b.path.clone()),
+            &BundleSource::Path(manifest_b.path.clone()),
             &runtime_b,
         )
         .expect("runtime B load must succeed");
@@ -1316,7 +1316,7 @@ fn two_runtimes_same_named_bundle_do_not_collide_in_sys_modules() {
             &runtime_a,
             alpha_cid,
             0,
-            core::ptr::null(),
+            ptr::null(),
             &mut out_a as *mut i32 as *mut (),
         )
     };
@@ -1329,7 +1329,7 @@ fn two_runtimes_same_named_bundle_do_not_collide_in_sys_modules() {
             &runtime_b,
             beta_cid,
             0,
-            core::ptr::null(),
+            ptr::null(),
             &mut out_b as *mut i32 as *mut (),
         )
     };

@@ -1,6 +1,8 @@
 //! Version — version struct, and parse/compare logic.
 
+use core::error::Error;
 use core::fmt;
+use core::str;
 use core::str::FromStr;
 
 #[repr(u32)]
@@ -26,7 +28,7 @@ impl fmt::Display for ParseVersionError {
     }
 }
 
-impl core::error::Error for ParseVersionError {}
+impl Error for ParseVersionError {}
 
 /// A three-component semantic version (major.minor.patch).
 #[repr(C)]
@@ -66,7 +68,7 @@ impl FromStr for Version {
     ///   components, or a required leading component is missing, and
     /// - `Err(ParseVersionError::InvalidInt)` if any component is not a valid `u32`.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let mut v_iter: core::str::Split<'_, char> = value.split('.');
+        let mut v_iter: str::Split<'_, char> = value.split('.');
 
         let major: u32 = v_iter
             .next()

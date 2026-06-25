@@ -9,32 +9,42 @@
 
 #![allow(clippy::expect_used)]
 
+use core::ffi::c_void;
 use core::hint::black_box;
+use core::mem;
+use core::ptr;
 use criterion::{Criterion, criterion_group, criterion_main};
+use std::env;
+use std::ffi::OsStr;
+use std::fs;
+use std::fs::ReadDir;
+use std::io::Write as _;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
 
+use netcorehost::hostfxr::Hostfxr;
 use netcorehost::hostfxr::HostfxrContext;
 use netcorehost::hostfxr::InitializedForRuntimeConfig;
+use netcorehost::hostfxr::ManagedFunction;
 use netcorehost::pdcstring::PdCString;
+use tempfile::Builder as TempfileBuilder;
+use tempfile::NamedTempFile;
 
-type InitFn = unsafe extern "system" fn(
-    *mut core::ffi::c_void,
-    *const core::ffi::c_void,
-    *const core::ffi::c_void,
-) -> u32;
+type InitFn = unsafe extern "system" fn(*mut c_void, *const c_void, *const c_void) -> u32;
 
 static CLR_INIT_FN: Mutex<Option<InitFn>> = Mutex::new(None);
 
 fn find_hostfxr() -> Option<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
 
-    if let Some(val) = std::env::var_os("DOTNET_ROOT") {
+    if let Some(val) = env::var_os("DOTNET_ROOT") {
         roots.push(PathBuf::from(val));
     }
 
-    if let Some(path_val) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path_val) {
+    if let Some(path_val) = env::var_os("PATH") {
+        for dir in env::split_paths(&path_val) {
             let candidate: PathBuf = dir.join("dotnet");
             if candidate.exists() {
                 roots.push(dir);
@@ -44,7 +54,7 @@ fn find_hostfxr() -> Option<PathBuf> {
 
     roots.push(PathBuf::from("/usr/share/dotnet"));
     roots.push(PathBuf::from("/usr/lib/dotnet"));
-    if let Some(home) = std::env::var_os("HOME") {
+    if let Some(home) = env::var_os("HOME") {
         roots.push(PathBuf::from(home).join(".dotnet"));
     }
 
@@ -57,14 +67,14 @@ fn find_hostfxr() -> Option<PathBuf> {
     None
 }
 
-fn highest_version_hostfxr(dotnet_root: &std::path::Path) -> Option<PathBuf> {
+fn highest_version_hostfxr(dotnet_root: &Path) -> Option<PathBuf> {
     let fxr_dir: PathBuf = dotnet_root.join("host").join("fxr");
     if !fxr_dir.is_dir() {
         return None;
     }
 
     let mut versions: Vec<(Vec<u64>, PathBuf)> = Vec::new();
-    let entries: std::fs::ReadDir = std::fs::read_dir(&fxr_dir).ok()?;
+    let entries: ReadDir = fs::read_dir(&fxr_dir).ok()?;
     for entry in entries.flatten() {
         let path: PathBuf = entry.path();
         if !path.is_dir() {
@@ -121,14 +131,12 @@ fn init_clr() -> Option<InitFn> {
     }
 
     let fxr_path: PathBuf = find_hostfxr()?;
-    let hostfxr: netcorehost::hostfxr::Hostfxr =
-        netcorehost::hostfxr::Hostfxr::load_from_path(&fxr_path).ok()?;
+    let hostfxr: Hostfxr = Hostfxr::load_from_path(&fxr_path).ok()?;
 
     let json: String = r#"{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}"#.to_owned();
-    let mut tmp: tempfile::NamedTempFile =
-        tempfile::Builder::new().suffix(".json").tempfile().ok()?;
-    std::io::Write::write_all(&mut tmp, json.as_bytes()).ok()?;
-    std::io::Write::flush(&mut tmp).ok()?;
+    let mut tmp: NamedTempFile = TempfileBuilder::new().suffix(".json").tempfile().ok()?;
+    tmp.write_all(json.as_bytes()).ok()?;
+    tmp.flush().ok()?;
     let temp_path: PathBuf = tmp.path().to_path_buf();
 
     let pdcpath: PdCString = PdCString::from_os_str(temp_path.as_os_str()).ok()?;
@@ -139,21 +147,20 @@ fn init_clr() -> Option<InitFn> {
     let loader = context.get_delegate_loader_for_assembly(asm_pdc).ok()?;
 
     let type_name: PdCString =
-        PdCString::from_os_str(std::ffi::OsStr::new("CsharpPlugin.Plugin, CsharpPlugin")).ok()?;
-    let method_name: PdCString =
-        PdCString::from_os_str(std::ffi::OsStr::new("PolyplugInit")).ok()?;
+        PdCString::from_os_str(OsStr::new("CsharpPlugin.Plugin, CsharpPlugin")).ok()?;
+    let method_name: PdCString = PdCString::from_os_str(OsStr::new("PolyplugInit")).ok()?;
 
-    let init_fn: netcorehost::hostfxr::ManagedFunction<InitFn> = loader
+    let init_fn: ManagedFunction<InitFn> = loader
         .get_function_with_unmanaged_callers_only::<InitFn>(&type_name, &method_name)
         .ok()?;
 
-    core::mem::forget(context);
+    mem::forget(context);
 
     Some(*init_fn)
 }
 
 fn get_init_fn() -> Option<InitFn> {
-    let mut guard: std::sync::MutexGuard<'_, Option<InitFn>> = match CLR_INIT_FN.lock() {
+    let mut guard: MutexGuard<'_, Option<InitFn>> = match CLR_INIT_FN.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
@@ -180,8 +187,7 @@ fn bench_clr_dispatch(c: &mut Criterion) {
             // from the CLR via get_function_with_unmanaged_callers_only. Its three pointer
             // parameters are nullable by ABI contract; the managed side treats null as a
             // no-op and returns an AbiError code, so null pointers are sound here.
-            let result: u32 =
-                unsafe { init_fn(core::ptr::null_mut(), core::ptr::null(), core::ptr::null()) };
+            let result: u32 = unsafe { init_fn(ptr::null_mut(), ptr::null(), ptr::null()) };
             black_box(result)
         })
     });
@@ -193,8 +199,7 @@ fn bench_clr_dispatch(c: &mut Criterion) {
                 // from the CLR via get_function_with_unmanaged_callers_only. Its three pointer
                 // parameters are nullable by ABI contract; the managed side treats null as a
                 // no-op and returns an AbiError code, so null pointers are sound here.
-                let result: u32 =
-                    unsafe { init_fn(core::ptr::null_mut(), core::ptr::null(), core::ptr::null()) };
+                let result: u32 = unsafe { init_fn(ptr::null_mut(), ptr::null(), ptr::null()) };
                 black_box(result);
             }
             black_box(())
@@ -233,16 +238,12 @@ fn bench_native_baseline(c: &mut Criterion) {
 fn bench_dispatch_signature(c: &mut Criterion) {
     let mut group = c.benchmark_group("dispatch_signature");
 
-    type InitFn = unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *const core::ffi::c_void,
-        *const core::ffi::c_void,
-    ) -> u32;
+    type InitFn = unsafe extern "system" fn(*mut c_void, *const c_void, *const c_void) -> u32;
 
     unsafe extern "system" fn noop_init(
-        _rt_ctx: *mut core::ffi::c_void,
-        _host_vtable: *const core::ffi::c_void,
-        _ctx: *const core::ffi::c_void,
+        _rt_ctx: *mut c_void,
+        _host_vtable: *const c_void,
+        _ctx: *const c_void,
     ) -> u32 {
         0
     }
@@ -253,8 +254,7 @@ fn bench_dispatch_signature(c: &mut Criterion) {
         b.iter(|| {
             // SAFETY: init_fn is the local noop_init, which ignores all three pointer
             // arguments and returns 0. Passing null pointers is therefore sound.
-            let result: u32 =
-                unsafe { init_fn(core::ptr::null_mut(), core::ptr::null(), core::ptr::null()) };
+            let result: u32 = unsafe { init_fn(ptr::null_mut(), ptr::null(), ptr::null()) };
             black_box(result)
         })
     });
@@ -269,9 +269,9 @@ fn bench_dispatch_signature(c: &mut Criterion) {
             // call, so they are valid and properly aligned for the duration of the dispatch.
             let result: u32 = unsafe {
                 init_fn(
-                    &mut rt_ctx as *mut u64 as *mut core::ffi::c_void,
-                    &host_vtable as *const u64 as *const core::ffi::c_void,
-                    &ctx as *const u64 as *const core::ffi::c_void,
+                    &mut rt_ctx as *mut u64 as *mut c_void,
+                    &host_vtable as *const u64 as *const c_void,
+                    &ctx as *const u64 as *const c_void,
                 )
             };
             black_box(result)

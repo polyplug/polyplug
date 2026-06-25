@@ -1,6 +1,7 @@
 //! Opaque handle to a host contract instance.
 
 use core::ffi::c_void;
+use core::ptr;
 
 /// Opaque handle to a host contract instance.
 ///
@@ -26,7 +27,7 @@ impl HostContractInstance {
     /// Create a null instance handle.
     pub fn null() -> Self {
         Self {
-            data: core::ptr::null_mut(),
+            data: ptr::null_mut(),
         }
     }
 

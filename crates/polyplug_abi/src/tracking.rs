@@ -6,10 +6,16 @@
 
 #[cfg(debug_assertions)]
 use core::cell::RefCell;
+#[cfg(test)]
+use core::panic::AssertUnwindSafe;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
+use std::panic;
+use std::process;
+#[cfg(test)]
+use std::thread;
 
 use crate::ffi::polyplug_host_alloc;
 use crate::ffi::polyplug_host_free;
@@ -64,7 +70,7 @@ unsafe extern "C" fn tracking_free(ptr: *mut u8, size: usize, align: usize) {
                     addr
                 );
                 #[allow(clippy::std_instead_of_core)]
-                std::process::abort();
+                process::abort();
             }
         });
     }
@@ -173,8 +179,8 @@ mod tests {
         // the panic (rather than #[should_panic]) so the allocation can be freed
         // afterwards — keeping the test leak-clean under Miri's leak checker while
         // still proving the mismatch is detected.
-        let outcome: std::thread::Result<()> =
-            std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| tracker.assert_no_leaks()));
+        let outcome: thread::Result<()> =
+            panic::catch_unwind(AssertUnwindSafe(|| tracker.assert_no_leaks()));
         assert!(
             outcome.is_err(),
             "assert_no_leaks must panic while an allocation is outstanding"

@@ -15,9 +15,9 @@
 
 use core::ffi::c_void;
 use core::mem::ManuallyDrop;
-use core::ops::Deref;
-use core::ops::DerefMut;
-use std::io::Write;
+use core::ops::{Deref, DerefMut};
+use core::ptr;
+use std::io::{Write, stderr};
 use std::sync::PoisonError;
 
 use polyplug_abi::runtime::RuntimeConfig;
@@ -53,7 +53,7 @@ impl LoggerHandle {
     pub const fn default_stderr() -> LoggerHandle {
         LoggerHandle {
             callback: None,
-            user_data: core::ptr::null_mut(),
+            user_data: ptr::null_mut(),
             max_level: LogLevel::Warn as u32,
         }
     }
@@ -122,7 +122,7 @@ impl LoggerHandle {
             }
             None => {
                 // Default sink: stderr, Error/Warn only (filtered above).
-                let _ = writeln!(std::io::stderr(), "[polyplug] [{scope}] {msg}");
+                let _ = writeln!(stderr(), "[polyplug] [{scope}] {msg}");
             }
         }
     }
@@ -247,8 +247,10 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use core::ffi::c_void;
+    use core::ptr;
     use core::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Mutex, MutexGuard, TryLockError};
+    use std::thread;
 
     use polyplug_abi::types::{LogLevel, StringView};
 
@@ -332,7 +334,7 @@ mod tests {
         // fallback branch and everything else is dropped.
         let logger = LoggerHandle {
             callback: None,
-            user_data: core::ptr::null_mut(),
+            user_data: ptr::null_mut(),
             max_level: LogLevel::Trace as u32,
         };
         assert!(logger.enabled(LogLevel::Error));
@@ -387,7 +389,7 @@ mod tests {
 
         // Poison the lock.
         let probe_ref: &PoisonProbe = &probe;
-        let _ = std::thread::scope(|s| {
+        let _ = thread::scope(|s| {
             s.spawn(|| {
                 let _guard: MutexGuard<'_, u32> = probe_ref.lock.lock().expect("not yet poisoned");
                 panic!("poison the probe lock");

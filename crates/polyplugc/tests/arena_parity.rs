@@ -16,10 +16,13 @@
 
 use polyplug_codegen::{GenerateConfig, GenerateOutput, GeneratedFile, Lang, Side};
 use polyplug_utils::guest_contract_id as fnv_contract_id;
+use polyplugc::generate;
 use polyplugc::ir::{
     AbiBuiltin, PrimitiveType, ResolvedContract, ResolvedFunction, ResolvedParam, ResolvedTypeRef,
     ValidatedIr, Version,
 };
+use std::ffi::OsStr;
+use std::fs;
 use std::path::PathBuf;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -71,11 +74,11 @@ fn generate_host_file(ir: ValidatedIr, lang: Lang, test_tag: &str, file_suffix: 
     let tmp_dir: PathBuf = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("arena_parity")
         .join(test_tag);
-    std::fs::create_dir_all(&tmp_dir).expect("create tmp dir");
+    fs::create_dir_all(&tmp_dir).expect("create tmp dir");
 
     let api_toml_content: String = ir_to_api_toml(&ir);
     let api_path: PathBuf = tmp_dir.join("api.toml");
-    std::fs::write(&api_path, &api_toml_content).expect("write api.toml");
+    fs::write(&api_path, &api_toml_content).expect("write api.toml");
 
     let config: GenerateConfig = GenerateConfig {
         api_toml: api_path,
@@ -83,7 +86,7 @@ fn generate_host_file(ir: ValidatedIr, lang: Lang, test_tag: &str, file_suffix: 
         side: Side::Host,
         out_dir: tmp_dir.join("out"),
     };
-    let output: GenerateOutput = polyplugc::generate(config).expect("generate");
+    let output: GenerateOutput = generate(config).expect("generate");
 
     output
         .files
@@ -91,7 +94,7 @@ fn generate_host_file(ir: ValidatedIr, lang: Lang, test_tag: &str, file_suffix: 
         .find(|f: &GeneratedFile| {
             f.path
                 .file_name()
-                .map(|n: &std::ffi::OsStr| n == file_suffix)
+                .map(|n: &OsStr| n == file_suffix)
                 .unwrap_or(false)
         })
         .unwrap_or_else(|| panic!("{file_suffix} must be generated"))

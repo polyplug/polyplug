@@ -11,13 +11,14 @@
 use polyplug_codegen::{GenerateConfig, Lang, Side};
 use polyplug_utils::host_contract_id;
 use polyplugc::generate;
+use std::fs;
 use std::path::PathBuf;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Create a test API TOML with a host contract containing multiple functions.
 fn create_test_api_with_host_contract(tmp_dir: &PathBuf) -> PathBuf {
-    std::fs::create_dir_all(tmp_dir).expect("create tmp_dir");
+    fs::create_dir_all(tmp_dir).expect("create tmp_dir");
     let api_toml_path: PathBuf = tmp_dir.join("test_interface_api.toml");
     let content: &str = r#"# Test API with host contract for interface factory tests
 [[plugin_contract]]
@@ -47,7 +48,7 @@ returns = "void"
 name = "get_level"
 returns = "u32"
 "#;
-    std::fs::write(&api_toml_path, content).expect("failed to write test api.toml");
+    fs::write(&api_toml_path, content).expect("failed to write test api.toml");
     api_toml_path
 }
 
@@ -68,14 +69,14 @@ fn generate_host_interface_factories(tmp_dir: &PathBuf) -> String {
     for file in &output.files {
         let file_path: PathBuf = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 
     // Read the interface_factories.rs file
     let interface_factories_path: PathBuf = tmp_dir.join("host").join("interface_factories.rs");
-    std::fs::read_to_string(&interface_factories_path).expect("read interface_factories.rs")
+    fs::read_to_string(&interface_factories_path).expect("read interface_factories.rs")
 }
 
 /// Compute expected contract ID for a host contract.

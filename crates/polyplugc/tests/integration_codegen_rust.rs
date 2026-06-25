@@ -4,11 +4,18 @@
 
 #![allow(clippy::expect_used)]
 
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::ExitStatus;
 
+use core::cell::Cell;
 use core::ffi::c_void;
+use core::mem;
+use core::ptr;
+use libloading::Library;
+use libloading::Symbol;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::Array;
@@ -18,7 +25,12 @@ use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
+use polyplug_abi::HostContractInstance;
+use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
+use polyplug_abi::StringView;
+use polyplug_abi::VmLoaderData;
+use polyplug_abi::ffi as abi_ffi;
 use polyplug_abi::string_view_null;
 use polyplug_codegen::{GenerateConfig, Lang, Side};
 use polyplug_utils::BundleId;
@@ -64,9 +76,9 @@ fn generate_rust_bindings(api_toml: &Path, out_dir: &Path, side: Side) {
     for file in &output.files {
         let file_path = out_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 }
 
@@ -101,7 +113,7 @@ polyplug_utils = {{ path = "{}" }}
         utils_lib_path.to_string_lossy().replace('\\', "/")
     );
     let cargo_toml_path: PathBuf = crate_dir.join("Cargo.toml");
-    std::fs::write(&cargo_toml_path, content).expect("failed to write plugin Cargo.toml");
+    fs::write(&cargo_toml_path, content).expect("failed to write plugin Cargo.toml");
 }
 
 // ─── Helper: write src/lib.rs for the generated cdylib ───────────────────────
@@ -198,15 +210,15 @@ pub unsafe extern "C" fn polyplug_init(
 }
 "#;
     let lib_rs_path: PathBuf = src_dir.join("lib.rs");
-    std::fs::write(&lib_rs_path, content).expect("failed to write plugin src/lib.rs");
+    fs::write(&lib_rs_path, content).expect("failed to write plugin src/lib.rs");
 }
 
 // ─── HostApi callback capturing the interface pointer ───────────────────────
 
 // Captured interface pointer from the register_guest_contract callback, stored in a thread-local.
-std::thread_local! {
-    static CAPTURED_INTERFACE: core::cell::Cell<*const GuestContractInterface> =
-        const { core::cell::Cell::new(core::ptr::null()) };
+thread_local! {
+    static CAPTURED_INTERFACE: Cell<*const GuestContractInterface> =
+        const { Cell::new(ptr::null()) };
 }
 
 /// register_guest_contract callback that captures the interface pointer into `CAPTURED_INTERFACE`.
@@ -238,13 +250,13 @@ struct AddArgs {
 // ─── HostApi stub functions ─────────────────────────────────────────────────
 
 unsafe extern "C" fn stub_alloc(_host: *const HostApi, size: usize, align: usize) -> *mut u8 {
-    polyplug_abi::ffi::polyplug_host_alloc(size, align)
+    abi_ffi::polyplug_host_alloc(size, align)
 }
 
 unsafe extern "C" fn stub_free(_host: *const HostApi, ptr: *mut u8, size: usize, align: usize) {
     // SAFETY: This is an unsafe extern "C" function. The caller ensures ptr is valid.
     unsafe {
-        polyplug_abi::ffi::polyplug_host_free(ptr, size, align);
+        abi_ffi::polyplug_host_free(ptr, size, align);
     }
 }
 
@@ -271,16 +283,16 @@ unsafe extern "C" fn stub_resolve_guest_contract(
     _host: *const HostApi,
     _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
-    core::ptr::null()
+    ptr::null()
 }
 
 unsafe extern "C" fn stub_get_host_contract(
     _host: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::HostContractInstance {
-    polyplug_abi::HostContractInstance {
-        data: core::ptr::null_mut(),
+) -> HostContractInstance {
+    HostContractInstance {
+        data: ptr::null_mut(),
     }
 }
 
@@ -288,8 +300,8 @@ unsafe extern "C" fn stub_resolve_host_contract_interface(
     _host: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractInterface {
-    core::ptr::null()
+) -> *const HostContractInterface {
+    ptr::null()
 }
 
 unsafe extern "C" fn stub_list_bundles(_host: *const HostApi) -> Array<BundleId> {
@@ -326,7 +338,7 @@ unsafe extern "C" fn stub_reload_bundle(
 
 unsafe extern "C" fn stub_register_host_contract(
     _this: *const HostApi,
-    _interface: *const polyplug_abi::HostContractInterface,
+    _interface: *const HostContractInterface,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -382,7 +394,7 @@ fn test_rust_codegen_compile_and_run() {
         .join("test_bundle.toml");
     let guest_lib_path: PathBuf = workspace_root().join("sdks").join("rust").join("guest");
 
-    std::fs::create_dir_all(&src_dir).expect("failed to create src dir");
+    fs::create_dir_all(&src_dir).expect("failed to create src dir");
 
     // ── 2. Generate Rust bindings using library API ───────────────────────────
     generate_rust_bindings(&api_toml, &src_dir, Side::Guest);
@@ -395,7 +407,7 @@ fn test_rust_codegen_compile_and_run() {
     let workspace_root_path: PathBuf = workspace_root();
     let target_dir: PathBuf = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("codegen_rust_build");
 
-    let build_status: std::process::ExitStatus = Command::new(env!("CARGO"))
+    let build_status: ExitStatus = Command::new(env!("CARGO"))
         .arg("build")
         .arg("--release")
         .arg("--target-dir")
@@ -421,12 +433,12 @@ fn test_rust_codegen_compile_and_run() {
 
     // ── 6. Load with libloading ───────────────────────────────────────────────
     // SAFETY: so_path is a compiled cdylib we just built.
-    let library: libloading::Library =
-        unsafe { libloading::Library::new(&so_path).expect("failed to load generated plugin .so") };
+    let library: Library =
+        unsafe { Library::new(&so_path).expect("failed to load generated plugin .so") };
 
     // ── 7. Resolve polyplug_init ──────────────────────────────────────────────
     // SAFETY: symbol matches expected ABI signature.
-    let init_fn: libloading::Symbol<
+    let init_fn: Symbol<
         '_,
         unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe {
@@ -436,10 +448,10 @@ fn test_rust_codegen_compile_and_run() {
     };
 
     // ── 8. Build HostApi + call polyplug_init ───────────────────────────────
-    CAPTURED_INTERFACE.with(|cell| cell.set(core::ptr::null()));
+    CAPTURED_INTERFACE.with(|cell| cell.set(ptr::null()));
 
     let host_abi: HostApi = HostApi {
-        runtime: core::ptr::null_mut(),
+        runtime: ptr::null_mut(),
         register_guest_contract: capture_interface_callback,
         alloc: stub_alloc,
         free: stub_free,
@@ -461,7 +473,7 @@ fn test_rust_codegen_compile_and_run() {
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
         revision_counter: stub_revision_counter,
-        reserved: core::ptr::null(),
+        reserved: ptr::null(),
     };
 
     // SAFETY: init_fn is valid; host_abi lives for the duration of the call.
@@ -517,7 +529,7 @@ fn test_rust_codegen_compile_and_run() {
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { core::mem::transmute(fn_ptr) };
+    ) = unsafe { mem::transmute(fn_ptr) };
 
     // The generated create_instance constructs the implementation via the
     // author factory and carries it in instance.data — no static storage.
@@ -525,9 +537,9 @@ fn test_rust_codegen_compile_and_run() {
     // SAFETY: host_abi outlives the instance; create_instance is the generated factory thunk.
     unsafe {
         (interface.create_instance)(
-            polyplug_abi::VmLoaderData::null(),
+            VmLoaderData::null(),
             &host_abi as *const HostApi,
-            core::ptr::null(),
+            ptr::null(),
             &mut instance as *mut GuestContractInstance,
         )
     };
@@ -551,11 +563,7 @@ fn test_rust_codegen_compile_and_run() {
 
     // SAFETY: instance was created by create_instance; destroy exactly once.
     unsafe {
-        (interface.destroy_instance)(
-            polyplug_abi::VmLoaderData::null(),
-            &host_abi as *const HostApi,
-            instance,
-        )
+        (interface.destroy_instance)(VmLoaderData::null(), &host_abi as *const HostApi, instance)
     };
 
     assert_eq!(
@@ -568,7 +576,7 @@ fn test_rust_codegen_compile_and_run() {
     println!("test_rust_codegen_compile_and_run: add(3, 5) = {} ✓", out);
 
     // Keep the library alive until after the last call.
-    core::mem::forget(library);
+    mem::forget(library);
 }
 
 // ─── Enum types codegen test ─────────────────────────────────────────────────
@@ -583,14 +591,14 @@ fn test_rust_codegen_generates_enum_types() {
         .join("fixtures")
         .join("test_bundle.toml");
 
-    std::fs::create_dir_all(&out_dir).expect("failed to create out_dir");
+    fs::create_dir_all(&out_dir).expect("failed to create out_dir");
 
     // ── 2. Generate Rust bindings using library API ───────────────────────────
     generate_rust_bindings(&api_toml, &out_dir, Side::Host);
 
     // ── 3. Read host/types.rs and assert enum content ─────────────────────────
     let types_file: PathBuf = out_dir.join("host").join("types.rs");
-    let content: String = std::fs::read_to_string(&types_file).expect("read types file");
+    let content: String = fs::read_to_string(&types_file).expect("read types file");
 
     assert!(
         content.contains("#[repr(u32)]"),
@@ -615,32 +623,32 @@ fn test_rust_codegen_generates_enum_types() {
 
 /// `HostApi.log` stub for test hosts — drops the record.
 unsafe extern "C" fn stub_host_log(
-    _this: *const polyplug_abi::HostApi,
+    _this: *const HostApi,
     _level: u32,
-    _scope: polyplug_abi::StringView,
-    _message: polyplug_abi::StringView,
+    _scope: StringView,
+    _message: StringView,
 ) {
 }
 
 unsafe extern "C" fn stub_create_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _args: *const core::ffi::c_void,
-    out_instance: *mut polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _args: *const c_void,
+    out_instance: *mut GuestContractInstance,
 ) {
     if !out_instance.is_null() {
         // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+        unsafe { out_instance.write(GuestContractInstance::null()) };
     }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _instance: polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _instance: GuestContractInstance,
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const polyplug_abi::HostApi) -> *const u64 {
-    core::ptr::null()
+unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
+    ptr::null()
 }

@@ -11,8 +11,11 @@
 //! with the declared `runtime`.
 
 use core::str::FromStr;
+use std::ffi::OsStr;
 use std::path::Path;
+use std::path::PathBuf;
 
+use polyplug::error::LoaderError;
 use polyplug::loader::ManifestData;
 use polyplug::loader::parse_manifest;
 use polyplug_abi::types::Version;
@@ -36,10 +39,8 @@ pub fn validate_bundle_dir(dir: &Path) -> Result<(), PolyplugcError> {
     // resolution (`linux.x86_64 = "..."`) into the `file` field for the active
     // platform, exactly as the runtime does at load time.
     let manifest: ManifestData =
-        parse_manifest(dir).map_err(|e: polyplug::error::LoaderError| {
-            PolyplugcError::ValidationFailed {
-                message: format!("manifest.toml: {e}"),
-            }
+        parse_manifest(dir).map_err(|e: LoaderError| PolyplugcError::ValidationFailed {
+            message: format!("manifest.toml: {e}"),
         })?;
 
     // Reuse the runtime's own structural + identity validation: `runtime`,
@@ -47,11 +48,9 @@ pub fn validate_bundle_dir(dir: &Path) -> Result<(), PolyplugcError> {
     // and `provides` / `bundle_dependencies` version-spec grammar.
     manifest
         .validate()
-        .map_err(
-            |e: polyplug::error::LoaderError| PolyplugcError::ValidationFailed {
-                message: format!("manifest.toml: {e}"),
-            },
-        )?;
+        .map_err(|e: LoaderError| PolyplugcError::ValidationFailed {
+            message: format!("manifest.toml: {e}"),
+        })?;
 
     // The version string must parse as a `Version` (the loader stores it raw, so
     // validate it explicitly here for a clear, early error).
@@ -65,7 +64,7 @@ pub fn validate_bundle_dir(dir: &Path) -> Result<(), PolyplugcError> {
     }
 
     // The resolved entry artifact must exist inside the bundle directory.
-    let artifact: std::path::PathBuf = dir.join(&manifest.file);
+    let artifact: PathBuf = dir.join(&manifest.file);
     if !artifact.is_file() {
         return Err(PolyplugcError::ValidationFailed {
             message: format!(
@@ -86,7 +85,7 @@ pub fn validate_bundle_dir(dir: &Path) -> Result<(), PolyplugcError> {
 fn check_extension_matches_runtime(manifest: &ManifestData) -> Result<(), PolyplugcError> {
     let extension: &str = Path::new(&manifest.file)
         .extension()
-        .and_then(|e: &std::ffi::OsStr| e.to_str())
+        .and_then(|e: &OsStr| e.to_str())
         .unwrap_or("");
 
     let allowed: &[&str] = match manifest.loader.as_str() {

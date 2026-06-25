@@ -20,6 +20,7 @@ mod tests {
     use core::mem::{align_of, offset_of, size_of};
 
     use crate::plugin::plugin_context::BundleInitContext;
+    use crate::types::StringView;
 
     #[test]
     #[cfg(target_pointer_width = "64")]
@@ -43,7 +44,7 @@ mod tests {
         // u64 is 8 bytes, StringView is 16 bytes.
         // If either field were *mut c_void, it would be 8 bytes.
         assert_eq!(size_of::<u64>(), 8);
-        assert_eq!(size_of::<crate::types::StringView>(), 16);
+        assert_eq!(size_of::<StringView>(), 16);
 
         // Verify BundleInitContext is 24 bytes (8 + 16), not 16 bytes (8 + 8)
         // which would indicate bare c_void pointers.

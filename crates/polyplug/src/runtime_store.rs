@@ -9,19 +9,25 @@
 //! find_all_guest_contracts(). DuplicateProvider is only raised when the SAME bundle_id
 //! tries to register the SAME contract_id twice (outside a reload window).
 
+use core::mem;
 use core::ops::ControlFlow;
+use core::ptr;
+use core::slice;
+use core::str;
 use core::sync::atomic::{AtomicU64, Ordering};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use polyplug_abi::SupportedLanguage;
+use crossbeam_epoch::{Atomic, Guard as EpochGuard, Owned, Shared, pin as epoch_pin};
+
+use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::dispatch::dispatch_type::DispatchType;
-use polyplug_abi::types::Version;
+use polyplug_abi::types::{StringView, Version};
 use polyplug_abi::{
     GuestContractHandle, GuestContractInstance, GuestContractInterface, HostApi, PluginDescriptor,
+    SupportedLanguage,
 };
 use polyplug_utils::{BundleId, GuestContractId};
 
@@ -37,7 +43,7 @@ use crate::logger::{LoggerHandle, RecoverPoisoned, RecoveringGuard};
 /// every host caller can safely call `create_instance` on any registered
 /// interface. It returns the canonical stateless dispatch token (null data).
 unsafe extern "C" fn stateless_create_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -50,7 +56,7 @@ unsafe extern "C" fn stateless_create_instance(
 
 /// Built-in no-op `destroy_instance` stub, paired with `stateless_create_instance`.
 unsafe extern "C" fn stateless_destroy_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
@@ -106,15 +112,15 @@ pub struct BundleData {
 /// # Safety
 /// `sv.ptr` must be valid for `sv.len` bytes for the duration of this call, or be null.
 unsafe fn string_view_to_owned_string(
-    sv: &polyplug_abi::types::StringView,
+    sv: &StringView,
     context: &str,
 ) -> Result<String, RegistryError> {
     if sv.ptr.is_null() || sv.len == 0 {
         return Ok(String::new());
     }
     // SAFETY: caller guarantees ptr/len describe a valid byte range for this call.
-    let bytes: &[u8] = unsafe { core::slice::from_raw_parts(sv.ptr, sv.len) };
-    match core::str::from_utf8(bytes) {
+    let bytes: &[u8] = unsafe { slice::from_raw_parts(sv.ptr, sv.len) };
+    match str::from_utf8(bytes) {
         Ok(s) => Ok(s.to_owned()),
         Err(_) => Err(RegistryError::InvalidUtf8 {
             context: context.to_owned(),
@@ -372,7 +378,7 @@ pub struct RuntimeStore {
     /// at the end of every mutation, while still holding the write guard — so the
     /// published view always mirrors `data`. The superseded view is deferred for
     /// epoch reclamation so any reader still observing it stays valid.
-    published: crossbeam_epoch::Atomic<ReadView>,
+    published: Atomic<ReadView>,
     /// Monotonic registry revision, bumped on every mutation (the tail of every
     /// [`RuntimeStore::publish`]). A generated host→guest caller fetches this word's
     /// address ONCE (via the `revision_counter` ABI callback, see
@@ -395,7 +401,7 @@ impl RuntimeStore {
     pub fn new() -> RuntimeStore {
         RuntimeStore {
             data: RwLock::new(RuntimeStoreData::new()),
-            published: crossbeam_epoch::Atomic::new(ReadView::empty()),
+            published: Atomic::new(ReadView::empty()),
             revision: AtomicU64::new(0),
             logger: LoggerHandle::default_stderr(),
         }
@@ -405,7 +411,7 @@ impl RuntimeStore {
     pub(crate) fn with_logger(logger: LoggerHandle) -> RuntimeStore {
         RuntimeStore {
             data: RwLock::new(RuntimeStoreData::new()),
-            published: crossbeam_epoch::Atomic::new(ReadView::empty()),
+            published: Atomic::new(ReadView::empty()),
             revision: AtomicU64::new(0),
             logger,
         }
@@ -418,11 +424,9 @@ impl RuntimeStore {
     /// the published view always mirrors `data`.
     fn publish(&self, data: &RuntimeStoreData) {
         let view: ReadView = ReadView::rebuild(data);
-        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
-        let new_shared: crossbeam_epoch::Shared<'_, ReadView> =
-            crossbeam_epoch::Owned::new(view).into_shared(&guard);
-        let old: crossbeam_epoch::Shared<'_, ReadView> =
-            self.published.swap(new_shared, Ordering::AcqRel, &guard);
+        let guard: EpochGuard = epoch_pin();
+        let new_shared: Shared<'_, ReadView> = Owned::new(view).into_shared(&guard);
+        let old: Shared<'_, ReadView> = self.published.swap(new_shared, Ordering::AcqRel, &guard);
         if !old.is_null() {
             // SAFETY: the swapped-out view is no longer reachable by new readers; any
             // reader that loaded it still holds a pin, so defer_destroy frees it only
@@ -453,7 +457,7 @@ impl RuntimeStore {
     pub fn revision_ptr(&self) -> *const u64 {
         // AtomicU64 is `#[repr(C)]`-compatible with u64 (same size/alignment, no extra
         // state), so the address of the atomic is a valid `*const u64` for reads.
-        core::ptr::addr_of!(self.revision).cast::<u64>()
+        ptr::addr_of!(self.revision).cast::<u64>()
     }
 
     /// Register a plugin interface.
@@ -489,9 +493,8 @@ impl RuntimeStore {
             // SAFETY: interface_ptr is a valid 'static GuestContractInterface (ABI
             // contract). We read the 4-byte `dispatch_type` field as a raw `u32`
             // (never as the typed enum) so an out-of-range value is observed soundly.
-            let raw: u32 = unsafe {
-                core::ptr::read(core::ptr::addr_of!((*interface_ptr).dispatch_type) as *const u32)
-            };
+            let raw: u32 =
+                unsafe { ptr::read(ptr::addr_of!((*interface_ptr).dispatch_type) as *const u32) };
             match DispatchType::from_u32(raw) {
                 Some(dt) => dt,
                 None => return Err(RegistryError::InvalidDispatchType { value: raw }),
@@ -506,7 +509,7 @@ impl RuntimeStore {
         let owned_name: String =
             unsafe { string_view_to_owned_string(&descriptor.name, "PluginDescriptor.name")? };
 
-        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+        let mut data: RecoveringGuard<RwLockWriteGuard<'_, RuntimeStoreData>> =
             self.data.write().recover_poisoned(self.logger, "store");
 
         // During a reload window the bundle legitimately re-registers its own
@@ -583,15 +586,13 @@ impl RuntimeStore {
             // SAFETY: interface_ptr is a valid 'static GuestContractInterface.
             // We read the two function-pointer fields as raw pointers (never as
             // typed `fn`) so a null value is observed soundly.
-            let create_raw: *const () = core::ptr::read(core::ptr::addr_of!(
-                (*interface_ptr).create_instance
-            ) as *const *const ());
-            let destroy_raw: *const () = core::ptr::read(core::ptr::addr_of!(
-                (*interface_ptr).destroy_instance
-            ) as *const *const ());
+            let create_raw: *const () =
+                ptr::read(ptr::addr_of!((*interface_ptr).create_instance) as *const *const ());
+            let destroy_raw: *const () =
+                ptr::read(ptr::addr_of!((*interface_ptr).destroy_instance) as *const *const ());
 
             let create_instance: unsafe extern "C" fn(
-                polyplug_abi::dispatch::VmLoaderData,
+                VmLoaderData,
                 *const HostApi,
                 *const (),
                 *mut GuestContractInstance,
@@ -599,10 +600,10 @@ impl RuntimeStore {
                 stateless_create_instance
             } else {
                 // SAFETY: non-null pointer to a valid create_instance per ABI.
-                core::mem::transmute::<
+                mem::transmute::<
                     *const (),
                     unsafe extern "C" fn(
-                        polyplug_abi::dispatch::VmLoaderData,
+                        VmLoaderData,
                         *const HostApi,
                         *const (),
                         *mut GuestContractInstance,
@@ -610,20 +611,16 @@ impl RuntimeStore {
                 >(create_raw)
             };
             let destroy_instance: unsafe extern "C" fn(
-                polyplug_abi::dispatch::VmLoaderData,
+                VmLoaderData,
                 *const HostApi,
                 GuestContractInstance,
             ) = if destroy_raw.is_null() {
                 stateless_destroy_instance
             } else {
                 // SAFETY: non-null pointer to a valid destroy_instance per ABI.
-                core::mem::transmute::<
+                mem::transmute::<
                     *const (),
-                    unsafe extern "C" fn(
-                        polyplug_abi::dispatch::VmLoaderData,
-                        *const HostApi,
-                        GuestContractInstance,
-                    ),
+                    unsafe extern "C" fn(VmLoaderData, *const HostApi, GuestContractInstance),
                 >(destroy_raw)
             };
 
@@ -635,7 +632,7 @@ impl RuntimeStore {
                 dispatch_type,
                 create_instance,
                 destroy_instance,
-                dispatch: core::ptr::read(core::ptr::addr_of!((*interface_ptr).dispatch)),
+                dispatch: ptr::read(ptr::addr_of!((*interface_ptr).dispatch)),
             }
         };
         slot.interface = Some(Arc::new(interface));
@@ -691,7 +688,7 @@ impl RuntimeStore {
         bundle_id: BundleId,
         contract_ids: Vec<GuestContractId>,
     ) -> Result<(), RegistryError> {
-        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+        let mut data: RecoveringGuard<RwLockWriteGuard<'_, RuntimeStoreData>> =
             self.data.write().recover_poisoned(self.logger, "store");
         let set: &mut HashSet<GuestContractId> =
             data.bundle_declared_deps.entry(bundle_id).or_default();
@@ -708,7 +705,7 @@ impl RuntimeStore {
         bundle_id: BundleId,
         contract_id: GuestContractId,
     ) -> bool {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+        let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
             self.data.read().recover_poisoned(self.logger, "store");
         data.bundle_declared_deps
             .get(&bundle_id)
@@ -731,9 +728,8 @@ impl RuntimeStore {
             min_version,
         };
 
-        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
-        let shared: crossbeam_epoch::Shared<'_, ReadView> =
-            self.published.load(Ordering::Acquire, &guard);
+        let guard: EpochGuard = epoch_pin();
+        let shared: Shared<'_, ReadView> = self.published.load(Ordering::Acquire, &guard);
         // SAFETY: `published` is never null while the store is alive (it is set to a
         // non-null view at construction and on every republish; only `Drop` nulls it,
         // under `&mut self` with no concurrent readers). The view is kept alive for the
@@ -769,7 +765,7 @@ impl RuntimeStore {
         contract_id: GuestContractId,
         min_version: u32,
     ) -> Result<GuestContractHandle, RegistryError> {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+        let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
             self.data.read().recover_poisoned(self.logger, "store");
 
         // Get all slot indices for this bundle (O(1) via bundle_data)
@@ -845,9 +841,8 @@ impl RuntimeStore {
     where
         F: FnMut(u32, u32, &SlotIfaceView) -> ControlFlow<()>,
     {
-        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
-        let shared: crossbeam_epoch::Shared<'_, ReadView> =
-            self.published.load(Ordering::Acquire, &guard);
+        let guard: EpochGuard = epoch_pin();
+        let shared: Shared<'_, ReadView> = self.published.load(Ordering::Acquire, &guard);
         // SAFETY: `published` is never null while the store is alive (see
         // `find_guest_contract`). The view stays valid for this guard's pin.
         let view: &ReadView = match unsafe { shared.as_ref() } {
@@ -1022,9 +1017,8 @@ impl RuntimeStore {
         &self,
         handle: GuestContractHandle,
     ) -> Result<*const GuestContractInterface, RegistryError> {
-        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
-        let shared: crossbeam_epoch::Shared<'_, ReadView> =
-            self.published.load(Ordering::Acquire, &guard);
+        let guard: EpochGuard = epoch_pin();
+        let shared: Shared<'_, ReadView> = self.published.load(Ordering::Acquire, &guard);
         // SAFETY: `published` is never null while the store is alive (see
         // `find_guest_contract`). The view stays valid for this guard's pin.
         let view: &ReadView = match unsafe { shared.as_ref() } {
@@ -1072,7 +1066,7 @@ impl RuntimeStore {
         slot_index: u32,
         new_interface: Arc<GuestContractInterface>,
     ) -> Result<(), RegistryError> {
-        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+        let mut data: RecoveringGuard<RwLockWriteGuard<'_, RuntimeStoreData>> =
             self.data.write().recover_poisoned(self.logger, "store");
         let slot_idx: usize = slot_index as usize;
         if slot_idx >= data.slots.len() {
@@ -1129,7 +1123,7 @@ impl RuntimeStore {
     /// not observe a second live slot per contract. Pair with `apply_reload_swap`
     /// (which closes the window) or `abort_reload` on the failure path.
     pub(crate) fn begin_reload(&self, bundle_id: BundleId) {
-        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+        let mut data: RecoveringGuard<RwLockWriteGuard<'_, RuntimeStoreData>> =
             self.data.write().recover_poisoned(self.logger, "store");
         data.reloading_bundles.insert(bundle_id);
         self.publish(&data);
@@ -1147,7 +1141,7 @@ impl RuntimeStore {
     /// untouched, so a reader pinned on one keeps it alive and any raw pointer a caller
     /// already resolved stays valid for the duration of that pin.
     pub(crate) fn abort_reload(&self, bundle_id: BundleId, old_slots: &[u32]) {
-        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+        let mut data: RecoveringGuard<RwLockWriteGuard<'_, RuntimeStoreData>> =
             self.data.write().recover_poisoned(self.logger, "store");
         data.reloading_bundles.remove(&bundle_id);
 
@@ -1201,7 +1195,7 @@ impl RuntimeStore {
         bundle_id: BundleId,
         old_slots: &[u32],
     ) -> Result<(), RegistryError> {
-        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+        let mut data: RecoveringGuard<RwLockWriteGuard<'_, RuntimeStoreData>> =
             self.data.write().recover_poisoned(self.logger, "store");
         // Close the reload window: subsequent registrations (if any) publish normally,
         // and the swap below makes the new interfaces visible via the old slots.
@@ -1327,7 +1321,7 @@ impl RuntimeStore {
         &self,
         handle: GuestContractHandle,
     ) -> Option<OwnedPluginDescriptor> {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+        let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
             self.data.read().recover_poisoned(self.logger, "store");
         if handle.is_null() {
             return None;
@@ -1349,7 +1343,7 @@ impl RuntimeStore {
     /// Returns an empty `Vec` if the bundle has no registered slots.
     /// O(1) lookup via bundle_data HashMap.
     pub fn get_bundle_plugin_slots(&self, bundle_id: BundleId) -> Vec<u32> {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+        let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
             self.data.read().recover_poisoned(self.logger, "store");
         data.bundle_data
             .get(&bundle_id)
@@ -1368,7 +1362,7 @@ impl RuntimeStore {
         &self,
         bundle_id: BundleId,
     ) -> Vec<(String, u32, Option<u32>)> {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+        let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
             self.data.read().recover_poisoned(self.logger, "store");
         let slots: &Vec<u32> = match data.bundle_data.get(&bundle_id) {
             Some(bd) => &bd.plugin_slots,
@@ -1410,7 +1404,7 @@ impl RuntimeStore {
     /// slot indices belongs to the bundle. Used by cascade reload to determine
     /// which contracts a freshly-reloaded bundle provides.
     pub(crate) fn bundle_exported_contracts(&self, bundle_id: BundleId) -> Vec<GuestContractId> {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+        let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
             self.data.read().recover_poisoned(self.logger, "store");
         let bundle_slots: &Vec<u32> = match data.bundle_data.get(&bundle_id) {
             Some(bd) => &bd.plugin_slots,
@@ -1434,7 +1428,7 @@ impl RuntimeStore {
         &self,
         contracts: &HashSet<GuestContractId>,
     ) -> Vec<BundleId> {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+        let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
             self.data.read().recover_poisoned(self.logger, "store");
         data.bundle_declared_deps
             .iter()
@@ -1456,7 +1450,7 @@ impl RuntimeStore {
         file_path: PathBuf,
         dependencies: Vec<BundleDependency>,
     ) -> Result<(), RegistryError> {
-        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+        let mut data: RecoveringGuard<RwLockWriteGuard<'_, RuntimeStoreData>> =
             self.data.write().recover_poisoned(self.logger, "store");
 
         // Update bundle_data descriptor if entry exists
@@ -1518,7 +1512,7 @@ impl RuntimeStore {
     ///
     /// Returns the number of slots that were invalidated.
     pub fn invalidate_bundle(&self, bundle_id: BundleId) -> Result<u32, RegistryError> {
-        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+        let mut data: RecoveringGuard<RwLockWriteGuard<'_, RuntimeStoreData>> =
             self.data.write().recover_poisoned(self.logger, "store");
 
         // Collect slot indices and bundle name before mutating.
@@ -1555,14 +1549,14 @@ impl RuntimeStore {
 
     /// List all loaded bundle IDs.
     pub fn list_bundles(&self) -> Vec<BundleId> {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+        let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
             self.data.read().recover_poisoned(self.logger, "store");
         data.bundle_data.keys().copied().collect::<Vec<BundleId>>()
     }
 
     /// Get bundle metadata by bundle ID.
     pub fn get_bundle_descriptor(&self, bundle_id: BundleId) -> Option<BundleDescriptor> {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+        let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
             self.data.read().recover_poisoned(self.logger, "store");
         data.bundle_data.get(&bundle_id).map(|bd: &BundleData| {
             // Clone descriptor fields manually since BundleDescriptor doesn't derive Clone
@@ -1587,7 +1581,7 @@ impl RuntimeStore {
 
     /// Get all BundleIds for a given bundle name (multi-version support).
     pub fn get_bundles_by_name(&self, bundle_name: &str) -> Vec<BundleId> {
-        let data: RecoveringGuard<std::sync::RwLockReadGuard<'_, RuntimeStoreData>> =
+        let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
             self.data.read().recover_poisoned(self.logger, "store");
         data.bundle_name_index
             .get(bundle_name)
@@ -1599,7 +1593,7 @@ impl RuntimeStore {
     /// This is only available in test builds to allow test isolation.
     #[cfg(test)]
     pub fn clear_for_test(&self) {
-        let mut data: RecoveringGuard<std::sync::RwLockWriteGuard<'_, RuntimeStoreData>> =
+        let mut data: RecoveringGuard<RwLockWriteGuard<'_, RuntimeStoreData>> =
             self.data.write().recover_poisoned(self.logger, "store");
         data.slots.clear();
         data.guest_contract_index.clear();
@@ -1619,10 +1613,10 @@ impl Default for RuntimeStore {
 
 impl Drop for RuntimeStore {
     fn drop(&mut self) {
-        let guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
-        let shared: crossbeam_epoch::Shared<'_, ReadView> =
+        let guard: EpochGuard = epoch_pin();
+        let shared: Shared<'_, ReadView> =
             self.published
-                .swap(crossbeam_epoch::Shared::null(), Ordering::SeqCst, &guard);
+                .swap(Shared::null(), Ordering::SeqCst, &guard);
         if !shared.is_null() {
             // SAFETY: `&mut self` proves exclusive access — no other thread can hold a
             // pin observing this view — so reclaiming it immediately is sound.
@@ -1644,7 +1638,7 @@ mod tests {
 
     /// No-op create_instance callback.
     unsafe extern "C" fn noop_create_instance(
-        _loader_data: polyplug_abi::dispatch::VmLoaderData,
+        _loader_data: VmLoaderData,
         _host: *const HostApi,
         _args: *const (),
         out_instance: *mut GuestContractInstance,
@@ -1657,7 +1651,7 @@ mod tests {
 
     /// No-op destroy_instance callback.
     unsafe extern "C" fn noop_destroy_instance(
-        _loader_data: polyplug_abi::dispatch::VmLoaderData,
+        _loader_data: VmLoaderData,
         _host: *const HostApi,
         _instance: GuestContractInstance,
     ) {
@@ -1677,7 +1671,7 @@ mod tests {
             dispatch: DispatchMechanisms {
                 native: NativeDispatch {
                     function_count: 0,
-                    functions: core::ptr::null(),
+                    functions: ptr::null(),
                 },
             },
         }

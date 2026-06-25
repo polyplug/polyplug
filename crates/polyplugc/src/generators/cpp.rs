@@ -4,6 +4,9 @@
 //! - Host-side: header-only C++ callers (RAII wrapper + interface dispatch)
 //! - Guest-side: extern "C" ABI wrappers + abstract base classes + interface statics
 
+use std::collections::HashSet;
+use std::path::PathBuf;
+
 use super::CALL_ARENA_BUF_LEN;
 use super::CodeGenerator;
 use super::GeneratedFile;
@@ -41,7 +44,7 @@ impl CodeGenerator for CppGenerator {
         // ── File 1: types.hpp ────────────────────────────────────────────────
         let types_hpp: String = generate_types_hpp(ir);
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("host/types.hpp"),
+            path: PathBuf::from("host/types.hpp"),
             content: types_hpp,
             force_regenerate: false,
         });
@@ -49,7 +52,7 @@ impl CodeGenerator for CppGenerator {
         // ── File 2: host_callers.hpp ─────────────────────────────────────────
         let host_callers_hpp: String = generate_host_callers_hpp(ir)?;
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("host/host_callers.hpp"),
+            path: PathBuf::from("host/host_callers.hpp"),
             content: host_callers_hpp,
             force_regenerate: false,
         });
@@ -57,7 +60,7 @@ impl CodeGenerator for CppGenerator {
         // ── File 3: manifest.toml ────────────────────────────────────────────
         let manifest_toml: String = generate_manifest_toml();
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("manifest.toml"),
+            path: PathBuf::from("manifest.toml"),
             content: manifest_toml,
             force_regenerate: true,
         });
@@ -66,7 +69,7 @@ impl CodeGenerator for CppGenerator {
         if !ir.host_contracts.is_empty() {
             let host_contracts_hpp: String = generate_cpp_host_contracts_file(ir);
             files.files.push(GeneratedFile {
-                path: std::path::PathBuf::from("host/host_contracts.hpp"),
+                path: PathBuf::from("host/host_contracts.hpp"),
                 content: host_contracts_hpp,
                 force_regenerate: false,
             });
@@ -76,7 +79,7 @@ impl CodeGenerator for CppGenerator {
         if !ir.host_contracts.is_empty() {
             let interface_factories_hpp: String = generate_cpp_host_interface_factories_file(ir);
             files.files.push(GeneratedFile {
-                path: std::path::PathBuf::from("host/interface_factories.hpp"),
+                path: PathBuf::from("host/interface_factories.hpp"),
                 content: interface_factories_hpp,
                 force_regenerate: false,
             });
@@ -93,7 +96,7 @@ impl CodeGenerator for CppGenerator {
         // ── File 1: types.hpp ────────────────────────────────────────────────
         let types_hpp: String = generate_types_hpp(ir);
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("guest/types.hpp"),
+            path: PathBuf::from("guest/types.hpp"),
             content: types_hpp,
             force_regenerate: false,
         });
@@ -101,7 +104,7 @@ impl CodeGenerator for CppGenerator {
         // ── File 2: contracts.hpp ────────────────────────────────────────────
         let contracts_hpp: String = generate_contracts_hpp(ir);
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("guest/contracts.hpp"),
+            path: PathBuf::from("guest/contracts.hpp"),
             content: contracts_hpp,
             force_regenerate: false,
         });
@@ -109,7 +112,7 @@ impl CodeGenerator for CppGenerator {
         // ── File 3: interfaces.hpp ──────────────────────────────────────────────
         let interfaces_hpp: String = generate_interfaces_hpp(ir)?;
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("guest/interfaces.hpp"),
+            path: PathBuf::from("guest/interfaces.hpp"),
             content: interfaces_hpp,
             force_regenerate: false,
         });
@@ -117,7 +120,7 @@ impl CodeGenerator for CppGenerator {
         // ── File 4: init.hpp ─────────────────────────────────────────────────
         let init_hpp: String = generate_init_hpp(ir)?;
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("guest/init.hpp"),
+            path: PathBuf::from("guest/init.hpp"),
             content: init_hpp,
             force_regenerate: false,
         });
@@ -126,7 +129,7 @@ impl CodeGenerator for CppGenerator {
         if ir.bundle.is_some() {
             let manifest_toml: String = generate_bundle_manifest_cpp(ir);
             files.files.push(GeneratedFile {
-                path: std::path::PathBuf::from("manifest.toml"),
+                path: PathBuf::from("manifest.toml"),
                 content: manifest_toml,
                 force_regenerate: true,
             });
@@ -138,7 +141,7 @@ impl CodeGenerator for CppGenerator {
         if !ir.host_contracts.is_empty() {
             let host_contracts_hpp: String = generate_cpp_guest_host_contracts_file(ir);
             files.files.push(GeneratedFile {
-                path: std::path::PathBuf::from("guest/host_contracts.hpp"),
+                path: PathBuf::from("guest/host_contracts.hpp"),
                 content: host_contracts_hpp,
                 force_regenerate: false,
             });
@@ -149,7 +152,7 @@ impl CodeGenerator for CppGenerator {
         if !peer_contracts.is_empty() {
             let peer_callers_hpp: String = generate_cpp_peer_callers_file(ir, &peer_contracts);
             files.files.push(GeneratedFile {
-                path: std::path::PathBuf::from("guest/peer_callers.hpp"),
+                path: PathBuf::from("guest/peer_callers.hpp"),
                 content: peer_callers_hpp,
                 force_regenerate: false,
             });
@@ -647,7 +650,7 @@ fn build_guest_call_expr(contract_lower: &str, func: &ResolvedFunction) -> Strin
     }
 
     if func.params.len() == 1 {
-        let param: &crate::ir::ResolvedParam = &func.params[0];
+        let param: &ResolvedParam = &func.params[0];
         match &param.ty {
             ResolvedTypeRef::UserDefined(type_name) => {
                 // Single user-defined struct param — dereference args directly
@@ -954,7 +957,7 @@ fn generate_bundle_manifest_cpp(ir: &ValidatedIr) -> String {
     };
 
     // Build function_count inline table: only for contracts this bundle PROVIDES
-    let provides_set: std::collections::HashSet<String> = provides.iter().cloned().collect();
+    let provides_set: HashSet<String> = provides.iter().cloned().collect();
     let fn_count_entries: Vec<String> = ir
         .contracts
         .iter()
@@ -2256,7 +2259,7 @@ fn emit_cpp_guest_host_contract_args_setup(
     }
 
     if func.params.len() == 1 {
-        let param: &crate::ir::ResolvedParam = &func.params[0];
+        let param: &ResolvedParam = &func.params[0];
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
                 // std::string_view -> StringView conversion
@@ -2754,7 +2757,7 @@ fn generate_cpp_host_thunk(
 /// Generate argument extraction for a host thunk.
 fn generate_cpp_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
     if func.params.len() == 1 {
-        let param: &crate::ir::ResolvedParam = &func.params[0];
+        let param: &ResolvedParam = &func.params[0];
         let ty_name: String = cpp_type_name(&param.ty);
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
@@ -2834,7 +2837,7 @@ fn generate_cpp_host_thunk_call(out: &mut String, func: &ResolvedFunction, has_r
     let call_args: String = if func.params.is_empty() {
         String::new()
     } else if func.params.len() == 1 {
-        let param: &crate::ir::ResolvedParam = &func.params[0];
+        let param: &ResolvedParam = &func.params[0];
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => param.name.clone(),
             ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => param.name.clone(),
@@ -3411,8 +3414,9 @@ mod tests {
     use super::*;
     use crate::ir::ReprType;
     use crate::ir::ResolvedDependency;
-    use crate::ir::ResolvedParam;
+    use crate::ir::ResolvedField;
     use crate::ir::Version;
+    use polyplug_codegen::ResolvedBundleFile;
 
     #[test]
     fn class_name_conversion() {
@@ -4397,7 +4401,7 @@ mod tests {
                     patch: 0,
                 },
                 loader: "native".to_owned(),
-                file: polyplug_codegen::ResolvedBundleFile::Single("test.so".to_owned()),
+                file: ResolvedBundleFile::Single("test.so".to_owned()),
                 plugins: vec![ResolvedPlugin {
                     name: "transformer".to_owned(),
                     implements: vec!["data.Transformer@1".to_owned()],
@@ -4524,9 +4528,9 @@ mod tests {
     /// bundle dependency — so every generated file kind is exercised.
     fn collision_ir() -> ValidatedIr {
         ValidatedIr {
-            types: vec![crate::ir::ResolvedType {
+            types: vec![ResolvedType {
                 name: "LogMessage".to_owned(),
-                fields: vec![crate::ir::ResolvedField {
+                fields: vec![ResolvedField {
                     name: "level".to_owned(),
                     ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
                 }],
@@ -4589,7 +4593,7 @@ mod tests {
                     returns: None,
                 }],
             }],
-            bundle: Some(crate::ir::ResolvedBundle {
+            bundle: Some(ResolvedBundle {
                 name: "decoder_bundle".to_owned(),
                 bundle_id: 0x9999_AAAA_BBBB_CCCC_u64,
                 version: Version {
@@ -4598,8 +4602,8 @@ mod tests {
                     patch: 0,
                 },
                 loader: "native".to_owned(),
-                file: polyplug_codegen::ResolvedBundleFile::Single("test.so".to_owned()),
-                plugins: vec![crate::ir::ResolvedPlugin {
+                file: ResolvedBundleFile::Single("test.so".to_owned()),
+                plugins: vec![ResolvedPlugin {
                     name: "decoder".to_owned(),
                     implements: vec!["pipeline.decoder@1.0".to_owned()],
                     optional: vec![],

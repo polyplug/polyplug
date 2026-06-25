@@ -1,5 +1,8 @@
 //! Runtime configuration.
 
+use core::ffi::c_void;
+use core::ptr;
+
 use crate::runtime::Compatibility;
 use crate::runtime::ReloadPhase;
 use crate::runtime::SignaturePolicy;
@@ -31,13 +34,13 @@ pub struct RuntimeConfig {
     ///   pointer — callbacks never receive null.
     /// - The pointee (and the `StringView`s inside it) is valid only for the
     ///   duration of the call — copy the data to retain it.
-    pub on_reload: Option<unsafe extern "C" fn(*mut core::ffi::c_void, *const ReloadPhase)>,
+    pub on_reload: Option<unsafe extern "C" fn(*mut c_void, *const ReloadPhase)>,
     /// Opaque user-data pointer forwarded to `on_reload` as its first argument.
     ///
     /// # Ownership
     /// Owned by the host that supplies the callback. The runtime never reads,
     /// writes, or frees the pointee — it only forwards the pointer.
-    pub on_reload_user_data: *mut core::ffi::c_void,
+    pub on_reload_user_data: *mut c_void,
     /// Optional logger callback, or null for the default behaviour.
     ///
     /// The runtime routes every diagnostic message through this callback as
@@ -64,7 +67,7 @@ pub struct RuntimeConfig {
     /// SDK instead installs `polyplug_lua_log_trampoline` (exported by the
     /// polyplug_lua loader cdylib) here and carries a scalar-callback bridge
     /// in `log_user_data`.
-    pub log: Option<unsafe extern "C" fn(*mut core::ffi::c_void, u32, StringView, StringView)>,
+    pub log: Option<unsafe extern "C" fn(*mut c_void, u32, StringView, StringView)>,
     /// Opaque user-data pointer forwarded to `log` as its first argument.
     ///
     /// # Ownership
@@ -72,7 +75,7 @@ pub struct RuntimeConfig {
     /// writes, or frees the pointee — it only forwards the pointer. The host
     /// must keep the pointee valid (and safe to use from any thread) for the
     /// runtime's entire lifetime.
-    pub log_user_data: *mut core::ffi::c_void,
+    pub log_user_data: *mut c_void,
     /// Maximum [`LogLevel`] (as `u32`) delivered to the `log` callback.
     ///
     /// Messages with a level value greater than this are skipped before any
@@ -139,9 +142,9 @@ impl Default for RuntimeConfig {
             compatibility: Compatibility::Strict,
             hot_reload_enabled: false,
             on_reload: None,
-            on_reload_user_data: core::ptr::null_mut(),
+            on_reload_user_data: ptr::null_mut(),
             log: None,
-            log_user_data: core::ptr::null_mut(),
+            log_user_data: ptr::null_mut(),
             log_max_level: LogLevel::Warn as u32,
             signature_policy: SignaturePolicy::Off,
             trusted_keys: Array::empty(),
@@ -151,11 +154,12 @@ impl Default for RuntimeConfig {
 
 #[cfg(test)]
 mod tests {
+    use core::ffi::c_void;
     use core::mem::{align_of, offset_of, size_of};
 
     use super::RuntimeConfig;
-    use crate::runtime::{Compatibility, SignaturePolicy};
-    use crate::types::LogLevel;
+    use crate::runtime::{Compatibility, ReloadPhase, SignaturePolicy};
+    use crate::types::{LogLevel, StringView};
 
     #[test]
     fn layout_runtime_config() {
@@ -194,30 +198,12 @@ mod tests {
     #[test]
     fn option_fn_pointer_niche_keeps_layout() {
         assert_eq!(
-            size_of::<
-                Option<
-                    unsafe extern "C" fn(
-                        *mut core::ffi::c_void,
-                        *const crate::runtime::ReloadPhase,
-                    ),
-                >,
-            >(),
-            size_of::<
-                unsafe extern "C" fn(*mut core::ffi::c_void, *const crate::runtime::ReloadPhase),
-            >(),
+            size_of::<Option<unsafe extern "C" fn(*mut c_void, *const ReloadPhase)>>(),
+            size_of::<unsafe extern "C" fn(*mut c_void, *const ReloadPhase)>(),
         );
         assert_eq!(
-            size_of::<
-                Option<
-                    unsafe extern "C" fn(
-                        *mut core::ffi::c_void,
-                        u32,
-                        crate::types::StringView,
-                        crate::types::StringView,
-                    ),
-                >,
-            >(),
-            size_of::<*const core::ffi::c_void>(),
+            size_of::<Option<unsafe extern "C" fn(*mut c_void, u32, StringView, StringView)>>(),
+            size_of::<*const c_void>(),
         );
     }
 

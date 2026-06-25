@@ -1,4 +1,4 @@
-use core::fmt;
+use core::fmt::{self, LowerHex, UpperHex};
 
 use crate::fnv1a_64;
 
@@ -53,13 +53,13 @@ impl BundleId {
 
 impl fmt::UpperHex for BundleId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::UpperHex::fmt(&self.0, f)
+        UpperHex::fmt(&self.0, f)
     }
 }
 
 impl fmt::LowerHex for BundleId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::LowerHex::fmt(&self.0, f)
+        LowerHex::fmt(&self.0, f)
     }
 }
 

@@ -8,12 +8,19 @@
 //! the hot-reload runtime/path helpers backed by the build-script-emitted
 //! reload-plugin directories.
 
+use core::mem::transmute;
+use core::ptr::null_mut;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crossbeam_epoch::{Guard, pin as epoch_pin};
+
 use polyplug::runtime::Runtime;
+use polyplug_abi::dispatch::VmLoaderData;
+use polyplug_abi::runtime::Compatibility;
 use polyplug_abi::{
-    GuestContractInstance, GuestContractInterface, HostApi, RuntimeConfig, StringView, Version,
+    GuestContractHandle, GuestContractInstance, GuestContractInterface, HostApi, PluginDescriptor,
+    RuntimeConfig, StringView, Version,
 };
 
 use crate::common::TestNativeLoader;
@@ -34,7 +41,7 @@ pub(crate) const MOCK_FNS_EMPTY: [*const (); 0] = [];
 /// # Safety
 /// Matches the ABI `create_instance` signature; reads neither argument.
 pub(crate) unsafe extern "C" fn noop_create_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -50,7 +57,7 @@ pub(crate) unsafe extern "C" fn noop_create_instance(
 /// # Safety
 /// Matches the ABI `destroy_instance` signature; owns no instance data.
 pub(crate) unsafe extern "C" fn noop_destroy_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
@@ -58,11 +65,8 @@ pub(crate) unsafe extern "C" fn noop_destroy_instance(
 
 // ─── Descriptor + interface builders ──────────────────────────────────────────
 
-pub(crate) fn make_descriptor(
-    name: &'static str,
-    contract_name: &'static str,
-) -> polyplug_abi::PluginDescriptor {
-    polyplug_abi::PluginDescriptor {
+pub(crate) fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDescriptor {
+    PluginDescriptor {
         name: StringView::from_static(name.as_bytes()),
         contract_name: StringView::from_static(contract_name.as_bytes()),
         version: Version {
@@ -120,10 +124,10 @@ pub(crate) fn v2_so_path() -> PathBuf {
 
 pub(crate) fn hot_reload_config() -> RuntimeConfig {
     RuntimeConfig {
-        compatibility: polyplug_abi::runtime::Compatibility::Strict,
+        compatibility: Compatibility::Strict,
         hot_reload_enabled: true,
         on_reload: None,
-        on_reload_user_data: core::ptr::null_mut(),
+        on_reload_user_data: null_mut(),
         ..Default::default()
     }
 }
@@ -142,8 +146,8 @@ pub(crate) fn make_hot_reload_runtime() -> Arc<Runtime> {
 /// Pins the epoch across resolve + deref so the interface stays alive while its
 /// native function table is read, even if a reload republishes concurrently.
 pub(crate) fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
-    let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
-    let handle: polyplug_abi::GuestContractHandle = rt.find_guest_contract(contract_id, 0).ok()?;
+    let _epoch_guard: Guard = epoch_pin();
+    let handle: GuestContractHandle = rt.find_guest_contract(contract_id, 0).ok()?;
     let interface_ptr: *const GuestContractInterface = rt.resolve_guest_contract(handle).ok()?;
     // SAFETY: the epoch guard pinned above keeps the resolved interface alive across this
     // deref. dispatch.native is the active variant for these native test interfaces, and
@@ -151,7 +155,7 @@ pub(crate) fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<exter
     // test plugins export.
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
         let fns: *const *const () = (*interface_ptr).dispatch.native.functions;
-        core::mem::transmute(*fns)
+        transmute(*fns)
     };
     Some(fn_ptr)
 }

@@ -2,6 +2,9 @@
 
 use std::path::Path;
 
+#[cfg(test)]
+use core::error::Error;
+
 use crate::ast_grep::{AstGrepRunner, Match};
 use crate::error::ValidatorError;
 use crate::languages::{LanguageValidator, parse_variant_text};
@@ -173,19 +176,14 @@ mod tests {
         validate_language_struct,
     };
 
-    fn create_temp_python_file(
-        content: &str,
-    ) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
+    fn create_temp_python_file(content: &str) -> Result<NamedTempFile, Box<dyn Error>> {
         let mut file: NamedTempFile = NamedTempFile::with_suffix(".py")?;
         file.write_all(content.as_bytes())?;
         file.flush()?;
         Ok(file)
     }
 
-    fn validate_file(
-        methods: &[String],
-        file: &Path,
-    ) -> Result<ValidationResult, Box<dyn core::error::Error>> {
+    fn validate_file(methods: &[String], file: &Path) -> Result<ValidationResult, Box<dyn Error>> {
         let mut validator: PythonValidator = PythonValidator::new();
         let result: ValidationResult = validate_language(
             &mut validator,
@@ -199,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detects_annotated_function() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_annotated_function() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_python_file(
             r#"
 def to_str(sv: StringView) -> str:
@@ -213,7 +211,7 @@ def to_str(sv: StringView) -> str:
     }
 
     #[test]
-    fn test_detects_unannotated_function() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_unannotated_function() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_python_file(
             r#"
 def to_str(sv):
@@ -226,7 +224,7 @@ def to_str(sv):
     }
 
     #[test]
-    fn test_renamed_definition_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_renamed_definition_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_python_file(
             r#"
 def to_str2(sv):
@@ -239,7 +237,7 @@ def to_str2(sv):
     }
 
     #[test]
-    fn test_call_site_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_call_site_only_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_python_file(
             r#"
 def other(sv):
@@ -253,7 +251,7 @@ def other(sv):
     }
 
     #[test]
-    fn test_comment_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_comment_only_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_python_file(
             r#"
 # to_str(sv) converts a StringView
@@ -268,7 +266,7 @@ def unrelated():
     }
 
     #[test]
-    fn test_reports_missing_methods() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_reports_missing_methods() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_python_file(
             r#"
 def to_str(sv):
@@ -294,7 +292,7 @@ def starts_with(sv, prefix):
     }
 
     #[test]
-    fn test_real_sdk_has_all_golden_methods() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_sdk_has_all_golden_methods() -> Result<(), Box<dyn Error>> {
         let sdk_path: PathBuf =
             repo_path("sdks/python/polyplug_abi/polyplug_abi/string_view_helper.py");
         let result: ValidationResult = validate_file(&golden_methods(), &sdk_path)?;
@@ -310,7 +308,7 @@ def starts_with(sv, prefix):
     fn validate_enum_file(
         enum_name: &str,
         file: &Path,
-    ) -> Result<EnumValidationResult, Box<dyn core::error::Error>> {
+    ) -> Result<EnumValidationResult, Box<dyn Error>> {
         let mut validator: PythonValidator = PythonValidator::new();
         let result: EnumValidationResult = validate_language_enum(
             &mut validator,
@@ -323,7 +321,7 @@ def starts_with(sv, prefix):
     }
 
     #[test]
-    fn test_enum_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_exact_match_passes() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_python_file(
             r#"
 import enum
@@ -341,8 +339,7 @@ class DispatchType(enum.IntEnum):
     }
 
     #[test]
-    fn test_enum_wrong_value_fails_with_expected_vs_found()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_wrong_value_fails_with_expected_vs_found() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_python_file(
             r#"
 class DispatchType(enum.IntEnum):
@@ -362,7 +359,7 @@ class DispatchType(enum.IntEnum):
     }
 
     #[test]
-    fn test_enum_missing_and_extra_variants_fail() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_missing_and_extra_variants_fail() -> Result<(), Box<dyn Error>> {
         // SCREAMING_CASE members are drift: golden names are PascalCase, so
         // NATIVE both leaves Native missing and surfaces as a stale extra.
         let file: NamedTempFile = create_temp_python_file(
@@ -385,7 +382,7 @@ class DispatchType(enum.IntEnum):
     }
 
     #[test]
-    fn test_enum_commented_out_variant_does_not_count() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_commented_out_variant_does_not_count() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_python_file(
             r#"
 # DispatchType has VirtualMachine = 1 per the ABI.
@@ -407,7 +404,7 @@ class DispatchType(enum.IntEnum):
     }
 
     #[test]
-    fn test_enum_method_body_assignments_do_not_count() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_method_body_assignments_do_not_count() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_python_file(
             r#"
 class DispatchType(enum.IntEnum):
@@ -426,7 +423,7 @@ class Other:
     }
 
     #[test]
-    fn test_real_abi_mirror_matches_golden_enums() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_abi_mirror_matches_golden_enums() -> Result<(), Box<dyn Error>> {
         let path: PathBuf = repo_path("sdks/python/abi/abi.py");
         for enum_name in [
             "AbiErrorCode",
@@ -441,8 +438,7 @@ class Other:
     }
 
     #[test]
-    fn test_real_package_reload_phase_matches_golden_enum()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_package_reload_phase_matches_golden_enum() -> Result<(), Box<dyn Error>> {
         let path: PathBuf = repo_path("sdks/python/polyplug_abi/polyplug_abi/__init__.py");
         let result: EnumValidationResult = validate_enum_file("ReloadPhaseType", &path)?;
         assert!(result.is_complete(), "ReloadPhaseType drift: {result:?}");
@@ -453,7 +449,7 @@ class Other:
         struct_name: &str,
         golden_fields: &[String],
         file: &Path,
-    ) -> Result<StructFieldValidationResult, Box<dyn core::error::Error>> {
+    ) -> Result<StructFieldValidationResult, Box<dyn Error>> {
         let mut validator: PythonValidator = PythonValidator::new();
         let result: StructFieldValidationResult = validate_language_struct(
             &mut validator,
@@ -466,7 +462,7 @@ class Other:
     }
 
     #[test]
-    fn test_struct_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_exact_match_passes() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_python_file(
             r#"
 import ctypes
@@ -484,7 +480,7 @@ class StringView(ctypes.Structure):
     }
 
     #[test]
-    fn test_struct_renamed_field_is_missing_and_extra() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_renamed_field_is_missing_and_extra() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_python_file(
             r#"
 import ctypes
@@ -510,7 +506,7 @@ class StringView(ctypes.Structure):
     }
 
     #[test]
-    fn test_struct_comment_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_comment_only_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_python_file(
             r#"
 import ctypes
@@ -529,7 +525,7 @@ import ctypes
     }
 
     #[test]
-    fn test_struct_other_class_not_confused() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_other_class_not_confused() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_python_file(
             r#"
 import ctypes
@@ -552,7 +548,7 @@ class StringView(ctypes.Structure):
     }
 
     #[test]
-    fn test_real_abi_mirror_structs_match_golden() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_abi_mirror_structs_match_golden() -> Result<(), Box<dyn Error>> {
         let path: PathBuf = repo_path("sdks/python/abi/abi.py");
         for struct_name in ["StringView", "AbiError"] {
             let result: StructFieldValidationResult =

@@ -4,6 +4,7 @@
 //! and then consumed by code generators.
 
 use polyplug_codegen::PolyplugcError;
+use polyplug_codegen::ResolvedBundleFile;
 
 // ─── Version ─────────────────────────────────────────────────────────────
 
@@ -300,7 +301,7 @@ pub struct ResolvedBundle {
     pub name: String,
     pub version: Version,
     pub loader: String,
-    pub file: polyplug_codegen::ResolvedBundleFile,
+    pub file: ResolvedBundleFile,
     pub plugins: Vec<ResolvedPlugin>,
     pub bundle_id: u64,
     pub dependencies: Vec<ResolvedDependency>,

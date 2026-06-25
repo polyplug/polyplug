@@ -1,5 +1,7 @@
 //! SigError — structured error type for bundle signing operations.
 
+use std::io::Error as IoError;
+
 use thiserror::Error;
 
 /// Errors that can occur during bundle signing or verification.
@@ -47,7 +49,7 @@ pub enum SigError {
     Io {
         path: String,
         #[source]
-        source: std::io::Error,
+        source: IoError,
     },
 
     #[error("bundle path `{path}` is not a directory")]

@@ -4,6 +4,9 @@
 //! polyplug never treats StringView as null-terminated — embedded \x00 bytes must
 //! be preserved through any polyplug-internal API that processes StringViews.
 
+use core::ptr;
+use core::slice;
+
 use polyplug_abi::StringView;
 use polyplug_abi::ffi::{polyplug_host_alloc, polyplug_host_free};
 
@@ -31,10 +34,10 @@ fn test_stringview_roundtrip_through_host_alloc() {
     let ptr: *mut u8 = polyplug_host_alloc(size, 1_usize);
     assert!(!ptr.is_null(), "host_alloc must succeed for size=11");
     // SAFETY: ptr is non-null and valid for `size` bytes.
-    unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), ptr, size) };
+    unsafe { ptr::copy_nonoverlapping(data.as_ptr(), ptr, size) };
     // Read back the bytes
     // SAFETY: ptr valid for size bytes, just written.
-    let read_back: &[u8] = unsafe { core::slice::from_raw_parts(ptr, size) };
+    let read_back: &[u8] = unsafe { slice::from_raw_parts(ptr, size) };
     assert_eq!(
         read_back, data,
         "data with embedded null must round-trip unchanged"
@@ -58,7 +61,7 @@ fn test_stringview_from_static_with_embedded_null() {
     );
     // Verify raw slice reconstruction preserves null
     // SAFETY: sv.ptr is a valid pointer to sv.len bytes of static data.
-    let slice: &[u8] = unsafe { core::slice::from_raw_parts(sv.ptr, sv.len) };
+    let slice: &[u8] = unsafe { slice::from_raw_parts(sv.ptr, sv.len) };
     assert_eq!(slice[4], 0_u8, "byte at index 4 must be null");
     assert_eq!(slice[5], b'p', "byte at index 5 must be 'p'");
 }

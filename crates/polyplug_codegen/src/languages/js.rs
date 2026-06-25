@@ -432,6 +432,8 @@ impl Default for JsGenerator {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::data::{FieldInfo, StructInfo};
 
@@ -598,8 +600,7 @@ mod tests {
     #[test]
     fn js_enum_field_uses_repr_layout_for_offsets() {
         let generator: JsGenerator = JsGenerator::new();
-        let mut enum_reprs: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
+        let mut enum_reprs: HashMap<String, String> = HashMap::new();
         enum_reprs.insert(String::from("MyPolicy"), String::from("u32"));
         let ctx: GenerationContext = GenerationContext::new().with_enum_reprs(enum_reprs);
 

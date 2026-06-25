@@ -15,6 +15,9 @@
 //! - Guests **never free** arena allocations. The arena retains every overflow block
 //!   across resets (rewinding their cursors for reuse) and frees them all on drop.
 
+use core::mem;
+use core::ptr;
+
 use crate::host::HostApi;
 
 /// Header prepended to every host-allocated overflow block.
@@ -75,7 +78,7 @@ const OVERFLOW_BLOCK_MIN: usize = 4096;
 /// `align_of::<ArenaOverflowBlock>()` (pointer alignment) covers the header and
 /// every primitive ABI value; larger requested alignments are satisfied by the
 /// bump-up logic within the block.
-const OVERFLOW_BLOCK_ALIGN: usize = core::mem::align_of::<ArenaOverflowBlock>();
+const OVERFLOW_BLOCK_ALIGN: usize = mem::align_of::<ArenaOverflowBlock>();
 
 impl CallArena {
     /// Construct an arena over a caller-provided byte buffer.
@@ -95,7 +98,7 @@ impl CallArena {
             end,
             base,
             host,
-            first_overflow: core::ptr::null_mut(),
+            first_overflow: ptr::null_mut(),
         }
     }
 
@@ -113,7 +116,7 @@ impl CallArena {
     /// The returned pointer is valid until the next [`CallArena::reset`].
     pub fn alloc(&mut self, size: usize, align: usize) -> *mut u8 {
         if size == 0 || !align.is_power_of_two() {
-            return core::ptr::null_mut();
+            return ptr::null_mut();
         }
 
         if let Some(ptr) = Self::bump(self.cur, self.end, size, align) {
@@ -169,7 +172,7 @@ impl CallArena {
                 }
                 ptr
             }
-            None => core::ptr::null_mut(),
+            None => ptr::null_mut(),
         }
     }
 
@@ -177,7 +180,7 @@ impl CallArena {
     /// `size`@`align` from it.
     fn alloc_overflow(&mut self, size: usize, align: usize) -> *mut u8 {
         if self.host.is_null() {
-            return core::ptr::null_mut();
+            return ptr::null_mut();
         }
 
         // REUSE PASS: walk the retained chain; serve from the first block with room.
@@ -192,10 +195,10 @@ impl CallArena {
         }
 
         // ALLOCATE NEW: no retained block had enough room.
-        let header: usize = core::mem::size_of::<ArenaOverflowBlock>();
+        let header: usize = mem::size_of::<ArenaOverflowBlock>();
         let needed: usize = match header.checked_add(align).and_then(|v| v.checked_add(size)) {
             Some(v) => v,
-            None => return core::ptr::null_mut(),
+            None => return ptr::null_mut(),
         };
         let capacity: usize = needed.max(OVERFLOW_BLOCK_MIN);
 
@@ -205,7 +208,7 @@ impl CallArena {
         let block_ptr: *mut u8 =
             unsafe { ((*self.host).alloc)(self.host, capacity, OVERFLOW_BLOCK_ALIGN) };
         if block_ptr.is_null() {
-            return core::ptr::null_mut();
+            return ptr::null_mut();
         }
 
         let block: *mut ArenaOverflowBlock = block_ptr.cast::<ArenaOverflowBlock>();
@@ -234,7 +237,7 @@ impl CallArena {
         self.cur = self.base;
         let mut block: *mut ArenaOverflowBlock = self.first_overflow;
         while !block.is_null() {
-            let header: usize = core::mem::size_of::<ArenaOverflowBlock>();
+            let header: usize = mem::size_of::<ArenaOverflowBlock>();
             // SAFETY: every block in the chain was allocated by `alloc_overflow`
             // with a valid header; reading `next` and writing `used` are in-bounds.
             let next: *mut ArenaOverflowBlock = unsafe {
@@ -269,7 +272,7 @@ impl Drop for CallArena {
             }
             block = next;
         }
-        self.first_overflow = core::ptr::null_mut();
+        self.first_overflow = ptr::null_mut();
     }
 }
 
@@ -284,13 +287,18 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use core::cell::Cell;
+    use core::ffi::c_void;
     use core::mem::{align_of, offset_of, size_of};
 
+    use core::alloc::Layout;
+
+    use std::alloc as std_alloc;
+
     use super::*;
-    use crate::guest::GuestContractInterface;
-    use crate::host::{HostContractInstance, HostContractInterface};
+    use crate::guest::{GuestContractInstance, GuestContractInterface};
+    use crate::host::{HostApi, HostContractInstance, HostContractInterface};
     use crate::plugin::{GuestContractHandle, PluginDescriptor};
-    use crate::types::{AbiError, Array, DependencyInfo};
+    use crate::types::{AbiError, Array, DependencyInfo, StringView};
     use polyplug_utils::BundleId;
 
     // ─── Counting host allocator for overflow tests ───────────────────────────
@@ -302,18 +310,16 @@ mod tests {
 
     unsafe extern "C" fn test_alloc(_this: *const HostApi, size: usize, align: usize) -> *mut u8 {
         ALLOC_COUNT.with(|c| c.set(c.get() + 1));
-        let layout: core::alloc::Layout =
-            core::alloc::Layout::from_size_align(size, align).expect("valid layout");
+        let layout: Layout = Layout::from_size_align(size, align).expect("valid layout");
         // SAFETY: layout has non-zero size in every test that triggers overflow.
-        unsafe { std::alloc::alloc(layout) }
+        unsafe { std_alloc::alloc(layout) }
     }
 
     unsafe extern "C" fn test_free(_this: *const HostApi, ptr: *mut u8, size: usize, align: usize) {
         FREE_COUNT.with(|c| c.set(c.get() + 1));
-        let layout: core::alloc::Layout =
-            core::alloc::Layout::from_size_align(size, align).expect("valid layout");
+        let layout: Layout = Layout::from_size_align(size, align).expect("valid layout");
         // SAFETY: ptr/size/align match the allocation made by test_alloc.
-        unsafe { std::alloc::dealloc(ptr, layout) }
+        unsafe { std_alloc::dealloc(ptr, layout) }
     }
 
     // CallArena only ever calls `alloc` and `free`. The remaining HostApi fields
@@ -349,7 +355,7 @@ mod tests {
         _this: *const HostApi,
         _handle: GuestContractHandle,
     ) -> *const GuestContractInterface {
-        core::ptr::null()
+        ptr::null()
     }
 
     unsafe extern "C" fn stub_get_host_contract(
@@ -365,7 +371,7 @@ mod tests {
         _id: u64,
         _ver: u32,
     ) -> *const HostContractInterface {
-        core::ptr::null()
+        ptr::null()
     }
 
     unsafe extern "C" fn stub_list_bundles(_this: *const HostApi) -> Array<BundleId> {
@@ -397,7 +403,7 @@ mod tests {
 
     unsafe extern "C" fn stub_register_loader(
         _this: *const HostApi,
-        _loader: *mut core::ffi::c_void,
+        _loader: *mut c_void,
         out_err: *mut AbiError,
     ) {
         // SAFETY: the test host always supplies a valid out-param pointer.
@@ -427,37 +433,37 @@ mod tests {
 
     /// `HostApi.log` stub for the test host — drops the record.
     unsafe extern "C" fn stub_host_log(
-        _this: *const crate::host::HostApi,
+        _this: *const HostApi,
         _level: u32,
-        _scope: crate::types::StringView,
-        _message: crate::types::StringView,
+        _scope: StringView,
+        _message: StringView,
     ) {
     }
 
     unsafe extern "C" fn stub_create_guest_instance(
-        _this: *const crate::host::HostApi,
-        _interface: *const crate::guest::GuestContractInterface,
-        _args: *const core::ffi::c_void,
-        out_instance: *mut crate::guest::GuestContractInstance,
+        _this: *const HostApi,
+        _interface: *const GuestContractInterface,
+        _args: *const c_void,
+        out_instance: *mut GuestContractInstance,
     ) {
         // SAFETY: the test host always supplies a valid out-param pointer.
-        unsafe { out_instance.write(crate::guest::GuestContractInstance::null()) };
+        unsafe { out_instance.write(GuestContractInstance::null()) };
     }
 
     unsafe extern "C" fn stub_destroy_guest_instance(
-        _this: *const crate::host::HostApi,
-        _interface: *const crate::guest::GuestContractInterface,
-        _instance: crate::guest::GuestContractInstance,
+        _this: *const HostApi,
+        _interface: *const GuestContractInterface,
+        _instance: GuestContractInstance,
     ) {
     }
 
-    unsafe extern "C" fn stub_revision_counter(_this: *const crate::host::HostApi) -> *const u64 {
-        core::ptr::null()
+    unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
+        ptr::null()
     }
 
     fn test_host() -> HostApi {
         HostApi {
-            runtime: core::ptr::null_mut(),
+            runtime: ptr::null_mut(),
             register_guest_contract: stub_register_guest,
             alloc: test_alloc,
             free: test_free,
@@ -479,7 +485,7 @@ mod tests {
             create_guest_instance: stub_create_guest_instance,
             destroy_guest_instance: stub_destroy_guest_instance,
             revision_counter: stub_revision_counter,
-            reserved: core::ptr::null(),
+            reserved: ptr::null(),
         }
     }
 
@@ -508,7 +514,7 @@ mod tests {
     #[test]
     fn bump_serves_from_primary_region() {
         let mut buf: [u8; 64] = [0; 64];
-        let mut arena: CallArena = CallArena::new(&mut buf, core::ptr::null());
+        let mut arena: CallArena = CallArena::new(&mut buf, ptr::null());
 
         let a: *mut u8 = arena.alloc(8, 1);
         let b: *mut u8 = arena.alloc(8, 1);
@@ -521,7 +527,7 @@ mod tests {
     #[test]
     fn alloc_respects_alignment() {
         let mut buf: [u8; 128] = [0; 128];
-        let mut arena: CallArena = CallArena::new(&mut buf, core::ptr::null());
+        let mut arena: CallArena = CallArena::new(&mut buf, ptr::null());
 
         // Burn one byte so the next allocation must round up.
         let _one: *mut u8 = arena.alloc(1, 1);
@@ -533,7 +539,7 @@ mod tests {
     #[test]
     fn zero_size_returns_null() {
         let mut buf: [u8; 16] = [0; 16];
-        let mut arena: CallArena = CallArena::new(&mut buf, core::ptr::null());
+        let mut arena: CallArena = CallArena::new(&mut buf, ptr::null());
         assert!(arena.alloc(0, 1).is_null());
     }
 

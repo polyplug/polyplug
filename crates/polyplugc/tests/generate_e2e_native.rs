@@ -17,9 +17,15 @@
 
 #![allow(clippy::expect_used)]
 
+use std::ffi::OsStr;
+use std::fs;
+use std::fs::DirEntry;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Output;
+use tempfile::TempDir;
+use tempfile::tempdir;
 
 /// Absolute path to the repository root, derived from this crate's manifest dir
 /// (`<repo>/crates/polyplugc`).
@@ -46,7 +52,7 @@ fn example_bundle_toml() -> PathBuf {
 }
 
 /// Run the `polyplugc` binary with `args`, returning the captured output.
-fn run_polyplugc(args: &[&std::ffi::OsStr]) -> std::process::Output {
+fn run_polyplugc(args: &[&OsStr]) -> Output {
     let bin: &str = env!("CARGO_BIN_EXE_polyplugc");
     Command::new(bin)
         .args(args)
@@ -75,7 +81,7 @@ fn canonicalize_for_toolchain(path: &Path) -> PathBuf {
 
 /// Generate the guest glue for the decoder fixture into `out_dir` for `lang`.
 fn generate_into(out_dir: &Path, lang: &str) {
-    let output: std::process::Output = run_polyplugc(&[
+    let output: Output = run_polyplugc(&[
         "generate".as_ref(),
         "--bundle".as_ref(),
         example_bundle_toml().as_os_str(),
@@ -106,10 +112,10 @@ fn generate_into(out_dir: &Path, lang: &str) {
 
 #[test]
 fn cpp_generated_glue_compiles() {
-    let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    let tmp: TempDir = tempdir().expect("tempdir");
     let project_dir: PathBuf = tmp.path().join("plugin");
     let gen_dir: PathBuf = project_dir.join("gen");
-    std::fs::create_dir_all(&project_dir).expect("create project dir");
+    fs::create_dir_all(&project_dir).expect("create project dir");
 
     generate_into(&gen_dir, "cpp");
     assert!(
@@ -141,7 +147,7 @@ fn cpp_generated_glue_compiles() {
          PipelineDecoderGuestContract* polyplug_create_decoder(const HostApi* host) { return new DecoderImpl(host); }\n\
          }  // namespace polyplug_plugin\n";
     let plugin_src: PathBuf = project_dir.join("plugin.cpp");
-    std::fs::write(&plugin_src, plugin_cpp).expect("write plugin.cpp");
+    fs::write(&plugin_src, plugin_cpp).expect("write plugin.cpp");
 
     let cpp_abi_include: PathBuf = repo_root().join("sdks").join("cpp").join("abi");
     let cpp_guest_include: PathBuf = repo_root().join("sdks").join("cpp").join("guest");
@@ -150,7 +156,7 @@ fn cpp_generated_glue_compiles() {
     // Compiler conventions mirror examples/build_all.sh (g++ -std=c++20 -fPIC
     // -shared). `c++` is the portable driver name resolving to the platform
     // compiler (g++/clang++).
-    let build: std::process::Output = Command::new("c++")
+    let build: Output = Command::new("c++")
         .arg("-std=c++20")
         .arg("-fPIC")
         .arg("-shared")
@@ -192,7 +198,7 @@ fn cpp_generated_glue_compiles() {
 
 #[test]
 fn csharp_generated_glue_compiles() {
-    let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    let tmp: TempDir = tempdir().expect("tempdir");
     // Canonicalize: on macOS the tempdir lives under the /var/folders →
     // /private/var/folders symlink, and MSBuild's ProjectReference path
     // relativization mixes the resolved and unresolved forms (MSB3202,
@@ -202,7 +208,7 @@ fn csharp_generated_glue_compiles() {
     let tmp_root: PathBuf = canonicalize_for_toolchain(tmp.path());
     let project_dir: PathBuf = tmp_root.join("plugin");
     let gen_dir: PathBuf = project_dir.join("generated");
-    std::fs::create_dir_all(&project_dir).expect("create project dir");
+    fs::create_dir_all(&project_dir).expect("create project dir");
 
     generate_into(&gen_dir, "csharp");
     assert!(
@@ -237,7 +243,7 @@ fn csharp_generated_glue_compiles() {
          </Project>\n",
         guest_csproj.display(),
     );
-    std::fs::write(project_dir.join("Plugin.csproj"), csproj).expect("write Plugin.csproj");
+    fs::write(project_dir.join("Plugin.csproj"), csproj).expect("write Plugin.csproj");
 
     // The only hand-written source: a minimal plugin impl modeled on
     // examples/guests/csharp/decoder/Decoder.cs.
@@ -269,14 +275,14 @@ fn csharp_generated_glue_compiles() {
          DecoderInterfaces.SetDecoderFactory(host => new DecoderPlugin(host));\n\
          }\n\
          }\n";
-    std::fs::write(project_dir.join("Plugin.cs"), plugin_cs).expect("write Plugin.cs");
+    fs::write(project_dir.join("Plugin.cs"), plugin_cs).expect("write Plugin.cs");
 
     // Keep the build hermetic: route the plugin assembly output into the
     // tempdir. The referenced SDK projects still build into their own
     // (gitignored) bin/obj under sdks/csharp, exactly as examples/build_all.sh
     // does.
     let out_dir: PathBuf = project_dir.join("out");
-    let build: std::process::Output = Command::new("dotnet")
+    let build: Output = Command::new("dotnet")
         .arg("build")
         .arg(project_dir.join("Plugin.csproj"))
         .arg("-c")
@@ -292,10 +298,10 @@ fn csharp_generated_glue_compiles() {
         String::from_utf8_lossy(&build.stderr),
     );
 
-    let produced_assembly: bool = std::fs::read_dir(&out_dir)
+    let produced_assembly: bool = fs::read_dir(&out_dir)
         .expect("output dir must exist after a successful build")
         .filter_map(Result::ok)
-        .any(|entry: std::fs::DirEntry| entry.file_name().to_string_lossy() == "plugin.dll");
+        .any(|entry: DirEntry| entry.file_name().to_string_lossy() == "plugin.dll");
     assert!(
         produced_assembly,
         "dotnet build succeeded but no plugin.dll was produced in {}",

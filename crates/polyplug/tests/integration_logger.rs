@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use polyplug::runtime::Runtime;
+use polyplug_abi::HostApi;
 use polyplug_abi::runtime::RuntimeConfig;
 use polyplug_abi::types::{LogLevel, StringView};
 use tempfile::TempDir;
@@ -155,7 +156,7 @@ fn host_api_log_routes_guest_records_into_host_logger() {
         .build()
         .expect("build runtime");
 
-    let host: *const polyplug_abi::HostApi = runtime.host_abi();
+    let host: *const HostApi = runtime.host_abi();
     let scope: &str = "guest.test_plugin";
     let message: &str = "hello from a guest";
     let scope_view = StringView {

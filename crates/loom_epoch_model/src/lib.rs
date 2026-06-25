@@ -51,12 +51,17 @@
 
 #[cfg(test)]
 mod tests {
+    use core::ptr;
+
     use loom::sync::Arc;
     use loom::sync::Mutex;
+    use loom::sync::MutexGuard;
     use loom::sync::atomic::AtomicBool;
     use loom::sync::atomic::AtomicPtr;
     use loom::sync::atomic::Ordering;
     use loom::thread;
+    use std::panic::{self, PanicHookInfo};
+    use std::thread::Result as ThreadResult;
 
     /// One published snapshot in the model (the stand-in for a `ReadView`).
     ///
@@ -120,7 +125,7 @@ mod tests {
         /// about to be moved.
         fn new() -> Arc<World> {
             let world: Arc<World> = Arc::new(World {
-                published: AtomicPtr::new(core::ptr::null_mut()),
+                published: AtomicPtr::new(ptr::null_mut()),
                 collector: Mutex::new(Collector {
                     next_guard: 0,
                     active: Vec::new(),
@@ -147,7 +152,7 @@ mod tests {
 
         /// Pin the epoch: register an active guard and return its id.
         fn pin(&self) -> u64 {
-            let mut collector: loom::sync::MutexGuard<'_, Collector> =
+            let mut collector: MutexGuard<'_, Collector> =
                 self.collector.lock().expect("collector poisoned");
             let id: u64 = collector.next_guard;
             collector.next_guard += 1;
@@ -158,7 +163,7 @@ mod tests {
         /// Unpin guard `id`, then reclaim anything whose defer-time guard set
         /// drained.
         fn unpin(&self, id: u64) {
-            let mut collector: loom::sync::MutexGuard<'_, Collector> =
+            let mut collector: MutexGuard<'_, Collector> =
                 self.collector.lock().expect("collector poisoned");
             collector.active.retain(|&g| g != id);
             World::reclaim(&mut collector);
@@ -168,7 +173,7 @@ mod tests {
         /// `defer_destroy` pair).
         fn publish_swap(&self, new_ptr: *mut Slot) {
             let old_ptr: *mut Slot = self.published.swap(new_ptr, Ordering::AcqRel);
-            let mut collector: loom::sync::MutexGuard<'_, Collector> =
+            let mut collector: MutexGuard<'_, Collector> =
                 self.collector.lock().expect("collector poisoned");
             let snapshot: Vec<u64> = collector.active.clone();
             collector.deferred.push((old_ptr as *const Slot, snapshot));
@@ -264,12 +269,10 @@ mod tests {
     /// the dereference (the 949d10ec fix) is necessary, not incidental.
     #[test]
     fn unpinned_reader_race_is_detected_by_loom() {
-        let prev: Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send> =
-            std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {})); // keep the expected failure quiet
-        let result: std::thread::Result<()> =
-            std::panic::catch_unwind(|| loom::model(|| scenario(true)));
-        std::panic::set_hook(prev);
+        let prev: Box<dyn Fn(&PanicHookInfo<'_>) + Sync + Send> = panic::take_hook();
+        panic::set_hook(Box::new(|_| {})); // keep the expected failure quiet
+        let result: ThreadResult<()> = panic::catch_unwind(|| loom::model(|| scenario(true)));
+        panic::set_hook(prev);
         assert!(
             result.is_err(),
             "loom did NOT detect the unpinned-deref use-after-free — the model lost its teeth"

@@ -13,14 +13,19 @@
 //! bundle never overlap their critical sections (the root cause of the historical
 //! concurrent-reload flake).
 
+use core::ffi::c_void;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Barrier, Mutex, MutexGuard};
+use std::thread;
+use std::thread::JoinHandle;
 
-use polyplug::error::RuntimeError;
+use crossbeam_epoch::{Guard, pin as epoch_pin};
+
+use polyplug::error::{RegistryError, RuntimeError};
 use polyplug::runtime::Runtime;
 use polyplug::runtime_store::RuntimeStore;
-use polyplug_abi::runtime::ReloadPhase;
+use polyplug_abi::runtime::{ReloadPhase, RuntimeConfig};
 use polyplug_abi::{
     GuestContractHandle, GuestContractInterface, PluginDescriptor, ReloadPhaseType, StringView,
     Version,
@@ -91,7 +96,7 @@ fn test_swap_interface_changes_interface_pointer() {
     // points into the Arc the swap supersedes; holding this guard keeps that Arc alive
     // (epoch reclamation cannot run while a reader is pinned), so the pre-swap pointer
     // stays valid across the swap and its deref below.
-    let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+    let _epoch_guard: Guard = epoch_pin();
 
     // The handle should be valid before the swap.
     let resolve_result_before: Result<*const GuestContractInterface, _> =
@@ -118,10 +123,8 @@ fn test_swap_interface_changes_interface_pointer() {
         .expect("swap_interface should succeed");
 
     // The same handle should now resolve to INTERFACE_V2.
-    let resolve_result_after: Result<
-        *const GuestContractInterface,
-        polyplug::error::RegistryError,
-    > = registry.resolve_guest_contract(handle);
+    let resolve_result_after: Result<*const GuestContractInterface, RegistryError> =
+        registry.resolve_guest_contract(handle);
 
     // With the new model (no generation), the handle should still be valid after swap
     assert!(
@@ -156,7 +159,7 @@ fn test_direct_swap_interface() {
 
     // Pin the epoch across resolve→swap→deref so the pre-swap interface Arc the
     // registry copied stays alive across the swap that supersedes it.
-    let _epoch_guard: crossbeam_epoch::Guard = crossbeam_epoch::pin();
+    let _epoch_guard: Guard = epoch_pin();
 
     // Resolve before swap
     let interface_ptr_before: *const GuestContractInterface = registry
@@ -196,8 +199,7 @@ fn stress_rapid_reload_cycles_100() {
     const CYCLES: u32 = 100_u32;
 
     let rt: Arc<Runtime> = make_hot_reload_runtime();
-    rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
-        .expect("load v1");
+    rt.load_bundle(Path::new(RELOAD_V1_DIR)).expect("load v1");
 
     let contract_id: u64 = GuestContractId::new("reload.test", 1).id();
 
@@ -255,7 +257,7 @@ fn stress_memory_interface_swap_cycles() {
     };
 
     // SAFETY: INTERFACE_V1 is 'static and valid for the lifetime of this test.
-    let handle: polyplug_abi::GuestContractHandle = unsafe {
+    let handle: GuestContractHandle = unsafe {
         registry
             .register_guest_contract(
                 descriptor,
@@ -290,12 +292,12 @@ fn stress_reload_callback_fires_on_every_cycle() {
     let events_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&events);
 
     let rt: Arc<Runtime> = Runtime::builder()
-        .config(polyplug_abi::runtime::RuntimeConfig {
+        .config(RuntimeConfig {
             hot_reload_enabled: true,
-            ..polyplug_abi::runtime::RuntimeConfig::default()
+            ..RuntimeConfig::default()
         })
         .loader(TestNativeLoader::new())
-        .on_reload(move |_user_data: *mut core::ffi::c_void, ev: ReloadPhase| {
+        .on_reload(move |_user_data: *mut c_void, ev: ReloadPhase| {
             events_clone
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -304,8 +306,7 @@ fn stress_reload_callback_fires_on_every_cycle() {
         .build()
         .expect("build runtime");
 
-    rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
-        .expect("load v1");
+    rt.load_bundle(Path::new(RELOAD_V1_DIR)).expect("load v1");
 
     for i in 0_u32..CYCLES {
         let so_path: PathBuf = if i % 2_u32 == 0_u32 {
@@ -320,7 +321,7 @@ fn stress_reload_callback_fires_on_every_cycle() {
             });
     }
 
-    let recorded_events: std::sync::MutexGuard<'_, Vec<ReloadPhase>> =
+    let recorded_events: MutexGuard<'_, Vec<ReloadPhase>> =
         events.lock().unwrap_or_else(|e| e.into_inner());
 
     // Count only Reloaded events (Preparing fires before each attempt)
@@ -355,14 +356,13 @@ fn stress_concurrent_reload_threads_no_panic() {
     const ROUNDS_PER_THREAD: u32 = 40_u32;
 
     let rt: Arc<Runtime> = make_hot_reload_runtime();
-    rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
-        .expect("load v1");
+    rt.load_bundle(Path::new(RELOAD_V1_DIR)).expect("load v1");
 
     let contract_id: u64 = GuestContractId::new("reload.test", 1).id();
     let rt_a: Arc<Runtime> = Arc::clone(&rt);
     let rt_b: Arc<Runtime> = Arc::clone(&rt);
 
-    let reloader_a: std::thread::JoinHandle<()> = std::thread::spawn(move || {
+    let reloader_a: JoinHandle<()> = thread::spawn(move || {
         for i in 0_u32..ROUNDS_PER_THREAD {
             let so_path: PathBuf = if i % 2_u32 == 0_u32 {
                 v2_so_path()
@@ -374,7 +374,7 @@ fn stress_concurrent_reload_threads_no_panic() {
         }
     });
 
-    let reloader_b: std::thread::JoinHandle<()> = std::thread::spawn(move || {
+    let reloader_b: JoinHandle<()> = thread::spawn(move || {
         for i in 0_u32..ROUNDS_PER_THREAD {
             let so_path: PathBuf = if i % 2_u32 == 0_u32 {
                 v1_so_path()
@@ -439,7 +439,7 @@ fn concurrent_reloads_are_mutually_exclusive() {
     let rt: Arc<Runtime> = Runtime::builder()
         .config(hot_reload_config())
         .loader(TestNativeLoader::new())
-        .on_reload(move |_ud: *mut core::ffi::c_void, phase: ReloadPhase| {
+        .on_reload(move |_ud: *mut c_void, phase: ReloadPhase| {
             match phase.phase_type {
                 ReloadPhaseType::Preparing => {
                     let now: usize = cb_in.fetch_add(1_usize, Ordering::SeqCst) + 1_usize;
@@ -464,16 +464,15 @@ fn concurrent_reloads_are_mutually_exclusive() {
         .build()
         .expect("runtime build must succeed");
 
-    rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
-        .expect("load v1");
+    rt.load_bundle(Path::new(RELOAD_V1_DIR)).expect("load v1");
     let contract_id: u64 = GuestContractId::new("reload.test", 1).id();
 
-    let barrier: Arc<std::sync::Barrier> = Arc::new(std::sync::Barrier::new(THREADS));
-    let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(THREADS);
+    let barrier: Arc<Barrier> = Arc::new(Barrier::new(THREADS));
+    let mut handles: Vec<JoinHandle<()>> = Vec::with_capacity(THREADS);
     for t in 0_usize..THREADS {
         let rt_t: Arc<Runtime> = Arc::clone(&rt);
-        let bar: Arc<std::sync::Barrier> = Arc::clone(&barrier);
-        handles.push(std::thread::spawn(move || {
+        let bar: Arc<Barrier> = Arc::clone(&barrier);
+        handles.push(thread::spawn(move || {
             bar.wait();
             for i in 0_u32..ROUNDS_PER_THREAD {
                 let so_path: PathBuf = if (i as usize + t) % 2_usize == 0_usize {

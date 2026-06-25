@@ -57,9 +57,15 @@ use polyplug_abi::HostApi;
 use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
+use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::types::Version;
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
+
+use core::mem;
+use core::ptr;
+use criterion::BenchmarkGroup;
+use criterion::measurement::WallTime;
 
 /// Argument struct for the benchmark target function.
 #[repr(C)]
@@ -92,7 +98,7 @@ unsafe extern "C" fn bench_add(
 }
 
 unsafe extern "C" fn noop_create_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -104,7 +110,7 @@ unsafe extern "C" fn noop_create_instance(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
@@ -184,9 +190,9 @@ fn dispatch_fn0(interface: &GuestContractInterface) -> u32 {
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { core::mem::transmute(fn_ptr) };
+    ) = unsafe { mem::transmute(fn_ptr) };
     let instance: GuestContractInstance = GuestContractInstance {
-        data: core::ptr::null_mut(),
+        data: ptr::null_mut(),
         contract_id: GuestContractId::from_u64(interface.contract_id.id()),
     };
     let args: AddArgs = AddArgs {
@@ -211,8 +217,7 @@ fn dispatch_fn0(interface: &GuestContractInterface) -> u32 {
 fn bench_cold_start(c: &mut Criterion) {
     let contract_id: u64 = GuestContractId::new("coldstart.contract", 1).id();
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("cold_start");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("cold_start");
     group.throughput(Throughput::Elements(1));
 
     // ── cold: first dispatch into a just-registered contract ──────────────────
@@ -262,7 +267,7 @@ fn bench_cold_start(c: &mut Criterion) {
     group.finish();
     // Keep the warm runtime alive for the whole bench (its leaked interface backs
     // the cached pointer). Never dropped.
-    core::mem::forget(warm_runtime);
+    mem::forget(warm_runtime);
 }
 
 criterion_group!(benches, bench_cold_start);

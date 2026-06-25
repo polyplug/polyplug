@@ -1,8 +1,10 @@
 //! BundleVerifier trait and Ed25519Verifier implementation.
 
-use std::path::Path;
+use std::fs;
+use std::io::Error as IoError;
+use std::path::{Path, PathBuf};
 
-use ed25519_dalek::VerifyingKey;
+use ed25519_dalek::{SignatureError, VerifyingKey};
 
 use crate::SigError;
 use crate::digest::{SIG_FILE_NAME, canonical_digest};
@@ -16,7 +18,7 @@ pub struct VerifiedBundle {
     /// A future key-pinning layer can inspect this to enforce an allowlist.
     pub verifying_key: VerifyingKey,
     /// The canonical bundle directory path that was verified.
-    pub bundle_dir: std::path::PathBuf,
+    pub bundle_dir: PathBuf,
 }
 
 /// Trait that abstracts bundle verification so alternative policies (e.g.,
@@ -38,18 +40,17 @@ impl BundleVerifier for Ed25519Verifier {
     fn verify(&self, bundle_dir: &Path) -> Result<VerifiedBundle, SigError> {
         let bundle_name: String = bundle_dir.display().to_string();
 
-        let sig_path: std::path::PathBuf = bundle_dir.join(SIG_FILE_NAME);
+        let sig_path: PathBuf = bundle_dir.join(SIG_FILE_NAME);
         if !sig_path.exists() {
             return Err(SigError::MissingSignature {
                 bundle: bundle_name,
             });
         }
 
-        let sig_data: Vec<u8> =
-            std::fs::read(&sig_path).map_err(|e: std::io::Error| SigError::Io {
-                path: sig_path.display().to_string(),
-                source: e,
-            })?;
+        let sig_data: Vec<u8> = fs::read(&sig_path).map_err(|e: IoError| SigError::Io {
+            path: sig_path.display().to_string(),
+            source: e,
+        })?;
 
         let bundle_sig: BundleSig = BundleSig::parse(&sig_data, &bundle_name)?;
 
@@ -58,12 +59,10 @@ impl BundleVerifier for Ed25519Verifier {
         bundle_sig
             .verifying_key
             .verify_strict(&digest, &bundle_sig.signature)
-            .map_err(
-                |e: ed25519_dalek::SignatureError| SigError::SignatureMismatch {
-                    bundle: bundle_name.clone(),
-                    reason: e.to_string(),
-                },
-            )?;
+            .map_err(|e: SignatureError| SigError::SignatureMismatch {
+                bundle: bundle_name.clone(),
+                reason: e.to_string(),
+            })?;
 
         Ok(VerifiedBundle {
             verifying_key: bundle_sig.verifying_key,
@@ -85,10 +84,8 @@ pub fn verify_bundle(bundle_dir: &Path) -> Result<VerifiedBundle, SigError> {
 /// Edwards point. This is the entry point used to turn host-supplied trusted-key
 /// bytes (`Ed25519PublicKey`) into verifying keys for [`PinnedKeyVerifier`].
 pub fn verifying_key_from_bytes(bytes: &[u8; 32]) -> Result<VerifyingKey, SigError> {
-    VerifyingKey::from_bytes(bytes).map_err(|e: ed25519_dalek::SignatureError| {
-        SigError::InvalidKeyData {
-            reason: e.to_string(),
-        }
+    VerifyingKey::from_bytes(bytes).map_err(|e: SignatureError| SigError::InvalidKeyData {
+        reason: e.to_string(),
     })
 }
 
@@ -191,7 +188,7 @@ mod tests {
         write_test_bundle(tmp.path());
 
         // Add a file in a nested subdirectory, then sign.
-        let nested: std::path::PathBuf = tmp.path().join("lib").join("inner");
+        let nested: PathBuf = tmp.path().join("lib").join("inner");
         fs::create_dir_all(&nested).expect("create nested dirs");
         fs::write(nested.join("deep.so"), b"deep bytes").expect("write deep");
 
@@ -256,7 +253,7 @@ mod tests {
             verifying_key: verifying_key_a,
             signature: signing_key_b.sign(&digest),
         };
-        let sig_path: std::path::PathBuf = tmp.path().join(SIG_FILE_NAME);
+        let sig_path: PathBuf = tmp.path().join(SIG_FILE_NAME);
         fs::write(&sig_path, mismatched.serialize()).expect("write mismatched sig");
 
         assert!(matches!(
@@ -348,7 +345,7 @@ mod tests {
         let (signing_key, _): (SigningKey, VerifyingKey) = generate_keypair();
         sign_bundle(tmp.path(), &signing_key).expect("sign");
 
-        let sig_path: std::path::PathBuf = tmp.path().join(SIG_FILE_NAME);
+        let sig_path: PathBuf = tmp.path().join(SIG_FILE_NAME);
         let mut bytes: Vec<u8> = fs::read(&sig_path).expect("read sig");
         bytes[0] = 0xFF;
         fs::write(&sig_path, &bytes).expect("write corrupted sig");

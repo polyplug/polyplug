@@ -297,6 +297,8 @@ pub unsafe extern "C" fn polyplug_lua_loader_free(ptr: *mut c_void) {
 #[cfg(test)]
 mod tests {
     use core::ffi::c_void;
+    use core::ptr;
+    use core::slice;
 
     use polyplug_abi::StringView;
 
@@ -329,9 +331,9 @@ mod tests {
         // SAFETY: scope_ptr/scope_len and msg_ptr/msg_len come from the
         // trampoline's StringView decomposition; the test keeps the backing
         // byte slices alive for the duration of the call.
-        let scope_bytes: &[u8] = unsafe { core::slice::from_raw_parts(scope_ptr, scope_len) };
+        let scope_bytes: &[u8] = unsafe { slice::from_raw_parts(scope_ptr, scope_len) };
         // SAFETY: same as scope_bytes above.
-        let msg_bytes: &[u8] = unsafe { core::slice::from_raw_parts(msg_ptr, msg_len) };
+        let msg_bytes: &[u8] = unsafe { slice::from_raw_parts(msg_ptr, msg_len) };
         captured.scope = String::from_utf8_lossy(scope_bytes).into_owned();
         captured.message = String::from_utf8_lossy(msg_bytes).into_owned();
     }
@@ -401,7 +403,7 @@ mod tests {
         // contract (no-op); the StringViews point at 'static byte literals.
         unsafe {
             polyplug_lua_log_trampoline(
-                core::ptr::null_mut(),
+                ptr::null_mut(),
                 3,
                 StringView::from_static(b"scope"),
                 StringView::from_static(b"message"),
@@ -414,7 +416,7 @@ mod tests {
     fn trampoline_is_noop_on_null_inner_callback() {
         let mut bridge = PolyplugLuaLogBridge {
             callback: None,
-            user_data: core::ptr::null_mut(),
+            user_data: ptr::null_mut(),
         };
         // SAFETY: bridge is a live PolyplugLuaLogBridge on this test's stack
         // with a null inner callback, which the trampoline must tolerate.

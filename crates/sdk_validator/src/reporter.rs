@@ -4,9 +4,16 @@
 //! When a method is missing, both formats name the target file(s) it is
 //! missing from.
 
+use core::cmp;
+
 use crate::aggregator::{
-    EnumMismatchKind, EnumReport, EnumVariantStatus, MethodStatus, StructFieldReport,
-    StructFieldStatus, StructReport, ValidationReport,
+    EnumMismatchKind, EnumReport, EnumVariantStatus, MethodStatus, MissingDetail,
+    StructFieldReport, StructFieldStatus, StructReport, ValidationReport,
+};
+
+#[cfg(test)]
+use crate::aggregator::{
+    EnumExtraDetail, EnumMismatch, FieldMismatchKind, StructFieldDrift, StructFieldMismatch,
 };
 
 /// Reporter for generating validation reports in different formats.
@@ -135,7 +142,7 @@ impl Reporter {
             .keys()
             .map(|n| n.len())
             .max()
-            .map_or(min_width, |max_len| core::cmp::max(min_width, max_len));
+            .map_or(min_width, |max_len| cmp::max(min_width, max_len));
         let lang_widths: Vec<usize> = self.calculate_language_column_widths();
 
         output.push_str("  ");
@@ -236,7 +243,7 @@ impl Reporter {
             .keys()
             .map(|n| n.len())
             .max()
-            .map_or(min_width, |max_len| core::cmp::max(min_width, max_len));
+            .map_or(min_width, |max_len| cmp::max(min_width, max_len));
         let value_width: usize = 5; // "Value" header
         let lang_widths: Vec<usize> = self.calculate_language_column_widths();
 
@@ -389,8 +396,7 @@ impl Reporter {
                 None => continue,
             };
 
-            let mut details: Vec<&crate::aggregator::MissingDetail> =
-                status.missing_in.iter().collect();
+            let mut details: Vec<&MissingDetail> = status.missing_in.iter().collect();
             details.sort_by(|a, b| a.language.cmp(&b.language));
 
             for detail in details {
@@ -422,14 +428,14 @@ impl Reporter {
             .map(|n| n.len())
             .max()
             .unwrap_or(min_width);
-        core::cmp::max(min_width, max_name_len)
+        cmp::max(min_width, max_name_len)
     }
 
     /// Calculate the widths needed for each language column.
     fn calculate_language_column_widths(&self) -> Vec<usize> {
         self.languages
             .iter()
-            .map(|lang| core::cmp::max(lang.len(), 1))
+            .map(|lang| cmp::max(lang.len(), 1))
             .collect()
     }
 
@@ -508,7 +514,7 @@ impl Default for Reporter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregator::{EnumExtraDetail, MissingDetail};
+    use core::error::Error;
 
     fn create_test_report() -> ValidationReport {
         let mut report: ValidationReport = ValidationReport::new();
@@ -654,7 +660,7 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_json_structure() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_generate_json_structure() -> Result<(), Box<dyn Error>> {
         let reporter: Reporter = Reporter::new();
         let report: ValidationReport = create_test_report();
         let output: String = reporter.generate_json(&report);
@@ -670,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_json_names_missing_files() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_generate_json_names_missing_files() -> Result<(), Box<dyn Error>> {
         let reporter: Reporter = Reporter::new();
         let report: ValidationReport = create_test_report();
         let output: String = reporter.generate_json(&report);
@@ -691,7 +697,7 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_json_empty_report() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_generate_json_empty_report() -> Result<(), Box<dyn Error>> {
         let reporter: Reporter = Reporter::new();
         let report: ValidationReport = ValidationReport::new();
         let output: String = reporter.generate_json(&report);
@@ -720,7 +726,7 @@ mod tests {
         let vm_status: EnumVariantStatus = EnumVariantStatus {
             expected: 1,
             found_in: vec!["js".to_string()],
-            mismatches: vec![crate::aggregator::EnumMismatch {
+            mismatches: vec![EnumMismatch {
                 language: "lua".to_string(),
                 file: "sdks/lua/guest/polyplug_guest.lua".to_string(),
                 kind: EnumMismatchKind::WrongValue { found: 2 },
@@ -775,7 +781,7 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_json_enum_fields() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_generate_json_enum_fields() -> Result<(), Box<dyn Error>> {
         let reporter: Reporter = Reporter::new();
         let report: ValidationReport = create_enum_test_report();
         let output: String = reporter.generate_json(&report);
@@ -806,22 +812,20 @@ mod tests {
         };
         let len_status: StructFieldStatus = StructFieldStatus {
             found_in: vec!["rust".to_string()],
-            mismatches: vec![crate::aggregator::StructFieldMismatch {
+            mismatches: vec![StructFieldMismatch {
                 language: "csharp".to_string(),
                 file: "sdks/csharp/abi/Abi.cs".to_string(),
-                kind: crate::aggregator::FieldMismatchKind::Missing,
+                kind: FieldMismatchKind::Missing,
             }],
         };
 
         struct_report.fields.insert("ptr".to_string(), ptr_status);
         struct_report.fields.insert("len".to_string(), len_status);
-        struct_report
-            .extra_fields
-            .push(crate::aggregator::StructFieldDrift {
-                language: "csharp".to_string(),
-                file: "sdks/csharp/abi/Abi.cs".to_string(),
-                field: "Length".to_string(),
-            });
+        struct_report.extra_fields.push(StructFieldDrift {
+            language: "csharp".to_string(),
+            file: "sdks/csharp/abi/Abi.cs".to_string(),
+            field: "Length".to_string(),
+        });
 
         report
             .per_struct_fields
@@ -856,7 +860,7 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_json_struct_fields() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_generate_json_struct_fields() -> Result<(), Box<dyn Error>> {
         let reporter: Reporter = Reporter::new();
         let report: ValidationReport = create_struct_field_test_report();
         let output: String = reporter.generate_json(&report);

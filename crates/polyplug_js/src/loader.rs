@@ -5,18 +5,38 @@
 //! between bundles and between polyplug Runtime instances.
 //! Uses VM dispatch to call JS functions through the QuickJS API.
 
+use core::ffi::c_void;
+use core::mem;
+use core::ptr;
+use core::slice;
+use core::str;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering;
 use std::collections::HashMap;
+use std::fs;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
 use std::sync::PoisonError;
+use std::thread;
 use std::thread::ThreadId;
+
+#[cfg(test)]
+use core::sync::atomic::AtomicUsize;
+#[cfg(test)]
+use polyplug::runtime::RuntimeBuilder as PolyplugRuntimeBuilder;
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Barrier;
 
 use rquickjs::Array;
 use rquickjs::Context;
 use rquickjs::Ctx;
+use rquickjs::Error as QjsError;
+use rquickjs::Exception;
 use rquickjs::Function;
 use rquickjs::Object;
 use rquickjs::Persistent;
@@ -40,12 +60,14 @@ use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
 use polyplug_abi::HostContractInstance;
 use polyplug_abi::HostContractInterface;
+use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::SupportedLanguage;
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
 use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
+use polyplug_abi::types::Array as AbiArray;
 use polyplug_abi::types::LogLevel;
 use polyplug_abi::types::Version;
 use polyplug_utils::BundleId;
@@ -209,12 +231,12 @@ struct JsDispatchGuard<'a> {
 
 impl Drop for JsDispatchGuard<'_> {
     fn drop(&mut self) {
-        let this: ThreadId = std::thread::current().id();
+        let this: ThreadId = thread::current().id();
         // Recover from poisoning: a panic in another dispatch may have poisoned
         // the lock, but the data is a plain Vec<ThreadId> that cannot be left
         // logically corrupt between lock/unlock, so reusing the inner value is
         // sound. This is production code, so we never unwrap.
-        let mut guard: std::sync::MutexGuard<'_, Vec<ThreadId>> =
+        let mut guard: MutexGuard<'_, Vec<ThreadId>> =
             self.threads.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(pos) = guard.iter().position(|&id| id == this) {
             guard.swap_remove(pos);
@@ -265,11 +287,11 @@ unsafe extern "C" fn js_create_instance(
     // QuickJS's `Context::with` on this VM already entered by the in-flight dispatch
     // on this thread, which rquickjs aborts on. There is no error out-param here, so
     // write a null instance (the caller routes by stamped contract id → default impl).
-    let this_thread: ThreadId = std::thread::current().id();
+    let this_thread: ThreadId = thread::current().id();
     {
         // Poison recovery: the Vec<ThreadId> cannot be left logically corrupt
         // between lock/unlock, so reusing it is sound. Production code, no unwrap.
-        let threads: std::sync::MutexGuard<'_, Vec<ThreadId>> = data
+        let threads: MutexGuard<'_, Vec<ThreadId>> = data
             .in_dispatch_threads
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -281,7 +303,7 @@ unsafe extern "C" fn js_create_instance(
         }
     }
 
-    let built: Result<Persistent<Value<'static>>, rquickjs::Error> = data.ctx.with(|ctx| {
+    let built: Result<Persistent<Value<'static>>, QjsError> = data.ctx.with(|ctx| {
         let factory: Function<'_> = data.factory.clone().restore(&ctx)?;
         // Thread the bridge + host vtable lo/hi explicitly (no per-VM global — Rule 12)
         // so the per-instance impl can capture them and reach host-contract / peer callers.
@@ -299,13 +321,13 @@ unsafe extern "C" fn js_create_instance(
             let id: u64 = data.next_id.fetch_add(1, Ordering::Relaxed);
             // Poison recovery: a poisoned registry between lock/unlock leaves the
             // HashMap usable. Production code, no unwrap.
-            let mut map: std::sync::MutexGuard<'_, HashMap<u64, Persistent<Value<'static>>>> = data
+            let mut map: MutexGuard<'_, HashMap<u64, Persistent<Value<'static>>>> = data
                 .instances
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
             map.insert(id, impl_persistent);
             GuestContractInstance {
-                data: id as usize as *mut core::ffi::c_void,
+                data: id as usize as *mut c_void,
                 contract_id: GuestContractId::from_u64(data.contract_id),
             }
         }
@@ -353,7 +375,7 @@ unsafe extern "C" fn js_destroy_instance(
     // Poison recovery: a poisoned registry between lock/unlock leaves the HashMap
     // usable. Production code, no unwrap. Dropping the removed Persistent releases the
     // JS ref through rquickjs's runtime (no Context::with required).
-    let mut map: std::sync::MutexGuard<'_, HashMap<u64, Persistent<Value<'static>>>> = data
+    let mut map: MutexGuard<'_, HashMap<u64, Persistent<Value<'static>>>> = data
         .instances
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -407,12 +429,12 @@ unsafe fn js_dispatch_impl(
     // concurrently is NOT reentrancy: it is allowed to proceed and rquickjs's
     // internal lock serializes it safely. The tracking Mutex is held only around
     // the membership check/insert below, never across Context::with.
-    let this_thread: ThreadId = std::thread::current().id();
+    let this_thread: ThreadId = thread::current().id();
     {
         // Recover from poisoning (a prior dispatch panic): the Vec<ThreadId>
         // cannot be left logically corrupt between lock/unlock, so the inner
         // value is reusable. Production code, so no unwrap.
-        let mut threads: std::sync::MutexGuard<'_, Vec<ThreadId>> = data
+        let mut threads: MutexGuard<'_, Vec<ThreadId>> = data
             .in_dispatch_threads
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -452,7 +474,7 @@ unsafe fn js_dispatch_impl(
     } else {
         // Poison recovery: the HashMap cannot be left logically corrupt between
         // lock/unlock, so reusing it is sound. Production code, no unwrap.
-        let map: std::sync::MutexGuard<'_, HashMap<u64, Persistent<Value<'static>>>> = data
+        let map: MutexGuard<'_, HashMap<u64, Persistent<Value<'static>>>> = data
             .instances
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -484,7 +506,7 @@ unsafe fn js_dispatch_impl(
     // arena_ptr) for StringView returns.
     let arena_f64: f64 = arena_usize as f64;
 
-    let call_result: Result<i32, rquickjs::Error> = data.ctx.with(|ctx| {
+    let call_result: Result<i32, QjsError> = data.ctx.with(|ctx| {
         let js_fn: Function<'_> = func_persistent.clone().restore(&ctx)?;
         // The generated wrapper takes (impl, args_ptr, out_ptr, arena_ptr, bridge):
         // the per-instance impl object is passed first so the wrapper invokes the
@@ -593,14 +615,14 @@ fn register_host_functions<'js>(
             pack_handle(handle)
         },
     )
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: findByContract function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("findByContract", find_by_contract_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: findByContract set failed: {e}"),
         })?;
@@ -619,14 +641,14 @@ fn register_host_functions<'js>(
             None
         },
     )
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: findByBundle function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("findByBundle", find_by_bundle_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: findByBundle set failed: {e}"),
         })?;
@@ -641,12 +663,12 @@ fn register_host_functions<'js>(
             };
             // SAFETY: hvt points to 'static HostApi data.
             // find_all_guest_contracts returns Array<GuestContractHandle>.
-            let handles: polyplug_abi::types::Array<GuestContractHandle> =
+            let handles: AbiArray<GuestContractHandle> =
                 unsafe { ((*hvt).find_all_guest_contracts)(hvt, contract_id, min_ver) };
             handles.len as u32
         },
     )
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!(
             "JS runtime js-quickjs error: findAllByContract function creation failed: {e}"
@@ -655,7 +677,7 @@ fn register_host_functions<'js>(
 
     polyplug_obj
         .set("findAllByContract", find_all_by_contract_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: findAllByContract set failed: {e}"),
         })?;
@@ -679,7 +701,7 @@ fn register_host_functions<'js>(
             }
         },
     )
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!(
             "JS runtime js-quickjs error: resolveGuestContract function creation failed: {e}"
@@ -688,7 +710,7 @@ fn register_host_functions<'js>(
 
     polyplug_obj
         .set("resolveGuestContract", resolve_guest_contract_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: resolveGuestContract set failed: {e}"),
         })?;
@@ -704,7 +726,7 @@ fn register_host_functions<'js>(
     // side; one bridge call per dispatch is negligible against microsecond VM dispatch.
     let revision_fn: Function<'js> = Function::new(
         ctx.clone(),
-        move |ctx: Ctx<'js>| -> Result<Array<'js>, rquickjs::Error> {
+        move |ctx: Ctx<'js>| -> Result<Array<'js>, QjsError> {
             let value: u64 = match host_from_usize(host_interface_usize) {
                 Some(hvt) => {
                     // SAFETY: hvt points to 'static HostApi data; revision_counter is an ABI
@@ -722,7 +744,7 @@ fn register_host_functions<'js>(
                 None => 0_u64,
             };
             let arr: Array<'js> = Array::new(ctx.clone())
-                .map_err(|_| rquickjs::Exception::throw_message(&ctx, "array creation failed"))?;
+                .map_err(|_| Exception::throw_message(&ctx, "array creation failed"))?;
             // Store as f64 halves: rquickjs sign-extends u32 > INT32_MAX to negative JS
             // ints, which corrupts the value; f64 preserves each 32-bit half exactly.
             let _ = arr.set(0, (value as u32) as f64);
@@ -730,14 +752,14 @@ fn register_host_functions<'js>(
             Ok(arr)
         },
     )
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: revision function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("revision", revision_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: revision set failed: {e}"),
         })?;
@@ -801,13 +823,13 @@ fn register_host_functions<'js>(
             // returned by resolve_guest_contract; null ctx is accepted for stateless contracts;
             // `instance` is a valid, writable out-param for the duration of the call.
             unsafe {
-                ((*iface).create_instance)(peer_loader_data, hvt, core::ptr::null(), &mut instance)
+                ((*iface).create_instance)(peer_loader_data, hvt, ptr::null(), &mut instance)
             };
             // A same-VM peer create is refused (null-id handle); the VM dispatch path
             // routes by instance.contract_id — stamp the id we resolved either way.
             instance.contract_id = GuestContractId::from_u64(contract_id);
-            let args: *const core::ffi::c_void = args_ptr as usize as *const core::ffi::c_void;
-            let out: *mut core::ffi::c_void = out_ptr as usize as *mut core::ffi::c_void;
+            let args: *const c_void = args_ptr as usize as *const c_void;
+            let out: *mut c_void = out_ptr as usize as *mut c_void;
             let mut err: AbiError = AbiError::ok();
             // Direct dispatch through the already-resolved interface — no re-entry into
             // the host to re-resolve. `peer_dt` was read above from this same interface,
@@ -818,7 +840,7 @@ fn register_host_functions<'js>(
                     // SAFETY: iface is non-null (checked above); dispatch_type == Native
                     // guarantees the `native` union variant is the active one, so reading
                     // it is sound.
-                    let native: polyplug_abi::NativeDispatch = unsafe { (*iface).dispatch.native };
+                    let native: NativeDispatch = unsafe { (*iface).dispatch.native };
                     if fn_id >= native.function_count || native.functions.is_null() {
                         // SAFETY: iface produced `instance` via create_instance with the peer's
                         // own loader_data; destroying it with the same loader_data releases the
@@ -842,10 +864,10 @@ fn register_host_functions<'js>(
                     // concrete fn pointer, the established native-call form.
                     let dispatch_fn: unsafe extern "C" fn(
                         GuestContractInstance,
-                        *const core::ffi::c_void,
-                        *mut core::ffi::c_void,
+                        *const c_void,
+                        *mut c_void,
                         *mut AbiError,
-                    ) = unsafe { core::mem::transmute(slot) };
+                    ) = unsafe { mem::transmute(slot) };
                     // SAFETY: dispatch_fn is transmuted from a valid native function pointer in
                     // this interface's table; `instance` belongs to this contract; args/out are
                     // caller-supplied addresses the generated peer_callers.ts aligns via
@@ -866,7 +888,7 @@ fn register_host_functions<'js>(
                             fn_id,
                             args as *const (),
                             out as *mut (),
-                            core::ptr::null_mut(),
+                            ptr::null_mut(),
                             &mut err,
                         )
                     };
@@ -880,27 +902,26 @@ fn register_host_functions<'js>(
             code
         },
     )
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: dispatchPeer function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("dispatchPeer", dispatch_peer_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: dispatchPeer set failed: {e}"),
         })?;
 
     let alloc_fn: Function<'js> = Function::new(
         ctx.clone(),
-        move |ctx: Ctx<'js>, size: u32| -> Result<Array<'js>, rquickjs::Error> {
+        move |ctx: Ctx<'js>, size: u32| -> Result<Array<'js>, QjsError> {
             let hvt: *const HostApi = match host_from_usize(host_interface_usize) {
                 Some(ptr) => ptr,
                 None => {
-                    let arr: Array<'js> = Array::new(ctx.clone()).map_err(|_| {
-                        rquickjs::Exception::throw_message(&ctx, "array creation failed")
-                    })?;
+                    let arr: Array<'js> = Array::new(ctx.clone())
+                        .map_err(|_| Exception::throw_message(&ctx, "array creation failed"))?;
                     let _ = arr.set(0, 0.0_f64);
                     let _ = arr.set(1, 0.0_f64);
                     return Ok(arr);
@@ -910,7 +931,7 @@ fn register_host_functions<'js>(
             let ptr: *mut u8 = unsafe { ((*hvt).alloc)(hvt, size as usize, 1) };
             let ptr_usize: usize = ptr as usize;
             let arr: Array<'js> = Array::new(ctx.clone())
-                .map_err(|_| rquickjs::Exception::throw_message(&ctx, "array creation failed"))?;
+                .map_err(|_| Exception::throw_message(&ctx, "array creation failed"))?;
             // Store as f64: rquickjs sign-extends u32 > INT32_MAX to negative JS ints,
             // which breaks BigInt reconstruction. f64 preserves the unsigned value exactly.
             let _ = arr.set(0, (ptr_usize as u32) as f64);
@@ -918,14 +939,14 @@ fn register_host_functions<'js>(
             Ok(arr)
         },
     )
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: alloc function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("alloc", alloc_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: alloc set failed: {e}"),
         })?;
@@ -938,13 +959,13 @@ fn register_host_functions<'js>(
     // same-VM reentrant dispatch can never perturb this call's arena.
     let arena_alloc_fn: Function<'js> = Function::new(
         ctx.clone(),
-        move |ctx: Ctx<'js>, size: u32, arena_ptr: f64| -> Result<Array<'js>, rquickjs::Error> {
+        move |ctx: Ctx<'js>, size: u32, arena_ptr: f64| -> Result<Array<'js>, QjsError> {
             let arena: *mut CallArena = arena_ptr as u64 as usize as *mut CallArena;
             let ptr: *mut u8 = if arena.is_null() {
                 match host_from_usize(host_interface_usize) {
                     // SAFETY: hvt points to 'static HostApi data.
                     Some(hvt) => unsafe { ((*hvt).alloc)(hvt, size as usize, 1) },
-                    None => core::ptr::null_mut(),
+                    None => ptr::null_mut(),
                 }
             } else {
                 // SAFETY: `arena` is the valid per-call CallArena whose pointer the
@@ -954,20 +975,20 @@ fn register_host_functions<'js>(
             };
             let ptr_usize: usize = ptr as usize;
             let arr: Array<'js> = Array::new(ctx.clone())
-                .map_err(|_| rquickjs::Exception::throw_message(&ctx, "array creation failed"))?;
+                .map_err(|_| Exception::throw_message(&ctx, "array creation failed"))?;
             let _ = arr.set(0, (ptr_usize as u32) as f64);
             let _ = arr.set(1, ((ptr_usize >> 32) as u32) as f64);
             Ok(arr)
         },
     )
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: arenaAlloc function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("arenaAlloc", arena_alloc_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: arenaAlloc set failed: {e}"),
         })?;
@@ -1003,14 +1024,14 @@ fn register_host_functions<'js>(
             logger.log(log_level, &scope, || message);
         },
     )
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: log function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("log", log_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: log set failed: {e}"),
         })?;
@@ -1034,14 +1055,14 @@ fn register_host_functions<'js>(
             unsafe { ((*hvt).free)(hvt, ptr, size as usize, align as usize) };
         },
     )
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: free function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("free", free_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: free set failed: {e}"),
         })?;
@@ -1055,14 +1076,14 @@ fn register_host_functions<'js>(
         // SAFETY: ptr is a valid pointer provided by the host for reading.
         unsafe { *ptr }
     })
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: readI32 function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("readI32", read_i32_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: readI32 set failed: {e}"),
         })?;
@@ -1078,14 +1099,14 @@ fn register_host_functions<'js>(
             *ptr = value;
         }
     })
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: writeI32 function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("writeI32", write_i32_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: writeI32 set failed: {e}"),
         })?;
@@ -1099,14 +1120,14 @@ fn register_host_functions<'js>(
         // SAFETY: ptr is a valid pointer provided by the host for reading.
         unsafe { *ptr as u32 }
     })
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: readByte function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("readByte", read_byte_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: readByte set failed: {e}"),
         })?;
@@ -1122,14 +1143,14 @@ fn register_host_functions<'js>(
             *ptr = value as u8;
         }
     })
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: writeByte function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("writeByte", write_byte_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: writeByte set failed: {e}"),
         })?;
@@ -1138,13 +1159,13 @@ fn register_host_functions<'js>(
         ctx.clone(),
         // Returns Array<'js> of u8 values instead of ArrayBuffer: a plain Array of integers
         // is unambiguous and Uint8Array(array_of_ints) works correctly in QuickJS.
-        |ctx: Ctx<'js>, ptr_num: f64, len: u32| -> Result<Array<'js>, rquickjs::Error> {
+        |ctx: Ctx<'js>, ptr_num: f64, len: u32| -> Result<Array<'js>, QjsError> {
             let ptr_u64: u64 = ptr_num as u64;
             let ptr: *const u8 = ptr_u64 as usize as *const u8;
             let len_usize: usize = len as usize;
 
             let arr: Array<'js> = Array::new(ctx.clone())
-                .map_err(|_| rquickjs::Exception::throw_message(&ctx, "Array creation failed"))?;
+                .map_err(|_| Exception::throw_message(&ctx, "Array creation failed"))?;
 
             if ptr.is_null() || len_usize == 0 {
                 return Ok(arr);
@@ -1152,7 +1173,7 @@ fn register_host_functions<'js>(
 
             // SAFETY: ptr is a valid pointer provided by the host for reading.
             // The caller guarantees the memory region [ptr, ptr+len) is valid.
-            let bytes: &[u8] = unsafe { core::slice::from_raw_parts(ptr, len_usize) };
+            let bytes: &[u8] = unsafe { slice::from_raw_parts(ptr, len_usize) };
 
             for (i, &byte) in bytes.iter().enumerate() {
                 // Byte values are 0-255, always fit in 31-bit signed int — no sign-extension issue.
@@ -1162,14 +1183,14 @@ fn register_host_functions<'js>(
             Ok(arr)
         },
     )
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: readMemory function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("readMemory", read_memory_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: readMemory set failed: {e}"),
         })?;
@@ -1186,14 +1207,14 @@ fn register_host_functions<'js>(
         // SAFETY: ptr is a valid pointer provided by the host for reading.
         unsafe { *ptr as f64 }
     })
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: readU32 function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("readU32", read_u32_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: readU32 set failed: {e}"),
         })?;
@@ -1211,14 +1232,14 @@ fn register_host_functions<'js>(
             *ptr = value as u64 as u32;
         }
     })
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: writeU32 function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("writeU32", write_u32_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: writeU32 set failed: {e}"),
         })?;
@@ -1255,8 +1276,8 @@ fn register_host_functions<'js>(
             // HostContractInstance.
             let instance: HostContractInstance =
                 unsafe { ((*hvt).get_host_contract)(hvt, contract_id, min_version) };
-            let args: *const core::ffi::c_void = args_ptr as usize as *const core::ffi::c_void;
-            let out: *mut core::ffi::c_void = out_ptr as usize as *mut core::ffi::c_void;
+            let args: *const c_void = args_ptr as usize as *const c_void;
+            let out: *mut c_void = out_ptr as usize as *mut c_void;
             // SAFETY: iface is non-null (checked above); `singleton` is a plain bool
             // field that is safe to read through a valid non-null pointer.
             let singleton: bool = unsafe { (*iface).singleton };
@@ -1267,7 +1288,7 @@ fn register_host_functions<'js>(
                 DispatchType::Native => {
                     // SAFETY: iface is non-null (checked); dispatch_type == Native guarantees
                     // the `native` union variant is active, so reading it is sound.
-                    let native: polyplug_abi::NativeDispatch = unsafe { (*iface).dispatch.native };
+                    let native: NativeDispatch = unsafe { (*iface).dispatch.native };
                     // Bounds- and null-check the host function table before indexing it,
                     // mirroring the runtime's native-dispatch path.
                     if native.functions.is_null() || fn_id >= native.function_count {
@@ -1288,24 +1309,17 @@ fn register_host_functions<'js>(
                     // SAFETY: fn_ptr came from the host's native dispatch table and has the documented
                     // (state, args, out) -> AbiError C signature; instance.data is the contract state.
                     let dispatch_fn: unsafe extern "C" fn(
-                        *const core::ffi::c_void,
-                        *const core::ffi::c_void,
-                        *mut core::ffi::c_void,
+                        *const c_void,
+                        *const c_void,
+                        *mut c_void,
                         *mut AbiError,
-                    ) = unsafe { core::mem::transmute(fn_ptr) };
+                    ) = unsafe { mem::transmute(fn_ptr) };
                     let mut err: AbiError = AbiError::ok();
                     // SAFETY: dispatch_fn is transmuted from a valid host native function pointer;
                     // instance.data is the contract-state pointer owned by the host; args and out
                     // are caller-supplied buffers aligned by the generated caller via polyplug.alloc;
                     // `err` is a valid, writable out-param for the duration of the call.
-                    unsafe {
-                        dispatch_fn(
-                            instance.data as *const core::ffi::c_void,
-                            args,
-                            out,
-                            &mut err,
-                        )
-                    };
+                    unsafe { dispatch_fn(instance.data as *const c_void, args, out, &mut err) };
                     err.code
                 }
                 DispatchType::VirtualMachine => {
@@ -1321,7 +1335,7 @@ fn register_host_functions<'js>(
                             fn_id,
                             args as *const (),
                             out as *mut (),
-                            core::ptr::null_mut(),
+                            ptr::null_mut(),
                             &mut err,
                         )
                     };
@@ -1337,7 +1351,7 @@ fn register_host_functions<'js>(
             code
         },
     )
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!(
             "JS runtime js-quickjs error: callHostContract function creation failed: {e}"
@@ -1346,7 +1360,7 @@ fn register_host_functions<'js>(
 
     polyplug_obj
         .set("callHostContract", call_host_contract_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: callHostContract set failed: {e}"),
         })?;
@@ -1359,14 +1373,14 @@ fn register_host_functions<'js>(
         // SAFETY: ptr is a valid host-provided pointer to an 8-byte f64 return slot.
         unsafe { *ptr }
     })
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: readF64 function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("readF64", read_f64_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: readF64 set failed: {e}"),
         })?;
@@ -1379,14 +1393,14 @@ fn register_host_functions<'js>(
         // SAFETY: ptr is a valid host-provided pointer to a 4-byte f32 return slot.
         unsafe { *ptr as f64 }
     })
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: readF32 function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("readF32", read_f32_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: readF32 set failed: {e}"),
         })?;
@@ -1405,14 +1419,14 @@ fn register_host_functions<'js>(
             *ptr = value;
         }
     })
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: writeF64 function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("writeF64", write_f64_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: writeF64 set failed: {e}"),
         })?;
@@ -1427,14 +1441,14 @@ fn register_host_functions<'js>(
             *ptr = value as f32;
         }
     })
-    .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+    .map_err(|e: QjsError| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("JS runtime js-quickjs error: writeF32 function creation failed: {e}"),
     })?;
 
     polyplug_obj
         .set("writeF32", write_f32_fn)
-        .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+        .map_err(|e: QjsError| LoaderError::InitFailed {
             bundle: bundle_name.to_owned(),
             error: format!("JS runtime js-quickjs error: writeF32 set failed: {e}"),
         })?;
@@ -1538,11 +1552,9 @@ impl JsLoader {
         } else {
             manifest.path.join("bundle.js")
         };
-        std::fs::read_to_string(&bundle_path).map_err(|e: std::io::Error| {
-            LoaderError::ManifestParse {
-                path: bundle_path.display().to_string(),
-                reason: e.to_string(),
-            }
+        fs::read_to_string(&bundle_path).map_err(|e: io::Error| LoaderError::ManifestParse {
+            path: bundle_path.display().to_string(),
+            reason: e.to_string(),
         })
     }
 
@@ -1569,13 +1581,13 @@ impl JsLoader {
         let bundle_id: u64 = manifest.id;
 
         let qjs_runtime: Runtime =
-            Runtime::new().map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+            Runtime::new().map_err(|e: QjsError| LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
                 error: format!("JS runtime init failed: QuickJS runtime init failed: {e}"),
             })?;
 
         let ctx: Context =
-            Context::full(&qjs_runtime).map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+            Context::full(&qjs_runtime).map_err(|e: QjsError| LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
                 error: format!("JS runtime js-quickjs error: context creation failed: {e}"),
             })?;
@@ -1619,7 +1631,7 @@ impl JsLoader {
         );
         let init_extract: Result<InitExtract, LoaderError> = ctx.with(|ctx_ref: Ctx<'_>| {
             let polyplug_obj: Object<'_> =
-                Object::new(ctx_ref.clone()).map_err(|e: rquickjs::Error| {
+                Object::new(ctx_ref.clone()).map_err(|e: QjsError| {
                     LoaderError::InitFailed {
                         bundle: manifest.name.clone(),
                         error: format!("JS runtime js-quickjs error: object creation failed: {e}"),
@@ -1636,7 +1648,7 @@ impl JsLoader {
             let set_bundle: String = format!("globalThis.bundlePath = {:?};", bundle_dir_str);
             ctx_ref
                 .eval::<Value<'_>, _>(set_bundle.as_str())
-                .map_err(|e: rquickjs::Error| {
+                .map_err(|e: QjsError| {
                     LoaderError::InitFailed {
                         bundle: manifest.name.clone(),
                         error: format!("JS runtime js-quickjs error: bundlePath injection failed: {e}"),
@@ -1645,7 +1657,7 @@ impl JsLoader {
 
             ctx_ref
                 .eval::<Value<'_>, _>(bundle_js)
-                .map_err(|e: rquickjs::Error| {
+                .map_err(|e: QjsError| {
                     LoaderError::InitFailed {
                         bundle: manifest.name.clone(),
                         error: format!("JS runtime js-quickjs error: bundle eval failed: {e}"),
@@ -1688,7 +1700,7 @@ impl JsLoader {
                     ctx_hi,
                     polyplug_obj.clone(),
                 ))
-                .map_err(|e: rquickjs::Error| {
+                .map_err(|e: QjsError| {
                     let thrown: Value<'_> = ctx_ref.catch();
                     let detail: String = match thrown.as_exception() {
                         Some(exc) => exc.message().unwrap_or_else(|| e.to_string()),
@@ -1812,7 +1824,7 @@ impl JsLoader {
                 .and_then(|f: Function<'_>| {
                     f.call::<(Object<'_>, f64, f64), Value<'_>>((polyplug_obj, host_lo, host_hi))
                 })
-                .map_err(|e: rquickjs::Error| LoaderError::InitFailed {
+                .map_err(|e: QjsError| LoaderError::InitFailed {
                     bundle: manifest.name.clone(),
                     error: format!(
                         "JS runtime js-quickjs error: default impl factory call failed: {e}"
@@ -1870,7 +1882,7 @@ impl JsLoader {
                 vm: VmDispatch {
                     call: js_dispatch,
                     loader_data: VmLoaderData {
-                        data: loader_data_ptr as *mut JsLoaderData as *mut core::ffi::c_void,
+                        data: loader_data_ptr as *mut JsLoaderData as *mut c_void,
                     },
                 },
             },
@@ -1935,7 +1947,7 @@ impl JsLoader {
         // for any in-flight dispatch and frees it once no reader is pinned, rather than
         // parking it until unload.
         let superseded: Option<Vec<SendVm>> = {
-            let mut live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<SendVm>>> =
+            let mut live: MutexGuard<'_, HashMap<BundleId, Vec<SendVm>>> =
                 self.live.lock().unwrap_or_else(PoisonError::into_inner);
             live.insert(BundleId::from_u64(bundle_id), vec![loader_data])
         };
@@ -1949,7 +1961,7 @@ impl JsLoader {
     /// Number of live VM-state entries currently owned for `bundle_id`.
     #[cfg(test)]
     fn live_vm_count(&self, bundle_id: BundleId) -> usize {
-        let live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<SendVm>>> =
+        let live: MutexGuard<'_, HashMap<BundleId, Vec<SendVm>>> =
             self.live.lock().unwrap_or_else(PoisonError::into_inner);
         live.get(&bundle_id).map(Vec::len).unwrap_or(0)
     }
@@ -1997,13 +2009,12 @@ impl BundleLoader for JsLoader {
             // Raw bytes: validate UTF-8, then take the same path as Code. JS source
             // must be valid UTF-8 text; invalid bytes are a structured error.
             BundleSource::Bytes(bytes) => {
-                let code: &str = core::str::from_utf8(bytes).map_err(|_| {
-                    LoaderError::InvalidSourceEncoding {
+                let code: &str =
+                    str::from_utf8(bytes).map_err(|_| LoaderError::InvalidSourceEncoding {
                         loader: "js-quickjs",
                         source_kind: source.kind(),
                         bundle: manifest.name.clone(),
-                    }
-                })?;
+                    })?;
                 self.load_inner(manifest, code, None, runtime)
             }
         }
@@ -2039,7 +2050,7 @@ impl BundleLoader for JsLoader {
     /// The VM is always epoch-reclaimed (never parked alive forever).
     fn unload(&self, bundle_id: BundleId, _runtime: &PolyplugRuntime) -> Result<(), LoaderError> {
         let state: Vec<SendVm> = {
-            let mut live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<SendVm>>> =
+            let mut live: MutexGuard<'_, HashMap<BundleId, Vec<SendVm>>> =
                 self.live.lock().unwrap_or_else(PoisonError::into_inner);
             match live.remove(&bundle_id) {
                 Some(v) => v,
@@ -2056,10 +2067,6 @@ impl BundleLoader for JsLoader {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
-    use core::sync::atomic::AtomicUsize;
-    use core::sync::atomic::Ordering;
-    use std::sync::Arc;
-    use std::sync::Barrier;
 
     use super::*;
 
@@ -2095,7 +2102,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     fn write_unload_bundle(name: &str) -> (tempfile::TempDir, ManifestData) {
         let contract_id: u64 = polyplug_utils::guest_contract_id("test.unload", 1);
         let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
+        fs::write(
             dir.path().join("bundle.js"),
             unload_bundle_js(contract_id, "test.unload@1"),
         )
@@ -2123,7 +2130,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     #[test]
     fn unload_removes_live_and_schedules_reclaim() {
         let loader: JsLoader = JsLoader::new(JsConfig {});
-        let runtime: Arc<PolyplugRuntime> = polyplug::runtime::RuntimeBuilder::new()
+        let runtime: Arc<PolyplugRuntime> = PolyplugRuntimeBuilder::new()
             .loader(JsLoader::new(JsConfig {}))
             .build()
             .expect("runtime build must succeed");
@@ -2164,7 +2171,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     #[test]
     fn unload_load_loop_is_bounded() {
         let loader: JsLoader = JsLoader::new(JsConfig {});
-        let runtime: Arc<PolyplugRuntime> = polyplug::runtime::RuntimeBuilder::new()
+        let runtime: Arc<PolyplugRuntime> = PolyplugRuntimeBuilder::new()
             .loader(JsLoader::new(JsConfig {}))
             .build()
             .expect("runtime build must succeed");
@@ -2219,7 +2226,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     #[test]
     fn reload_replaces_live_and_reclaims_superseded_vm() {
         let loader: JsLoader = JsLoader::new(JsConfig {});
-        let runtime: Arc<PolyplugRuntime> = polyplug::runtime::RuntimeBuilder::new()
+        let runtime: Arc<PolyplugRuntime> = PolyplugRuntimeBuilder::new()
             .loader(JsLoader::new(JsConfig {}))
             .build()
             .expect("runtime build must succeed");
@@ -2280,7 +2287,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     #[test]
     fn unload_schedules_reclaim_even_when_in_flight() {
         let loader: JsLoader = JsLoader::new(JsConfig {});
-        let runtime: Arc<PolyplugRuntime> = polyplug::runtime::RuntimeBuilder::new()
+        let runtime: Arc<PolyplugRuntime> = PolyplugRuntimeBuilder::new()
             .loader(JsLoader::new(JsConfig {}))
             .build()
             .expect("runtime build must succeed");
@@ -2300,15 +2307,15 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
         // state the dispatch guard leaves while a call is mid-flight on another
         // thread. An in-flight mark must not change the uniform epoch-reclaim outcome.
         {
-            let live: std::sync::MutexGuard<'_, HashMap<BundleId, Vec<SendVm>>> =
+            let live: MutexGuard<'_, HashMap<BundleId, Vec<SendVm>>> =
                 loader.live.lock().unwrap_or_else(PoisonError::into_inner);
             let state: &Vec<SendVm> = live.get(&bundle_id).expect("bundle must be live");
-            let mut threads: std::sync::MutexGuard<'_, Vec<ThreadId>> = state[0]
+            let mut threads: MutexGuard<'_, Vec<ThreadId>> = state[0]
                 .data()
                 .in_dispatch_threads
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            threads.push(std::thread::current().id());
+            threads.push(thread::current().id());
         }
 
         loader
@@ -2335,7 +2342,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     #[test]
     fn js_guest_f64_param_and_return_round_trip() {
         let loader: JsLoader = JsLoader::new(JsConfig {});
-        let runtime: Arc<PolyplugRuntime> = polyplug::runtime::RuntimeBuilder::new()
+        let runtime: Arc<PolyplugRuntime> = PolyplugRuntimeBuilder::new()
             .loader(JsLoader::new(JsConfig {}))
             .build()
             .expect("runtime build must succeed");
@@ -2363,7 +2370,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
 "#
         );
         let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("bundle.js"), bundle_js).expect("write bundle.js");
+        fs::write(dir.path().join("bundle.js"), bundle_js).expect("write bundle.js");
         let manifest: ManifestData = ManifestData {
             id: polyplug_utils::bundle_id("js_f64_round_trip"),
             name: "js_f64_round_trip".to_owned(),
@@ -2409,7 +2416,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
                 0,
                 &arg as *const f64 as *const (),
                 &mut out_val as *mut f64 as *mut (),
-                core::ptr::null_mut(),
+                ptr::null_mut(),
                 &mut err,
             )
         };
@@ -2480,7 +2487,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
         // test, so the &'static borrow is valid for the test's lifetime.
         let data_ref: &'static JsLoaderData = unsafe { &*ptr };
         let vm_loader_data: VmLoaderData = VmLoaderData {
-            data: ptr as *mut core::ffi::c_void,
+            data: ptr as *mut c_void,
         };
         (vm_loader_data, data_ref)
     }
@@ -2510,9 +2517,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
                 vm_loader_data,
                 GuestContractInstance::null(),
                 0,
-                core::ptr::null(),
+                ptr::null(),
                 &mut out_buf as *mut i32 as *mut (),
-                core::ptr::null_mut(),
+                ptr::null_mut(),
             )
         };
         assert!(err.is_ok(), "normal dispatch should return Ok");
@@ -2547,7 +2554,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
             let reenter_fn: Function<'_> = Function::new(ctx_ref.clone(), move || -> f64 {
                 let ptr_usize: usize = cell_for_fn.load(Ordering::Acquire);
                 let vm_loader_data: VmLoaderData = VmLoaderData {
-                    data: ptr_usize as *mut core::ffi::c_void,
+                    data: ptr_usize as *mut c_void,
                 };
                 // SAFETY: the cell holds the live leaked JsLoaderData pointer set up
                 // by the test before dispatch; the guest ignores the forwarded
@@ -2557,9 +2564,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
                         vm_loader_data,
                         GuestContractInstance::null(),
                         0,
-                        core::ptr::null(),
-                        core::ptr::null_mut(),
-                        core::ptr::null_mut(),
+                        ptr::null(),
+                        ptr::null_mut(),
+                        ptr::null_mut(),
                     )
                 };
                 nested.code as f64
@@ -2592,9 +2599,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
                 vm_loader_data,
                 GuestContractInstance::null(),
                 0,
-                core::ptr::null(),
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
+                ptr::null(),
+                ptr::null_mut(),
+                ptr::null_mut(),
             )
         };
         assert!(outer.is_ok(), "outer dispatch should complete Ok");
@@ -2627,9 +2634,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
                 vm_loader_data,
                 GuestContractInstance::null(),
                 0,
-                core::ptr::null(),
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
+                ptr::null(),
+                ptr::null_mut(),
+                ptr::null_mut(),
             )
         };
         assert!(
@@ -2696,9 +2703,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
         // thread boundary as a usize to satisfy Send, then rebuild it inside.
         let data_addr: usize = vm_loader_data.data as usize;
 
-        let handle: std::thread::JoinHandle<AbiError> = std::thread::spawn(move || {
+        let handle: thread::JoinHandle<AbiError> = thread::spawn(move || {
             let vm_loader_data_a: VmLoaderData = VmLoaderData {
-                data: data_addr as *mut core::ffi::c_void,
+                data: data_addr as *mut c_void,
             };
             // SAFETY: data_addr is the live leaked JsLoaderData pointer; it
             // outlives all threads in this test. The guest fn ignores its args.
@@ -2707,9 +2714,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
                     vm_loader_data_a,
                     GuestContractInstance::null(),
                     0,
-                    core::ptr::null(),
-                    core::ptr::null_mut(),
-                    core::ptr::null_mut(),
+                    ptr::null(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
                 )
             }
         });
@@ -2719,9 +2726,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
 
         // From THIS (different) thread, dispatch into the SAME Context. This must
         // not be rejected; it blocks on rquickjs's lock until A releases it.
-        let main_handle: std::thread::JoinHandle<AbiError> = std::thread::spawn(move || {
+        let main_handle: thread::JoinHandle<AbiError> = thread::spawn(move || {
             let vm_loader_data_b: VmLoaderData = VmLoaderData {
-                data: data_addr as *mut core::ffi::c_void,
+                data: data_addr as *mut c_void,
             };
             // SAFETY: same live leaked pointer as above. fn_id 1 is the no-op
             // function — dispatching fn_id 0 here would re-enter the barrier
@@ -2731,9 +2738,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
                     vm_loader_data_b,
                     GuestContractInstance::null(),
                     1,
-                    core::ptr::null(),
-                    core::ptr::null_mut(),
-                    core::ptr::null_mut(),
+                    ptr::null(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
                 )
             }
         });

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use super::CodeGenerator;
@@ -162,7 +163,7 @@ fn generate_bundle_manifest_lua(ir: &ValidatedIr) -> String {
         )
     };
 
-    let provides_set: std::collections::HashSet<String> = provides.iter().cloned().collect();
+    let provides_set: HashSet<String> = provides.iter().cloned().collect();
     let fn_count_entries: Vec<String> = ir
         .contracts
         .iter()
@@ -2817,7 +2818,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2868,7 +2869,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.fs.reader".to_owned(),
             contract_id: 0xDEADBEEF,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2920,7 +2921,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2977,7 +2978,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -3073,7 +3074,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.fs.reader".to_owned(),
             contract_id: 0xDEADBEEF,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -3126,7 +3127,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -3467,7 +3468,7 @@ mod tests {
             host_contracts: vec![ResolvedHostContract {
                 name: "host.logger".to_owned(),
                 contract_id: 0x1234_5678_9ABC_DEF0_u64,
-                version: crate::ir::Version {
+                version: Version {
                     major: 1,
                     minor: 0,
                     patch: 0,
@@ -3743,7 +3744,7 @@ mod tests {
         ResolvedContract {
             name: "image.Codec".to_owned(),
             contract_id: 0x1111_2222_3333_4444_u64,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -3817,7 +3818,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.theme".to_owned(),
             contract_id: 0xDEAD_BEEF_u64,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -3854,7 +3855,7 @@ mod tests {
         let contract: ResolvedContract = ResolvedContract {
             name: "counter.Inc".to_owned(),
             contract_id: 0x5555_6666_u64,
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,

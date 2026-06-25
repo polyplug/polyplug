@@ -1,5 +1,7 @@
 //! DotnetConfig — configuration for the .NET CLR loader.
 
+use std::path::PathBuf;
+
 /// Configuration for the .NET CLR loader.
 ///
 /// The app developer provides this at init to declare the minimum
@@ -35,5 +37,5 @@ pub enum HostfxrLocation {
     #[default]
     Auto,
     /// Use the hostfxr library at the given path.
-    Path(std::path::PathBuf),
+    Path(PathBuf),
 }

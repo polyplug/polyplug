@@ -14,6 +14,7 @@ use polyplug::loader::RawManifestDependency;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
 use polyplug_utils::GuestContractId;
+use polyplug_utils::bundle_id;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -307,7 +308,7 @@ fn unknown_runtime_fails_build() {
             // Use the canonical id so the build reaches the loader-lookup stage and
             // fails specifically on the unknown runtime, not on manifest validation
             // (the build path now validates manifests via the shared load path).
-            id: polyplug_utils::bundle_id("zigzag_plugin"),
+            id: bundle_id("zigzag_plugin"),
             name: "zigzag_plugin".to_owned(),
             loader: "zigzag_unknown".to_owned(),
             file: "zigzag_plugin.so".to_owned(),

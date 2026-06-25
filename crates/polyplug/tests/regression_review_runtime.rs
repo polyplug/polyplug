@@ -15,26 +15,32 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
-use std::path::PathBuf;
+use std::fs::{create_dir_all, write};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use core::ffi::c_void;
+use core::ptr::{NonNull, null, null_mut};
+
 use polyplug::Runtime;
 use polyplug::compatibility::CapabilityGraph;
-use polyplug::error::RuntimeError;
-use polyplug::loader::{BundleLoader, ManifestData};
+use polyplug::error::{LoaderError, RuntimeError};
+use polyplug::loader::{BundleLoader, BundleSource, ManifestData, RawManifestDependency};
+use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::runtime::{Compatibility, ReloadPhaseType, RuntimeConfig};
 use polyplug_abi::{
-    AbiErrorCode, DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface,
-    HostApi, HostContractInstance, HostContractInterface, NativeDispatch, PluginDescriptor,
-    StringView, Version,
+    AbiError, AbiErrorCode, DispatchMechanisms, DispatchType, GuestContractInstance,
+    GuestContractInterface, HostApi, HostContractInstance, HostContractInterface, NativeDispatch,
+    PluginDescriptor, StringView, SupportedLanguage, Version,
 };
-use polyplug_utils::{BundleId, GuestContractId, HostContractId};
+use polyplug_utils::{BundleId, GuestContractId, HostContractId, bundle_id};
+use tempfile::TempDir;
 
 // ─── Shared guest-interface helpers ──────────────────────────────────────────
 
 unsafe extern "C" fn noop_create_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -46,7 +52,7 @@ unsafe extern "C" fn noop_create_instance(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
@@ -66,7 +72,7 @@ fn leak_guest_interface(contract_id: u64) -> &'static GuestContractInterface {
         dispatch: DispatchMechanisms {
             native: NativeDispatch {
                 function_count: 0,
-                functions: core::ptr::null(),
+                functions: null(),
             },
         },
     }))
@@ -92,8 +98,8 @@ impl BundleLoader for DepProbeLoader {
         "dep-probe"
     }
 
-    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
-        polyplug_abi::SupportedLanguage::Rust
+    fn loader_language(&self) -> SupportedLanguage {
+        SupportedLanguage::Rust
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -103,9 +109,9 @@ impl BundleLoader for DepProbeLoader {
     fn load(
         &self,
         manifest: &ManifestData,
-        _source: &polyplug::loader::BundleSource,
+        _source: &BundleSource,
         runtime: &Runtime,
-    ) -> Result<(), polyplug::error::LoaderError> {
+    ) -> Result<(), LoaderError> {
         let host_abi: *const HostApi = runtime.host_abi();
         let bundle_id: BundleId = BundleId::new(&manifest.name);
         runtime.push_init_bundle_id(bundle_id.id());
@@ -126,12 +132,8 @@ impl BundleLoader for DepProbeLoader {
         Ok(())
     }
 
-    fn reload(
-        &self,
-        _manifest: &ManifestData,
-        _runtime: &Runtime,
-    ) -> Result<(), polyplug::error::LoaderError> {
-        Err(polyplug::error::LoaderError::HotReloadUnsupported {
+    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
+        Err(LoaderError::HotReloadUnsupported {
             loader_name: self.loader_name().to_owned(),
         })
     }
@@ -162,11 +164,11 @@ fn register_provider_for_loader(runtime: &Runtime, contract_id: u64, bundle_id: 
     .expect("provider registration should succeed");
 }
 
-fn write_provider_bundle(dir: &std::path::Path, name: &str) -> PathBuf {
+fn write_provider_bundle(dir: &Path, name: &str) -> PathBuf {
     let bundle_dir: PathBuf = dir.join(name);
-    std::fs::create_dir_all(&bundle_dir).expect("create dir");
-    std::fs::write(bundle_dir.join("dummy.so"), b"").expect("write so");
-    let id: u64 = polyplug_utils::bundle_id(name);
+    create_dir_all(&bundle_dir).expect("create dir");
+    write(bundle_dir.join("dummy.so"), b"").expect("write so");
+    let id: u64 = bundle_id(name);
     // Declare the provided contract (and its function_count) so the build-time
     // capability graph + Strict function_count check are satisfied. major is 1
     // (version 1.0 → key "declared.dep@1").
@@ -179,15 +181,15 @@ fn write_provider_bundle(dir: &std::path::Path, name: &str) -> PathBuf {
          provides = [\"declared.dep@1\"]\n\
          function_count = {{ \"declared.dep@1\" = 0 }}\n"
     );
-    std::fs::write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
+    write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
     bundle_dir
 }
 
-fn write_dependent_bundle(dir: &std::path::Path, name: &str, declared_contract_id: u64) -> PathBuf {
+fn write_dependent_bundle(dir: &Path, name: &str, declared_contract_id: u64) -> PathBuf {
     let bundle_dir: PathBuf = dir.join(name);
-    std::fs::create_dir_all(&bundle_dir).expect("create dir");
-    std::fs::write(bundle_dir.join("dummy.so"), b"").expect("write so");
-    let id: u64 = polyplug_utils::bundle_id(name);
+    create_dir_all(&bundle_dir).expect("create dir");
+    write(bundle_dir.join("dummy.so"), b"").expect("write so");
+    let id: u64 = bundle_id(name);
     let manifest: String = format!(
         "id = {id}\n\
          name = \"{name}\"\n\
@@ -200,7 +202,7 @@ fn write_dependent_bundle(dir: &std::path::Path, name: &str, declared_contract_i
          min_version = \"1.0\"\n\
          contract_id = {declared_contract_id}\n"
     );
-    std::fs::write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
+    write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
     bundle_dir
 }
 
@@ -209,7 +211,7 @@ fn builder_discovered_bundle_declares_deps_and_has_descriptor() {
     // contract major must match how `min_version = "1.0"` resolves: major 1.
     let declared_contract_id: u64 = GuestContractId::new("declared.dep", 1_u32).id();
 
-    let temp: tempfile::TempDir = tempfile::TempDir::new().expect("temp dir");
+    let temp: TempDir = TempDir::new().expect("temp dir");
     // Bundle A provides declared.dep; bundle B depends on it. B sorts after A in
     // topo order (A is the provider) so A registers before B probes.
     write_provider_bundle(temp.path(), "bundle_a_provider");
@@ -266,12 +268,12 @@ fn register_guest_contract_null_descriptor_is_invalid_pointer() {
     let host_abi: *const HostApi = runtime.host_abi();
     let interface: &'static GuestContractInterface =
         leak_guest_interface(GuestContractId::new("x", 1).id());
-    let mut err: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+    let mut err: AbiError = AbiError::ok();
     // SAFETY: host_abi valid; descriptor deliberately null to exercise the guard.
     unsafe {
         ((*host_abi).register_guest_contract)(
             host_abi,
-            core::ptr::null(),
+            null(),
             interface as *const GuestContractInterface,
             &mut err,
         )
@@ -292,13 +294,13 @@ fn register_guest_contract_null_interface_is_invalid_pointer() {
             patch: 0,
         },
     };
-    let mut err: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+    let mut err: AbiError = AbiError::ok();
     // SAFETY: host_abi valid; interface deliberately null to exercise the guard.
     unsafe {
         ((*host_abi).register_guest_contract)(
             host_abi,
             &descriptor as *const PluginDescriptor,
-            core::ptr::null(),
+            null(),
             &mut err,
         )
     };
@@ -361,14 +363,14 @@ fn leak_inert_host_interface(id: u64, singleton: bool) -> &'static HostContractI
         },
         singleton,
         dispatch_type: DispatchType::Native,
-        runtime: core::ptr::null_mut(),
-        user_data: core::ptr::null_mut(),
+        runtime: null_mut(),
+        user_data: null_mut(),
         create_instance: inert_create_instance,
         destroy_instance: inert_destroy_instance,
         dispatch: DispatchMechanisms {
             native: NativeDispatch {
                 function_count: 0,
-                functions: core::ptr::null(),
+                functions: null(),
             },
         },
     }))
@@ -388,14 +390,14 @@ fn get_host_contract_reentrant_register_does_not_deadlock() {
         singleton: false,
         dispatch_type: DispatchType::Native,
         // Point the interface at the runtime so create_instance can reach it.
-        runtime: Arc::as_ptr(&runtime) as *mut core::ffi::c_void,
-        user_data: core::ptr::null_mut(),
+        runtime: Arc::as_ptr(&runtime) as *mut c_void,
+        user_data: null_mut(),
         create_instance: reentrant_create_instance,
         destroy_instance: inert_destroy_instance,
         dispatch: DispatchMechanisms {
             native: NativeDispatch {
                 function_count: 0,
-                functions: core::ptr::null(),
+                functions: null(),
             },
         },
     }));
@@ -427,7 +429,7 @@ unsafe extern "C" fn flaky_singleton_create_instance(
         // checks null-ness, never reads through `data`. `NonNull::dangling` yields a
         // well-aligned non-null pointer without fabricating a bogus integer address.
         HostContractInstance {
-            data: core::ptr::NonNull::<core::ffi::c_void>::dangling().as_ptr(),
+            data: NonNull::<c_void>::dangling().as_ptr(),
         }
     };
     if !out_instance.is_null() {
@@ -450,14 +452,14 @@ fn get_host_contract_does_not_cache_null_singleton() {
         },
         singleton: true,
         dispatch_type: DispatchType::Native,
-        runtime: core::ptr::null_mut(),
-        user_data: core::ptr::null_mut(),
+        runtime: null_mut(),
+        user_data: null_mut(),
         create_instance: flaky_singleton_create_instance,
         destroy_instance: inert_destroy_instance,
         dispatch: DispatchMechanisms {
             native: NativeDispatch {
                 function_count: 0,
-                functions: core::ptr::null(),
+                functions: null(),
             },
         },
     }));
@@ -487,13 +489,13 @@ fn get_host_contract_does_not_cache_null_singleton() {
 fn manifest_with(
     name: &str,
     provides: Vec<String>,
-    deps: Vec<polyplug::loader::RawManifestDependency>,
+    deps: Vec<RawManifestDependency>,
 ) -> ManifestData {
     let mut m: ManifestData = ManifestData::parse_from_str(&format!(
         "loader=\"native\"\nname=\"{name}\"\nfile=\"x.so\"\n"
     ))
     .expect("parse base manifest");
-    m.id = polyplug_utils::bundle_id(name);
+    m.id = bundle_id(name);
     m.version = "1.0.0".to_owned();
     m.provides = provides;
     m.dependencies = deps;
@@ -511,7 +513,7 @@ fn capability_graph_bybundle_matches_versioned_provides() {
         Vec::new(),
     );
 
-    let dep: polyplug::loader::RawManifestDependency = polyplug::loader::RawManifestDependency {
+    let dep: RawManifestDependency = RawManifestDependency {
         kind: "bundle".to_owned(),
         contract: "data.Reporter".to_owned(),
         min_version: "1.0".to_owned(),
@@ -544,8 +546,8 @@ impl BundleLoader for NeverLoadsLoader {
     fn loader_name(&self) -> &'static str {
         "reload-probe"
     }
-    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
-        polyplug_abi::SupportedLanguage::Rust
+    fn loader_language(&self) -> SupportedLanguage {
+        SupportedLanguage::Rust
     }
     fn supports_hot_reload(&self) -> bool {
         true
@@ -553,28 +555,24 @@ impl BundleLoader for NeverLoadsLoader {
     fn load(
         &self,
         _manifest: &ManifestData,
-        _source: &polyplug::loader::BundleSource,
+        _source: &BundleSource,
         _runtime: &Runtime,
-    ) -> Result<(), polyplug::error::LoaderError> {
+    ) -> Result<(), LoaderError> {
         Ok(())
     }
-    fn reload(
-        &self,
-        _manifest: &ManifestData,
-        _runtime: &Runtime,
-    ) -> Result<(), polyplug::error::LoaderError> {
+    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
         Ok(())
     }
 }
 
 #[test]
 fn reload_with_tampered_manifest_id_fails_and_fires_failed_callback() {
-    let temp: tempfile::TempDir = tempfile::TempDir::new().expect("temp dir");
+    let temp: TempDir = TempDir::new().expect("temp dir");
     let bundle_dir: PathBuf = temp.path().join("tampered");
-    std::fs::create_dir_all(&bundle_dir).expect("create dir");
-    std::fs::write(bundle_dir.join("plugin.so"), b"").expect("write so");
+    create_dir_all(&bundle_dir).expect("create dir");
+    write(bundle_dir.join("plugin.so"), b"").expect("write so");
     // id deliberately mismatches FNV1a(name) → BundleTampered on validate().
-    let bogus_id: u64 = polyplug_utils::bundle_id("tampered").wrapping_add(1);
+    let bogus_id: u64 = bundle_id("tampered").wrapping_add(1);
     let manifest: String = format!(
         "id = {bogus_id}\n\
          name = \"tampered\"\n\
@@ -582,7 +580,7 @@ fn reload_with_tampered_manifest_id_fails_and_fires_failed_callback() {
          file = \"plugin.so\"\n\
          version = \"1.0\"\n"
     );
-    std::fs::write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
+    write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
 
     let failed_fired: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
     let failed_fired_cb: Arc<Mutex<bool>> = Arc::clone(&failed_fired);
@@ -591,7 +589,7 @@ fn reload_with_tampered_manifest_id_fails_and_fires_failed_callback() {
         compatibility: Compatibility::Strict,
         hot_reload_enabled: true,
         on_reload: None,
-        on_reload_user_data: core::ptr::null_mut(),
+        on_reload_user_data: null_mut(),
         ..Default::default()
     };
 
@@ -610,7 +608,7 @@ fn reload_with_tampered_manifest_id_fails_and_fires_failed_callback() {
     let result: Result<(), RuntimeError> = runtime.reload_bundle(plugin_path.as_path());
 
     match result {
-        Err(RuntimeError::Loader(polyplug::error::LoaderError::BundleTampered { .. })) => {}
+        Err(RuntimeError::Loader(LoaderError::BundleTampered { .. })) => {}
         other => panic!("expected BundleTampered on reload of tampered manifest, got {other:?}"),
     }
     assert!(
@@ -627,8 +625,8 @@ fn dep_with_contract_id(
     contract: &str,
     min_version: &str,
     contract_id: GuestContractId,
-) -> polyplug::loader::RawManifestDependency {
-    polyplug::loader::RawManifestDependency {
+) -> RawManifestDependency {
+    RawManifestDependency {
         kind: "contract".to_owned(),
         contract: contract.to_owned(),
         min_version: min_version.to_owned(),
@@ -657,7 +655,7 @@ fn validate_rejects_mismatched_dependency_contract_id() {
         GuestContractId::from_u64(GuestContractId::new("math", 1).id().wrapping_add(7));
     m.dependencies = vec![dep_with_contract_id("math", "1.0", wrong)];
     match m.validate() {
-        Err(polyplug::error::LoaderError::ManifestParse { reason, .. }) => {
+        Err(LoaderError::ManifestParse { reason, .. }) => {
             assert!(
                 reason.contains("contract_id"),
                 "mismatch error must mention contract_id: {reason}"
@@ -710,7 +708,7 @@ fn register_guest_contract_duplicate_returns_duplicate_provider_code() {
     // Attribute both registrations to the same (non-zero) bundle id, exactly as
     // a loader's init window would.
     runtime.push_init_bundle_id(0xD0D0_u64);
-    let mut first: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+    let mut first: AbiError = AbiError::ok();
     // SAFETY: host_abi is valid; descriptor and interface are valid 'static refs.
     unsafe {
         ((*host_abi).register_guest_contract)(
@@ -721,7 +719,7 @@ fn register_guest_contract_duplicate_returns_duplicate_provider_code() {
         )
     };
     assert_eq!(first.code, AbiErrorCode::Ok as u32, "first must register");
-    let mut second: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+    let mut second: AbiError = AbiError::ok();
     // SAFETY: same as above — deliberate same-bundle duplicate registration.
     unsafe {
         ((*host_abi).register_guest_contract)(

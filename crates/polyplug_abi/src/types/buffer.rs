@@ -1,3 +1,5 @@
+use core::slice;
+
 /// Owning byte buffer.
 ///
 /// OWNERSHIP: `ptr` is always allocated through the host allocator — the
@@ -32,7 +34,7 @@ impl Buffer {
             return &[];
         }
         // SAFETY: ptr is non-null and the caller guarantees `len` live bytes.
-        unsafe { core::slice::from_raw_parts(self.ptr, self.len) }
+        unsafe { slice::from_raw_parts(self.ptr, self.len) }
     }
 
     /// Returns the buffer contents as a mutable byte slice.
@@ -49,13 +51,14 @@ impl Buffer {
         }
         // SAFETY: ptr is non-null and the caller guarantees `cap` live, exclusively
         // owned bytes.
-        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.cap) }
+        unsafe { slice::from_raw_parts_mut(self.ptr, self.cap) }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use core::mem::{align_of, offset_of, size_of};
+    use core::ptr;
 
     use crate::types::buffer::Buffer;
 
@@ -71,7 +74,7 @@ mod tests {
     #[test]
     fn as_slice_on_null_returns_empty() {
         let buf: Buffer = Buffer {
-            ptr: core::ptr::null_mut(),
+            ptr: ptr::null_mut(),
             len: 0,
             cap: 0,
         };
@@ -83,7 +86,7 @@ mod tests {
     #[test]
     fn as_mut_slice_on_null_returns_empty() {
         let mut buf: Buffer = Buffer {
-            ptr: core::ptr::null_mut(),
+            ptr: ptr::null_mut(),
             len: 0,
             cap: 0,
         };

@@ -18,18 +18,29 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
+use core::ptr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use polyplug::Runtime;
 use polyplug::error::LoaderError;
-use polyplug::loader::{BundleLoader, ManifestData};
+use polyplug::loader::BundleLoader;
+use polyplug::loader::BundleSource;
+use polyplug::loader::ManifestData;
+use polyplug_abi::Array;
+use polyplug_abi::SupportedLanguage;
+use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::{
     DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInstance,
     GuestContractInterface, HostApi, NativeDispatch, PluginDescriptor, StringView, Version,
 };
+use polyplug_utils::bundle_id;
+use polyplug_utils::guest_contract_id;
 use polyplug_utils::{BundleId, GuestContractId};
+use std::fs;
+use std::sync::MutexGuard;
+use tempfile::TempDir;
 
 /// Results captured by the probing loader during the simulated init window.
 struct ProbeResults {
@@ -53,8 +64,8 @@ impl BundleLoader for ProbeLoader {
         "probe-enforce"
     }
 
-    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
-        polyplug_abi::SupportedLanguage::Rust
+    fn loader_language(&self) -> SupportedLanguage {
+        SupportedLanguage::Rust
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -64,7 +75,7 @@ impl BundleLoader for ProbeLoader {
     fn load(
         &self,
         manifest: &ManifestData,
-        _source: &polyplug::loader::BundleSource,
+        _source: &BundleSource,
         runtime: &Runtime,
     ) -> Result<(), LoaderError> {
         let host_abi: *const HostApi = runtime.host_abi();
@@ -88,11 +99,11 @@ impl BundleLoader for ProbeLoader {
         // Probe the enumeration API for both contracts. The declared one must be
         // enumerable; the undeclared one must come back empty during init.
         // SAFETY: host_abi is a valid HostApi from the runtime.
-        let declared_all: polyplug_abi::Array<GuestContractHandle> = unsafe {
+        let declared_all: Array<GuestContractHandle> = unsafe {
             ((*host_abi).find_all_guest_contracts)(host_abi, self.declared_contract_id, 0_u32)
         };
         // SAFETY: host_abi is a valid HostApi from the runtime.
-        let undeclared_all: polyplug_abi::Array<GuestContractHandle> = unsafe {
+        let undeclared_all: Array<GuestContractHandle> = unsafe {
             ((*host_abi).find_all_guest_contracts)(host_abi, self.undeclared_contract_id, 0_u32)
         };
         let declared_all_len: usize = declared_all.len;
@@ -100,7 +111,7 @@ impl BundleLoader for ProbeLoader {
 
         runtime.pop_init_bundle_id();
 
-        let mut guard: std::sync::MutexGuard<'_, ProbeResults> =
+        let mut guard: MutexGuard<'_, ProbeResults> =
             self.results.lock().unwrap_or_else(|e| e.into_inner());
         guard.declared_lookup_null = Some(declared_handle.is_null());
         guard.undeclared_lookup_null = Some(undeclared_handle.is_null());
@@ -118,7 +129,7 @@ impl BundleLoader for ProbeLoader {
 
 /// No-op create_instance callback for the registered provider interface.
 unsafe extern "C" fn noop_create_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -131,7 +142,7 @@ unsafe extern "C" fn noop_create_instance(
 
 /// No-op destroy_instance callback for the registered provider interface.
 unsafe extern "C" fn noop_destroy_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
@@ -153,7 +164,7 @@ fn register_provider(runtime: &Runtime, contract_id: u64, bundle_id: u64) -> Gue
         dispatch: DispatchMechanisms {
             native: NativeDispatch {
                 function_count: 0,
-                functions: core::ptr::null(),
+                functions: ptr::null(),
             },
         },
     }));
@@ -181,13 +192,13 @@ fn register_provider(runtime: &Runtime, contract_id: u64, bundle_id: u64) -> Gue
 /// Write a bundle directory with a manifest declaring `declared_contract` as a
 /// `[[dependency]]` (with its explicit contract_id), matching the depender
 /// fixture's manifest shape.
-fn write_bundle(temp: &tempfile::TempDir, bundle_name: &str, declared_contract_id: u64) -> PathBuf {
+fn write_bundle(temp: &TempDir, bundle_name: &str, declared_contract_id: u64) -> PathBuf {
     let bundle_dir: PathBuf = temp.path().join(bundle_name);
-    std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
-    std::fs::write(bundle_dir.join("dummy.so"), b"").expect("write dummy so");
-    let bundle_id: u64 = polyplug_utils::bundle_id(bundle_name);
+    fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+    fs::write(bundle_dir.join("dummy.so"), b"").expect("write dummy so");
+    let bundle_id_val: u64 = bundle_id(bundle_name);
     let manifest: String = format!(
-        "id = {bundle_id}\n\
+        "id = {bundle_id_val}\n\
          name = \"{bundle_name}\"\n\
          loader = \"probe-enforce\"\n\
          file = \"dummy.so\"\n\
@@ -198,16 +209,16 @@ fn write_bundle(temp: &tempfile::TempDir, bundle_name: &str, declared_contract_i
          min_version = \"1.0\"\n\
          contract_id = {declared_contract_id}\n"
     );
-    std::fs::write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
+    fs::write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
     bundle_dir
 }
 
 #[test]
 fn declared_dep_resolves_undeclared_denied_during_init_host_unaffected() {
-    let temp: tempfile::TempDir = tempfile::TempDir::new().expect("temp dir");
+    let temp: TempDir = TempDir::new().expect("temp dir");
 
-    let declared_contract_id: u64 = polyplug_utils::guest_contract_id("declared.dep", 1_u32);
-    let undeclared_contract_id: u64 = polyplug_utils::guest_contract_id("undeclared.other", 1_u32);
+    let declared_contract_id: u64 = guest_contract_id("declared.dep", 1_u32);
+    let undeclared_contract_id: u64 = guest_contract_id("undeclared.other", 1_u32);
 
     let results: Arc<Mutex<ProbeResults>> = Arc::new(Mutex::new(ProbeResults {
         declared_lookup_null: None,
@@ -235,8 +246,7 @@ fn declared_dep_resolves_undeclared_denied_during_init_host_unaffected() {
         .load_bundle(bundle_path.as_path())
         .expect("load_bundle should succeed");
 
-    let guard: std::sync::MutexGuard<'_, ProbeResults> =
-        results.lock().unwrap_or_else(|e| e.into_inner());
+    let guard: MutexGuard<'_, ProbeResults> = results.lock().unwrap_or_else(|e| e.into_inner());
 
     // (a) Declared dependency resolved during init.
     assert_eq!(

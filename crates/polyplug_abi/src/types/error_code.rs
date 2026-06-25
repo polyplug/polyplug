@@ -1,3 +1,5 @@
+use core::fmt;
+
 /// ABI error codes (reserved: 0-255 runtime, 256+ plugin-defined).
 ///
 /// These codes are returned by all ABI functions to indicate success or failure.
@@ -40,8 +42,8 @@ pub enum AbiErrorCode {
     HostContractCallFailed = 102,
 }
 
-impl core::fmt::Display for AbiErrorCode {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl fmt::Display for AbiErrorCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AbiErrorCode::Ok => write!(f, "Ok"),
             AbiErrorCode::Generic => write!(f, "Generic"),

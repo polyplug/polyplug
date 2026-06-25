@@ -11,10 +11,17 @@
 
 #![allow(clippy::expect_used)]
 
+use std::ffi::CStr;
+
 use core::hint::black_box;
 use criterion::{Criterion, criterion_group, criterion_main};
+use pyo3::Bound;
+use pyo3::Py;
+use pyo3::PyAny;
+use pyo3::PyErr;
 use pyo3::Python;
 use pyo3::types::PyAnyMethods;
+use pyo3::types::PyDict;
 use pyo3::types::PyDictMethods;
 use pyo3::types::PyModule;
 
@@ -38,9 +45,9 @@ fn bench_python_dispatch(c: &mut Criterion) {
 
     // Compile the no-op function ONCE (not measured) and keep a GIL-independent
     // handle. Inside the timed loops only `attach` + `call` run.
-    let noop_fn: pyo3::Py<pyo3::PyAny> = Python::attach(|py| {
-        let code: &std::ffi::CStr = c"def noop_dispatch(args, out): return 0";
-        let globals: pyo3::Bound<'_, pyo3::types::PyDict> = pyo3::types::PyDict::new(py);
+    let noop_fn: Py<PyAny> = Python::attach(|py| {
+        let code: &CStr = c"def noop_dispatch(args, out): return 0";
+        let globals: Bound<'_, PyDict> = PyDict::new(py);
         py.run(code, Some(&globals), None)
             .expect("Failed to run code");
         globals
@@ -56,11 +63,10 @@ fn bench_python_dispatch(c: &mut Criterion) {
     group.bench_function("gil_acquire_and_call", |b| {
         b.iter(|| {
             Python::attach(|py| {
-                let fn_bound: &pyo3::Bound<'_, pyo3::PyAny> = noop_fn.bind(py);
+                let fn_bound: &Bound<'_, PyAny> = noop_fn.bind(py);
                 let args_i64: i64 = 0;
                 let out_i64: i64 = 0;
-                let _: Result<pyo3::Bound<'_, pyo3::PyAny>, pyo3::PyErr> =
-                    fn_bound.call((args_i64, out_i64), None);
+                let _: Result<Bound<'_, PyAny>, PyErr> = fn_bound.call((args_i64, out_i64), None);
                 black_box(())
             })
         })
@@ -70,11 +76,11 @@ fn bench_python_dispatch(c: &mut Criterion) {
     group.bench_function("gil_acquire_and_10_calls", |b| {
         b.iter(|| {
             Python::attach(|py| {
-                let fn_bound: &pyo3::Bound<'_, pyo3::PyAny> = noop_fn.bind(py);
+                let fn_bound: &Bound<'_, PyAny> = noop_fn.bind(py);
                 let args_i64: i64 = 0;
                 let out_i64: i64 = 0;
                 for _ in 0..10 {
-                    let _: Result<pyo3::Bound<'_, pyo3::PyAny>, pyo3::PyErr> =
+                    let _: Result<Bound<'_, PyAny>, PyErr> =
                         fn_bound.call((args_i64, out_i64), None);
                 }
                 black_box(())
@@ -102,7 +108,7 @@ fn bench_gil_acquisition(c: &mut Criterion) {
     group.bench_function("gil_acquire_with_module_import", |b| {
         b.iter(|| {
             Python::attach(|py| {
-                let _: Result<pyo3::Bound<'_, PyModule>, pyo3::PyErr> = PyModule::import(py, "sys");
+                let _: Result<Bound<'_, PyModule>, PyErr> = PyModule::import(py, "sys");
                 black_box(())
             })
         })
@@ -153,19 +159,19 @@ fn bench_python_computation(c: &mut Criterion) {
     group.bench_function("python_computation_100_iterations", |b| {
         b.iter(|| {
             Python::attach(|py| {
-                let code: &std::ffi::CStr = c"def compute_sum(args, out):\n    total = 0\n    for i in range(100):\n        total += i\n    return total";
-                let globals: pyo3::Bound<'_, pyo3::types::PyDict> =
-                    pyo3::types::PyDict::new(py);
+                let code: &CStr = c"def compute_sum(args, out):\n    total = 0\n    for i in range(100):\n        total += i\n    return total";
+                let globals: Bound<'_, PyDict> =
+                    PyDict::new(py);
                 py.run(code, Some(&globals), None).expect("Failed to run code");
 
-                let compute_fn: pyo3::Bound<'_, pyo3::PyAny> = globals
+                let compute_fn: Bound<'_, PyAny> = globals
                     .get_item("compute_sum")
                     .expect("Failed to get compute_sum")
                     .expect("compute_sum not found");
 
                 let args_i64: i64 = 0;
                 let out_i64: i64 = 0;
-                let _: Result<pyo3::Bound<'_, pyo3::PyAny>, pyo3::PyErr> =
+                let _: Result<Bound<'_, PyAny>, PyErr> =
                     compute_fn.call((args_i64, out_i64), None);
                 black_box(())
             })
@@ -186,13 +192,13 @@ fn bench_cached_dispatch(c: &mut Criterion) {
     let mut group = c.benchmark_group("cached_dispatch");
 
     // Setup: Create function once (not measured).
-    let cached_fn: pyo3::Py<pyo3::PyAny> = Python::attach(|py| {
-        let code: &std::ffi::CStr = c"def noop_dispatch(args, out): return 0";
-        let globals: pyo3::Bound<'_, pyo3::types::PyDict> = pyo3::types::PyDict::new(py);
+    let cached_fn: Py<PyAny> = Python::attach(|py| {
+        let code: &CStr = c"def noop_dispatch(args, out): return 0";
+        let globals: Bound<'_, PyDict> = PyDict::new(py);
         py.run(code, Some(&globals), None)
             .expect("Failed to run code");
 
-        let noop_fn: pyo3::Bound<'_, pyo3::PyAny> = globals
+        let noop_fn: Bound<'_, PyAny> = globals
             .get_item("noop_dispatch")
             .expect("Failed to get noop_dispatch")
             .expect("noop_dispatch not found");
@@ -209,8 +215,7 @@ fn bench_cached_dispatch(c: &mut Criterion) {
                 let noop_fn = cached_fn.bind(py);
                 let args_i64: i64 = 0;
                 let out_i64: i64 = 0;
-                let _: Result<pyo3::Bound<'_, pyo3::PyAny>, pyo3::PyErr> =
-                    noop_fn.call((args_i64, out_i64), None);
+                let _: Result<Bound<'_, PyAny>, PyErr> = noop_fn.call((args_i64, out_i64), None);
                 black_box(())
             })
         })
@@ -223,7 +228,7 @@ fn bench_cached_dispatch(c: &mut Criterion) {
                 let args_i64: i64 = 0;
                 let out_i64: i64 = 0;
                 for _ in 0..10 {
-                    let _: Result<pyo3::Bound<'_, pyo3::PyAny>, pyo3::PyErr> =
+                    let _: Result<Bound<'_, PyAny>, PyErr> =
                         noop_fn.call((args_i64, out_i64), None);
                 }
                 black_box(())

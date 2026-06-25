@@ -4,6 +4,7 @@
 
 use polyplug_codegen::{GenerateConfig, Lang, Side};
 use polyplugc::generate;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -29,9 +30,9 @@ fn generate_lua_bindings(api_toml: &Path, out_dir: &Path) {
     for file in &output.files {
         let file_path = out_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 }
 
@@ -42,7 +43,7 @@ fn test_generate_lua_files_exist() {
     let out_dir: PathBuf =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_lua");
 
-    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    fs::create_dir_all(&out_dir).expect("create out_dir");
 
     generate_lua_bindings(&api_toml, &out_dir);
 

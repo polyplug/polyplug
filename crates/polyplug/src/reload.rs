@@ -13,14 +13,17 @@
 //!
 //! Safety contract: Host MUST destroy all instances in Preparing callback.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::MutexGuard;
 
+use polyplug_abi::plugin::GuestContractHandle;
 use polyplug_abi::runtime::ReloadPhase;
 use polyplug_abi::types::{LogLevel, StringView};
 use polyplug_utils::{BundleId, GuestContractId};
 
-use crate::error::RuntimeError;
-use crate::loader::ManifestData;
+use crate::error::{LoaderError, RegistryError, RuntimeError};
+use crate::loader::{BundleLoader, ManifestData, parse_manifest};
 use crate::logger::{RecoverPoisoned, RecoveringGuard};
 use crate::runtime::Runtime;
 
@@ -72,7 +75,7 @@ impl Runtime {
     /// not synchronously trigger another reload on the same runtime — doing so
     /// deadlocks. Cascade reloads are driven internally *after* the swap via the
     /// lock-free `reload_bundle_with_visited`, so they are unaffected.
-    pub fn reload_bundle(&self, path: &std::path::Path) -> Result<(), RuntimeError> {
+    pub fn reload_bundle(&self, path: &Path) -> Result<(), RuntimeError> {
         // Serialize this reload against any other concurrent reload. A reload's
         // pre-reload slot snapshot and the `apply_reload_swap` that consumes it
         // straddle `loader.reload()`, so the registry `RwLock` (dropped between
@@ -82,7 +85,7 @@ impl Runtime {
         // `reload_serialize` field docs. The guard is held across the entire
         // cascade tree; the recursive `reload_bundle_with_visited` (also used for
         // cascade dependents) never re-acquires it, so cascades cannot self-deadlock.
-        let _reload_guard: RecoveringGuard<std::sync::MutexGuard<'_, ()>> = self
+        let _reload_guard: RecoveringGuard<MutexGuard<'_, ()>> = self
             .reload_serialize
             .lock()
             .recover_poisoned(self.logger, "reload");
@@ -94,7 +97,7 @@ impl Runtime {
     /// dependency cycles during cascade reloads.
     fn reload_bundle_with_visited(
         &self,
-        path: &std::path::Path,
+        path: &Path,
         visited: &mut HashSet<BundleId>,
     ) -> Result<(), RuntimeError> {
         if !self.config().hot_reload_enabled {
@@ -104,14 +107,13 @@ impl Runtime {
         // `path` points to the bundle's shared-library file; its parent directory
         // holds the manifest. A directory path is accepted as the bundle dir
         // directly (the loader resolves the .so from the manifest's `file`).
-        let bundle_dir: &std::path::Path = if path.is_dir() {
+        let bundle_dir: &Path = if path.is_dir() {
             path
         } else {
             path.parent().unwrap_or(path)
         };
 
-        let manifest: ManifestData =
-            crate::loader::parse_manifest(bundle_dir).map_err(RuntimeError::Loader)?;
+        let manifest: ManifestData = parse_manifest(bundle_dir).map_err(RuntimeError::Loader)?;
 
         let bundle_id: BundleId = BundleId::new(&manifest.name);
 
@@ -137,13 +139,12 @@ impl Runtime {
         }
 
         // Find the loader (lock released before reload() runs — see `loader_for`).
-        let loader: &dyn crate::loader::BundleLoader =
-            self.loader_for(&manifest.loader).ok_or_else(|| {
-                RuntimeError::Loader(crate::error::LoaderError::NoLoaderForName {
-                    bundle: path.display().to_string(),
-                    loader_name: manifest.loader.clone(),
-                })
-            })?;
+        let loader: &dyn BundleLoader = self.loader_for(&manifest.loader).ok_or_else(|| {
+            RuntimeError::Loader(LoaderError::NoLoaderForName {
+                bundle: path.display().to_string(),
+                loader_name: manifest.loader.clone(),
+            })
+        })?;
 
         // A loader that does not support hot-reload (e.g. python, dotnet) gates the
         // same way config-disabled does: surface `HotReloadDisabled` and never call
@@ -157,7 +158,7 @@ impl Runtime {
         // A missing file is a reload failure that must fire the Failed callback so
         // the host learns the active version was kept.
         if !path.is_dir() && !path.exists() {
-            let err: RuntimeError = RuntimeError::Loader(crate::error::LoaderError::InitFailed {
+            let err: RuntimeError = RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
                 error: format!("bundle library not found at {}", path.display()),
             });
@@ -210,7 +211,7 @@ impl Runtime {
         self.registry.begin_reload(bundle_id);
 
         // Call loader's reload() - this does load+init, registering new interfaces
-        let result: Result<(), crate::error::RuntimeError> =
+        let result: Result<(), RuntimeError> =
             loader.reload(&manifest, self).map_err(RuntimeError::Loader);
 
         match result {
@@ -313,14 +314,12 @@ impl Runtime {
         // names and paths while holding the manifest lock, then release it before
         // reloading (reload re-acquires the manifest lock).
         let dependent_ids: Vec<BundleId> = self.registry.bundles_depending_on_any(&exported);
-        let mut candidates: Vec<(String, std::path::PathBuf)> = {
-            let manifests: RecoveringGuard<
-                std::sync::MutexGuard<'_, std::collections::HashMap<String, ManifestData>>,
-            > = self
+        let mut candidates: Vec<(String, PathBuf)> = {
+            let manifests: RecoveringGuard<MutexGuard<'_, HashMap<String, ManifestData>>> = self
                 .bundle_manifests
                 .lock()
                 .recover_poisoned(self.logger, "reload");
-            let mut collected: Vec<(String, std::path::PathBuf)> = Vec::new();
+            let mut collected: Vec<(String, PathBuf)> = Vec::new();
             for manifest in manifests.values() {
                 let dep_bundle_id: BundleId = BundleId::new(&manifest.name);
                 if dep_bundle_id == reloaded_bundle_id
@@ -362,7 +361,7 @@ impl Runtime {
         &self,
         contract_id: u64,
         min_version: u32,
-    ) -> Result<polyplug_abi::plugin::GuestContractHandle, crate::error::RegistryError> {
+    ) -> Result<GuestContractHandle, RegistryError> {
         self.registry()
             .find_guest_contract(GuestContractId::from_u64(contract_id), min_version)
     }

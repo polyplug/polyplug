@@ -35,12 +35,16 @@
 // production code paths, not stubs.
 
 use core::hint::black_box;
+use core::mem;
+use core::ptr;
 
+use criterion::BenchmarkGroup;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
 use criterion::criterion_group;
 use criterion::criterion_main;
+use criterion::measurement::WallTime;
 
 use polyplug::Runtime;
 use polyplug::logger::LoggerHandle;
@@ -125,8 +129,8 @@ fn leak_host_interface(contract_id: u64) -> &'static HostContractInterface {
         },
         singleton: true,
         dispatch_type: DispatchType::Native,
-        runtime: core::ptr::null_mut(),
-        user_data: core::ptr::null_mut(),
+        runtime: ptr::null_mut(),
+        user_data: ptr::null_mut(),
         create_instance: host_create_instance,
         destroy_instance: host_destroy_instance,
         dispatch: DispatchMechanisms {
@@ -171,7 +175,7 @@ fn bench_host_contract_call(c: &mut Criterion) {
     // SAFETY: resolved is the registered 'static interface; fn 0 is host_add.
     let dispatch_fn: unsafe extern "C" fn(HostContractInstance, *const (), *mut (), *mut AbiError) = unsafe {
         let fn_ptr: *const () = *(*resolved).dispatch.native.functions.add(0);
-        core::mem::transmute(fn_ptr)
+        mem::transmute(fn_ptr)
     };
     let instance: HostContractInstance = HostContractInstance::null();
 
@@ -181,8 +185,7 @@ fn bench_host_contract_call(c: &mut Criterion) {
     };
     let mut out: u32 = 0_u32;
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("guest_host_call");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("guest_host_call");
     group.throughput(Throughput::Elements(1));
 
     group.bench_function(BenchmarkId::new("host_contract_call", "native"), |b| {
@@ -206,7 +209,7 @@ fn bench_host_contract_call(c: &mut Criterion) {
     group.finish();
     // The runtime owns the leaked interface for the process lifetime; keep it
     // alive for the whole bench. Never dropped (the leaked interface is 'static).
-    core::mem::forget(runtime);
+    mem::forget(runtime);
 }
 
 // ─── Benchmark — host→log funnel ──────────────────────────────────────────────
@@ -239,8 +242,7 @@ fn bench_host_log(c: &mut Criterion) {
     // return otherwise).
     let logger: LoggerHandle = runtime.logger();
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("guest_host_call");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("guest_host_call");
     group.throughput(Throughput::Elements(1));
 
     group.bench_function(BenchmarkId::new("host_log", "delivered"), |b| {
@@ -252,7 +254,7 @@ fn bench_host_log(c: &mut Criterion) {
     });
 
     group.finish();
-    core::mem::forget(runtime);
+    mem::forget(runtime);
 }
 
 // ─── criterion_group / criterion_main ────────────────────────────────────────

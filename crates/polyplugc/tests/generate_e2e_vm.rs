@@ -35,9 +35,16 @@
 
 #![allow(clippy::expect_used)]
 
+use std::ffi::OsStr;
+use std::ffi::OsString;
+use std::fs;
+use std::fs::ReadDir;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Output;
+use tempfile::TempDir;
+use tempfile::tempdir;
 
 /// Absolute path to the repository root, derived from this crate's manifest dir
 /// (`<repo>/crates/polyplugc`).
@@ -64,7 +71,7 @@ fn transformer_bundle_toml(lang_dir: &str) -> PathBuf {
 }
 
 /// Run the `polyplugc` binary with `args`, returning the captured output.
-fn run_polyplugc(args: &[&std::ffi::OsStr]) -> std::process::Output {
+fn run_polyplugc(args: &[&OsStr]) -> Output {
     let bin: &str = env!("CARGO_BIN_EXE_polyplugc");
     Command::new(bin)
         .args(args)
@@ -75,7 +82,7 @@ fn run_polyplugc(args: &[&std::ffi::OsStr]) -> std::process::Output {
 /// Generate guest glue for `bundle` in `lang` into `out_dir` via the CLI,
 /// asserting success and surfacing full stderr on failure.
 fn generate_guest_glue(bundle: &Path, lang: &str, out_dir: &Path) {
-    let output: std::process::Output = run_polyplugc(&[
+    let output: Output = run_polyplugc(&[
         "generate".as_ref(),
         "--bundle".as_ref(),
         bundle.as_os_str(),
@@ -96,7 +103,7 @@ fn generate_guest_glue(bundle: &Path, lang: &str, out_dir: &Path) {
 /// Collect every file under `dir` (recursively) whose extension equals `ext`.
 fn files_with_ext(dir: &Path, ext: &str) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
-    let entries: std::fs::ReadDir = match std::fs::read_dir(dir) {
+    let entries: ReadDir = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return out,
     };
@@ -117,10 +124,10 @@ fn files_with_ext(dir: &Path, ext: &str) -> Vec<PathBuf> {
 
 #[test]
 fn python_generated_glue_compiles_and_imports() {
-    let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    let tmp: TempDir = tempdir().expect("tempdir");
     let bundle_dir: PathBuf = tmp.path().join("bundle");
     let gen_dir: PathBuf = bundle_dir.join("generated");
-    std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+    fs::create_dir_all(&bundle_dir).expect("create bundle dir");
 
     generate_guest_glue(&transformer_bundle_toml("python"), "python", &gen_dir);
 
@@ -132,7 +139,7 @@ fn python_generated_glue_compiles_and_imports() {
         gen_dir.display()
     );
     for file in &py_files {
-        let output: std::process::Output = Command::new("python3")
+        let output: Output = Command::new("python3")
             .arg("-m")
             .arg("py_compile")
             .arg(file)
@@ -151,7 +158,7 @@ fn python_generated_glue_compiles_and_imports() {
     // `examples/build_all.sh` does and as the PythonLoader expects:
     //   polyplug_guest, polyplug_abi, and the polyplug.abi namespace shim.
     let site: PathBuf = bundle_dir.join("site-packages");
-    std::fs::create_dir_all(site.join("polyplug").join("abi")).expect("create site polyplug/abi");
+    fs::create_dir_all(site.join("polyplug").join("abi")).expect("create site polyplug/abi");
     let sdk_python: PathBuf = repo_root().join("sdks").join("python");
     copy_dir_all(
         &sdk_python.join("guest").join("polyplug_guest"),
@@ -161,13 +168,13 @@ fn python_generated_glue_compiles_and_imports() {
         &sdk_python.join("polyplug_abi").join("polyplug_abi"),
         &site.join("polyplug_abi"),
     );
-    std::fs::copy(
+    fs::copy(
         sdk_python.join("abi").join("abi.py"),
         site.join("polyplug").join("abi").join("abi.py"),
     )
     .expect("copy polyplug/abi/abi.py");
-    std::fs::write(site.join("polyplug").join("__init__.py"), b"").expect("write polyplug init");
-    std::fs::write(site.join("polyplug").join("abi").join("__init__.py"), b"")
+    fs::write(site.join("polyplug").join("__init__.py"), b"").expect("write polyplug init");
+    fs::write(site.join("polyplug").join("abi").join("__init__.py"), b"")
         .expect("write polyplug.abi init");
 
     // Import every generated guest module. The loader prepends the bundle dir
@@ -187,7 +194,7 @@ fn python_generated_glue_compiles_and_imports() {
         bundle = bundle_dir.to_string_lossy(),
         gen = gen_dir.to_string_lossy(),
     );
-    let output: std::process::Output = Command::new("python3")
+    let output: Output = Command::new("python3")
         .arg("-c")
         .arg(&import_script)
         .output()
@@ -206,10 +213,10 @@ fn python_generated_glue_compiles_and_imports() {
 
 #[test]
 fn lua_generated_glue_compiles_and_loads() {
-    let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    let tmp: TempDir = tempdir().expect("tempdir");
     let bundle_dir: PathBuf = tmp.path().join("bundle");
     let gen_dir: PathBuf = bundle_dir.join("generated");
-    std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+    fs::create_dir_all(&bundle_dir).expect("create bundle dir");
 
     generate_guest_glue(&transformer_bundle_toml("lua"), "lua", &gen_dir);
 
@@ -224,7 +231,7 @@ fn lua_generated_glue_compiles_and_loads() {
         gen_dir.display()
     );
     for file in &lua_files {
-        let output: std::process::Output = Command::new("luajit")
+        let output: Output = Command::new("luajit")
             .arg("-bl")
             .arg(file)
             .arg(devnull())
@@ -257,7 +264,7 @@ fn lua_generated_glue_compiles_and_loads() {
          \x20\x20end\n\
          end\n"
     );
-    let output: std::process::Output = Command::new("luajit")
+    let output: Output = Command::new("luajit")
         .arg("-e")
         .arg(&load_script)
         .output()
@@ -276,7 +283,7 @@ fn lua_generated_glue_compiles_and_loads() {
 
 #[test]
 fn js_quickjs_generated_glue_type_checks() {
-    let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    let tmp: TempDir = tempdir().expect("tempdir");
     let gen_dir: PathBuf = tmp.path().join("generated");
 
     generate_guest_glue(&transformer_bundle_toml("js"), "js-quickjs", &gen_dir);
@@ -292,11 +299,11 @@ fn js_quickjs_generated_glue_type_checks() {
     // extensionless relative imports the generator emits (the QuickJS/rolldown
     // convention this repo ships). All generated imports are local, so no import
     // map is needed.
-    let mut args: Vec<std::ffi::OsString> = vec!["check".into(), "--sloppy-imports".into()];
+    let mut args: Vec<OsString> = vec!["check".into(), "--sloppy-imports".into()];
     for file in &ts_files {
         args.push(file.clone().into_os_string());
     }
-    let output: std::process::Output = Command::new("deno")
+    let output: Output = Command::new("deno")
         .args(&args)
         .output()
         .expect("failed to spawn deno check");
@@ -313,8 +320,8 @@ fn js_quickjs_generated_glue_type_checks() {
 
 /// Recursively copy `src` directory into `dst` (created if absent).
 fn copy_dir_all(src: &Path, dst: &Path) {
-    std::fs::create_dir_all(dst).expect("create dst dir");
-    for entry in std::fs::read_dir(src)
+    fs::create_dir_all(dst).expect("create dst dir");
+    for entry in fs::read_dir(src)
         .expect("read src dir")
         .filter_map(Result::ok)
     {
@@ -323,7 +330,7 @@ fn copy_dir_all(src: &Path, dst: &Path) {
         if path.is_dir() {
             copy_dir_all(&path, &target);
         } else {
-            std::fs::copy(&path, &target).expect("copy file");
+            fs::copy(&path, &target).expect("copy file");
         }
     }
 }

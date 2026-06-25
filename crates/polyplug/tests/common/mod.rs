@@ -24,16 +24,18 @@
 //!   `HostApi::register_loader` callback.
 
 use core::ffi::c_void;
+use core::slice::from_raw_parts;
 use std::collections::HashMap;
+use std::env::var;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 use std::sync::{Mutex, Once};
 
 use libloading::Library;
 
 use polyplug::Runtime;
 use polyplug::error::LoaderError;
-use polyplug::loader::{BundleLoader, ManifestData};
+use polyplug::loader::{BundleLoader, BundleSource, ManifestData};
 use polyplug_abi::HostApi;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::StringView;
@@ -122,8 +124,7 @@ impl TestNativeLoader {
             *sym
         };
 
-        let bundle_dir: &std::path::Path =
-            bundle_path.parent().unwrap_or(std::path::Path::new("."));
+        let bundle_dir: &Path = bundle_path.parent().unwrap_or(Path::new("."));
         let ctx: BundleInitContext = BundleInitContext {
             bundle_id: BundleId::new(&manifest.name).id(),
             bundle_path: StringView {
@@ -147,9 +148,8 @@ impl TestNativeLoader {
                 format!("init returned error code {:?}", init_result.code)
             } else {
                 // SAFETY: ptr is non-null and points to valid UTF-8 bytes for message.len.
-                let bytes: &[u8] = unsafe {
-                    core::slice::from_raw_parts(init_result.message.ptr, init_result.message.len)
-                };
+                let bytes: &[u8] =
+                    unsafe { from_raw_parts(init_result.message.ptr, init_result.message.len) };
                 String::from_utf8_lossy(bytes).into_owned()
             };
             return Err(LoaderError::InitFailed {
@@ -198,7 +198,7 @@ impl BundleLoader for TestNativeLoader {
     fn load(
         &self,
         manifest: &ManifestData,
-        _source: &polyplug::loader::BundleSource,
+        _source: &BundleSource,
         runtime: &Runtime,
     ) -> Result<(), LoaderError> {
         self.load_library(manifest, runtime)
@@ -262,7 +262,7 @@ pub fn polyplugc_bin() -> PathBuf {
 
 /// Workspace target directory: honors `CARGO_TARGET_DIR`, else `<workspace>/target`.
 fn workspace_target_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("CARGO_TARGET_DIR") {
+    if let Ok(dir) = var("CARGO_TARGET_DIR") {
         return PathBuf::from(dir);
     }
     // CARGO_MANIFEST_DIR = crates/polyplug; workspace root is two levels up.
@@ -283,7 +283,7 @@ fn build_polyplugc(profile: &str) {
         if profile == "release" {
             cmd.arg("--release");
         }
-        let status: std::process::ExitStatus = cmd
+        let status: ExitStatus = cmd
             .status()
             .expect("failed to spawn cargo build -p polyplugc");
         assert!(status.success(), "cargo build -p polyplugc failed");

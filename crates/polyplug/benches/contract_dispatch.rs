@@ -3,8 +3,14 @@
 // THIS IS A BENCHMARK FILE — do not add #[test] functions here
 // Run with: cargo bench -p polyplug --bench contract_dispatch
 
+use core::cell::Cell;
 use core::cell::RefCell;
+use core::ffi::c_void;
 use core::hint::black_box;
+use core::mem;
+use core::ptr;
+use core::slice::from_raw_parts;
+use core::str::from_utf8_unchecked;
 
 use criterion::BenchmarkId;
 use criterion::Criterion;
@@ -17,16 +23,26 @@ use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::Array;
 use polyplug_abi::Buffer;
+use polyplug_abi::BundleInitContext;
+use polyplug_abi::DependencyInfo;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
+use polyplug_abi::HostContractInstance;
+use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_utils::BundleId;
+use polyplug_utils::GuestContractId;
+
+use libloading::{Library, Symbol};
+
+use criterion::BenchmarkGroup;
+use criterion::measurement::WallTime;
 
 // ─── Plugin paths from build.rs ──────────────────────────────────────────────
 
@@ -53,8 +69,8 @@ struct FillArgs {
 
 thread_local! {
     static BENCH_REGISTRY: RefCell<Option<RuntimeStore>> = RefCell::new(Some(RuntimeStore::new()));
-    static LAST_INTERFACE: core::cell::Cell<*const GuestContractInterface> = const { core::cell::Cell::new(core::ptr::null()) };
-    static LAST_CONTRACT_ID: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+    static LAST_INTERFACE: Cell<*const GuestContractInterface> = const { Cell::new(ptr::null()) };
+    static LAST_CONTRACT_ID: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Registration callback used by all benchmarks.
@@ -89,13 +105,12 @@ unsafe extern "C" fn bench_register_callback(
     // SAFETY: desc.contract_name is set from a &'static str in the benchmark fixture.
     // The bytes are valid UTF-8 by construction.
     let contract_name: &str = unsafe {
-        let bytes: &[u8] =
-            core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
-        core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
+        let bytes: &[u8] = from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
+        from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
 
     let result: Result<GuestContractHandle, _> =
-        BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
+        BENCH_REGISTRY.with(|cell: &RefCell<Option<RuntimeStore>>| {
             // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
             let borrowed = cell.borrow();
             let registry = borrowed.as_ref().expect("registry not initialized");
@@ -142,14 +157,11 @@ unsafe extern "C" fn bench_find_guest_contract(
     contract_id: u64,
     min_version: u32,
 ) -> GuestContractHandle {
-    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
+    BENCH_REGISTRY.with(|cell: &RefCell<Option<RuntimeStore>>| {
         let registry = cell.borrow();
         let reg = registry.as_ref().expect("registry not initialized");
-        reg.find(
-            polyplug_utils::GuestContractId::from_u64(contract_id),
-            min_version,
-        )
-        .unwrap_or_else(|_| GuestContractHandle::null())
+        reg.find(GuestContractId::from_u64(contract_id), min_version)
+            .unwrap_or_else(|_| GuestContractHandle::null())
     })
 }
 
@@ -173,12 +185,12 @@ unsafe extern "C" fn bench_resolve_guest_contract(
     _this: *const HostApi,
     handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
-    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
+    BENCH_REGISTRY.with(|cell: &RefCell<Option<RuntimeStore>>| {
         cell.borrow()
             .as_ref()
             .expect("registry not initialized")
             .resolve_guest_contract(handle)
-            .unwrap_or(core::ptr::null())
+            .unwrap_or(ptr::null())
     })
 }
 
@@ -187,8 +199,8 @@ unsafe extern "C" fn bench_get_host_contract(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::HostContractInstance {
-    polyplug_abi::HostContractInstance::null()
+) -> HostContractInstance {
+    HostContractInstance::null()
 }
 
 /// Returns null pointer for host contract interface.
@@ -196,8 +208,8 @@ unsafe extern "C" fn bench_resolve_host_contract_interface(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractInterface {
-    core::ptr::null()
+) -> *const HostContractInterface {
+    ptr::null()
 }
 
 /// Returns empty array of bundle IDs.
@@ -206,9 +218,7 @@ unsafe extern "C" fn bench_list_bundles(_this: *const HostApi) -> Array<BundleId
 }
 
 /// Returns empty array of dependencies.
-unsafe extern "C" fn bench_get_dependencies(
-    _this: *const HostApi,
-) -> Array<polyplug_abi::DependencyInfo> {
+unsafe extern "C" fn bench_get_dependencies(_this: *const HostApi) -> Array<DependencyInfo> {
     Array::empty()
 }
 
@@ -251,7 +261,7 @@ unsafe extern "C" fn bench_reload_bundle(
 /// register_host_contract stub — writes error to out_err (not used in benches).
 unsafe extern "C" fn bench_register_host_contract(
     _this: *const HostApi,
-    _interface: *const polyplug_abi::HostContractInterface,
+    _interface: *const HostContractInterface,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -268,7 +278,7 @@ unsafe extern "C" fn bench_register_host_contract(
 /// register_loader stub — writes error to out_err (not used in benches).
 unsafe extern "C" fn bench_register_loader(
     _this: *const HostApi,
-    _loader_ptr: *mut core::ffi::c_void,
+    _loader_ptr: *mut c_void,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -332,7 +342,7 @@ unsafe extern "C" fn bench_free(_this: *const HostApi, ptr: *mut u8, size: usize
 /// host table (to register, resolve, or allocate) uses this single definition.
 fn bench_host_api() -> HostApi {
     HostApi {
-        runtime: core::ptr::null_mut(),
+        runtime: ptr::null_mut(),
         register_guest_contract: bench_register_callback,
         alloc: bench_alloc,
         free: bench_free,
@@ -354,22 +364,21 @@ fn bench_host_api() -> HostApi {
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
         revision_counter: stub_revision_counter,
-        reserved: core::ptr::null(),
+        reserved: ptr::null(),
     }
 }
 
 /// Load a plugin cdylib and call `polyplug_init`, registering into BENCH_REGISTRY.
 /// After this call, LAST_INTERFACE holds the interface pointer of the plugin just loaded.
-fn load_and_init_plugin(path: &str) -> libloading::Library {
+fn load_and_init_plugin(path: &str) -> Library {
     // SAFETY: path is a valid compiled cdylib built by build.rs.
-    let library: libloading::Library =
-        unsafe { libloading::Library::new(path).expect("failed to load plugin") };
+    let library: Library = unsafe { Library::new(path).expect("failed to load plugin") };
 
     // SAFETY: polyplug_init matches the expected 2-arg ABI:
     // unsafe extern "C" fn(host: *const HostApi, ctx: *const BundleInitContext) -> AbiError
-    let init_fn: libloading::Symbol<
+    let init_fn: Symbol<
         '_,
-        unsafe extern "C" fn(*const HostApi, *const polyplug_abi::BundleInitContext) -> AbiError,
+        unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
@@ -378,7 +387,7 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
 
     let host_interface: HostApi = bench_host_api();
 
-    let plugin_ctx: polyplug_abi::BundleInitContext = polyplug_abi::BundleInitContext {
+    let plugin_ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
         bundle_id: 0,
     };
@@ -387,7 +396,7 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
     let result: AbiError = unsafe {
         init_fn(
             &host_interface as *const HostApi,
-            &plugin_ctx as *const polyplug_abi::BundleInitContext,
+            &plugin_ctx as *const BundleInitContext,
         )
     };
 
@@ -417,7 +426,7 @@ fn get_interface_fn(
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(fn_id) };
     // SAFETY: transmuting to the canonical 4-arg native dispatch signature.
     // Arg/out types are enforced by each benchmark's setup code.
-    unsafe { core::mem::transmute(fn_ptr) }
+    unsafe { mem::transmute(fn_ptr) }
 }
 
 // ─── Benchmark 1 — noop dispatch ─────────────────────────────────────────────
@@ -426,11 +435,11 @@ fn get_interface_fn(
 /// Isolates the raw dispatch overhead with no meaningful computation.
 fn bench_dispatch_noop(c: &mut Criterion) {
     // Reset registry for a clean slate.
-    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
+    BENCH_REGISTRY.with(|cell: &RefCell<Option<RuntimeStore>>| {
         *cell.borrow_mut() = Some(RuntimeStore::new());
     });
 
-    let _library: libloading::Library = load_and_init_plugin(TEST_PLUGIN_SO);
+    let _library: Library = load_and_init_plugin(TEST_PLUGIN_SO);
     let dispatch_fn: unsafe extern "C" fn(
         GuestContractInstance,
         *const (),
@@ -438,8 +447,7 @@ fn bench_dispatch_noop(c: &mut Criterion) {
         *mut AbiError,
     ) = get_interface_fn(0);
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("dispatch");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("dispatch");
     group.throughput(Throughput::Elements(1));
 
     let args: AddArgs = AddArgs { a: 0, b: 0 };
@@ -464,7 +472,7 @@ fn bench_dispatch_noop(c: &mut Criterion) {
 
     group.finish();
     // Keep library alive for the duration; never drop (never-drop invariant).
-    core::mem::forget(_library);
+    mem::forget(_library);
 }
 
 // ─── Benchmark 2 — buffer arg dispatch ───────────────────────────────────────
@@ -473,11 +481,11 @@ fn bench_dispatch_noop(c: &mut Criterion) {
 /// The buffer is allocated ONCE before the loop — only dispatch overhead is measured.
 fn bench_dispatch_buffer_arg(c: &mut Criterion) {
     // Reset registry for a clean slate.
-    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
+    BENCH_REGISTRY.with(|cell: &RefCell<Option<RuntimeStore>>| {
         *cell.borrow_mut() = Some(RuntimeStore::new());
     });
 
-    let _library: libloading::Library = load_and_init_plugin(MEMORY_PLUGIN_SO);
+    let _library: Library = load_and_init_plugin(MEMORY_PLUGIN_SO);
     // fn 0 = memory_fill_preallocated_buffer(args: FillArgs) -> u32
     let dispatch_fn: unsafe extern "C" fn(
         GuestContractInstance,
@@ -490,8 +498,7 @@ fn bench_dispatch_buffer_arg(c: &mut Criterion) {
     let buf_ptr: *mut u8 = polyplug_host_alloc(4096, 1);
     assert!(!buf_ptr.is_null(), "bench alloc failed");
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("dispatch");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("dispatch");
     group.throughput(Throughput::Elements(1));
 
     let args: FillArgs = FillArgs {
@@ -528,7 +535,7 @@ fn bench_dispatch_buffer_arg(c: &mut Criterion) {
     // Freeing here is safe — the benchmark loop is complete.
     unsafe { polyplug_host_free(buf_ptr, 4096, 1) };
 
-    core::mem::forget(_library);
+    mem::forget(_library);
 }
 
 // ─── Benchmark 3 — struct arg and return ─────────────────────────────────────
@@ -538,11 +545,11 @@ fn bench_dispatch_buffer_arg(c: &mut Criterion) {
 /// dead-code elimination of the computation inside the plugin.
 fn bench_dispatch_struct_arg_and_return(c: &mut Criterion) {
     // Reset registry for a clean slate.
-    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
+    BENCH_REGISTRY.with(|cell: &RefCell<Option<RuntimeStore>>| {
         *cell.borrow_mut() = Some(RuntimeStore::new());
     });
 
-    let _library: libloading::Library = load_and_init_plugin(TEST_PLUGIN_SO);
+    let _library: Library = load_and_init_plugin(TEST_PLUGIN_SO);
     let dispatch_fn: unsafe extern "C" fn(
         GuestContractInstance,
         *const (),
@@ -550,8 +557,7 @@ fn bench_dispatch_struct_arg_and_return(c: &mut Criterion) {
         *mut AbiError,
     ) = get_interface_fn(0);
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("dispatch");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("dispatch");
     group.throughput(Throughput::Elements(1));
 
     let args: AddArgs = AddArgs {
@@ -582,7 +588,7 @@ fn bench_dispatch_struct_arg_and_return(c: &mut Criterion) {
     );
 
     group.finish();
-    core::mem::forget(_library);
+    mem::forget(_library);
 }
 
 // ─── Benchmark 4 — cross-plugin dispatch ─────────────────────────────────────
@@ -592,12 +598,12 @@ fn bench_dispatch_struct_arg_and_return(c: &mut Criterion) {
 /// Uses memory_plugin fn 2 (echo_string_view) as the target — no allocation.
 fn bench_dispatch_cross_plugin(c: &mut Criterion) {
     // Reset registry for a clean slate.
-    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
+    BENCH_REGISTRY.with(|cell: &RefCell<Option<RuntimeStore>>| {
         *cell.borrow_mut() = Some(RuntimeStore::new());
     });
 
     // Load memory_plugin into BENCH_REGISTRY so find_guest_contract can locate it.
-    let _memory_lib: libloading::Library = load_and_init_plugin(MEMORY_PLUGIN_SO);
+    let _memory_lib: Library = load_and_init_plugin(MEMORY_PLUGIN_SO);
 
     // Capture the memory.test contract_id (set by bench_register_callback above).
     let memory_contract_id: u64 = LAST_CONTRACT_ID.with(|cell| cell.get());
@@ -616,8 +622,7 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
     };
     let mut sv_out: StringView = StringView::null();
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("dispatch");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("dispatch");
     group.throughput(Throughput::Elements(1));
 
     group.bench_function(BenchmarkId::new("cross_plugin", "find+call"), |b| {
@@ -659,7 +664,7 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
                     *const (),
                     *mut (),
                     *mut AbiError,
-                ) = unsafe { core::mem::transmute(fn_ptr) };
+                ) = unsafe { mem::transmute(fn_ptr) };
                 let mut err: AbiError = AbiError::ok();
                 // SAFETY: sv and sv_out are valid locations matching the fn signature;
                 // err is a valid writable out-param.
@@ -679,7 +684,7 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
     });
 
     group.finish();
-    core::mem::forget(_memory_lib);
+    mem::forget(_memory_lib);
 }
 
 // ─── Benchmark 5 — marshalling: borrowed view vs owned copy by size ───────────
@@ -702,11 +707,11 @@ struct CopyArgs {
 /// `ReadOnlySpan` / `memoryview`) versus owned native `String` / `bytes`.
 fn bench_marshalling(c: &mut Criterion) {
     // Reset registry for a clean slate.
-    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<RuntimeStore>>| {
+    BENCH_REGISTRY.with(|cell: &RefCell<Option<RuntimeStore>>| {
         *cell.borrow_mut() = Some(RuntimeStore::new());
     });
 
-    let _library: libloading::Library = load_and_init_plugin(MEMORY_PLUGIN_SO);
+    let _library: Library = load_and_init_plugin(MEMORY_PLUGIN_SO);
     // fn 4 = memory_return_borrowed(StringView) -> StringView
     // fn 5 = memory_return_owned(CopyArgs) -> Buffer
     let borrowed_fn: unsafe extern "C" fn(
@@ -727,8 +732,7 @@ fn bench_marshalling(c: &mut Criterion) {
     let payload: Vec<u8> = vec![b'a'; 1_048_576];
     let sizes: [usize; 9] = [16, 64, 256, 1024, 4096, 16384, 65536, 262_144, 1_048_576];
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("marshalling");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("marshalling");
     group.throughput(Throughput::Elements(1));
 
     for &size in &sizes {
@@ -762,7 +766,7 @@ fn bench_marshalling(c: &mut Criterion) {
         };
         group.bench_with_input(BenchmarkId::new("owned", size), &copy_args, |b, args| {
             let mut out: Buffer = Buffer {
-                ptr: core::ptr::null_mut(),
+                ptr: ptr::null_mut(),
                 len: 0,
                 cap: 0,
             };
@@ -790,7 +794,7 @@ fn bench_marshalling(c: &mut Criterion) {
     }
 
     group.finish();
-    core::mem::forget(_library);
+    mem::forget(_library);
 }
 
 // ─── criterion_group / criterion_main ────────────────────────────────────────
@@ -807,32 +811,32 @@ criterion_main!(benches);
 
 /// `HostApi.log` stub for test hosts — drops the record.
 unsafe extern "C" fn stub_host_log(
-    _this: *const polyplug_abi::HostApi,
+    _this: *const HostApi,
     _level: u32,
-    _scope: polyplug_abi::StringView,
-    _message: polyplug_abi::StringView,
+    _scope: StringView,
+    _message: StringView,
 ) {
 }
 
 unsafe extern "C" fn stub_create_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _args: *const core::ffi::c_void,
-    out_instance: *mut polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _args: *const c_void,
+    out_instance: *mut GuestContractInstance,
 ) {
     if !out_instance.is_null() {
         // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+        unsafe { out_instance.write(GuestContractInstance::null()) };
     }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _instance: polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _instance: GuestContractInstance,
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const polyplug_abi::HostApi) -> *const u64 {
-    core::ptr::null()
+unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
+    ptr::null()
 }

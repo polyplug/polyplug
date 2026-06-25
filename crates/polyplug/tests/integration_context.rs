@@ -8,13 +8,28 @@
 //!
 //! This test crate is the crate root for the `integration_context` test binary.
 
+use core::ffi::c_void;
+use core::mem;
+use core::ptr;
+use core::slice;
+
+use libloading::{Library, Symbol};
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
+use polyplug_abi::Array;
 use polyplug_abi::BundleInitContext;
+use polyplug_abi::DependencyInfo;
+use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
+use polyplug_abi::HostContractInstance;
+use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_utils::BundleId;
 
 /// Path to the compiled test_plugin shared library -- set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
@@ -40,13 +55,13 @@ unsafe extern "C" fn noop_register(
 
 /// No-op alloc callback.
 unsafe extern "C" fn noop_alloc(_this: *const HostApi, size: usize, align: usize) -> *mut u8 {
-    polyplug_abi::ffi::polyplug_host_alloc(size, align)
+    polyplug_host_alloc(size, align)
 }
 
 /// No-op free callback.
 unsafe extern "C" fn noop_free(_this: *const HostApi, ptr: *mut u8, size: usize, align: usize) {
     // SAFETY: polyplug_host_free is a safe wrapper around the system allocator.
-    unsafe { polyplug_abi::ffi::polyplug_host_free(ptr, size, align) }
+    unsafe { polyplug_host_free(ptr, size, align) }
 }
 
 /// No-op find_guest_contract callback.
@@ -54,8 +69,8 @@ unsafe extern "C" fn noop_find_guest_contract(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::GuestContractHandle {
-    polyplug_abi::GuestContractHandle::null()
+) -> GuestContractHandle {
+    GuestContractHandle::null()
 }
 
 /// No-op find_all_by_contract callback.
@@ -63,16 +78,16 @@ unsafe extern "C" fn noop_find_all_guest_contracts(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::Array<polyplug_abi::GuestContractHandle> {
-    polyplug_abi::Array::empty()
+) -> Array<GuestContractHandle> {
+    Array::empty()
 }
 
 /// No-op resolve_guest_contract callback.
 unsafe extern "C" fn noop_resolve_guest_contract(
     _this: *const HostApi,
-    _handle: polyplug_abi::GuestContractHandle,
+    _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
-    core::ptr::null()
+    ptr::null()
 }
 
 /// No-op get_host_contract callback.
@@ -80,22 +95,18 @@ unsafe extern "C" fn noop_get_host_contract(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::HostContractInstance {
-    polyplug_abi::HostContractInstance::null()
+) -> HostContractInstance {
+    HostContractInstance::null()
 }
 
 /// No-op list_bundles callback.
-unsafe extern "C" fn noop_list_bundles(
-    _this: *const HostApi,
-) -> polyplug_abi::Array<polyplug_utils::BundleId> {
-    polyplug_abi::Array::empty()
+unsafe extern "C" fn noop_list_bundles(_this: *const HostApi) -> Array<BundleId> {
+    Array::empty()
 }
 
 /// No-op get_dependencies callback.
-unsafe extern "C" fn noop_get_dependencies(
-    _this: *const HostApi,
-) -> polyplug_abi::Array<polyplug_abi::DependencyInfo> {
-    polyplug_abi::Array::empty()
+unsafe extern "C" fn noop_get_dependencies(_this: *const HostApi) -> Array<DependencyInfo> {
+    Array::empty()
 }
 
 /// No-op resolve_host_contract_interface callback.
@@ -103,8 +114,8 @@ unsafe extern "C" fn noop_resolve_host_contract_interface(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractInterface {
-    core::ptr::null()
+) -> *const HostContractInterface {
+    ptr::null()
 }
 
 /// No-op load_bundle callback.
@@ -136,7 +147,7 @@ unsafe extern "C" fn noop_reload_bundle(
 /// No-op register_host_contract callback.
 unsafe extern "C" fn noop_register_host_contract(
     _this: *const HostApi,
-    _interface: *const polyplug_abi::HostContractInterface,
+    _interface: *const HostContractInterface,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -148,7 +159,7 @@ unsafe extern "C" fn noop_register_host_contract(
 /// No-op register_loader callback.
 unsafe extern "C" fn noop_register_loader(
     _this: *const HostApi,
-    _loader_ptr: *mut core::ffi::c_void,
+    _loader_ptr: *mut c_void,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -173,7 +184,7 @@ unsafe extern "C" fn noop_get_error_len(_this: *const HostApi) -> usize {
 
 unsafe extern "C" fn noop_unload_bundle(
     _this: *const HostApi,
-    _bundle_id: polyplug_utils::BundleId,
+    _bundle_id: BundleId,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -188,14 +199,13 @@ unsafe extern "C" fn noop_unload_bundle(
 fn rust_plugin_receives_bundle_path() {
     // SAFETY: TEST_PLUGIN_SO is an absolute path to a compiled cdylib.
     // libloading loads it with RTLD_NOW | RTLD_LOCAL semantics.
-    let library: libloading::Library = unsafe {
-        libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library")
-    };
+    let library: Library =
+        unsafe { Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library") };
 
     // Resolve the two-arg polyplug_init symbol.
     // SAFETY: polyplug_init is a C function with signature
     //   `unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError`.
-    let init_fn: libloading::Symbol<
+    let init_fn: Symbol<
         '_,
         unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe {
@@ -207,7 +217,7 @@ fn rust_plugin_receives_bundle_path() {
     // Resolve polyplug_get_last_bundle_path symbol.
     // SAFETY: polyplug_get_last_bundle_path is a C function with signature
     //   `unsafe extern "C" fn() -> StringView`.
-    let get_path_fn: libloading::Symbol<'_, unsafe extern "C" fn() -> StringView> = unsafe {
+    let get_path_fn: Symbol<'_, unsafe extern "C" fn() -> StringView> = unsafe {
         library
             .get(b"polyplug_get_last_bundle_path\0")
             .expect("polyplug_get_last_bundle_path symbol not found")
@@ -215,7 +225,7 @@ fn rust_plugin_receives_bundle_path() {
 
     // Build a HostApi with no-op callbacks.
     let host_interface: HostApi = HostApi {
-        runtime: core::ptr::null_mut(),
+        runtime: ptr::null_mut(),
         register_guest_contract: noop_register,
         alloc: noop_alloc,
         free: noop_free,
@@ -237,7 +247,7 @@ fn rust_plugin_receives_bundle_path() {
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
         revision_counter: stub_revision_counter,
-        reserved: core::ptr::null(),
+        reserved: ptr::null(),
     };
 
     // Build a BundleInitContext with a known bundle_path string.
@@ -282,8 +292,7 @@ fn rust_plugin_receives_bundle_path() {
     // SAFETY: returned_sv.ptr points to the same bundle_path_str bytes that
     // were stored by polyplug_init. bundle_path_str is live for the duration
     // of this test. len was just verified to equal bundle_path_str.len().
-    let returned_bytes: &[u8] =
-        unsafe { core::slice::from_raw_parts(returned_sv.ptr, returned_sv.len) };
+    let returned_bytes: &[u8] = unsafe { slice::from_raw_parts(returned_sv.ptr, returned_sv.len) };
     assert_eq!(
         returned_bytes,
         bundle_path_str.as_bytes(),
@@ -296,37 +305,37 @@ fn rust_plugin_receives_bundle_path() {
     );
 
     // Leak the library -- keeping interface pointers valid until process exit.
-    core::mem::forget(library);
+    mem::forget(library);
 }
 
 /// `HostApi.log` stub for test hosts — drops the record.
 unsafe extern "C" fn stub_host_log(
-    _this: *const polyplug_abi::HostApi,
+    _this: *const HostApi,
     _level: u32,
-    _scope: polyplug_abi::StringView,
-    _message: polyplug_abi::StringView,
+    _scope: StringView,
+    _message: StringView,
 ) {
 }
 
 unsafe extern "C" fn stub_create_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _args: *const core::ffi::c_void,
-    out_instance: *mut polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _args: *const c_void,
+    out_instance: *mut GuestContractInstance,
 ) {
     if !out_instance.is_null() {
         // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+        unsafe { out_instance.write(GuestContractInstance::null()) };
     }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _instance: polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _instance: GuestContractInstance,
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const polyplug_abi::HostApi) -> *const u64 {
-    core::ptr::null()
+unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
+    ptr::null()
 }

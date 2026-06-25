@@ -8,7 +8,11 @@
 //!   `local name = function(...) end`
 
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
+
+#[cfg(test)]
+use core::error::Error;
 
 use tree_sitter::{Node, Parser, Tree};
 
@@ -46,7 +50,7 @@ impl LuaValidator {
     /// Parse a file and extract all function names defined in it.
     fn extract_function_names(&mut self, file: &Path) -> Result<HashSet<String>, ValidatorError> {
         let source: String =
-            std::fs::read_to_string(file).map_err(|source| ValidatorError::FileRead {
+            fs::read_to_string(file).map_err(|source| ValidatorError::FileRead {
                 path: file.to_path_buf(),
                 source,
             })?;
@@ -321,7 +325,7 @@ impl LanguageValidator for LuaValidator {
         file: &Path,
     ) -> Result<Vec<(String, Option<i64>)>, ValidatorError> {
         let source: String =
-            std::fs::read_to_string(file).map_err(|source| ValidatorError::FileRead {
+            fs::read_to_string(file).map_err(|source| ValidatorError::FileRead {
                 path: file.to_path_buf(),
                 source,
             })?;
@@ -348,7 +352,7 @@ impl LanguageValidator for LuaValidator {
         file: &Path,
     ) -> Result<Vec<String>, ValidatorError> {
         let source: String =
-            std::fs::read_to_string(file).map_err(|source| ValidatorError::FileRead {
+            fs::read_to_string(file).map_err(|source| ValidatorError::FileRead {
                 path: file.to_path_buf(),
                 source,
             })?;
@@ -375,17 +379,14 @@ mod tests {
         validate_language_struct,
     };
 
-    fn create_temp_lua_file(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
+    fn create_temp_lua_file(content: &str) -> Result<NamedTempFile, Box<dyn Error>> {
         let mut file: NamedTempFile = NamedTempFile::with_suffix(".lua")?;
         file.write_all(content.as_bytes())?;
         file.flush()?;
         Ok(file)
     }
 
-    fn validate_file(
-        methods: &[String],
-        file: &Path,
-    ) -> Result<ValidationResult, Box<dyn core::error::Error>> {
+    fn validate_file(methods: &[String], file: &Path) -> Result<ValidationResult, Box<dyn Error>> {
         let mut validator: LuaValidator = LuaValidator::new()?;
         let result: ValidationResult = validate_language(
             &mut validator,
@@ -399,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detects_global_function() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_global_function() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 function to_str(sv)
@@ -413,7 +414,7 @@ end
     }
 
     #[test]
-    fn test_detects_table_method_dot() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_table_method_dot() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local M = {}
@@ -429,7 +430,7 @@ return M
     }
 
     #[test]
-    fn test_detects_table_method_colon() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_table_method_colon() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local M = {}
@@ -445,7 +446,7 @@ return M
     }
 
     #[test]
-    fn test_detects_local_function() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_local_function() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local function to_str(sv)
@@ -459,7 +460,7 @@ end
     }
 
     #[test]
-    fn test_detects_nested_table_method() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_nested_table_method() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local helpers = {}
@@ -474,7 +475,7 @@ end
     }
 
     #[test]
-    fn test_detects_assignment_form() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_assignment_form() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local M = {}
@@ -505,7 +506,7 @@ return M
     }
 
     #[test]
-    fn test_assignment_of_non_function_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_assignment_of_non_function_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local M = {}
@@ -519,7 +520,7 @@ return M
     }
 
     #[test]
-    fn test_renamed_definition_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_renamed_definition_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local M = {}
@@ -535,7 +536,7 @@ return M
     }
 
     #[test]
-    fn test_call_site_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_call_site_only_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local M = {}
@@ -552,7 +553,7 @@ return M
     }
 
     #[test]
-    fn test_comment_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_comment_only_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 -- to_str(sv) converts a StringView
@@ -567,7 +568,7 @@ return M
     }
 
     #[test]
-    fn test_unreadable_file_is_error() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_unreadable_file_is_error() -> Result<(), Box<dyn Error>> {
         let mut validator: LuaValidator = LuaValidator::new()?;
         // Bypass validate_language's existence check to exercise FileRead.
         let result: Result<bool, ValidatorError> =
@@ -577,7 +578,7 @@ return M
     }
 
     #[test]
-    fn test_real_sdk_has_all_golden_methods() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_sdk_has_all_golden_methods() -> Result<(), Box<dyn Error>> {
         let sdk_path: PathBuf = repo_path("sdks/lua/abi/abi.lua");
         let result: ValidationResult = validate_file(&golden_methods(), &sdk_path)?;
         assert!(
@@ -592,7 +593,7 @@ return M
     fn validate_enum_file(
         enum_name: &str,
         file: &Path,
-    ) -> Result<EnumValidationResult, Box<dyn core::error::Error>> {
+    ) -> Result<EnumValidationResult, Box<dyn Error>> {
         let mut validator: LuaValidator = LuaValidator::new()?;
         let result: EnumValidationResult = validate_language_enum(
             &mut validator,
@@ -605,7 +606,7 @@ return M
     }
 
     #[test]
-    fn test_enum_table_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_table_exact_match_passes() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local M = {}
@@ -622,8 +623,7 @@ return M
     }
 
     #[test]
-    fn test_enum_table_wrong_value_fails_with_expected_vs_found()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_table_wrong_value_fails_with_expected_vs_found() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local M = {}
@@ -646,8 +646,7 @@ return M
     }
 
     #[test]
-    fn test_enum_table_missing_and_extra_variants_fail() -> Result<(), Box<dyn core::error::Error>>
-    {
+    fn test_enum_table_missing_and_extra_variants_fail() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local M = {}
@@ -671,8 +670,7 @@ return M
     }
 
     #[test]
-    fn test_enum_table_commented_out_variant_does_not_count()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_table_commented_out_variant_does_not_count() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 -- DispatchType has VirtualMachine = 1 per the ABI.
@@ -697,7 +695,7 @@ return M
     }
 
     #[test]
-    fn test_enum_table_other_table_is_not_confused() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_table_other_table_is_not_confused() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local M = {}
@@ -718,7 +716,7 @@ return M
     }
 
     #[test]
-    fn test_enum_cdef_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_cdef_exact_match_passes() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local ffi = require("ffi")
@@ -736,8 +734,7 @@ ffi.cdef[[
     }
 
     #[test]
-    fn test_enum_cdef_wrong_value_fails_with_expected_vs_found()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_cdef_wrong_value_fails_with_expected_vs_found() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local ffi = require("ffi")
@@ -761,7 +758,7 @@ ffi.cdef[[
     }
 
     #[test]
-    fn test_enum_cdef_missing_and_extra_variants_fail() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_cdef_missing_and_extra_variants_fail() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local ffi = require("ffi")
@@ -786,8 +783,7 @@ ffi.cdef[[
     }
 
     #[test]
-    fn test_enum_cdef_commented_out_variant_does_not_count()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_cdef_commented_out_variant_does_not_count() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local ffi = require("ffi")
@@ -812,7 +808,7 @@ ffi.cdef[[
     }
 
     #[test]
-    fn test_real_abi_cdef_matches_golden_enums() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_abi_cdef_matches_golden_enums() -> Result<(), Box<dyn Error>> {
         let path: PathBuf = repo_path("sdks/lua/abi/abi.lua");
         for enum_name in [
             "AbiErrorCode",
@@ -827,7 +823,7 @@ ffi.cdef[[
     }
 
     #[test]
-    fn test_real_guest_tables_match_golden_enums() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_guest_tables_match_golden_enums() -> Result<(), Box<dyn Error>> {
         let path: PathBuf = repo_path("sdks/lua/guest/polyplug_guest.lua");
         for enum_name in ["AbiErrorCode", "DispatchType", "LogLevel"] {
             let result: EnumValidationResult = validate_enum_file(enum_name, &path)?;
@@ -840,7 +836,7 @@ ffi.cdef[[
         struct_name: &str,
         golden_fields: &[String],
         file: &Path,
-    ) -> Result<StructFieldValidationResult, Box<dyn core::error::Error>> {
+    ) -> Result<StructFieldValidationResult, Box<dyn Error>> {
         let mut validator: LuaValidator = LuaValidator::new()?;
         let result: StructFieldValidationResult = validate_language_struct(
             &mut validator,
@@ -853,7 +849,7 @@ ffi.cdef[[
     }
 
     #[test]
-    fn test_struct_cdef_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_cdef_exact_match_passes() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local ffi = require("ffi")
@@ -874,8 +870,7 @@ ffi.cdef[[
     }
 
     #[test]
-    fn test_struct_cdef_renamed_field_is_missing_and_extra()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_cdef_renamed_field_is_missing_and_extra() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local ffi = require("ffi")
@@ -902,8 +897,7 @@ ffi.cdef[[
     }
 
     #[test]
-    fn test_struct_cdef_forward_declaration_does_not_match()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_cdef_forward_declaration_does_not_match() -> Result<(), Box<dyn Error>> {
         // A bodyless forward declaration must yield no fields.
         let file: NamedTempFile = create_temp_lua_file(
             r#"
@@ -925,7 +919,7 @@ ffi.cdef[[
     }
 
     #[test]
-    fn test_struct_cdef_comment_field_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_cdef_comment_field_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local ffi = require("ffi")
@@ -947,7 +941,7 @@ ffi.cdef[[
     }
 
     #[test]
-    fn test_struct_cdef_other_struct_not_confused() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_cdef_other_struct_not_confused() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_lua_file(
             r#"
 local ffi = require("ffi")
@@ -970,7 +964,7 @@ ffi.cdef[[
     }
 
     #[test]
-    fn test_real_abi_cdef_structs_match_golden() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_abi_cdef_structs_match_golden() -> Result<(), Box<dyn Error>> {
         let path: PathBuf = repo_path("sdks/lua/abi/abi.lua");
         for struct_name in ["StringView", "AbiError"] {
             let result: StructFieldValidationResult =

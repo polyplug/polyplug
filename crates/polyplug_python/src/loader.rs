@@ -113,16 +113,23 @@
 //! callable) through its own call frame — not a shared mutable cell — the inner
 //! call's arena and the outer call's arena never alias or clear one another.
 
+use core::ffi::c_void;
+use core::ptr;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
 
 use pyo3::Bound;
 use pyo3::Py;
 use pyo3::PyAny;
+use pyo3::PyErr;
+use pyo3::PyResult;
 use pyo3::Python;
 use pyo3::types::PyAnyMethods;
+use pyo3::types::PyCFunction;
+use pyo3::types::PyDict;
 use pyo3::types::PyList;
 use pyo3::types::PyListMethods;
 use pyo3::types::PyTuple;
@@ -234,7 +241,7 @@ unsafe extern "C" fn python_create_instance(
                         Ok(mut map) => {
                             map.insert(id, impl_obj.unbind());
                             GuestContractInstance {
-                                data: id as usize as *mut core::ffi::c_void,
+                                data: id as usize as *mut c_void,
                                 contract_id: data.contract_id,
                             }
                         }
@@ -361,16 +368,15 @@ unsafe fn python_vm_dispatch_impl(
         let impl_py: Py<PyAny> = if instance_id == 0 {
             data.default_impl.clone_ref(py)
         } else {
-            let map: std::sync::MutexGuard<'_, HashMap<u64, Py<PyAny>>> =
-                match data.instances.lock() {
-                    Ok(g) => g,
-                    Err(_) => {
-                        return AbiError {
-                            code: AbiErrorCode::Generic as u32,
-                            message: StringView::null(),
-                        };
-                    }
-                };
+            let map: MutexGuard<'_, HashMap<u64, Py<PyAny>>> = match data.instances.lock() {
+                Ok(g) => g,
+                Err(_) => {
+                    return AbiError {
+                        code: AbiErrorCode::Generic as u32,
+                        message: StringView::null(),
+                    };
+                }
+            };
             match map.get(&instance_id) {
                 Some(obj) => obj.clone_ref(py),
                 None => {
@@ -389,7 +395,7 @@ unsafe fn python_vm_dispatch_impl(
         // dispatch cannot overwrite or clear this call's arena.
         let arena_alloc: Bound<'_, PyAny> = data.arena_alloc.bind(py).clone();
         let bound: Bound<'_, PyAny> = callable.bind(py).clone();
-        let call_result: Result<Bound<'_, PyAny>, pyo3::PyErr> =
+        let call_result: Result<Bound<'_, PyAny>, PyErr> =
             bound.call((impl_py, args_int, out_int, arena_int, arena_alloc), None);
 
         match call_result {
@@ -694,7 +700,7 @@ pub(crate) fn register_contracts(
                 vm: VmDispatch {
                     call: python_vm_dispatch,
                     loader_data: VmLoaderData {
-                        data: loader_data_ptr as *mut core::ffi::c_void,
+                        data: loader_data_ptr as *mut c_void,
                     },
                 },
             },
@@ -791,7 +797,7 @@ fn build_arena_bridge<'py>(
         let ptr: *mut u8 = if arena.is_null() {
             let host: *const HostApi = host_addr as *const HostApi;
             if host.is_null() {
-                core::ptr::null_mut()
+                ptr::null_mut()
             } else {
                 // SAFETY: host points to 'static HostApi data for the runtime
                 // lifetime; align 1 is valid for raw byte buffers.
@@ -806,20 +812,18 @@ fn build_arena_bridge<'py>(
         ptr as usize as i64
     };
 
-    pyo3::types::PyCFunction::new_closure(
+    PyCFunction::new_closure(
         py,
         None,
         None,
-        move |args: &Bound<'_, pyo3::types::PyTuple>,
-              _kwargs: Option<&Bound<'_, pyo3::types::PyDict>>|
-              -> pyo3::PyResult<i64> {
+        move |args: &Bound<'_, PyTuple>, _kwargs: Option<&Bound<'_, PyDict>>| -> PyResult<i64> {
             let size: u32 = args.get_item(0)?.extract::<u32>()?;
             let arena_addr: usize = args.get_item(1)?.extract::<usize>()?;
             Ok(closure(size, arena_addr))
         },
     )
-    .map(|f: Bound<'_, pyo3::types::PyCFunction>| f.into_any())
-    .map_err(|e: pyo3::PyErr| LoaderError::InitFailed {
+    .map(|f: Bound<'_, PyCFunction>| f.into_any())
+    .map_err(|e: PyErr| LoaderError::InitFailed {
         bundle: bundle_name.to_owned(),
         error: format!("failed to create arena_alloc bridge: {}", e),
     })

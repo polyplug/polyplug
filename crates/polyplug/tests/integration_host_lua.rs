@@ -7,8 +7,12 @@
 //!
 //! Tests requiring native plugin loading are in tests/integration/ffi_native.rs.
 
+use core::ptr;
+
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
+use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::HostApi;
 
 fn read_last_error(host: *const HostApi) -> String {
@@ -26,7 +30,7 @@ fn read_last_error(host: *const HostApi) -> String {
 #[test]
 fn test_runtime_new_succeeds() {
     // SAFETY: polyplug_runtime_create has no preconditions.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
     assert!(!host.is_null(), "polyplug_runtime_create returned null");
     // SAFETY: host is non-null, returned by polyplug_runtime_create.
     unsafe { polyplug_runtime_destroy(host) };
@@ -35,15 +39,15 @@ fn test_runtime_new_succeeds() {
 #[test]
 fn test_last_error_after_failed_load() {
     // SAFETY: polyplug_runtime_create has no preconditions.
-    let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
     assert!(!host.is_null());
     let bad_path: &[u8] = b"/does/not/exist";
-    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+    let mut result: AbiError = AbiError::ok();
     // SAFETY: host is non-null; bad_path ptr/len are valid for the slice.
     unsafe { ((*host).load_bundle)(host, bad_path.as_ptr(), bad_path.len(), &mut result) };
     assert_ne!(
         result.code,
-        polyplug_abi::AbiErrorCode::Ok as u32,
+        AbiErrorCode::Ok as u32,
         "Expected failure for non-existent path"
     );
     let err: String = read_last_error(host);

@@ -24,8 +24,14 @@
 //! - `get_last_error`, `get_error_len` — error handling
 //! - `alloc`, `free` — memory management
 
+use core::panic::AssertUnwindSafe;
+use std::panic::catch_unwind;
+use std::sync::Arc;
+
+use core::ptr;
+
 use polyplug_abi::HostApi;
-use polyplug_abi::runtime::RuntimeConfig;
+use polyplug_abi::runtime::{ReloadPhase, RuntimeConfig};
 
 use crate::runtime::Runtime;
 
@@ -49,7 +55,7 @@ use crate::runtime::Runtime;
 /// must be called **exactly once** for each non-null pointer returned here.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_create(config: *const RuntimeConfig) -> *const HostApi {
-    std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
+    catch_unwind(AssertUnwindSafe(|| {
         let mut builder = Runtime::builder();
 
         if !config.is_null() {
@@ -65,12 +71,7 @@ pub unsafe extern "C" fn polyplug_runtime_create(config: *const RuntimeConfig) -
                     // pointer to a ReloadPhase that lives on this stack frame for the
                     // whole call — the ABI contract only requires the pointee to be valid
                     // for the duration of the callback.
-                    unsafe {
-                        cb(
-                            user_data,
-                            &phase as *const polyplug_abi::runtime::ReloadPhase,
-                        )
-                    };
+                    unsafe { cb(user_data, &phase as *const ReloadPhase) };
                 });
             }
         }
@@ -83,7 +84,7 @@ pub unsafe extern "C" fn polyplug_runtime_create(config: *const RuntimeConfig) -
                 // Runtime (its `host_abi` box), so this pointer stays valid until
                 // `polyplug_runtime_destroy` drops the Arc and, with it, the Runtime.
                 let host_abi: *const HostApi = rt.host_abi();
-                let runtime_ptr: *const Runtime = std::sync::Arc::into_raw(rt);
+                let runtime_ptr: *const Runtime = Arc::into_raw(rt);
 
                 // The HostApi.runtime field must already equal the Arc target.
                 // SAFETY: `host_abi` is the runtime-owned HostApi pointer; the Arc
@@ -98,10 +99,10 @@ pub unsafe extern "C" fn polyplug_runtime_create(config: *const RuntimeConfig) -
 
                 host_abi
             }
-            Err(_) => core::ptr::null(),
+            Err(_) => ptr::null(),
         }
     }))
-    .unwrap_or(core::ptr::null())
+    .unwrap_or(ptr::null())
 }
 
 /// Destroys a runtime instance.
@@ -114,7 +115,7 @@ pub unsafe extern "C" fn polyplug_runtime_create(config: *const RuntimeConfig) -
 /// dangling and must not be used.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_destroy(host: *const HostApi) {
-    std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
+    catch_unwind(AssertUnwindSafe(|| {
         if !host.is_null() {
             // Exactly-once contract: this is the sole legitimate destroy of `host`.
             // Read the `runtime` field, reconstruct the `Arc<Runtime>` handed out by
@@ -132,8 +133,7 @@ pub unsafe extern "C" fn polyplug_runtime_destroy(host: *const HostApi) {
             let runtime_ptr: *const Runtime = unsafe { (*host).runtime as *const Runtime };
             if !runtime_ptr.is_null() {
                 // SAFETY: see above — balances the `Arc::into_raw` from create.
-                let _runtime: std::sync::Arc<Runtime> =
-                    unsafe { std::sync::Arc::from_raw(runtime_ptr) };
+                let _runtime: Arc<Runtime> = unsafe { Arc::from_raw(runtime_ptr) };
             }
         }
     }))
@@ -143,13 +143,20 @@ pub unsafe extern "C" fn polyplug_runtime_destroy(host: *const HostApi) {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
+    use core::ptr;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+
+    use polyplug_abi::runtime::Compatibility;
+    use polyplug_abi::{AbiError, AbiErrorCode, GuestContractHandle};
+
     use super::*;
-    use polyplug_abi::AbiErrorCode;
 
     #[test]
     fn test_runtime_new_and_free() {
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
-        let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+        let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host.is_null());
         // SAFETY: host was returned by polyplug_runtime_create and is non-null.
         unsafe { polyplug_runtime_destroy(host) };
@@ -158,9 +165,9 @@ mod tests {
     #[test]
     fn multiple_ffi_runtimes_are_isolated() {
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
-        let host1: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+        let host1: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
-        let host2: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+        let host2: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host1.is_null());
         assert!(!host2.is_null());
         assert_ne!(host1, host2);
@@ -169,9 +176,9 @@ mod tests {
         // fails and records a per-runtime last_error. Runtime 2 is left untouched.
         // SAFETY: host1 is a valid HostApi; passing a null path is the path
         // explicitly handled by host_load_bundle (sets last_error, returns error).
-        let mut rc1: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+        let mut rc1: AbiError = AbiError::ok();
         // SAFETY: rc1 is a valid, writable out-param for the load_bundle result.
-        unsafe { ((*host1).load_bundle)(host1, core::ptr::null(), 0, &mut rc1) };
+        unsafe { ((*host1).load_bundle)(host1, ptr::null(), 0, &mut rc1) };
         assert_eq!(rc1.code, AbiErrorCode::InvalidPointer as u32);
 
         // Runtime 1 must now observe its own error; runtime 2 must observe none —
@@ -192,9 +199,9 @@ mod tests {
         // The reverse: drive a different error into runtime 2 and confirm runtime 1's
         // error is unaffected (each keeps its own most-recent error independently).
         // SAFETY: host2 is valid; null path is the handled error path.
-        let mut rc2: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+        let mut rc2: AbiError = AbiError::ok();
         // SAFETY: rc2 is a valid, writable out-param for the load_bundle result.
-        unsafe { ((*host2).load_bundle)(host2, core::ptr::null(), 0, &mut rc2) };
+        unsafe { ((*host2).load_bundle)(host2, ptr::null(), 0, &mut rc2) };
         assert_eq!(rc2.code, AbiErrorCode::InvalidPointer as u32);
         // SAFETY: both hosts valid.
         let len2_after: usize = unsafe { ((*host2).get_error_len)(host2) };
@@ -210,20 +217,18 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_with_config() {
-        use polyplug_abi::runtime::Compatibility;
-
         let config1: RuntimeConfig = RuntimeConfig {
             compatibility: Compatibility::Strict,
             hot_reload_enabled: true,
             on_reload: None,
-            on_reload_user_data: core::ptr::null_mut(),
+            on_reload_user_data: ptr::null_mut(),
             ..Default::default()
         };
         let config2: RuntimeConfig = RuntimeConfig {
             compatibility: Compatibility::Relaxed,
             hot_reload_enabled: false,
             on_reload: None,
-            on_reload_user_data: core::ptr::null_mut(),
+            on_reload_user_data: ptr::null_mut(),
             ..Default::default()
         };
 
@@ -247,12 +252,12 @@ mod tests {
     #[test]
     fn host_interface_load_bundle_returns_error_on_null() {
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
-        let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+        let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host.is_null());
 
-        let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+        let mut result: AbiError = AbiError::ok();
         // SAFETY: host is valid, testing null path handling; result is a valid out-param.
-        unsafe { ((*host).load_bundle)(host, core::ptr::null(), 0, &mut result) };
+        unsafe { ((*host).load_bundle)(host, ptr::null(), 0, &mut result) };
         assert_eq!(result.code, AbiErrorCode::InvalidPointer as u32);
 
         // SAFETY: host was returned by polyplug_runtime_create and is destroyed once.
@@ -262,7 +267,7 @@ mod tests {
     #[test]
     fn host_interface_find_guest_contract_returns_null_on_empty_registry() {
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
-        let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+        let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host.is_null());
 
         // SAFETY: host is valid, testing empty registry behavior
@@ -276,7 +281,7 @@ mod tests {
     #[test]
     fn host_interface_get_error_len_on_clean_runtime() {
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
-        let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+        let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host.is_null());
 
         // SAFETY: host is valid, no error set yet
@@ -289,10 +294,6 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_concurrent_operations() {
-        use core::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
-        use std::thread;
-
         let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
 
         let handles: Vec<thread::JoinHandle<()>> = (0..4)
@@ -301,8 +302,7 @@ mod tests {
                 thread::spawn(move || {
                     for _ in 0..10 {
                         // SAFETY: polyplug_runtime_create has no pointer preconditions.
-                        let host: *const HostApi =
-                            unsafe { polyplug_runtime_create(core::ptr::null()) };
+                        let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
                         if !host.is_null() {
                             success.fetch_add(1, Ordering::SeqCst);
                             // SAFETY: host was returned by create and is destroyed once.
@@ -323,19 +323,19 @@ mod tests {
     #[test]
     fn multiple_ffi_runtimes_lifecycle_interleaved() {
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
-        let host1: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+        let host1: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host1.is_null());
         // SAFETY: host1 was returned by create and is destroyed once.
         unsafe { polyplug_runtime_destroy(host1) };
 
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
-        let host2: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+        let host2: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host2.is_null());
         // SAFETY: host2 was returned by create and is destroyed once.
         unsafe { polyplug_runtime_destroy(host2) };
 
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
-        let host3: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+        let host3: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host3.is_null());
         // SAFETY: host3 was returned by create and is destroyed once.
         unsafe { polyplug_runtime_destroy(host3) };
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn ffi_runtime_create_with_null_options() {
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
-        let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+        let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host.is_null());
         // SAFETY: host was returned by create and is destroyed once.
         unsafe { polyplug_runtime_destroy(host) };
@@ -353,15 +353,11 @@ mod tests {
     #[test]
     fn ffi_runtime_destroy_null_is_safe() {
         // SAFETY: polyplug_runtime_destroy explicitly accepts and ignores a null pointer.
-        unsafe { polyplug_runtime_destroy(core::ptr::null()) };
+        unsafe { polyplug_runtime_destroy(ptr::null()) };
     }
 
     #[test]
     fn multiple_ffi_runtimes_parallel_mixed_ops() {
-        use core::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
-        use std::thread;
-
         let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
         let error_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
 
@@ -371,13 +367,12 @@ mod tests {
                 let errors: Arc<AtomicUsize> = Arc::clone(&error_count);
                 thread::spawn(move || {
                     // SAFETY: polyplug_runtime_create has no pointer preconditions.
-                    let host: *const HostApi =
-                        unsafe { polyplug_runtime_create(core::ptr::null()) };
+                    let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
                     if host.is_null() {
                         return;
                     }
 
-                    let mut result: polyplug_abi::AbiError = polyplug_abi::AbiError::ok();
+                    let mut result: AbiError = AbiError::ok();
                     // SAFETY: host is valid, testing load_bundle error handling;
                     // result is a valid, writable out-param.
                     unsafe { ((*host).load_bundle)(host, b"/bad".as_ptr(), 4, &mut result) };
@@ -407,10 +402,10 @@ mod tests {
     #[test]
     fn host_interface_resolve_guest_contract_returns_null_on_null_handle() {
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
-        let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+        let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host.is_null());
 
-        let null_handle = polyplug_abi::GuestContractHandle::null();
+        let null_handle = GuestContractHandle::null();
         // SAFETY: host is valid, testing null handle behavior
         let interface = unsafe { ((*host).resolve_guest_contract)(host, null_handle) };
         assert!(interface.is_null());
@@ -422,7 +417,7 @@ mod tests {
     #[test]
     fn host_interface_has_runtime_pointer() {
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
-        let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+        let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host.is_null());
 
         // SAFETY: host is valid, checking runtime pointer is set
@@ -436,7 +431,7 @@ mod tests {
     #[test]
     fn host_interface_has_all_operation_fields() {
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
-        let host: *const HostApi = unsafe { polyplug_runtime_create(core::ptr::null()) };
+        let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host.is_null());
 
         // SAFETY: host is valid, verifying all fields are non-null function pointers

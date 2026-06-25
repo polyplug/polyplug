@@ -1,3 +1,5 @@
+use core::fmt;
+
 /// Log severity levels for the host-supplied logger callback (`RuntimeConfig::log`).
 ///
 /// Numeric ordering is significant: lower values are more severe. A message is
@@ -17,8 +19,8 @@ pub enum LogLevel {
     Trace = 5,
 }
 
-impl core::fmt::Display for LogLevel {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl fmt::Display for LogLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LogLevel::Error => write!(f, "Error"),
             LogLevel::Warn => write!(f, "Warn"),

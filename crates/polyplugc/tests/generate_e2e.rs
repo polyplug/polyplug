@@ -20,9 +20,16 @@
 
 #![allow(clippy::expect_used)]
 
+use std::borrow::Cow;
+use std::ffi::OsStr;
+use std::fs;
+use std::fs::DirEntry;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Output;
+use tempfile::TempDir;
+use tempfile::tempdir;
 
 /// Absolute path to the repository root, derived from this crate's manifest dir
 /// (`<repo>/crates/polyplugc`).
@@ -74,7 +81,7 @@ fn polyplug_utils_path() -> PathBuf {
 }
 
 /// Run the `polyplugc` binary with `args`, returning the captured output.
-fn run_polyplugc(args: &[&std::ffi::OsStr]) -> std::process::Output {
+fn run_polyplugc(args: &[&OsStr]) -> Output {
     let bin: &str = env!("CARGO_BIN_EXE_polyplugc");
     Command::new(bin)
         .args(args)
@@ -88,13 +95,13 @@ fn run_polyplugc(args: &[&std::ffi::OsStr]) -> std::process::Output {
 
 #[test]
 fn rust_generated_glue_compiles() {
-    let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    let tmp: TempDir = tempdir().expect("tempdir");
     let project_dir: PathBuf = tmp.path().join("plugin");
     let gen_dir: PathBuf = project_dir.join("gen");
-    std::fs::create_dir_all(project_dir.join("src")).expect("create src dir");
+    fs::create_dir_all(project_dir.join("src")).expect("create src dir");
 
     // Generate the guest glue into <project>/gen via the CLI.
-    let output: std::process::Output = run_polyplugc(&[
+    let output: Output = run_polyplugc(&[
         "generate".as_ref(),
         "--bundle".as_ref(),
         example_bundle_toml().as_os_str(),
@@ -141,7 +148,7 @@ fn rust_generated_glue_compiles() {
             .to_string()
             .replace('\\', "\\\\")
     );
-    std::fs::write(project_dir.join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
+    fs::write(project_dir.join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
 
     // src/lib.rs includes the generated glue verbatim and provides the minimal
     // plugin entry points. This is the only hand-written file.
@@ -176,12 +183,12 @@ fn rust_generated_glue_compiles() {
          pub extern \"C\" fn polyplug_abi_version() -> u32 {\n\
          polyplug_abi::POLYPLUG_ABI_VERSION\n\
          }\n";
-    std::fs::write(project_dir.join("src/lib.rs"), lib_rs).expect("write src/lib.rs");
+    fs::write(project_dir.join("src/lib.rs"), lib_rs).expect("write src/lib.rs");
 
     // Per-test target dir inside the tempdir to avoid contending on the
     // workspace target lock while the outer test run holds it.
     let target_dir: PathBuf = tmp.path().join("target");
-    let build: std::process::Output = Command::new(env!("CARGO"))
+    let build: Output = Command::new(env!("CARGO"))
         .arg("build")
         .arg("--manifest-path")
         .arg(project_dir.join("Cargo.toml"))
@@ -196,10 +203,10 @@ fn rust_generated_glue_compiles() {
         String::from_utf8_lossy(&build.stderr),
     );
 
-    let produced_cdylib: bool = std::fs::read_dir(target_dir.join("debug"))
+    let produced_cdylib: bool = fs::read_dir(target_dir.join("debug"))
         .expect("debug output dir must exist after a successful build")
         .filter_map(Result::ok)
-        .any(|entry: std::fs::DirEntry| {
+        .any(|entry: DirEntry| {
             let name: String = entry.file_name().to_string_lossy().into_owned();
             name.contains("plugin")
                 && (name.ends_with(".so") || name.ends_with(".dylib") || name.ends_with(".dll"))
@@ -221,7 +228,7 @@ fn rust_generated_glue_compiles() {
 /// Generate the bundle manifest (and guest glue) for the decoder fixture into
 /// `out_dir` via the CLI.
 fn generate_manifest_into(out_dir: &Path) {
-    let output: std::process::Output = run_polyplugc(&[
+    let output: Output = run_polyplugc(&[
         "generate".as_ref(),
         "--bundle".as_ref(),
         example_bundle_toml().as_os_str(),
@@ -249,14 +256,14 @@ fn validate_bundle_dir_accepts_correct_bundle() {
     if !is_supported_platform() {
         return;
     }
-    let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    let tmp: TempDir = tempdir().expect("tempdir");
     let dir: PathBuf = tmp.path().join("dist");
-    std::fs::create_dir_all(&dir).expect("create dist dir");
+    fs::create_dir_all(&dir).expect("create dist dir");
 
     generate_manifest_into(&dir);
-    std::fs::write(dir.join(DECLARED_ARTIFACT), b"dummy").expect("write artifact");
+    fs::write(dir.join(DECLARED_ARTIFACT), b"dummy").expect("write artifact");
 
-    let output: std::process::Output = run_polyplugc(&[
+    let output: Output = run_polyplugc(&[
         "validate".as_ref(),
         "--bundle-dir".as_ref(),
         dir.as_os_str(),
@@ -279,14 +286,14 @@ fn validate_bundle_dir_rejects_missing_artifact() {
     if !is_supported_platform() {
         return;
     }
-    let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    let tmp: TempDir = tempdir().expect("tempdir");
     let dir: PathBuf = tmp.path().join("dist");
-    std::fs::create_dir_all(&dir).expect("create dist dir");
+    fs::create_dir_all(&dir).expect("create dist dir");
 
     // Manifest only — the declared artifact is intentionally absent.
     generate_manifest_into(&dir);
 
-    let output: std::process::Output = run_polyplugc(&[
+    let output: Output = run_polyplugc(&[
         "validate".as_ref(),
         "--bundle-dir".as_ref(),
         dir.as_os_str(),
@@ -295,7 +302,7 @@ fn validate_bundle_dir_rejects_missing_artifact() {
         !output.status.success(),
         "validate --bundle-dir must fail when the entry artifact is missing",
     );
-    let stderr: std::borrow::Cow<'_, str> = String::from_utf8_lossy(&output.stderr);
+    let stderr: Cow<'_, str> = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("file") && stderr.contains("does not exist"),
         "error must name the missing `file`, got:\n{stderr}",
@@ -307,16 +314,16 @@ fn validate_bundle_dir_rejects_tampered_id() {
     if !is_supported_platform() {
         return;
     }
-    let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    let tmp: TempDir = tempdir().expect("tempdir");
     let dir: PathBuf = tmp.path().join("dist");
-    std::fs::create_dir_all(&dir).expect("create dist dir");
+    fs::create_dir_all(&dir).expect("create dist dir");
 
     generate_manifest_into(&dir);
-    std::fs::write(dir.join(DECLARED_ARTIFACT), b"dummy").expect("write artifact");
+    fs::write(dir.join(DECLARED_ARTIFACT), b"dummy").expect("write artifact");
 
     // Tamper: rewrite the `id` line so it no longer equals fnv1a_64(name).
     let manifest_path: PathBuf = dir.join("manifest.toml");
-    let original: String = std::fs::read_to_string(&manifest_path).expect("read manifest");
+    let original: String = fs::read_to_string(&manifest_path).expect("read manifest");
     let tampered: String = original
         .lines()
         .map(|line: &str| {
@@ -329,9 +336,9 @@ fn validate_bundle_dir_rejects_tampered_id() {
         .collect::<Vec<String>>()
         .join("\n");
     assert_ne!(original, tampered, "tamper step must change the manifest");
-    std::fs::write(&manifest_path, tampered).expect("write tampered manifest");
+    fs::write(&manifest_path, tampered).expect("write tampered manifest");
 
-    let output: std::process::Output = run_polyplugc(&[
+    let output: Output = run_polyplugc(&[
         "validate".as_ref(),
         "--bundle-dir".as_ref(),
         dir.as_os_str(),
@@ -340,7 +347,7 @@ fn validate_bundle_dir_rejects_tampered_id() {
         !output.status.success(),
         "validate --bundle-dir must fail when the manifest `id` is tampered",
     );
-    let stderr: std::borrow::Cow<'_, str> = String::from_utf8_lossy(&output.stderr);
+    let stderr: Cow<'_, str> = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("tamper") || stderr.contains("id") || stderr.contains("expected"),
         "error must signal an id/tamper mismatch, got:\n{stderr}",
@@ -366,13 +373,13 @@ fn validate_bundle_dir_rejects_tampered_id() {
 
 #[test]
 fn host_thunk_empty_stringview_round_trips() {
-    let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    let tmp: TempDir = tempdir().expect("tempdir");
     let project_dir: PathBuf = tmp.path().join("driver");
     let gen_dir: PathBuf = project_dir.join("gen");
-    std::fs::create_dir_all(project_dir.join("src")).expect("create src dir");
+    fs::create_dir_all(project_dir.join("src")).expect("create src dir");
 
     // Generate the HOST glue (includes host/interface_factories.rs with the thunk).
-    let output: std::process::Output = run_polyplugc(&[
+    let output: Output = run_polyplugc(&[
         "generate".as_ref(),
         "--api".as_ref(),
         example_api_toml().as_os_str(),
@@ -414,7 +421,7 @@ fn host_thunk_empty_stringview_round_trips() {
             .to_string()
             .replace('\\', "\\\\")
     );
-    std::fs::write(project_dir.join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
+    fs::write(project_dir.join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
 
     // The only hand-written file. It includes the generated host glue verbatim,
     // builds the logger interface, fetches the `log` thunk from the native
@@ -471,10 +478,10 @@ fn host_thunk_empty_stringview_round_trips() {
          assert!(GOT_EMPTY.load(Ordering::SeqCst), \"null StringView must decode to an empty &str\");\n\
          println!(\"OK: null StringView round-tripped to empty &str\");\n\
          }\n";
-    std::fs::write(project_dir.join("src/main.rs"), main_rs).expect("write src/main.rs");
+    fs::write(project_dir.join("src/main.rs"), main_rs).expect("write src/main.rs");
 
     let target_dir: PathBuf = tmp.path().join("target");
-    let run: std::process::Output = Command::new(env!("CARGO"))
+    let run: Output = Command::new(env!("CARGO"))
         .arg("run")
         .arg("--manifest-path")
         .arg(project_dir.join("Cargo.toml"))

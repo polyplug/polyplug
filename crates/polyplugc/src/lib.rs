@@ -3,22 +3,34 @@ pub mod ir;
 pub mod parser;
 pub mod validate;
 
+use std::ffi::OsStr;
 use std::fs;
+use std::io;
 use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
+use std::process;
 
 use crate::ir::ValidatedIr;
+use generators::cpp::CppGenerator;
+use generators::csharp::CSharpGenerator;
+use generators::js_quickjs::JsQuickjsGenerator;
+use generators::lua::LuaGenerator;
+use generators::python::PythonGenerator;
+use generators::rust::RustGenerator;
 use generators::{CodeGenerator, GeneratedFile as InternalGeneratedFile, GeneratedFiles};
-use polyplug_codegen::{GenerateConfig, GenerateOutput, Lang, PolyplugcError, Side};
+use polyplug_codegen::{
+    GenerateConfig, GenerateOutput, GeneratedFile as PublicGeneratedFile, Lang, PolyplugcError,
+    Side,
+};
 
 pub fn generate(config: GenerateConfig) -> Result<GenerateOutput, PolyplugcError> {
-    let file_content: String =
-        fs::read_to_string(&config.api_toml).map_err(|e: std::io::Error| {
-            PolyplugcError::ReadFailed {
-                path: config.api_toml.to_string_lossy().to_string(),
-                source: e,
-            }
-        })?;
+    let file_content: String = fs::read_to_string(&config.api_toml).map_err(|e: io::Error| {
+        PolyplugcError::ReadFailed {
+            path: config.api_toml.to_string_lossy().to_string(),
+            source: e,
+        }
+    })?;
     let ir: ValidatedIr = if file_content.contains("[bundle]") {
         parser::parse_bundle_with_api(&config.api_toml)?
     } else {
@@ -26,12 +38,12 @@ pub fn generate(config: GenerateConfig) -> Result<GenerateOutput, PolyplugcError
     };
 
     let generator: Box<dyn CodeGenerator> = match config.lang {
-        Lang::Rust => Box::new(generators::rust::RustGenerator),
-        Lang::Cpp => Box::new(generators::cpp::CppGenerator),
-        Lang::CSharp => Box::new(generators::csharp::CSharpGenerator),
-        Lang::Python => Box::new(generators::python::PythonGenerator),
-        Lang::Lua => Box::new(generators::lua::LuaGenerator),
-        Lang::JsQuickJs => Box::new(generators::js_quickjs::JsQuickjsGenerator),
+        Lang::Rust => Box::new(RustGenerator),
+        Lang::Cpp => Box::new(CppGenerator),
+        Lang::CSharp => Box::new(CSharpGenerator),
+        Lang::Python => Box::new(PythonGenerator),
+        Lang::Lua => Box::new(LuaGenerator),
+        Lang::JsQuickJs => Box::new(JsQuickjsGenerator),
     };
 
     let mut files: GeneratedFiles = GeneratedFiles::default();
@@ -40,10 +52,10 @@ pub fn generate(config: GenerateConfig) -> Result<GenerateOutput, PolyplugcError
         Side::Guest => generator.generate_guest(&ir, &mut files)?,
     }
 
-    let public_files: Vec<polyplug_codegen::GeneratedFile> = files
+    let public_files: Vec<PublicGeneratedFile> = files
         .files
         .into_iter()
-        .map(|f: InternalGeneratedFile| polyplug_codegen::GeneratedFile {
+        .map(|f: InternalGeneratedFile| PublicGeneratedFile {
             path: f.path,
             content: f.content,
             force_regenerate: f.force_regenerate,
@@ -77,7 +89,7 @@ pub fn write_output(
 ) -> Result<WriteSummary, PolyplugcError> {
     let mut summary: WriteSummary = WriteSummary::default();
     for file in &output.files {
-        let file_path: std::path::PathBuf = out_dir.join(&file.path);
+        let file_path: PathBuf = out_dir.join(&file.path);
         let final_content: String = format_for_disk(&file_path, &file.content);
 
         if !file.force_regenerate {
@@ -90,14 +102,12 @@ pub fn write_output(
         }
 
         if let Some(parent) = file_path.parent() {
-            fs::create_dir_all(parent).map_err(|e: std::io::Error| {
-                PolyplugcError::WriteFailed {
-                    path: parent.to_string_lossy().into_owned(),
-                    source: e,
-                }
+            fs::create_dir_all(parent).map_err(|e: io::Error| PolyplugcError::WriteFailed {
+                path: parent.to_string_lossy().into_owned(),
+                source: e,
             })?;
         }
-        fs::write(&file_path, &final_content).map_err(|e: std::io::Error| {
+        fs::write(&file_path, &final_content).map_err(|e: io::Error| {
             PolyplugcError::WriteFailed {
                 path: file_path.to_string_lossy().into_owned(),
                 source: e,
@@ -114,7 +124,7 @@ pub fn write_output(
 /// absent or exits non-zero (e.g. generated code cargo will reject anyway), the
 /// unformatted source is returned unchanged.
 fn format_for_disk(path: &Path, content: &str) -> String {
-    let is_rust: bool = path.extension().and_then(|e: &std::ffi::OsStr| e.to_str()) == Some("rs");
+    let is_rust: bool = path.extension().and_then(|e: &OsStr| e.to_str()) == Some("rs");
     if !is_rust {
         return content.to_owned();
     }
@@ -125,18 +135,18 @@ fn format_for_disk(path: &Path, content: &str) -> String {
 /// `None` if rustfmt is unavailable or exits non-zero. stdin is closed before the
 /// output is collected so rustfmt observes EOF and cannot deadlock.
 fn rustfmt_stdin(content: &str) -> Option<String> {
-    let mut child: std::process::Child = std::process::Command::new("rustfmt")
+    let mut child: process::Child = process::Command::new("rustfmt")
         .arg("--edition")
         .arg("2024")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stdin(process::Stdio::piped())
+        .stdout(process::Stdio::piped())
+        .stderr(process::Stdio::null())
         .spawn()
         .ok()?;
-    let mut stdin: std::process::ChildStdin = child.stdin.take()?;
+    let mut stdin: process::ChildStdin = child.stdin.take()?;
     stdin.write_all(content.as_bytes()).ok()?;
     drop(stdin);
-    let output: std::process::Output = child.wait_with_output().ok()?;
+    let output: process::Output = child.wait_with_output().ok()?;
     if !output.status.success() {
         return None;
     }

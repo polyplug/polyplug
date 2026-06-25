@@ -20,6 +20,7 @@
 // noise of the dispatch it guards.
 
 use core::hint::black_box;
+use core::ptr;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering;
 
@@ -85,7 +86,7 @@ fn bench_revision_check(c: &mut Criterion) {
     // bench never mutates it, mirroring the steady state between reloads where the
     // cache line stays Shared in every reader's L1.
     let revision: AtomicU64 = AtomicU64::new(7);
-    let revision_ptr: *const u64 = core::ptr::addr_of!(revision).cast::<u64>();
+    let revision_ptr: *const u64 = ptr::addr_of!(revision).cast::<u64>();
     let cached_revision: u64 = read_revision(revision_ptr);
 
     let mut group = c.benchmark_group("revision_check");

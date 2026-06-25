@@ -29,6 +29,10 @@
 
 use std::collections::HashMap;
 use std::sync::RwLock;
+use std::sync::RwLockReadGuard;
+use std::sync::RwLockWriteGuard;
+
+use core::any::Any;
 
 use mlua::Function;
 use mlua::Lua;
@@ -145,7 +149,7 @@ impl RuntimeLanguageBridge for LuaHostBridge {
     fn register_host_contract(
         &mut self,
         contract_id: u64,
-        implementation: Box<dyn core::any::Any>,
+        implementation: Box<dyn Any>,
     ) -> Result<(), BridgeError> {
         // Attempt to downcast to Function
         let callable: Function = implementation
@@ -158,7 +162,7 @@ impl RuntimeLanguageBridge for LuaHostBridge {
             .map(|boxed| *boxed)?;
 
         // Acquire write lock and insert
-        let mut contracts: std::sync::RwLockWriteGuard<'_, HashMap<u64, Function>> = self
+        let mut contracts: RwLockWriteGuard<'_, HashMap<u64, Function>> = self
             .contracts
             .write()
             .map_err(|_| BridgeError::VmRegistrationFailed {
@@ -213,7 +217,7 @@ impl RuntimeLanguageBridge for LuaHostBridge {
         out: *mut (),
     ) -> AbiError {
         // Step 1: Look up the registered callable
-        let contracts_guard: std::sync::RwLockReadGuard<'_, HashMap<u64, Function>> =
+        let contracts_guard: RwLockReadGuard<'_, HashMap<u64, Function>> =
             match self.contracts.read() {
                 Ok(guard) => guard,
                 Err(_) => {
@@ -292,12 +296,14 @@ unsafe impl Sync for LuaHostBridge {}
 mod tests {
     #![allow(clippy::expect_used)]
 
+    use core::ptr;
+
     use super::*;
 
     #[test]
     fn bridge_new_creates_empty_bridge() {
         let bridge: LuaHostBridge = LuaHostBridge::new();
-        let contracts: std::sync::RwLockReadGuard<'_, HashMap<u64, Function>> =
+        let contracts: RwLockReadGuard<'_, HashMap<u64, Function>> =
             bridge.contracts.read().expect("read lock");
         assert!(contracts.is_empty());
     }
@@ -305,7 +311,7 @@ mod tests {
     #[test]
     fn bridge_default_creates_empty_bridge() {
         let bridge: LuaHostBridge = LuaHostBridge::default();
-        let contracts: std::sync::RwLockReadGuard<'_, HashMap<u64, Function>> =
+        let contracts: RwLockReadGuard<'_, HashMap<u64, Function>> =
             bridge.contracts.read().expect("read lock");
         assert!(contracts.is_empty());
     }
@@ -313,7 +319,7 @@ mod tests {
     #[test]
     fn bridge_with_capacity_creates_empty_bridge() {
         let bridge: LuaHostBridge = LuaHostBridge::with_capacity(10);
-        let contracts: std::sync::RwLockReadGuard<'_, HashMap<u64, Function>> =
+        let contracts: RwLockReadGuard<'_, HashMap<u64, Function>> =
             bridge.contracts.read().expect("read lock");
         assert!(contracts.is_empty());
     }
@@ -350,7 +356,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Verify it's stored
-        let contracts: std::sync::RwLockReadGuard<'_, HashMap<u64, Function>> =
+        let contracts: RwLockReadGuard<'_, HashMap<u64, Function>> =
             bridge.contracts.read().expect("read lock");
         assert!(contracts.contains_key(&1234));
     }
@@ -411,7 +417,7 @@ mod tests {
         // SAFETY: null pointers are valid here — the lookup fails before any
         // pointer is dereferenced (contract 9999 is not registered).
         let result: AbiError =
-            unsafe { bridge.call_host_contract(9999, 0, core::ptr::null(), core::ptr::null_mut()) };
+            unsafe { bridge.call_host_contract(9999, 0, ptr::null(), ptr::null_mut()) };
         assert_eq!(result.code, AbiErrorCode::HostContractNotFound as u32);
     }
 
@@ -435,7 +441,7 @@ mod tests {
         // SAFETY: the registered Lua function treats args/out as opaque integers and
         // never dereferences them, so passing null pointers is sound here.
         let result: AbiError =
-            unsafe { bridge.call_host_contract(1234, 5, core::ptr::null(), core::ptr::null_mut()) };
+            unsafe { bridge.call_host_contract(1234, 5, ptr::null(), ptr::null_mut()) };
         assert!(result.is_ok());
     }
 
@@ -459,7 +465,7 @@ mod tests {
         // SAFETY: the registered Lua function raises before touching args/out, so
         // passing null pointers is sound here.
         let result: AbiError =
-            unsafe { bridge.call_host_contract(1234, 0, core::ptr::null(), core::ptr::null_mut()) };
+            unsafe { bridge.call_host_contract(1234, 0, ptr::null(), ptr::null_mut()) };
         assert_eq!(result.code, AbiErrorCode::HostContractCallFailed as u32);
     }
 }

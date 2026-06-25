@@ -14,7 +14,11 @@
 
 #![allow(clippy::expect_used)]
 
+use polyplugc::generate;
+use std::env;
+use std::fs;
 use std::path::PathBuf;
+use std::process;
 
 use polyplug::loader::manifest::{ManifestData, ManifestDependency};
 use polyplug_codegen::{GenerateConfig, GenerateOutput, Lang, Side};
@@ -73,18 +77,18 @@ fn bundle_toml_for_lang(lang: Lang) -> String {
 }
 
 fn generate_manifest_for_lang(lang: Lang) -> String {
-    let tmp_dir: PathBuf = std::env::temp_dir().join(format!(
+    let tmp_dir: PathBuf = env::temp_dir().join(format!(
         "polyplugc_dep_roundtrip_{:?}_{}",
         lang,
-        std::process::id()
+        process::id()
     ));
-    let _ = std::fs::remove_dir_all(&tmp_dir);
-    std::fs::create_dir_all(&tmp_dir).expect("create tmp dir");
+    let _ = fs::remove_dir_all(&tmp_dir);
+    fs::create_dir_all(&tmp_dir).expect("create tmp dir");
 
     let api_path: PathBuf = tmp_dir.join("api.toml");
     let bundle_path: PathBuf = tmp_dir.join("bundle.toml");
-    std::fs::write(&api_path, API_TOML).expect("write api.toml");
-    std::fs::write(&bundle_path, bundle_toml_for_lang(lang)).expect("write bundle.toml");
+    fs::write(&api_path, API_TOML).expect("write api.toml");
+    fs::write(&bundle_path, bundle_toml_for_lang(lang)).expect("write bundle.toml");
 
     let config: GenerateConfig = GenerateConfig {
         api_toml: bundle_path,
@@ -92,7 +96,7 @@ fn generate_manifest_for_lang(lang: Lang) -> String {
         side: Side::Guest,
         out_dir: tmp_dir.join("out"),
     };
-    let output: GenerateOutput = polyplugc::generate(config).expect("generate guest");
+    let output: GenerateOutput = generate(config).expect("generate guest");
 
     let manifest_file = output
         .files

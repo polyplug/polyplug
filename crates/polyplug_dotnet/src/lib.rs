@@ -11,12 +11,17 @@ use polyplug_abi::AbiErrorCode;
 use polyplug_abi::BundleInitContext;
 use polyplug_abi::StringView;
 
+use core::slice;
+use std::borrow::Cow;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use polyplug::Runtime;
 use polyplug::error::LoaderError;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::BundleSource;
+use polyplug::loader::ManifestData;
 use polyplug::logger::LoggerHandle;
 use polyplug_abi::HostApi;
 use polyplug_abi::SupportedLanguage;
@@ -26,6 +31,8 @@ use crate::context::CLR_CONTEXT;
 use crate::context::DotnetContext;
 use crate::context::InitFn;
 use crate::context::init_context;
+use crate::version::read_target_framework;
+use crate::version::target_framework_from_bytes;
 
 pub struct DotnetLoader {
     config: DotnetConfig,
@@ -79,11 +86,11 @@ impl DotnetLoader {
     fn resolve_init_from_path(
         &self,
         runtime_id: u64,
-        manifest: &polyplug::loader::ManifestData,
+        manifest: &ManifestData,
         bundle_dir: &Path,
         logger: LoggerHandle,
     ) -> Result<(InitFn, String), LoaderError> {
-        let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
+        let bundle_path: PathBuf = if !manifest.file.is_empty() {
             manifest.path.join(&manifest.file)
         } else {
             return Err(LoaderError::ManifestMissingFile {
@@ -101,10 +108,10 @@ impl DotnetLoader {
             });
         }
 
-        let tfm: String = crate::version::read_target_framework(&bundle_path)?;
+        let tfm: String = read_target_framework(&bundle_path)?;
         check_version_compatibility(&tfm, &self.config.min_framework, logger)?;
 
-        let abs_path: std::path::PathBuf =
+        let abs_path: PathBuf =
             bundle_path
                 .canonicalize()
                 .map_err(|_| LoaderError::InitFailed {
@@ -119,8 +126,7 @@ impl DotnetLoader {
             CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, bundle_dir, logger))?,
         );
 
-        let stem: std::borrow::Cow<'_, str> =
-            abs_path.file_stem().unwrap_or_default().to_string_lossy();
+        let stem: Cow<'_, str> = abs_path.file_stem().unwrap_or_default().to_string_lossy();
         let bundle_name: String = stem.into_owned();
         // The bridge resolves `{name}.Plugin` directly from the Assembly object it loads into
         // the bundle's collectible ALC (no assembly-name re-binding), so a simple type name is
@@ -157,7 +163,7 @@ impl DotnetLoader {
     fn resolve_init_from_bytes(
         &self,
         runtime_id: u64,
-        manifest: &polyplug::loader::ManifestData,
+        manifest: &ManifestData,
         bundle_dir: &Path,
         bytes: &[u8],
         logger: LoggerHandle,
@@ -178,7 +184,7 @@ impl DotnetLoader {
             });
         }
 
-        let tfm: String = crate::version::target_framework_from_bytes(bytes, &bundle_name)?;
+        let tfm: String = target_framework_from_bytes(bytes, &bundle_name)?;
         check_version_compatibility(&tfm, &self.config.min_framework, logger)?;
 
         let context: Arc<DotnetContext> = Arc::clone(
@@ -300,8 +306,8 @@ impl BundleLoader for DotnetLoader {
 
     fn load(
         &self,
-        manifest: &polyplug::loader::ManifestData,
-        source: &polyplug::loader::BundleSource,
+        manifest: &ManifestData,
+        source: &BundleSource,
         runtime: &Runtime,
     ) -> Result<(), LoaderError> {
         // `Code` is unsupported: C#/.NET is a compiled language, so there is no source-text
@@ -313,20 +319,20 @@ impl BundleLoader for DotnetLoader {
         // The init function and the assembly simple name are resolved per source kind, then
         // the shared init-invocation tail below drives the managed `PolyplugInit`.
         let (managed_init, bundle_name): (InitFn, String) = match source {
-            polyplug::loader::BundleSource::Code(_) => {
+            BundleSource::Code(_) => {
                 return Err(LoaderError::UnsupportedBundleSource {
                     loader: "dotnet",
                     source_kind: source.kind(),
                     bundle: manifest.name.clone(),
                 });
             }
-            polyplug::loader::BundleSource::Path(_) => self.resolve_init_from_path(
+            BundleSource::Path(_) => self.resolve_init_from_path(
                 runtime_alc_id(runtime),
                 manifest,
                 bundle_dir,
                 runtime.logger(),
             )?,
-            polyplug::loader::BundleSource::Bytes(bytes) => self.resolve_init_from_bytes(
+            BundleSource::Bytes(bytes) => self.resolve_init_from_bytes(
                 runtime_alc_id(runtime),
                 manifest,
                 bundle_dir,
@@ -377,7 +383,7 @@ impl BundleLoader for DotnetLoader {
                 // SAFETY: per the ABI contract a non-null message.ptr points to
                 // message.len bytes of UTF-8 valid for the duration of this call.
                 let bytes: &[u8] =
-                    unsafe { core::slice::from_raw_parts(result.message.ptr, result.message.len) };
+                    unsafe { slice::from_raw_parts(result.message.ptr, result.message.len) };
                 String::from_utf8_lossy(bytes).into_owned()
             };
             return Err(LoaderError::InitFailed {
@@ -389,11 +395,7 @@ impl BundleLoader for DotnetLoader {
         Ok(())
     }
 
-    fn reload(
-        &self,
-        _manifest: &polyplug::loader::ManifestData,
-        _runtime: &Runtime,
-    ) -> Result<(), LoaderError> {
+    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
         // Collectible ALC enables true UNLOAD reclaim (see `unload`); hot-reload
         // (load-new → swap → free-old under quiescence) is a separate, larger workstream
         // and remains disabled for .NET. Defensive: the runtime gates on

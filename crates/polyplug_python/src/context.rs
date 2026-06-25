@@ -5,6 +5,16 @@ use std::sync::MutexGuard;
 use std::sync::OnceLock;
 
 use pyo3::Python;
+use pyo3::PythonVersionInfo;
+
+#[cfg(unix)]
+use core::mem;
+#[cfg(unix)]
+use libloading::os::unix::Library;
+#[cfg(unix)]
+use libloading::os::unix::RTLD_GLOBAL;
+#[cfg(unix)]
+use libloading::os::unix::RTLD_LAZY;
 
 use polyplug::error::LoaderError;
 
@@ -73,14 +83,10 @@ fn promote_libpython_symbols() {
         // merges RTLD_GLOBAL into its symbol scope without re-initializing it.
         // The handle is intentionally leaked (via std::mem::forget) so the
         // promoted scope persists for the interpreter's lifetime.
-        let opened: Result<libloading::os::unix::Library, libloading::Error> = unsafe {
-            libloading::os::unix::Library::open(
-                Some(name),
-                libloading::os::unix::RTLD_GLOBAL | libloading::os::unix::RTLD_LAZY,
-            )
-        };
+        let opened: Result<Library, libloading::Error> =
+            unsafe { Library::open(Some(name), RTLD_GLOBAL | RTLD_LAZY) };
         if let Ok(lib) = opened {
-            core::mem::forget(lib);
+            mem::forget(lib);
             return;
         }
     }
@@ -110,7 +116,7 @@ pub(crate) fn ensure_python_initialized(config: &PythonConfig) -> Result<(), Loa
 
     // Step 2: Verify version.
     Python::attach(|py| {
-        let ver: pyo3::PythonVersionInfo = py.version_info();
+        let ver: PythonVersionInfo = py.version_info();
         let (req_major, req_minor): (u32, u32) = config.min_version;
         if (ver.major as u32, ver.minor as u32) < (req_major, req_minor) {
             return Err(LoaderError::InitFailed {

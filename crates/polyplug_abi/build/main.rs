@@ -9,17 +9,24 @@
 //! 6. Writes generated SDK files to `sdks/{lang}/abi/`
 //! 7. Emits `cargo:rerun-if-changed` for all tracked source files
 
+#![allow(clippy::std_instead_of_core)]
+
 mod extractor;
 mod generate;
 mod mapper;
 mod types;
 
 use std::env;
+use std::error::Error;
 use std::fs;
+use std::io;
 use std::path::PathBuf;
+
+use syn::{Error as SynError, File as SynFile, Item as SynItem};
 
 use crate::extractor::{extract_doc, extract_fields, extract_from_dir, has_repr_c, is_public};
 use crate::generate::generate_all_sdks;
+use crate::types::{AbiField, AbiStruct, AbiTypes};
 
 /// Loader crates whose config structs should be discovered.
 const LOADER_CRATES: &[&str] = &[
@@ -30,7 +37,7 @@ const LOADER_CRATES: &[&str] = &[
     "polyplug_dotnet",
 ];
 
-fn main() -> Result<(), Box<dyn core::error::Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let manifest_dir: PathBuf = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let workspace_root: PathBuf = manifest_dir
         .parent()
@@ -61,28 +68,27 @@ fn main() -> Result<(), Box<dyn core::error::Error>> {
 
         if let Some(target_path) = target {
             // Extract types from the loader config file
-            let source: String =
-                fs::read_to_string(&target_path).map_err(|e: std::io::Error| {
-                    format!("Failed to read {}: {}", target_path.display(), e)
-                })?;
+            let source: String = fs::read_to_string(&target_path).map_err(|e: io::Error| {
+                format!("Failed to read {}: {}", target_path.display(), e)
+            })?;
 
-            let file: syn::File = syn::parse_file(&source).map_err(|e: syn::Error| {
+            let file: SynFile = syn::parse_file(&source).map_err(|e: SynError| {
                 format!("Failed to parse {}: {}", target_path.display(), e)
             })?;
 
-            let mut loader_types: types::AbiTypes = types::AbiTypes::new();
+            let mut loader_types: AbiTypes = AbiTypes::new();
 
             // Extract structs with #[repr(C)] from the loader config
             for item in &file.items {
-                if let syn::Item::Struct(item_struct) = item {
+                if let SynItem::Struct(item_struct) = item {
                     // Use extractor's auto-discovery logic:
                     // pub struct with #[repr(C)]
                     if is_public(&item_struct.vis) && has_repr_c(&item_struct.attrs) {
                         let name: String = item_struct.ident.to_string();
-                        let fields: Vec<types::AbiField> = extract_fields(&item_struct.fields);
+                        let fields: Vec<AbiField> = extract_fields(&item_struct.fields);
                         let doc: Option<String> = extract_doc(&item_struct.attrs);
 
-                        loader_types.add_struct(types::AbiStruct {
+                        loader_types.add_struct(AbiStruct {
                             name,
                             fields,
                             doc,

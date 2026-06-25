@@ -14,7 +14,10 @@
 // dispatcher forwards as an int.
 #![allow(clippy::expect_used)]
 
+use core::ptr;
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
@@ -25,7 +28,9 @@ use polyplug::runtime_builder::RuntimeBuilder;
 use polyplug_abi::AbiError;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
+use polyplug_abi::GuestContractInterface;
 use polyplug_abi::dispatch::DispatchType;
+use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
 use polyplug_python::PythonLoader;
 use polyplug_utils::GuestContractId;
 use polyplug_utils::bundle_id;
@@ -67,7 +72,7 @@ fn inline_manifest(name: &str) -> ManifestData {
         // `file` is ignored for in-memory sources, but `ManifestData::validate()`
         // (run by `load_bundle_from_source`) requires a non-empty placeholder.
         file: "<inline>".to_owned(),
-        path: std::path::PathBuf::new(),
+        path: PathBuf::new(),
         version: String::new(),
         provides: Vec::new(),
         function_count: HashMap::new(),
@@ -81,7 +86,7 @@ fn inline_manifest(name: &str) -> ManifestData {
 /// contract dispatches a live VM call that writes into `out`.
 #[test]
 fn code_source_loads_resolves_and_dispatches() {
-    let runtime: std::sync::Arc<Runtime> = RuntimeBuilder::new()
+    let runtime: Arc<Runtime> = RuntimeBuilder::new()
         .loader(PythonLoader::default())
         .build()
         .expect("runtime build");
@@ -97,7 +102,7 @@ fn code_source_loads_resolves_and_dispatches() {
         .find(contract_id, 0)
         .expect("contract must be registered after inline Code load");
 
-    let interface_ptr: *const polyplug_abi::GuestContractInterface = runtime
+    let interface_ptr: *const GuestContractInterface = runtime
         .registry()
         .resolve_guest_contract(handle)
         .expect("registered contract must resolve to an interface");
@@ -107,7 +112,7 @@ fn code_source_loads_resolves_and_dispatches() {
     );
 
     // SAFETY: runtime-owned interface leaked for the runtime lifetime; reading its fields is sound.
-    let interface: &polyplug_abi::GuestContractInterface = unsafe { &*interface_ptr };
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     assert_eq!(
         interface.contract_id.id(),
         code_contract_id(),
@@ -122,7 +127,7 @@ fn code_source_loads_resolves_and_dispatches() {
     // Live VM call: fn 0 writes 0x7B into out.
     // SAFETY: vm union arm is active (dispatch_type == VirtualMachine); loader_data
     // wraps a live PythonLoaderData; out points at a valid i32.
-    let vm: polyplug_abi::dispatch::vm_dispatch::VmDispatch = unsafe { interface.dispatch.vm };
+    let vm: VmDispatch = unsafe { interface.dispatch.vm };
     let mut out_buf: i32 = 0;
     let mut err: AbiError = AbiError::ok();
     // SAFETY: see above — out is valid, args/arena are null and ignored.
@@ -131,9 +136,9 @@ fn code_source_loads_resolves_and_dispatches() {
             vm.loader_data,
             GuestContractInstance::null(),
             0,
-            core::ptr::null(),
+            ptr::null(),
             &mut out_buf as *mut i32 as *mut (),
-            core::ptr::null_mut(),
+            ptr::null_mut(),
             &mut err as *mut AbiError,
         );
     }
@@ -148,7 +153,7 @@ fn code_source_loads_resolves_and_dispatches() {
 /// A `Bytes`-sourced plugin carrying valid UTF-8 behaves identically to `Code`.
 #[test]
 fn bytes_source_valid_utf8_loads() {
-    let runtime: std::sync::Arc<Runtime> = RuntimeBuilder::new()
+    let runtime: Arc<Runtime> = RuntimeBuilder::new()
         .loader(PythonLoader::default())
         .build()
         .expect("runtime build");
@@ -169,7 +174,7 @@ fn bytes_source_valid_utf8_loads() {
 /// `Bytes` carrying invalid UTF-8 must fail with `LoaderError::InvalidSourceEncoding`.
 #[test]
 fn bytes_source_invalid_utf8_returns_structured_error() {
-    let runtime: std::sync::Arc<Runtime> = RuntimeBuilder::new()
+    let runtime: Arc<Runtime> = RuntimeBuilder::new()
         .loader(PythonLoader::default())
         .build()
         .expect("runtime build");

@@ -9,12 +9,23 @@
 //! - contract_id lookup returns correct handles
 //! - Stale handles are detected after replacement
 
+use core::cell::RefCell;
+use core::ffi::c_void;
+use core::mem;
+use core::ptr;
+use core::slice;
+use core::str;
+
+use libloading::{Library, Symbol};
 use polyplug::runtime_store::RuntimeStore;
+use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::{
-    AbiError, AbiErrorCode, BundleInitContext, GuestContractHandle, GuestContractInstance,
-    GuestContractInterface, HostApi, PluginDescriptor, StringView, Version,
+    AbiError, AbiErrorCode, Array, BundleInitContext, DependencyInfo, DispatchMechanisms,
+    DispatchType, GuestContractHandle, GuestContractInstance, GuestContractInterface, HostApi,
+    HostContractInstance, HostContractInterface, NativeDispatch, PluginDescriptor, StringView,
+    Version,
 };
 use polyplug_utils::{BundleId, GuestContractId};
 
@@ -55,9 +66,8 @@ unsafe extern "C" fn graph_register_callback(
     // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
     // &'static str contract name -- guaranteed valid UTF-8 by construction.
     let contract_name_str: &str = unsafe {
-        let bytes: &[u8] =
-            core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
-        core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
+        let bytes: &[u8] = slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
+        str::from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
 
     // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
@@ -111,8 +121,8 @@ unsafe extern "C" fn noop_find_all_guest_contracts(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::Array<GuestContractHandle> {
-    polyplug_abi::Array::empty()
+) -> Array<GuestContractHandle> {
+    Array::empty()
 }
 
 /// No-op resolve_guest_contract callback.
@@ -120,7 +130,7 @@ unsafe extern "C" fn noop_resolve_guest_contract(
     _this: *const HostApi,
     _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
-    core::ptr::null()
+    ptr::null()
 }
 
 /// No-op get_host_contract callback.
@@ -128,22 +138,18 @@ unsafe extern "C" fn noop_get_host_contract(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::HostContractInstance {
-    polyplug_abi::HostContractInstance::null()
+) -> HostContractInstance {
+    HostContractInstance::null()
 }
 
 /// No-op list_bundles callback.
-unsafe extern "C" fn noop_list_bundles(
-    _this: *const HostApi,
-) -> polyplug_abi::Array<polyplug_utils::BundleId> {
-    polyplug_abi::Array::empty()
+unsafe extern "C" fn noop_list_bundles(_this: *const HostApi) -> Array<BundleId> {
+    Array::empty()
 }
 
 /// No-op get_dependencies callback.
-unsafe extern "C" fn noop_get_dependencies(
-    _this: *const HostApi,
-) -> polyplug_abi::Array<polyplug_abi::DependencyInfo> {
-    polyplug_abi::Array::empty()
+unsafe extern "C" fn noop_get_dependencies(_this: *const HostApi) -> Array<DependencyInfo> {
+    Array::empty()
 }
 
 /// No-op resolve_host_contract_interface callback.
@@ -151,13 +157,13 @@ unsafe extern "C" fn noop_resolve_host_contract_interface(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractInterface {
-    core::ptr::null()
+) -> *const HostContractInterface {
+    ptr::null()
 }
 
 /// No-op create_instance for fake interface.
 unsafe extern "C" fn fake_create_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -170,7 +176,7 @@ unsafe extern "C" fn fake_create_instance(
 
 /// No-op destroy_instance for fake interface.
 unsafe extern "C" fn fake_destroy_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
@@ -214,7 +220,7 @@ unsafe extern "C" fn noop_reload_bundle(
 
 unsafe extern "C" fn noop_register_host_contract(
     _this: *const HostApi,
-    _interface: *const polyplug_abi::HostContractInterface,
+    _interface: *const HostContractInterface,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -230,7 +236,7 @@ unsafe extern "C" fn noop_register_host_contract(
 
 unsafe extern "C" fn noop_register_loader(
     _this: *const HostApi,
-    _loader_ptr: *mut core::ffi::c_void,
+    _loader_ptr: *mut c_void,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -267,21 +273,19 @@ unsafe extern "C" fn noop_unload_bundle(
     }
 }
 
-std::thread_local! {
-    static GRAPH_REGISTRY: core::cell::RefCell<RuntimeStore> =
-        core::cell::RefCell::new(RuntimeStore::new());
+thread_local! {
+    static GRAPH_REGISTRY: RefCell<RuntimeStore> = RefCell::new(RuntimeStore::new());
 }
 
 /// Load the test_plugin and call polyplug_init, storing results in GRAPH_REGISTRY.
 /// Returns the loaded Library (caller must `std::mem::forget` it to prevent unload).
-fn load_and_init_plugin() -> libloading::Library {
+fn load_and_init_plugin() -> Library {
     // SAFETY: TEST_PLUGIN_SO is a compiled cdylib with correct ABI.
-    let library: libloading::Library = unsafe {
-        libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library")
-    };
+    let library: Library =
+        unsafe { Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library") };
 
     // SAFETY: polyplug_init signature is `extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError`.
-    let init_fn: libloading::Symbol<
+    let init_fn: Symbol<
         '_,
         unsafe extern "C" fn(*const HostApi, *const BundleInitContext) -> AbiError,
     > = unsafe {
@@ -291,7 +295,7 @@ fn load_and_init_plugin() -> libloading::Library {
     };
 
     let host_interface: HostApi = HostApi {
-        runtime: core::ptr::null_mut(),
+        runtime: ptr::null_mut(),
         register_guest_contract: graph_register_callback,
         alloc: noop_alloc,
         free: noop_free,
@@ -314,7 +318,7 @@ fn load_and_init_plugin() -> libloading::Library {
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
         revision_counter: stub_revision_counter,
-        reserved: core::ptr::null(),
+        reserved: ptr::null(),
     };
 
     let ctx: BundleInitContext = BundleInitContext {
@@ -343,7 +347,7 @@ fn load_and_init_plugin() -> libloading::Library {
 fn test_single_contract_registration_and_lookup() {
     GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = RuntimeStore::new());
 
-    let lib: libloading::Library = load_and_init_plugin();
+    let lib: Library = load_and_init_plugin();
 
     let test_add_id: GuestContractId = GuestContractId::new("test.add", 1);
 
@@ -373,14 +377,14 @@ fn test_single_contract_registration_and_lookup() {
     let function_count: u32 = unsafe { interface.dispatch.native.function_count };
     assert_eq!(function_count, 1, "test.add must have 1 function");
 
-    core::mem::forget(lib);
+    mem::forget(lib);
 }
 
 #[test]
 fn test_unknown_contract_returns_not_found() {
     GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = RuntimeStore::new());
 
-    let lib: libloading::Library = load_and_init_plugin();
+    let lib: Library = load_and_init_plugin();
 
     let unknown_id: GuestContractId = GuestContractId::new("unknown.contract", 1);
     let result: Result<GuestContractHandle, _> =
@@ -391,14 +395,14 @@ fn test_unknown_contract_returns_not_found() {
         "lookup of unregistered contract must return Err"
     );
 
-    core::mem::forget(lib);
+    mem::forget(lib);
 }
 
 #[test]
 fn test_duplicate_registration_allowed() {
     GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = RuntimeStore::new());
 
-    let lib: libloading::Library = load_and_init_plugin();
+    let lib: Library = load_and_init_plugin();
 
     // Register the same contract again from a DIFFERENT bundle -- should succeed
     // (multi-impl). The harness callback registers the plugin's contracts under
@@ -416,13 +420,13 @@ fn test_duplicate_registration_allowed() {
             minor: 0,
             patch: 0,
         },
-        dispatch_type: polyplug_abi::DispatchType::Native,
+        dispatch_type: DispatchType::Native,
         create_instance: fake_create_instance,
         destroy_instance: fake_destroy_instance,
-        dispatch: polyplug_abi::DispatchMechanisms {
-            native: polyplug_abi::NativeDispatch {
+        dispatch: DispatchMechanisms {
+            native: NativeDispatch {
                 function_count: 0,
-                functions: core::ptr::null(),
+                functions: ptr::null(),
             },
         },
     };
@@ -451,14 +455,14 @@ fn test_duplicate_registration_allowed() {
         "registration of same contract from a different bundle should succeed (multi-impl allowed)"
     );
 
-    core::mem::forget(lib);
+    mem::forget(lib);
 }
 
 #[test]
 fn test_invalid_handle_detected() {
     GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = RuntimeStore::new());
 
-    let lib: libloading::Library = load_and_init_plugin();
+    let lib: Library = load_and_init_plugin();
 
     let test_add_id: GuestContractId = GuestContractId::new("test.add", 1);
     let _handle: GuestContractHandle = GRAPH_REGISTRY.with(|cell| {
@@ -478,14 +482,14 @@ fn test_invalid_handle_detected() {
 
     assert!(result.is_err(), "invalid handle must return Err");
 
-    core::mem::forget(lib);
+    mem::forget(lib);
 }
 
 #[test]
 fn test_multi_lookup_consistent() {
     GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = RuntimeStore::new());
 
-    let lib: libloading::Library = load_and_init_plugin();
+    let lib: Library = load_and_init_plugin();
 
     let test_add_id: GuestContractId = GuestContractId::new("test.add", 1);
 
@@ -506,37 +510,37 @@ fn test_multi_lookup_consistent() {
         "repeated lookups must return same slot index"
     );
 
-    core::mem::forget(lib);
+    mem::forget(lib);
 }
 
 /// `HostApi.log` stub for test hosts — drops the record.
 unsafe extern "C" fn stub_host_log(
-    _this: *const polyplug_abi::HostApi,
+    _this: *const HostApi,
     _level: u32,
-    _scope: polyplug_abi::StringView,
-    _message: polyplug_abi::StringView,
+    _scope: StringView,
+    _message: StringView,
 ) {
 }
 
 unsafe extern "C" fn stub_create_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _args: *const core::ffi::c_void,
-    out_instance: *mut polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _args: *const c_void,
+    out_instance: *mut GuestContractInstance,
 ) {
     if !out_instance.is_null() {
         // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+        unsafe { out_instance.write(GuestContractInstance::null()) };
     }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _instance: polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _instance: GuestContractInstance,
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const polyplug_abi::HostApi) -> *const u64 {
-    core::ptr::null()
+unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
+    ptr::null()
 }

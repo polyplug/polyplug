@@ -3,9 +3,11 @@
 //! Provides naming-convention transforms and a thin runner that executes the
 //! ast-grep CLI with inline YAML rules and parses its JSON output.
 
-use core::str::FromStr;
+use core::str::{Chars, FromStr};
+use std::borrow::Cow;
+use std::io::ErrorKind;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -139,7 +141,7 @@ fn split_capitalized(name: &str) -> Vec<String> {
 
 /// Capitalize the first letter of a word.
 fn capitalize_first(word: &str) -> String {
-    let mut chars: core::str::Chars<'_> = word.chars();
+    let mut chars: Chars<'_> = word.chars();
     match chars.next() {
         Some(first) => {
             first.to_uppercase().collect::<String>() + chars.as_str().to_lowercase().as_str()
@@ -226,7 +228,7 @@ impl AstGrepRunner {
     /// Returns an error if ast-grep cannot be spawned, exits with a failure
     /// status (e.g. malformed rule), or produces unparseable JSON.
     pub fn run_with_rule(&self, rule: &str, file_path: &Path) -> Result<Vec<Match>, AstGrepError> {
-        let output: std::process::Output = Command::new(self.binary)
+        let output: Output = Command::new(self.binary)
             .arg("scan")
             .arg("--inline-rules")
             .arg(rule)
@@ -234,7 +236,7 @@ impl AstGrepRunner {
             .arg(file_path)
             .output()
             .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
+                if e.kind() == ErrorKind::NotFound {
                     AstGrepError::CliNotFound
                 } else {
                     AstGrepError::ExecutionFailed {
@@ -244,13 +246,13 @@ impl AstGrepRunner {
             })?;
 
         if !output.status.success() {
-            let stderr: std::borrow::Cow<'_, str> = String::from_utf8_lossy(&output.stderr);
+            let stderr: Cow<'_, str> = String::from_utf8_lossy(&output.stderr);
             return Err(AstGrepError::ExecutionFailed {
                 message: stderr.to_string(),
             });
         }
 
-        let stdout: std::borrow::Cow<'_, str> = String::from_utf8_lossy(&output.stdout);
+        let stdout: Cow<'_, str> = String::from_utf8_lossy(&output.stdout);
         if stdout.is_empty() || stdout.trim() == "null" {
             return Ok(Vec::new());
         }

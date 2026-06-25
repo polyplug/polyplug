@@ -9,6 +9,8 @@
 //!            is `pub(crate)` and cannot be accessed from an external crate.
 //!
 
+use core::ptr;
+use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::{
     DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface, HostApi,
     NativeDispatch, PluginDescriptor, StringView, Version,
@@ -19,7 +21,7 @@ use polyplug_utils::GuestContractId;
 
 /// Create a null instance (stub for tests).
 unsafe extern "C" fn null_create_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -32,7 +34,7 @@ unsafe extern "C" fn null_create_instance(
 
 /// Destroy instance (stub for tests).
 unsafe extern "C" fn null_destroy_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
@@ -71,7 +73,7 @@ fn make_static_interface_minor(
         dispatch: DispatchMechanisms {
             native: NativeDispatch {
                 function_count: 0,
-                functions: core::ptr::null(),
+                functions: ptr::null(),
             },
         },
     }))

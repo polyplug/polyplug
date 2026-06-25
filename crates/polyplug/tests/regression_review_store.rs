@@ -20,13 +20,18 @@
 
 use std::sync::Arc;
 
+use core::mem::size_of;
+use core::ptr::null;
+
 use polyplug::Runtime;
 use polyplug::error::RegistryError;
+use polyplug::ffi::{polyplug_runtime_create, polyplug_runtime_destroy};
 use polyplug::runtime_store::RuntimeStore;
+use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::runtime::RuntimeConfig;
 use polyplug_abi::{
-    Array, DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInterface, HostApi,
-    NativeDispatch, PluginDescriptor, StringView, Version,
+    Array, DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInstance,
+    GuestContractInterface, HostApi, NativeDispatch, PluginDescriptor, StringView, Version,
 };
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
@@ -35,22 +40,22 @@ const MOCK_FUNCTIONS: [*const (); 0] = [];
 
 /// No-op create_instance callback.
 unsafe extern "C" fn noop_create_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
-    out_instance: *mut polyplug_abi::GuestContractInstance,
+    out_instance: *mut GuestContractInstance,
 ) {
     if !out_instance.is_null() {
         // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+        unsafe { out_instance.write(GuestContractInstance::null()) };
     }
 }
 
 /// No-op destroy_instance callback.
 unsafe extern "C" fn noop_destroy_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
-    _instance: polyplug_abi::GuestContractInstance,
+    _instance: GuestContractInstance,
 ) {
 }
 
@@ -168,8 +173,7 @@ fn host_find_all_array_len_matches_live_providers_and_frees() {
     const CID: u64 = 0x9999_0000_0000_0001_u64;
 
     // SAFETY: null config is accepted (default runtime config).
-    let host: *const HostApi =
-        unsafe { polyplug::ffi::polyplug_runtime_create(core::ptr::null::<RuntimeConfig>()) };
+    let host: *const HostApi = unsafe { polyplug_runtime_create(null::<RuntimeConfig>()) };
     assert!(!host.is_null(), "runtime create must yield a host");
 
     // SAFETY: host is non-null and its runtime field points to a live Runtime.
@@ -232,7 +236,7 @@ fn host_find_all_array_len_matches_live_providers_and_frees() {
     );
 
     // Free using the Array contract: len * sizeof(T) with align — must round-trip.
-    let size: usize = array.len * core::mem::size_of::<GuestContractHandle>();
+    let size: usize = array.len * size_of::<GuestContractHandle>();
     // SAFETY: items was allocated by host->alloc with size == len * sizeof(T) and
     // matching alignment; freeing with the same size/align is the documented contract.
     unsafe {
@@ -240,7 +244,7 @@ fn host_find_all_array_len_matches_live_providers_and_frees() {
     }
 
     // SAFETY: host was produced by polyplug_runtime_create and is destroyed once.
-    unsafe { polyplug::ffi::polyplug_runtime_destroy(host) };
+    unsafe { polyplug_runtime_destroy(host) };
 }
 
 // =============================================================================

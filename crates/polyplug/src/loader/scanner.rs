@@ -7,6 +7,8 @@
 //! is surfaced to the caller as a [`ScanDiagnostic`] in [`ScanResult::diagnostics`]
 //! rather than being silently swallowed.
 
+use std::fs::{DirEntry, ReadDir, read_dir};
+use std::io::Error as IoError;
 use std::path::PathBuf;
 
 use thiserror::Error;
@@ -26,7 +28,7 @@ pub enum ScanDiagnostic {
     DirectoryReadFailed {
         path: PathBuf,
         #[source]
-        source: std::io::Error,
+        source: IoError,
     },
 
     /// A directory entry could not be accessed (e.g. permissions, I/O failure).
@@ -34,7 +36,7 @@ pub enum ScanDiagnostic {
     EntryReadFailed {
         dir: PathBuf,
         #[source]
-        source: std::io::Error,
+        source: IoError,
     },
 
     /// A `manifest.toml` was present but could not be parsed.
@@ -74,7 +76,7 @@ pub fn scan_dirs(dirs: &[PathBuf]) -> ScanResult {
             continue;
         }
 
-        let read_dir: std::fs::ReadDir = match std::fs::read_dir(dir) {
+        let read_dir: ReadDir = match read_dir(dir) {
             Ok(read_dir) => read_dir,
             Err(source) => {
                 diagnostics.push(ScanDiagnostic::DirectoryReadFailed {
@@ -86,7 +88,7 @@ pub fn scan_dirs(dirs: &[PathBuf]) -> ScanResult {
         };
 
         for entry in read_dir {
-            let entry: std::fs::DirEntry = match entry {
+            let entry: DirEntry = match entry {
                 Ok(entry) => entry,
                 Err(source) => {
                     diagnostics.push(ScanDiagnostic::EntryReadFailed {
@@ -122,15 +124,18 @@ pub fn scan_dirs(dirs: &[PathBuf]) -> ScanResult {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
+    use core::slice;
 
-    use super::{ScanDiagnostic, ScanResult, scan_dirs};
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+
     use tempfile::TempDir;
 
-    fn write_valid_bundle(root: &std::path::Path, name: &str) {
+    use super::{ScanDiagnostic, ScanResult, scan_dirs};
+
+    fn write_valid_bundle(root: &Path, name: &str) {
         let bundle_dir: PathBuf = root.join(name);
         fs::create_dir_all(&bundle_dir).expect("create bundle dir");
         let manifest: String = format!(
@@ -196,7 +201,7 @@ mod tests {
         perms.set_mode(0o000);
         fs::set_permissions(&locked, perms).expect("chmod 000");
 
-        let result: ScanResult = scan_dirs(core::slice::from_ref(&locked));
+        let result: ScanResult = scan_dirs(slice::from_ref(&locked));
 
         // Restore permissions so TempDir cleanup can remove the directory.
         let mut restore: fs::Permissions = fs::Permissions::from_mode(0o755);

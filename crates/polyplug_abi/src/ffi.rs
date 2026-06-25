@@ -6,6 +6,7 @@
 
 use core::alloc::GlobalAlloc;
 use core::alloc::Layout;
+use core::ptr;
 use std::alloc::System;
 
 /// Allocate memory via the host system allocator.
@@ -19,11 +20,11 @@ use std::alloc::System;
 /// - Not use it after calling `polyplug_host_free`.
 pub extern "C" fn polyplug_host_alloc(size: usize, align: usize) -> *mut u8 {
     if size == 0 {
-        return core::ptr::null_mut();
+        return ptr::null_mut();
     }
     let layout: Layout = match Layout::from_size_align(size, align) {
         Ok(l) => l,
-        Err(_) => return core::ptr::null_mut(),
+        Err(_) => return ptr::null_mut(),
     };
     // SAFETY: layout is non-zero size and power-of-two alignment, validated above.
     // Caller is generated code that always passes correct alignment for the type.

@@ -11,6 +11,7 @@ pub use capability_graph::CapabilityGraph;
 mod tests {
     #![allow(clippy::expect_used)]
 
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     use polyplug_abi::types::Version;
@@ -151,7 +152,7 @@ mod tests {
             version: String::new(),
             file: String::new(),
             provides: vec!["contract.X".to_owned()],
-            function_count: std::collections::HashMap::new(),
+            function_count: HashMap::new(),
             needs_reinit_on_dep_reload: false,
             bundle_dependencies: Vec::new(),
             path: PathBuf::new(),
@@ -165,7 +166,7 @@ mod tests {
             version: String::new(),
             file: String::new(),
             provides: vec!["contract.Y".to_owned()],
-            function_count: std::collections::HashMap::new(),
+            function_count: HashMap::new(),
             needs_reinit_on_dep_reload: false,
             bundle_dependencies: Vec::new(),
             path: PathBuf::new(),
@@ -179,7 +180,7 @@ mod tests {
             version: String::new(),
             file: String::new(),
             provides: Vec::new(),
-            function_count: std::collections::HashMap::new(),
+            function_count: HashMap::new(),
             needs_reinit_on_dep_reload: false,
             bundle_dependencies: Vec::new(),
             path: PathBuf::new(),
@@ -234,7 +235,7 @@ mod tests {
             version: String::new(),
             file: String::new(),
             provides: Vec::new(),
-            function_count: std::collections::HashMap::new(),
+            function_count: HashMap::new(),
             needs_reinit_on_dep_reload: false,
             bundle_dependencies: Vec::new(),
             path: PathBuf::new(),
@@ -267,7 +268,7 @@ mod tests {
             version: version.to_owned(),
             file: String::new(),
             provides: provides.into_iter().map(str::to_owned).collect(),
-            function_count: std::collections::HashMap::new(),
+            function_count: HashMap::new(),
             needs_reinit_on_dep_reload: false,
             bundle_dependencies: Vec::new(),
             path: PathBuf::new(),

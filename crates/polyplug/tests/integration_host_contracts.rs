@@ -10,11 +10,16 @@
 //! - Missing contracts return None
 //! - Unregister functionality
 
+use core::ptr;
+use core::time::Duration;
 use std::sync::Arc;
+use std::thread;
 
+use polyplug::error::HostContractError;
 use polyplug::runtime::Runtime;
 use polyplug_abi::{
-    DispatchMechanisms, DispatchType, HostContractInterface, NativeDispatch, Version,
+    DispatchMechanisms, DispatchType, HostContractInstance, HostContractInterface, NativeDispatch,
+    Version,
 };
 use polyplug_utils::HostContractId;
 
@@ -24,18 +29,18 @@ use polyplug_utils::HostContractId;
 unsafe extern "C" fn noop_create_instance(
     _this: *const HostContractInterface,
     _args: *const (),
-    out_instance: *mut polyplug_abi::HostContractInstance,
+    out_instance: *mut HostContractInstance,
 ) {
     if !out_instance.is_null() {
         // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(polyplug_abi::HostContractInstance::null()) };
+        unsafe { out_instance.write(HostContractInstance::null()) };
     }
 }
 
 /// No-op destroy_instance callback.
 unsafe extern "C" fn noop_destroy_instance(
     _this: *const HostContractInterface,
-    _instance: polyplug_abi::HostContractInstance,
+    _instance: HostContractInstance,
 ) {
 }
 
@@ -58,14 +63,14 @@ fn create_static_interface(
         },
         singleton,
         dispatch_type: DispatchType::Native,
-        runtime: core::ptr::null_mut(),
-        user_data: core::ptr::null_mut(),
+        runtime: ptr::null_mut(),
+        user_data: ptr::null_mut(),
         create_instance: noop_create_instance,
         destroy_instance: noop_destroy_instance,
         dispatch: DispatchMechanisms {
             native: NativeDispatch {
                 function_count: 0,
-                functions: core::ptr::null(),
+                functions: ptr::null(),
             },
         },
     });
@@ -85,7 +90,7 @@ fn register_host_contract_success() {
     let interface: &'static HostContractInterface =
         create_static_interface(contract_id, 1, 0, true);
 
-    let result: Result<(), polyplug::error::HostContractError> =
+    let result: Result<(), HostContractError> =
         runtime.register_host_contract(contract_id, interface);
 
     assert!(result.is_ok(), "registration should succeed: {result:?}");
@@ -104,7 +109,7 @@ fn register_host_contract_duplicate_returns_error() {
         create_static_interface(contract_id, 2, 0, true);
 
     // First registration succeeds
-    let result1: Result<(), polyplug::error::HostContractError> =
+    let result1: Result<(), HostContractError> =
         runtime.register_host_contract(contract_id, interface1);
     assert!(
         result1.is_ok(),
@@ -112,14 +117,14 @@ fn register_host_contract_duplicate_returns_error() {
     );
 
     // Second registration fails with DuplicateContract
-    let result2: Result<(), polyplug::error::HostContractError> =
+    let result2: Result<(), HostContractError> =
         runtime.register_host_contract(contract_id, interface2);
     assert!(
         result2.is_err(),
         "duplicate registration should return error: {result2:?}"
     );
     match result2 {
-        Err(polyplug::error::HostContractError::DuplicateContract { contract_id: id }) => {
+        Err(HostContractError::DuplicateContract { contract_id: id }) => {
             assert_eq!(id, contract_id, "error contract_id should match");
         }
         _ => panic!("error should be DuplicateContract variant, got: {result2:?}"),
@@ -392,8 +397,6 @@ fn get_host_contract_version_check_zero_succeeds() {
 
 #[test]
 fn concurrent_register_and_lookup() {
-    use std::thread;
-
     let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
@@ -443,8 +446,6 @@ fn concurrent_register_and_lookup() {
 
 #[test]
 fn concurrent_lookups_multiple_contracts() {
-    use std::thread;
-
     let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
@@ -498,8 +499,6 @@ fn concurrent_lookups_multiple_contracts() {
 
 #[test]
 fn concurrent_register_different_contracts() {
-    use std::thread;
-
     let runtime: Arc<Runtime> = Runtime::builder()
         .build()
         .expect("runtime build should succeed");
@@ -517,28 +516,25 @@ fn concurrent_register_different_contracts() {
         0x2000_0000_0000_000A,
     ];
 
-    let mut handles: Vec<thread::JoinHandle<Result<(), polyplug::error::HostContractError>>> =
-        Vec::new();
+    let mut handles: Vec<thread::JoinHandle<Result<(), HostContractError>>> = Vec::new();
 
     // Spawn 10 threads, each registering a different contract
     for (idx, &id) in contract_ids.iter().enumerate() {
         let runtime_clone: Arc<Runtime> = Arc::clone(&runtime);
         let interface: &'static HostContractInterface = create_static_interface(id, 1, 0, true);
 
-        let handle: thread::JoinHandle<Result<(), polyplug::error::HostContractError>> =
-            thread::spawn(move || {
-                // Small delay to increase race probability
-                std::thread::sleep(core::time::Duration::from_millis(idx as u64));
-                runtime_clone.register_host_contract(id, interface)
-            });
+        let handle: thread::JoinHandle<Result<(), HostContractError>> = thread::spawn(move || {
+            // Small delay to increase race probability
+            thread::sleep(Duration::from_millis(idx as u64));
+            runtime_clone.register_host_contract(id, interface)
+        });
 
         handles.push(handle);
     }
 
     // All registrations should succeed (different contract IDs)
     for (idx, handle) in handles.into_iter().enumerate() {
-        let result: Result<(), polyplug::error::HostContractError> =
-            handle.join().expect("thread should not panic");
+        let result: Result<(), HostContractError> = handle.join().expect("thread should not panic");
         assert!(
             result.is_ok(),
             "registration in thread {} should succeed: {result:?}",

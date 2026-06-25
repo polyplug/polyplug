@@ -4,6 +4,7 @@
 //! Opaque to core runtime — loaders know their own state layout.
 
 use core::ffi::c_void;
+use core::ptr;
 
 /// Opaque handle to VM loader-specific data.
 ///
@@ -31,7 +32,7 @@ impl VmLoaderData {
     /// Create a null loader data handle.
     pub fn null() -> Self {
         Self {
-            data: core::ptr::null_mut(),
+            data: ptr::null_mut(),
         }
     }
 

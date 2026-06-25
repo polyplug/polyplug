@@ -58,7 +58,12 @@
 //! `Runtime` that owns the in-flight call — multiple runtimes sharing one
 //! plugin dylib in the same process stay fully isolated.
 
-use polyplug_abi::{AbiErrorCode, HostApi, StringView};
+use core::error::Error;
+use core::fmt;
+use core::{ptr, slice, str};
+
+use polyplug_abi::types::LogLevel;
+use polyplug_abi::{AbiError, AbiErrorCode, HostApi, StringView};
 
 /// Per-instance handle to the host runtime that created a plugin instance.
 ///
@@ -133,7 +138,7 @@ impl HostContext {
         // SAFETY: ptr is non-null (checked above) and was allocated by host.alloc
         // with size bytes.len() and align 1. The source bytes.as_ptr() is valid for
         // bytes.len() bytes. The destination is valid for bytes.len() bytes.
-        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len()) };
+        unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len()) };
         Ok(StringView {
             ptr,
             len: bytes.len(),
@@ -145,7 +150,7 @@ impl HostContext {
     /// Routes to the same sink as the host's `RuntimeConfig::log` callback (or
     /// its stderr default). `scope` should be a short stable tag, e.g.
     /// `"guest.<plugin-name>"`. No-op when this context is null.
-    pub fn log(self, level: polyplug_abi::types::LogLevel, scope: &str, message: &str) {
+    pub fn log(self, level: LogLevel, scope: &str, message: &str) {
         if self.host.is_null() {
             return;
         }
@@ -168,8 +173,8 @@ impl HostContext {
 // ─── Helper Functions ─────────────────────────────────────────────────────────
 
 /// Create an AbiError panic response.
-pub fn abi_error_panic_caught() -> polyplug_abi::AbiError {
-    polyplug_abi::AbiError::panic_caught()
+pub fn abi_error_panic_caught() -> AbiError {
+    AbiError::panic_caught()
 }
 
 // ─── Helper Types ─────────────────────────────────────────────────────────────
@@ -217,8 +222,8 @@ pub struct GuestError {
     pub message: String,
 }
 
-impl core::fmt::Display for GuestError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl fmt::Display for GuestError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "GuestError(code={}, message={})",
@@ -227,7 +232,7 @@ impl core::fmt::Display for GuestError {
     }
 }
 
-impl core::error::Error for GuestError {}
+impl Error for GuestError {}
 
 // ─── String Helpers ───────────────────────────────────────────────────────────
 
@@ -265,7 +270,7 @@ pub unsafe fn to_str(sv: &StringView) -> Result<&str, GuestError> {
     // SAFETY: sv.ptr is non-null (checked above) and sv.len is the valid length.
     // The caller guarantees, via this function's `# Safety` contract, that the
     // pointer is valid for sv.len bytes for the lifetime 'a.
-    match unsafe { core::str::from_utf8(core::slice::from_raw_parts(sv.ptr, sv.len)) } {
+    match unsafe { str::from_utf8(slice::from_raw_parts(sv.ptr, sv.len)) } {
         Ok(s) => Ok(s),
         Err(e) => Err(GuestError {
             code: AbiErrorCode::Generic,
@@ -391,7 +396,9 @@ pub unsafe fn split<'a>(sv: &'a StringView, delimiter: &str) -> Result<Vec<&'a s
 
 #[cfg(test)]
 mod tests {
-    use polyplug_abi::StringView;
+    use core::ptr;
+
+    use polyplug_abi::{AbiErrorCode, StringView};
 
     fn view(bytes: &[u8]) -> StringView {
         StringView {
@@ -403,7 +410,7 @@ mod tests {
     #[test]
     fn to_str_null_view_is_empty() {
         let sv = StringView {
-            ptr: core::ptr::null(),
+            ptr: ptr::null(),
             len: 5,
         };
         // SAFETY: a null view is explicitly legal input for to_str.
@@ -426,7 +433,7 @@ mod tests {
         assert!(matches!(
             // SAFETY: the view borrows a live byte slice for the duration of the call.
             unsafe { crate::to_str(&sv) },
-            Err(e) if e.code == polyplug_abi::AbiErrorCode::Generic
+            Err(e) if e.code == AbiErrorCode::Generic
         ));
     }
 
@@ -466,7 +473,7 @@ mod tests {
     #[test]
     fn split_empty_view_is_empty_list() {
         let sv = StringView {
-            ptr: core::ptr::null(),
+            ptr: ptr::null(),
             len: 0,
         };
         // SAFETY: a null view is explicitly legal input for split.

@@ -2,6 +2,9 @@
 
 use std::path::Path;
 
+#[cfg(test)]
+use core::error::Error;
+
 use crate::ast_grep::{AstGrepRunner, Match};
 use crate::error::ValidatorError;
 use crate::languages::{LanguageValidator, parse_field_name_typed, parse_variant_text};
@@ -196,24 +199,21 @@ mod tests {
         validate_language_struct,
     };
 
-    fn create_temp_ts_file(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
+    fn create_temp_ts_file(content: &str) -> Result<NamedTempFile, Box<dyn Error>> {
         let mut file: NamedTempFile = NamedTempFile::with_suffix(".ts")?;
         file.write_all(content.as_bytes())?;
         file.flush()?;
         Ok(file)
     }
 
-    fn create_temp_js_file(content: &str) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
+    fn create_temp_js_file(content: &str) -> Result<NamedTempFile, Box<dyn Error>> {
         let mut file: NamedTempFile = NamedTempFile::with_suffix(".js")?;
         file.write_all(content.as_bytes())?;
         file.flush()?;
         Ok(file)
     }
 
-    fn validate_file(
-        methods: &[String],
-        file: &Path,
-    ) -> Result<ValidationResult, Box<dyn core::error::Error>> {
+    fn validate_file(methods: &[String], file: &Path) -> Result<ValidationResult, Box<dyn Error>> {
         let mut validator: JsValidator = JsValidator::new();
         let result: ValidationResult = validate_language(
             &mut validator,
@@ -227,7 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detects_annotated_function() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_annotated_function() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_ts_file(
             r#"
 export function toStr(sv: StringView | null | undefined): string {
@@ -241,7 +241,7 @@ export function toStr(sv: StringView | null | undefined): string {
     }
 
     #[test]
-    fn test_detects_unannotated_function() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_unannotated_function() -> Result<(), Box<dyn Error>> {
         // Plain-JS form — no type annotations, `.ts` extension used here.
         let file: NamedTempFile = create_temp_ts_file(
             r#"
@@ -256,7 +256,7 @@ export function toStr(sv) {
     }
 
     #[test]
-    fn test_detects_arrow_functions() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_arrow_functions() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_ts_file(
             r#"
 export const startsWith = (sv, prefix) => sv.startsWith(prefix);
@@ -279,7 +279,7 @@ export const stripPrefix = (sv: string, prefix: string): string => sv.slice(pref
     }
 
     #[test]
-    fn test_renamed_definition_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_renamed_definition_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_ts_file(
             r#"
 export function toStr2(sv: StringView): string {
@@ -293,7 +293,7 @@ export function toStr2(sv: StringView): string {
     }
 
     #[test]
-    fn test_call_site_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_call_site_only_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_ts_file(
             r#"
 export function other(sv: StringView): string {
@@ -308,7 +308,7 @@ export function other(sv: StringView): string {
     }
 
     #[test]
-    fn test_comment_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_comment_only_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_ts_file(
             r#"
 // toStr(sv) converts a StringView; function toStr is documented here only.
@@ -321,7 +321,7 @@ export function unrelated(): void {}
     }
 
     #[test]
-    fn test_reports_missing_methods() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_reports_missing_methods() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_ts_file(
             r#"
 export function toStr(sv: StringView | null | undefined): string {
@@ -340,7 +340,7 @@ export function toStr(sv: StringView | null | undefined): string {
     }
 
     #[test]
-    fn test_detects_plain_js_function() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_plain_js_function() -> Result<(), Box<dyn Error>> {
         // Validates that `.js` files are parsed with `language: javascript`, not
         // `language: typescript` — the two parsers are distinct in ast-grep and
         // the wrong choice silently produces zero matches.
@@ -364,7 +364,7 @@ export function startsWith(sv, prefix) {
     }
 
     #[test]
-    fn test_real_sdk_has_all_golden_methods() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_sdk_has_all_golden_methods() -> Result<(), Box<dyn Error>> {
         let sdk_path: PathBuf = repo_path("sdks/js/abi/abi.ts");
         let result: ValidationResult = validate_file(&golden_methods(), &sdk_path)?;
         assert!(
@@ -377,7 +377,7 @@ export function startsWith(sv, prefix) {
     }
 
     #[test]
-    fn test_real_guest_js_has_all_golden_methods() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_guest_js_has_all_golden_methods() -> Result<(), Box<dyn Error>> {
         let sdk_path: PathBuf = repo_path("sdks/js/guest/polyplug_guest.js");
         let result: ValidationResult = validate_file(&golden_methods(), &sdk_path)?;
         assert!(
@@ -392,7 +392,7 @@ export function startsWith(sv, prefix) {
     fn validate_enum_file(
         enum_name: &str,
         file: &Path,
-    ) -> Result<EnumValidationResult, Box<dyn core::error::Error>> {
+    ) -> Result<EnumValidationResult, Box<dyn Error>> {
         let mut validator: JsValidator = JsValidator::new();
         let result: EnumValidationResult = validate_language_enum(
             &mut validator,
@@ -405,7 +405,7 @@ export function startsWith(sv, prefix) {
     }
 
     #[test]
-    fn test_ts_enum_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_ts_enum_exact_match_passes() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_ts_file(
             r#"
 export const enum DispatchType {
@@ -420,8 +420,7 @@ export const enum DispatchType {
     }
 
     #[test]
-    fn test_ts_enum_wrong_value_fails_with_expected_vs_found()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_ts_enum_wrong_value_fails_with_expected_vs_found() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_ts_file(
             r#"
 export const enum DispatchType {
@@ -442,7 +441,7 @@ export const enum DispatchType {
     }
 
     #[test]
-    fn test_ts_enum_missing_and_extra_variants_fail() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_ts_enum_missing_and_extra_variants_fail() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_ts_file(
             r#"
 export const enum DispatchType {
@@ -466,8 +465,7 @@ export const enum DispatchType {
     }
 
     #[test]
-    fn test_ts_enum_commented_out_variant_does_not_count() -> Result<(), Box<dyn core::error::Error>>
-    {
+    fn test_ts_enum_commented_out_variant_does_not_count() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_ts_file(
             r#"
 // DispatchType has VirtualMachine = 1 per the ABI.
@@ -490,7 +488,7 @@ const doc: string = "VirtualMachine = 1";
     }
 
     #[test]
-    fn test_js_object_literal_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_js_object_literal_exact_match_passes() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_js_file(
             r#"
 export const DispatchType = {
@@ -506,7 +504,7 @@ export const DispatchType = {
 
     #[test]
     fn test_js_object_literal_wrong_value_fails_with_expected_vs_found()
-    -> Result<(), Box<dyn core::error::Error>> {
+    -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_js_file(
             r#"
 export const DispatchType = {
@@ -527,8 +525,7 @@ export const DispatchType = {
     }
 
     #[test]
-    fn test_js_object_literal_missing_and_extra_variants_fail()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_js_object_literal_missing_and_extra_variants_fail() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_js_file(
             r#"
 export const DispatchType = {
@@ -550,8 +547,8 @@ export const DispatchType = {
     }
 
     #[test]
-    fn test_js_object_literal_comment_and_other_objects_do_not_count()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_js_object_literal_comment_and_other_objects_do_not_count() -> Result<(), Box<dyn Error>>
+    {
         let file: NamedTempFile = create_temp_js_file(
             r#"
 // DispatchType has VirtualMachine: 1 per the ABI.
@@ -576,7 +573,7 @@ export const DispatchType = {
     }
 
     #[test]
-    fn test_real_abi_mirror_matches_golden_enums() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_abi_mirror_matches_golden_enums() -> Result<(), Box<dyn Error>> {
         let path: PathBuf = repo_path("sdks/js/abi/abi.ts");
         for enum_name in [
             "AbiErrorCode",
@@ -591,7 +588,7 @@ export const DispatchType = {
     }
 
     #[test]
-    fn test_real_guest_js_matches_golden_enums() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_guest_js_matches_golden_enums() -> Result<(), Box<dyn Error>> {
         let path: PathBuf = repo_path("sdks/js/guest/polyplug_guest.js");
         for enum_name in ["AbiErrorCode", "LogLevel"] {
             let result: EnumValidationResult = validate_enum_file(enum_name, &path)?;
@@ -604,7 +601,7 @@ export const DispatchType = {
         struct_name: &str,
         golden_fields: &[String],
         file: &Path,
-    ) -> Result<StructFieldValidationResult, Box<dyn core::error::Error>> {
+    ) -> Result<StructFieldValidationResult, Box<dyn Error>> {
         let mut validator: JsValidator = JsValidator::new();
         // TypeScript interface field names are snake_case (unlike JS methods,
         // which are camelCase), and the comparator normalizes either way back
@@ -620,7 +617,7 @@ export const DispatchType = {
     }
 
     #[test]
-    fn test_struct_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_exact_match_passes() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_ts_file(
             r#"
 export interface StringView {
@@ -636,7 +633,7 @@ export interface StringView {
     }
 
     #[test]
-    fn test_struct_renamed_field_is_missing_and_extra() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_renamed_field_is_missing_and_extra() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_ts_file(
             r#"
 export interface StringView {
@@ -660,7 +657,7 @@ export interface StringView {
     }
 
     #[test]
-    fn test_struct_comment_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_comment_only_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_ts_file(
             r#"
 // export interface StringView { ptr: bigint; len: number; }
@@ -678,7 +675,7 @@ export interface StringView {
     }
 
     #[test]
-    fn test_struct_other_interface_not_confused() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_other_interface_not_confused() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_ts_file(
             r#"
 export interface Other {
@@ -698,7 +695,7 @@ export interface StringView {
     }
 
     #[test]
-    fn test_real_abi_mirror_structs_match_golden() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_abi_mirror_structs_match_golden() -> Result<(), Box<dyn Error>> {
         let path: PathBuf = repo_path("sdks/js/abi/abi.ts");
         for struct_name in ["StringView", "AbiError"] {
             let result: StructFieldValidationResult =

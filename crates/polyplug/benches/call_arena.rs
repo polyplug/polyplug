@@ -47,14 +47,21 @@ use polyplug_abi::Array;
 use polyplug_abi::CallArena;
 use polyplug_abi::DependencyInfo;
 use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
 use polyplug_abi::HostContractInstance;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
+use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_utils::BundleId;
+
+use core::ffi::c_void;
+use core::ptr;
+use criterion::BenchmarkGroup;
+use criterion::measurement::WallTime;
 
 // ─── Minimal HostApi backing the arena's overflow alloc/free ──────────────────
 //
@@ -91,7 +98,7 @@ unsafe extern "C" fn stub_resolve_guest(
     _this: *const HostApi,
     _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
-    core::ptr::null()
+    ptr::null()
 }
 
 unsafe extern "C" fn stub_get_host_contract(
@@ -107,7 +114,7 @@ unsafe extern "C" fn stub_resolve_host_interface(
     _id: u64,
     _ver: u32,
 ) -> *const HostContractInterface {
-    core::ptr::null()
+    ptr::null()
 }
 
 unsafe extern "C" fn stub_list_bundles(_this: *const HostApi) -> Array<BundleId> {
@@ -143,7 +150,7 @@ unsafe extern "C" fn stub_register_host(
 
 unsafe extern "C" fn stub_register_loader(
     _this: *const HostApi,
-    _loader: *mut core::ffi::c_void,
+    _loader: *mut c_void,
     out_err: *mut AbiError,
 ) {
     if !out_err.is_null() {
@@ -196,7 +203,7 @@ unsafe extern "C" fn arena_free(_this: *const HostApi, ptr: *mut u8, size: usize
 /// other field is a valid no-op stub so the table is well-formed.
 fn arena_host_api() -> HostApi {
     HostApi {
-        runtime: core::ptr::null_mut(),
+        runtime: ptr::null_mut(),
         register_guest_contract: stub_register_guest,
         alloc: arena_alloc,
         free: arena_free,
@@ -218,7 +225,7 @@ fn arena_host_api() -> HostApi {
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
         revision_counter: stub_revision_counter,
-        reserved: core::ptr::null(),
+        reserved: ptr::null(),
     }
 }
 
@@ -237,8 +244,7 @@ fn bench_primary_alloc(c: &mut Criterion) {
     let mut buf: Vec<u8> = vec![0_u8; PRIMARY_BYTES];
     let mut arena: CallArena = CallArena::new(&mut buf, &host as *const HostApi);
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("call_arena");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("call_arena");
     group.throughput(Throughput::Elements(1));
 
     group.bench_function(BenchmarkId::new("primary", "alloc_64"), |b| {
@@ -265,8 +271,7 @@ fn bench_reset_primary_only(c: &mut Criterion) {
     // Advance the cursor once so reset has something to rewind.
     let _ = arena.alloc(64, 8);
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("call_arena");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("call_arena");
     group.throughput(Throughput::Elements(1));
 
     group.bench_function(BenchmarkId::new("reset", "primary_only"), |b| {
@@ -296,8 +301,7 @@ fn bench_overflow_reuse(c: &mut Criterion) {
     // Overflow payload: larger than the primary region so it always spills.
     const OVERFLOW_ALLOC: usize = PRIMARY_BYTES + 1024;
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("call_arena");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("call_arena");
     group.throughput(Throughput::Elements(1));
 
     // COLD: build a fresh arena per iteration so its Drop frees the block, then
@@ -353,8 +357,7 @@ fn bench_per_call(c: &mut Criterion) {
 
     let payload_sizes: [usize; 2] = [64, 65536];
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("call_arena");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("call_arena");
     group.throughput(Throughput::Elements(1));
 
     for &payload in &payload_sizes {
@@ -395,32 +398,32 @@ criterion_main!(benches);
 
 /// `HostApi.log` stub for test hosts — drops the record.
 unsafe extern "C" fn stub_host_log(
-    _this: *const polyplug_abi::HostApi,
+    _this: *const HostApi,
     _level: u32,
-    _scope: polyplug_abi::StringView,
-    _message: polyplug_abi::StringView,
+    _scope: StringView,
+    _message: StringView,
 ) {
 }
 
 unsafe extern "C" fn stub_create_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _args: *const core::ffi::c_void,
-    out_instance: *mut polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _args: *const c_void,
+    out_instance: *mut GuestContractInstance,
 ) {
     if !out_instance.is_null() {
         // SAFETY: out_instance is non-null (just checked) and writable per the ABI contract.
-        unsafe { out_instance.write(polyplug_abi::GuestContractInstance::null()) };
+        unsafe { out_instance.write(GuestContractInstance::null()) };
     }
 }
 
 unsafe extern "C" fn stub_destroy_guest_instance(
-    _this: *const polyplug_abi::HostApi,
-    _interface: *const polyplug_abi::GuestContractInterface,
-    _instance: polyplug_abi::GuestContractInstance,
+    _this: *const HostApi,
+    _interface: *const GuestContractInterface,
+    _instance: GuestContractInstance,
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const polyplug_abi::HostApi) -> *const u64 {
-    core::ptr::null()
+unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
+    ptr::null()
 }

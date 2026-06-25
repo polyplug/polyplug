@@ -5,6 +5,7 @@
 
 use polyplug_codegen::{GenerateConfig, Lang, Side};
 use polyplugc::generate;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -35,9 +36,9 @@ fn generate_csharp_bindings(bundle_toml: &Path, out_dir: &Path) {
     for file in &output.files {
         let file_path = out_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 }
 
@@ -50,7 +51,7 @@ fn test_generate_csharp_files_exist() {
     let out_dir: PathBuf =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_csharp");
 
-    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    fs::create_dir_all(&out_dir).expect("create out_dir");
 
     // Generate C# bindings using library API
     generate_csharp_bindings(&bundle_toml, &out_dir);
@@ -87,7 +88,7 @@ fn test_csharp_codegen_generates_enum_types() {
     let out_dir: PathBuf =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_csharp_enum");
 
-    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    fs::create_dir_all(&out_dir).expect("create out_dir");
 
     // Generate C# bindings using library API (host side for api.toml)
     let config = GenerateConfig {
@@ -102,14 +103,14 @@ fn test_csharp_codegen_generates_enum_types() {
     for file in &output.files {
         let file_path = out_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 
     // Read host/Types.cs and assert enum content
     let types_file: PathBuf = out_dir.join("host").join("Types.cs");
-    let content: String = std::fs::read_to_string(&types_file).expect("read types file");
+    let content: String = fs::read_to_string(&types_file).expect("read types file");
 
     assert!(
         content.contains("public enum PixelFormat : uint"),

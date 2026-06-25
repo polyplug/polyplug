@@ -10,6 +10,7 @@
 #![allow(clippy::expect_used)]
 
 use polyplug_codegen::error::PolyplugcError;
+use polyplugc::ir::ValidatedIr;
 use polyplugc::parser::{parse_api_str, parse_bundle_str};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -192,7 +193,7 @@ fn duplicate_type_and_enum_different_names_ok() {
         "[[enum]]\nname = \"Status\"\nrepr = \"u32\"\n\n",
         "[[enum.variants]]\nname = \"Ok\"\nvalue = \"0\"\n",
     );
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(toml);
+    let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
         result.is_ok(),
         "expected Ok for distinct names, got {result:?}"
@@ -280,7 +281,7 @@ fn known_primitive_types_accepted() {
         "[[contract.functions]]\nname = \"k\"\n",
         "[[contract.functions.params]]\nname = \"p\"\ntype = \"bool\"\n",
     );
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(toml);
+    let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
         result.is_ok(),
         "expected all primitives to resolve, got {result:?}"
@@ -298,7 +299,7 @@ fn abi_builtins_accepted_as_type_refs() {
         "[[contract.functions]]\nname = \"c\"\nreturn = \"Void\"\n\n",
         "[[contract.functions]]\nname = \"d\"\nreturn = \"ptr\"\n",
     );
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(toml);
+    let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
         result.is_ok(),
         "expected ABI builtins to resolve, got {result:?}"
@@ -316,7 +317,7 @@ fn user_defined_type_resolves_when_declared() {
         "[[contract.functions]]\nname = \"distance\"\n",
         "[[contract.functions.params]]\nname = \"p\"\ntype = \"Point\"\n",
     );
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(toml);
+    let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
         result.is_ok(),
         "expected user-defined type to resolve, got {result:?}"
@@ -332,7 +333,7 @@ fn enum_type_resolves_as_param_type() {
         "[[contract]]\nname = \"svc\"\nversion = \"1.0\"\n\n",
         "[[contract.functions]]\nname = \"get_status\"\nreturn = \"Status\"\n",
     );
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(toml);
+    let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
         result.is_ok(),
         "expected enum type to resolve as return, got {result:?}"
@@ -391,7 +392,7 @@ fn enum_single_level_ref_accepted() {
         "[[enum.variants]]\nname = \"A\"\nvalue = \"1\"\n",
         "[[enum.variants]]\nname = \"B\"\nvalue = \"A | 1\"\n",
     );
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(toml);
+    let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
         result.is_ok(),
         "expected single-level backward ref to succeed, got {result:?}"
@@ -408,7 +409,7 @@ fn enum_multiple_back_refs_in_one_value_accepted() {
         "[[enum.variants]]\nname = \"C\"\nvalue = \"4\"\n",
         "[[enum.variants]]\nname = \"D\"\nvalue = \"A | B | C\"\n",
     );
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(toml);
+    let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
         result.is_ok(),
         "expected multi-back-ref expression to succeed, got {result:?}"
@@ -472,7 +473,7 @@ fn enum_all_valid_reprs_accepted() {
         let toml: String = format!(
             "[[enum]]\nname = \"E\"\nrepr = \"{repr}\"\n\n[[enum.variants]]\nname = \"X\"\nvalue = \"0\"\n"
         );
-        let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(&toml);
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(&toml);
         assert!(
             result.is_ok(),
             "expected repr={repr} to be accepted, got {result:?}",
@@ -523,7 +524,7 @@ fn enum_valid_hex_literal_accepted() {
         "[[enum.variants]]\nname = \"A\"\nvalue = \"0xFF\"\n",
         "[[enum.variants]]\nname = \"B\"\nvalue = \"0x0A\"\n",
     );
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(toml);
+    let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
         result.is_ok(),
         "expected hex literals to be accepted, got {result:?}"
@@ -536,7 +537,7 @@ fn enum_valid_binary_literal_accepted() {
         "[[enum]]\nname = \"Flags\"\nrepr = \"u32\"\n\n",
         "[[enum.variants]]\nname = \"A\"\nvalue = \"0b1010\"\n",
     );
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(toml);
+    let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
         result.is_ok(),
         "expected binary literals to be accepted, got {result:?}"
@@ -549,7 +550,7 @@ fn enum_valid_tilde_operator_accepted() {
         "[[enum]]\nname = \"Flags\"\nrepr = \"u32\"\n\n",
         "[[enum.variants]]\nname = \"All\"\nvalue = \"~0\"\n",
     );
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(toml);
+    let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
         result.is_ok(),
         "expected ~ operator to be accepted, got {result:?}"
@@ -562,7 +563,7 @@ fn enum_valid_grouped_expr_accepted() {
         "[[enum]]\nname = \"Flags\"\nrepr = \"u32\"\n\n",
         "[[enum.variants]]\nname = \"A\"\nvalue = \"(1 << 2)\"\n",
     );
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(toml);
+    let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
         result.is_ok(),
         "expected grouped expression to be accepted, got {result:?}"
@@ -633,7 +634,7 @@ fn version_empty_string_rejected() {
 #[test]
 fn version_single_component_accepted() {
     // "1" → major=1, minor=0, patch=0 — should succeed.
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> =
+    let result: Result<ValidatedIr, PolyplugcError> =
         parse_api_str("[[contract]]\nname = \"x\"\nversion = \"1\"");
     assert!(
         result.is_ok(),
@@ -644,7 +645,7 @@ fn version_single_component_accepted() {
 #[test]
 fn version_major_minor_accepted() {
     // "2.3" → major=2, minor=3, patch=0 — should succeed.
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> =
+    let result: Result<ValidatedIr, PolyplugcError> =
         parse_api_str("[[contract]]\nname = \"x\"\nversion = \"2.3\"");
     assert!(
         result.is_ok(),
@@ -672,7 +673,7 @@ fn bundle_version_overflow_rejected() {
 fn bundle_with_no_plugins_accepted() {
     // plugins are optional.
     let toml: &str = "[bundle]\nname = \"empty-bundle\"\nversion = \"1.0\"\nfile = \"test.so\"";
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_bundle_str(toml);
+    let result: Result<ValidatedIr, PolyplugcError> = parse_bundle_str(toml);
     assert!(
         result.is_ok(),
         "expected bundle with no plugins to succeed, got {result:?}"
@@ -685,7 +686,7 @@ fn bundle_plugin_without_version_succeeds() {
     // single deployable-artifact version, and plugins ship/load/reload as part of
     // the bundle, so a per-plugin version would be redundant. A plugin entry with
     // only `name` + `implements` must parse cleanly.
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_bundle_str(concat!(
+    let result: Result<ValidatedIr, PolyplugcError> = parse_bundle_str(concat!(
         "[bundle]\nname = \"b\"\nversion = \"1.0\"\nfile = \"x.so\"\n\n",
         "[[plugin]]\nname = \"my-plugin\"\nimplements = [\"image.encode@1.0\"]\n",
     ));
@@ -703,7 +704,7 @@ fn bundle_well_formed_succeeds() {
         "implements = [\"image.encode@1.0\"]\n\n",
         "[[dependency]]\nkind = \"contract\"\ncontract = \"image.encode\"\nmin_version = \"1.0\"\n",
     );
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_bundle_str(toml);
+    let result: Result<ValidatedIr, PolyplugcError> = parse_bundle_str(toml);
     assert!(
         result.is_ok(),
         "expected well-formed bundle to succeed, got {result:?}"
@@ -717,7 +718,7 @@ fn bundle_well_formed_succeeds() {
 #[test]
 fn empty_api_toml_accepted() {
     // An empty file is a valid (empty) API schema.
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str("");
+    let result: Result<ValidatedIr, PolyplugcError> = parse_api_str("");
     assert!(
         result.is_ok(),
         "expected empty API TOML to succeed, got {result:?}"
@@ -726,7 +727,7 @@ fn empty_api_toml_accepted() {
 
 #[test]
 fn whitespace_only_api_toml_accepted() {
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str("   \n\n  ");
+    let result: Result<ValidatedIr, PolyplugcError> = parse_api_str("   \n\n  ");
     assert!(
         result.is_ok(),
         "expected whitespace-only API TOML to succeed, got {result:?}"
@@ -735,7 +736,7 @@ fn whitespace_only_api_toml_accepted() {
 
 #[test]
 fn comments_only_api_toml_accepted() {
-    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> =
+    let result: Result<ValidatedIr, PolyplugcError> =
         parse_api_str("# This is just a comment\n# Another comment\n");
     assert!(
         result.is_ok(),
@@ -751,8 +752,7 @@ fn multiple_contracts_all_parse() {
         "[[contract]]\nname = \"svc.beta\"\nversion = \"2.1\"\n\n",
         "[[contract.functions]]\nname = \"pong\"\n",
     );
-    let ir: polyplugc::ir::ValidatedIr =
-        parse_api_str(toml).expect("expected multiple contracts to parse");
+    let ir: ValidatedIr = parse_api_str(toml).expect("expected multiple contracts to parse");
     assert_eq!(ir.contracts.len(), 2, "expected 2 contracts");
     assert_eq!(ir.contracts[0].name, "svc.alpha");
     assert_eq!(ir.contracts[1].name, "svc.beta");
@@ -851,7 +851,7 @@ fn duplicate_function_name_within_contract_rejected() {
 #[test]
 fn valid_dotted_contract_name_accepted() {
     // Sanity: a normal dotted PascalCase contract name must still parse.
-    let ir: polyplugc::ir::ValidatedIr =
+    let ir: ValidatedIr =
         parse_api_str("[[plugin_contract]]\nname = \"pipeline.Decoder\"\nversion = \"1.0\"\n")
             .expect("valid dotted contract name must parse");
     assert_eq!(ir.contracts.len(), 1);

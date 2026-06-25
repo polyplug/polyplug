@@ -3,6 +3,10 @@
 #![allow(clippy::std_instead_of_core)]
 
 use core::ffi::c_void;
+use std::num::ParseIntError;
+use std::ptr;
+use std::slice;
+use std::str;
 
 use polyplug::loader::BundleLoader;
 use polyplug::logger::LoggerHandle;
@@ -180,24 +184,23 @@ pub unsafe extern "C" fn polyplug_python_loader_create(
     config: *const PolyplugPythonConfig,
 ) -> *mut c_void {
     if config.is_null() {
-        return std::ptr::null_mut();
+        return ptr::null_mut();
     }
     // SAFETY: caller guarantees config is a valid, non-null pointer.
     let cfg: &PolyplugPythonConfig = unsafe { &*config };
     if cfg.min_version_ptr.is_null() {
-        return std::ptr::null_mut();
+        return ptr::null_mut();
     }
     // SAFETY: caller guarantees min_version_ptr points to min_version_len
     // valid bytes for the duration of this call.
-    let bytes: &[u8] =
-        unsafe { std::slice::from_raw_parts(cfg.min_version_ptr, cfg.min_version_len) };
-    let version_str: &str = match std::str::from_utf8(bytes) {
+    let bytes: &[u8] = unsafe { slice::from_raw_parts(cfg.min_version_ptr, cfg.min_version_len) };
+    let version_str: &str = match str::from_utf8(bytes) {
         Ok(s) => s,
-        Err(_) => return std::ptr::null_mut(),
+        Err(_) => return ptr::null_mut(),
     };
     let min_version: (u32, u32) = match parse_version(version_str) {
         Some(v) => v,
-        None => return std::ptr::null_mut(),
+        None => return ptr::null_mut(),
     };
     let loader: PythonLoader = PythonLoader::new(PythonConfig { min_version });
     // Double-box: inner Box<dyn BundleLoader> preserves the fat pointer (data + vtable),
@@ -238,7 +241,7 @@ fn parse_version(s: &str) -> Option<(u32, u32)> {
     let major_str: &str = parts.next()?;
     let major: u32 = major_str
         .parse()
-        .map_err(|e: std::num::ParseIntError| {
+        .map_err(|e: ParseIntError| {
             logger.log(LogLevel::Error, "loader.python", || {
                 format!("parse_version: failed to parse major '{major_str}' as u32: {e}")
             });
@@ -247,7 +250,7 @@ fn parse_version(s: &str) -> Option<(u32, u32)> {
     let minor_str: &str = parts.next()?;
     let minor: u32 = minor_str
         .parse()
-        .map_err(|e: std::num::ParseIntError| {
+        .map_err(|e: ParseIntError| {
             logger.log(LogLevel::Error, "loader.python", || {
                 format!("parse_version: failed to parse minor '{minor_str}' as u32: {e}")
             });

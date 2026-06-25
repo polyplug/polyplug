@@ -5,6 +5,7 @@
 
 use polyplug_codegen::{GenerateConfig, Lang, Side};
 use polyplugc::generate;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -35,9 +36,9 @@ fn generate_cpp_bindings(bundle_toml: &Path, out_dir: &Path, side: Side) {
     for file in &output.files {
         let file_path = out_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+            fs::create_dir_all(parent).expect("failed to create parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+        fs::write(&file_path, &file.content).expect("failed to write generated file");
     }
 }
 
@@ -50,7 +51,7 @@ fn test_generate_cpp_guest_files_exist() {
     let out_dir: PathBuf =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_cpp_guest");
 
-    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    fs::create_dir_all(&out_dir).expect("create out_dir");
 
     // Generate C++ guest-side bindings using library API
     generate_cpp_bindings(&bundle_toml, &out_dir, Side::Guest);
@@ -87,7 +88,7 @@ fn test_generate_cpp_host_files_exist() {
     let out_dir: PathBuf =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_cpp_host");
 
-    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    fs::create_dir_all(&out_dir).expect("create out_dir");
 
     // Generate C++ host-side bindings using library API
     generate_cpp_bindings(&api_toml, &out_dir, Side::Host);
@@ -119,13 +120,13 @@ fn test_cpp_codegen_uses_interface_naming() {
     let out_dir: PathBuf =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_cpp_naming");
 
-    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    fs::create_dir_all(&out_dir).expect("create out_dir");
 
     generate_cpp_bindings(&bundle_toml, &out_dir, Side::Guest);
 
     // Read guest/interfaces.hpp and assert interface naming
     let interfaces_file: PathBuf = out_dir.join("guest").join("interfaces.hpp");
-    let content: String = std::fs::read_to_string(&interfaces_file).expect("read interfaces file");
+    let content: String = fs::read_to_string(&interfaces_file).expect("read interfaces file");
 
     // Assert _INTERFACE suffix is used (not _VTABLE)
     assert!(
@@ -160,7 +161,7 @@ fn test_cpp_codegen_host_contract_uses_interface() {
     let out_dir: PathBuf =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_cpp_host_contract");
 
-    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    fs::create_dir_all(&out_dir).expect("create out_dir");
 
     // Generate guest-side bindings (host_contracts.hpp is in guest directory for callers)
     generate_cpp_bindings(&bundle_toml, &out_dir, Side::Guest);
@@ -173,7 +174,7 @@ fn test_cpp_codegen_host_contract_uses_interface() {
     // If host_contracts.hpp exists, check its content
     if host_callers_file.exists() {
         let content: String =
-            std::fs::read_to_string(&host_callers_file).expect("read host_contracts file");
+            fs::read_to_string(&host_callers_file).expect("read host_contracts file");
 
         // Assert HostContractInterface is used (not HostContractVTable)
         if content.contains("HostContract") {
@@ -217,7 +218,7 @@ fn test_cpp_codegen_guest_instance_wrapper_exists() {
     let out_dir: PathBuf =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_cpp_instance");
 
-    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    fs::create_dir_all(&out_dir).expect("create out_dir");
 
     generate_cpp_bindings(&bundle_toml, &out_dir, Side::Guest);
 
@@ -227,7 +228,7 @@ fn test_cpp_codegen_guest_instance_wrapper_exists() {
     // If host_callers.hpp exists in guest directory, check for instance wrapper pattern
     if host_callers_file.exists() {
         let content: String =
-            std::fs::read_to_string(&host_callers_file).expect("read host_callers file");
+            fs::read_to_string(&host_callers_file).expect("read host_callers file");
 
         // Assert instance wrapper pattern exists (for calling guest contracts from host)
         // The pattern includes:
@@ -271,8 +272,7 @@ fn test_cpp_codegen_guest_instance_wrapper_exists() {
     } else {
         // Read guest/interfaces.hpp instead - it contains the static interface declaration
         let interfaces_file: PathBuf = out_dir.join("guest").join("interfaces.hpp");
-        let content: String =
-            std::fs::read_to_string(&interfaces_file).expect("read interfaces file");
+        let content: String = fs::read_to_string(&interfaces_file).expect("read interfaces file");
 
         // Assert create_instance stub exists in interface
         assert!(
@@ -303,7 +303,7 @@ fn test_cpp_codegen_factory_uses_inline_fields() {
     let out_dir: PathBuf =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_cpp_factory");
 
-    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    fs::create_dir_all(&out_dir).expect("create out_dir");
 
     // Generate host-side bindings
     generate_cpp_bindings(&api_toml, &out_dir, Side::Host);
@@ -312,8 +312,8 @@ fn test_cpp_codegen_factory_uses_inline_fields() {
     let interface_factories_file: PathBuf = out_dir.join("host").join("interface_factories.hpp");
 
     if interface_factories_file.exists() {
-        let content: String = std::fs::read_to_string(&interface_factories_file)
-            .expect("read interface_factories file");
+        let content: String =
+            fs::read_to_string(&interface_factories_file).expect("read interface_factories file");
 
         // Assert HostContractInterface is used
         assert!(
@@ -361,7 +361,7 @@ fn test_cpp_codegen_no_legacy_vtable_naming() {
     let out_dir: PathBuf =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_cpp_legacy");
 
-    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    fs::create_dir_all(&out_dir).expect("create out_dir");
 
     generate_cpp_bindings(&bundle_toml, &out_dir, Side::Guest);
 
@@ -376,7 +376,7 @@ fn test_cpp_codegen_no_legacy_vtable_naming() {
     for rel_path in guest_files {
         let full_path: PathBuf = out_dir.join(rel_path);
         if full_path.exists() {
-            let content: String = std::fs::read_to_string(&full_path).expect("read file");
+            let content: String = fs::read_to_string(&full_path).expect("read file");
 
             // Assert no PluginVTable (legacy naming)
             assert!(
@@ -416,13 +416,12 @@ fn test_cpp_codegen_host_caller_threads_arena() {
     let out_dir: PathBuf =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_cpp_arena");
 
-    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+    fs::create_dir_all(&out_dir).expect("create out_dir");
 
     generate_cpp_bindings(&api_toml, &out_dir, Side::Host);
 
     let host_callers_file: PathBuf = out_dir.join("host").join("host_callers.hpp");
-    let content: String =
-        std::fs::read_to_string(&host_callers_file).expect("read host_callers file");
+    let content: String = fs::read_to_string(&host_callers_file).expect("read host_callers file");
 
     // The inline arena helpers and the per-caller buffer/member must be emitted.
     assert!(

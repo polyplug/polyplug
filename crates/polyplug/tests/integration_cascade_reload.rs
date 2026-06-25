@@ -18,21 +18,30 @@ use core::sync::atomic::Ordering;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use core::ptr;
 use polyplug::error::LoaderError;
-use polyplug::loader::{BundleLoader, ManifestData};
+use polyplug::loader::BundleLoader;
+use polyplug::loader::BundleSource;
+use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
+use polyplug_abi::SupportedLanguage;
+use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::{
     Compatibility, DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface,
     HostApi, NativeDispatch, PluginDescriptor, RuntimeConfig, StringView, Version,
 };
+use polyplug_utils::bundle_id;
+use polyplug_utils::guest_contract_id;
 use polyplug_utils::{BundleId, GuestContractId};
+use std::fs;
+use tempfile::TempDir;
 
 // ─── Shared callbacks ──────────────────────────────────────────────────────────
 
 const MOCK_FNS_EMPTY: [*const (); 0] = [];
 
 unsafe extern "C" fn noop_create_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -44,7 +53,7 @@ unsafe extern "C" fn noop_create_instance(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
@@ -108,8 +117,8 @@ impl BundleLoader for CascadeLoader {
         self.loader_name
     }
 
-    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
-        polyplug_abi::SupportedLanguage::Rust
+    fn loader_language(&self) -> SupportedLanguage {
+        SupportedLanguage::Rust
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -119,7 +128,7 @@ impl BundleLoader for CascadeLoader {
     fn load(
         &self,
         manifest: &ManifestData,
-        _source: &polyplug::loader::BundleSource,
+        _source: &BundleSource,
         runtime: &Runtime,
     ) -> Result<(), LoaderError> {
         self.register(manifest, runtime);
@@ -140,7 +149,7 @@ fn hot_reload_config() -> RuntimeConfig {
         compatibility: Compatibility::Yolo,
         hot_reload_enabled: true,
         on_reload: None,
-        on_reload_user_data: core::ptr::null_mut(),
+        on_reload_user_data: ptr::null_mut(),
         ..Default::default()
     }
 }
@@ -153,19 +162,19 @@ fn hot_reload_config() -> RuntimeConfig {
 /// The dependency `contract` name and its `contract_id` are kept consistent here so
 /// the bundle passes `ManifestData::validate`'s contract_id cross-check.
 fn write_bundle(
-    temp: &tempfile::TempDir,
+    temp: &TempDir,
     bundle_name: &str,
     loader_name: &str,
     needs_reinit: bool,
     dep_contract: Option<&str>,
 ) -> PathBuf {
     let bundle_dir: PathBuf = temp.path().join(bundle_name);
-    std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
-    std::fs::write(bundle_dir.join("dummy.so"), b"").expect("write dummy so");
+    fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+    fs::write(bundle_dir.join("dummy.so"), b"").expect("write dummy so");
 
-    let bundle_id: u64 = polyplug_utils::bundle_id(bundle_name);
+    let bundle_id_val: u64 = bundle_id(bundle_name);
     let mut manifest: String = format!(
-        "id = {bundle_id}\n\
+        "id = {bundle_id_val}\n\
          name = \"{bundle_name}\"\n\
          loader = \"{loader_name}\"\n\
          file = \"dummy.so\"\n\
@@ -173,7 +182,7 @@ fn write_bundle(
          needs_reinit_on_dep_reload = {needs_reinit}\n"
     );
     if let Some(contract_name) = dep_contract {
-        let contract_id: u64 = polyplug_utils::guest_contract_id(contract_name, 1_u32);
+        let contract_id: u64 = guest_contract_id(contract_name, 1_u32);
         manifest.push_str(&format!(
             "\n[[dependency]]\n\
              kind = \"contract\"\n\
@@ -182,7 +191,7 @@ fn write_bundle(
              contract_id = {contract_id}\n"
         ));
     }
-    std::fs::write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
+    fs::write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
     bundle_dir
 }
 
@@ -190,9 +199,9 @@ fn write_bundle(
 
 #[test]
 fn cascade_reload_disabled_does_not_trigger() {
-    let temp: tempfile::TempDir = tempfile::TempDir::new().expect("temp dir");
+    let temp: TempDir = TempDir::new().expect("temp dir");
 
-    let a_contract_id: u64 = polyplug_utils::guest_contract_id("dep.contract", 1_u32);
+    let a_contract_id: u64 = guest_contract_id("dep.contract", 1_u32);
     let b_reload_called: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
     let runtime: Arc<Runtime> = Runtime::builder()
@@ -204,7 +213,7 @@ fn cascade_reload_disabled_does_not_trigger() {
         })
         .loader(CascadeLoader {
             loader_name: "cascade-b",
-            contract_id: polyplug_utils::guest_contract_id("b.contract", 1_u32),
+            contract_id: guest_contract_id("b.contract", 1_u32),
             reload_called: Arc::clone(&b_reload_called),
         })
         .build()
@@ -229,9 +238,9 @@ fn cascade_reload_disabled_does_not_trigger() {
 
 #[test]
 fn cascade_reload_enabled_triggers_dependent() {
-    let temp: tempfile::TempDir = tempfile::TempDir::new().expect("temp dir");
+    let temp: TempDir = TempDir::new().expect("temp dir");
 
-    let a_contract_id: u64 = polyplug_utils::guest_contract_id("dep.contract", 1_u32);
+    let a_contract_id: u64 = guest_contract_id("dep.contract", 1_u32);
     let b_reload_called: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
     let runtime: Arc<Runtime> = Runtime::builder()
@@ -243,7 +252,7 @@ fn cascade_reload_enabled_triggers_dependent() {
         })
         .loader(CascadeLoader {
             loader_name: "cascade-b",
-            contract_id: polyplug_utils::guest_contract_id("b.contract", 1_u32),
+            contract_id: guest_contract_id("b.contract", 1_u32),
             reload_called: Arc::clone(&b_reload_called),
         })
         .build()
@@ -268,10 +277,10 @@ fn cascade_reload_enabled_triggers_dependent() {
 
 #[test]
 fn cascade_reload_cycle_detection() {
-    let temp: tempfile::TempDir = tempfile::TempDir::new().expect("temp dir");
+    let temp: TempDir = TempDir::new().expect("temp dir");
 
-    let a_contract_id: u64 = polyplug_utils::guest_contract_id("a.contract", 1_u32);
-    let b_contract_id: u64 = polyplug_utils::guest_contract_id("b.contract", 1_u32);
+    let a_contract_id: u64 = guest_contract_id("a.contract", 1_u32);
+    let b_contract_id: u64 = guest_contract_id("b.contract", 1_u32);
 
     let a_reload_called: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let b_reload_called: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));

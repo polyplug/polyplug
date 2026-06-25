@@ -54,6 +54,10 @@
 //! ```
 
 use core::hint::black_box;
+use core::mem::transmute;
+use core::time::Duration;
+use std::env::var;
+use std::fs::{create_dir_all, read_to_string, write};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -110,7 +114,7 @@ struct AddArgs {
 /// or if the proc file is unreadable, so the soak still runs (churn-only) where
 /// RSS sampling is unavailable.
 fn current_rss_kib() -> Option<u64> {
-    let status: String = std::fs::read_to_string("/proc/self/status").ok()?;
+    let status: String = read_to_string("/proc/self/status").ok()?;
     for line in status.lines() {
         if let Some(rest) = line.strip_prefix("VmRSS:") {
             // Format: `VmRSS:\t   5380 kB`
@@ -122,7 +126,7 @@ fn current_rss_kib() -> Option<u64> {
 
 /// Parse a positive-integer environment variable, falling back to `default`.
 fn env_u64(name: &str, default: u64) -> u64 {
-    match std::env::var(name) {
+    match var(name) {
         Ok(raw) => raw.trim().parse::<u64>().unwrap_or(default).max(1),
         Err(_) => default,
     }
@@ -151,7 +155,7 @@ fn resolve_add_dispatch(runtime: &Runtime) -> NativeDispatchFn {
     // native function table.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: `add` was registered with the frozen native dispatch signature.
-    unsafe { core::mem::transmute::<*const (), NativeDispatchFn>(fn_ptr) }
+    unsafe { transmute::<*const (), NativeDispatchFn>(fn_ptr) }
 }
 
 /// One full churn cycle: fresh runtime, load, dispatch a few times, unload,
@@ -201,7 +205,7 @@ fn run_one_cycle() {
 fn soak_load_unload_churn() {
     let iters: u64 = env_u64("POLYPLUG_SOAK_ITERS", DEFAULT_SOAK_ITERS);
     let sample_every: u64 = env_u64("POLYPLUG_SOAK_SAMPLE_EVERY", DEFAULT_SAMPLE_EVERY);
-    let out_path: Option<String> = std::env::var("POLYPLUG_SOAK_OUT").ok();
+    let out_path: Option<String> = var("POLYPLUG_SOAK_OUT").ok();
 
     // (cycle_index, rss_kib) samples — populated only when RSS is readable.
     let mut series: Vec<(u64, u64)> = Vec::new();
@@ -218,7 +222,7 @@ fn soak_load_unload_churn() {
             }
         }
     }
-    let elapsed: core::time::Duration = start.elapsed();
+    let elapsed: Duration = start.elapsed();
 
     let cycles_per_sec: f64 = iters as f64 / elapsed.as_secs_f64();
 
@@ -273,14 +277,14 @@ fn soak_load_unload_churn() {
 
     if let Some(path) = out_path {
         if let Some(parent) = Path::new(&path).parent() {
-            let _ = std::fs::create_dir_all(parent);
+            let _ = create_dir_all(parent);
         }
         let mut body: String =
             String::from("# cycle rss_kib — polyplug load/unload soak (RSS over time)\n");
         for (cycle, rss) in &series {
             body.push_str(&format!("{cycle} {rss}\n"));
         }
-        std::fs::write(&path, body).expect("write soak RSS series");
+        write(&path, body).expect("write soak RSS series");
         println!("[soak] wrote RSS series to {path}");
     }
 }

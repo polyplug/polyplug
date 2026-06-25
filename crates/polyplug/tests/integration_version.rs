@@ -6,8 +6,10 @@ use polyplug::error::GraphError;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::BundleSource;
 use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
+use polyplug_abi::SupportedLanguage;
 use polyplug_abi::runtime::Compatibility;
 use polyplug_abi::types::LogLevel;
 use polyplug_utils::bundle_id;
@@ -25,8 +27,8 @@ impl BundleLoader for NoopLoader {
         "test-noop"
     }
 
-    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
-        polyplug_abi::SupportedLanguage::Rust
+    fn loader_language(&self) -> SupportedLanguage {
+        SupportedLanguage::Rust
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -36,18 +38,14 @@ impl BundleLoader for NoopLoader {
     fn load(
         &self,
         _manifest: &ManifestData,
-        _source: &polyplug::loader::BundleSource,
+        _source: &BundleSource,
         _runtime: &Runtime,
-    ) -> Result<(), polyplug::error::LoaderError> {
+    ) -> Result<(), LoaderError> {
         Ok(())
     }
 
-    fn reload(
-        &self,
-        _manifest: &ManifestData,
-        _runtime: &Runtime,
-    ) -> Result<(), polyplug::error::LoaderError> {
-        Err(polyplug::error::LoaderError::HotReloadUnsupported {
+    fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
+        Err(LoaderError::HotReloadUnsupported {
             loader_name: self.loader_name().to_owned(),
         })
     }
@@ -62,10 +60,10 @@ fn write_bundle_manifest(
     deps: &[(&str, u64, &str)],
 ) -> PathBuf {
     let bundle_dir: PathBuf = dir.path().join(bundle_name);
-    std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+    fs::create_dir_all(&bundle_dir).expect("create bundle dir");
 
     let so_name: String = format!("{bundle_name}.so");
-    std::fs::write(bundle_dir.join(&so_name), b"").expect("write stub so");
+    fs::write(bundle_dir.join(&so_name), b"").expect("write stub so");
 
     // Build TOML manifest string directly
     let mut manifest_toml: String = format!(

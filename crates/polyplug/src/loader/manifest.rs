@@ -6,17 +6,19 @@
 
 // TODO: Move toml parse to host rust SDK
 
+use core::fmt::{Formatter, Result as FmtResult};
 use core::str::FromStr;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs::read_to_string;
+use std::path::{Path, PathBuf};
 
 use serde::Deserializer;
-use serde::de::MapAccess;
-use serde::de::Visitor;
+use serde::de::{self, MapAccess, Visitor};
 
 use polyplug_abi::types::{LogLevel, Version};
-use polyplug_utils::{BundleId, GuestContractId};
+use polyplug_utils::{BundleId, GuestContractId, bundle_id as compute_bundle_id};
 
+use crate::error::LoaderError;
 use crate::logger::LoggerHandle;
 use crate::runtime_store::BundleDependency;
 
@@ -51,20 +53,20 @@ where
     impl<'de> Visitor<'de> for FileFieldVisitor {
         type Value = String;
 
-        fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+        fn expecting(&self, formatter: &mut Formatter) -> FmtResult {
             formatter.write_str("a string or a table with platform keys")
         }
 
         fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
         where
-            E: serde::de::Error,
+            E: de::Error,
         {
             Ok(v.to_string())
         }
 
         fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
         where
-            E: serde::de::Error,
+            E: de::Error,
         {
             Ok(v)
         }
@@ -109,7 +111,7 @@ where
                 })
                 .collect();
 
-            Err(serde::de::Error::custom(format!(
+            Err(de::Error::custom(format!(
                 "no file entry for platform {}.{}, available: {:?}",
                 target_os, target_arch, available
             )))
@@ -277,34 +279,34 @@ impl ManifestData {
     /// - `id` equals `polyplug_utils::bundle_id(name)` (TRUST_MODEL §2 identity).
     /// - every `provides` / `bundle_dependencies` entry matches `name[@version]`
     ///   grammar, with a parseable version when one is given.
-    pub fn validate(&self) -> Result<(), crate::error::LoaderError> {
+    pub fn validate(&self) -> Result<(), LoaderError> {
         if self.loader.is_empty() {
-            return Err(crate::error::LoaderError::ManifestParse {
+            return Err(LoaderError::ManifestParse {
                 path: self.path.display().to_string(),
                 reason: "loader field is required but was empty".to_owned(),
             });
         }
         if self.name.is_empty() {
-            return Err(crate::error::LoaderError::ManifestParse {
+            return Err(LoaderError::ManifestParse {
                 path: self.path.display().to_string(),
                 reason: "name field is required but was empty".to_owned(),
             });
         }
         if self.file.is_empty() {
-            return Err(crate::error::LoaderError::ManifestMissingFile {
+            return Err(LoaderError::ManifestMissingFile {
                 bundle: self.name.clone(),
             });
         }
         if self.id == 0 {
-            return Err(crate::error::LoaderError::ManifestParse {
+            return Err(LoaderError::ManifestParse {
                 path: self.path.display().to_string(),
                 reason: "id field is required but was 0 or missing".to_owned(),
             });
         }
 
-        let expected_id: u64 = polyplug_utils::bundle_id(&self.name);
+        let expected_id: u64 = compute_bundle_id(&self.name);
         if self.id != expected_id {
-            return Err(crate::error::LoaderError::BundleTampered {
+            return Err(LoaderError::BundleTampered {
                 bundle: self.name.clone(),
                 expected: expected_id,
                 found: self.id,
@@ -342,7 +344,7 @@ impl ManifestData {
                 .unwrap_or(0);
             let expected: GuestContractId = GuestContractId::new(bare_contract, dep_major);
             if dep.contract_id != expected {
-                return Err(crate::error::LoaderError::ManifestParse {
+                return Err(LoaderError::ManifestParse {
                     path: self.path.display().to_string(),
                     reason: format!(
                         "dependency \"{}\" declares contract_id {} but the canonical id for \
@@ -360,9 +362,9 @@ impl ManifestData {
     }
 
     /// Validate that the file field is present and non-empty.
-    pub fn validate_file(&self) -> Result<(), crate::error::LoaderError> {
+    pub fn validate_file(&self) -> Result<(), LoaderError> {
         if self.file.trim().is_empty() {
-            return Err(crate::error::LoaderError::ManifestMissingFile {
+            return Err(LoaderError::ManifestMissingFile {
                 bundle: self.name.clone(),
             });
         }
@@ -370,9 +372,9 @@ impl ManifestData {
     }
 
     /// Parse a manifest from a TOML string.
-    pub fn parse_from_str(s: &str) -> Result<Self, crate::error::LoaderError> {
+    pub fn parse_from_str(s: &str) -> Result<Self, LoaderError> {
         let mut manifest: ManifestData =
-            toml::from_str(s).map_err(|e| crate::error::LoaderError::ManifestParse {
+            toml::from_str(s).map_err(|e| LoaderError::ManifestParse {
                 path: String::new(),
                 reason: e.to_string(),
             })?;
@@ -386,17 +388,13 @@ impl ManifestData {
 /// The name part must be non-empty. When an `@version` suffix is present it must
 /// parse as a [`Version`]; an empty or unparseable version is rejected so silent
 /// coercion to "no version" can no longer mask a malformed manifest.
-fn validate_name_version_spec(
-    spec: &str,
-    field: &str,
-    path: &std::path::Path,
-) -> Result<(), crate::error::LoaderError> {
+fn validate_name_version_spec(spec: &str, field: &str, path: &Path) -> Result<(), LoaderError> {
     let (name, version): (&str, Option<&str>) = match spec.split_once('@') {
         Some((name, version_str)) => (name, Some(version_str)),
         None => (spec, None),
     };
     if name.trim().is_empty() {
-        return Err(crate::error::LoaderError::ManifestParse {
+        return Err(LoaderError::ManifestParse {
             path: path.display().to_string(),
             reason: format!("{field} entry \"{spec}\" has an empty contract/bundle name"),
         });
@@ -406,7 +404,7 @@ fn validate_name_version_spec(
         // a full `major.minor.patch` version string is also accepted.
         let is_bare_major: bool = version_str.parse::<u32>().is_ok();
         if !is_bare_major && Version::from_str(version_str).is_err() {
-            return Err(crate::error::LoaderError::ManifestParse {
+            return Err(LoaderError::ManifestParse {
                 path: path.display().to_string(),
                 reason: format!(
                     "{field} entry \"{spec}\" has an unparseable version spec \"{version_str}\" \
@@ -419,18 +417,15 @@ fn validate_name_version_spec(
 }
 
 /// Parse a manifest.toml file from a bundle directory.
-pub fn parse_manifest(
-    bundle_dir: &std::path::Path,
-) -> Result<ManifestData, crate::error::LoaderError> {
-    let manifest_path: std::path::PathBuf = bundle_dir.join("manifest.toml");
-    let content: String = std::fs::read_to_string(&manifest_path).map_err(|e| {
-        crate::error::LoaderError::ManifestParse {
+pub fn parse_manifest(bundle_dir: &Path) -> Result<ManifestData, LoaderError> {
+    let manifest_path: PathBuf = bundle_dir.join("manifest.toml");
+    let content: String =
+        read_to_string(&manifest_path).map_err(|e| LoaderError::ManifestParse {
             path: manifest_path.display().to_string(),
             reason: format!("failed to read: {e}"),
-        }
-    })?;
+        })?;
     let mut manifest: ManifestData =
-        toml::from_str(&content).map_err(|e| crate::error::LoaderError::ManifestParse {
+        toml::from_str(&content).map_err(|e| LoaderError::ManifestParse {
             path: manifest_path.display().to_string(),
             reason: e.to_string(),
         })?;
@@ -441,12 +436,14 @@ pub fn parse_manifest(
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
-    use polyplug_utils::{BundleId, GuestContractId};
-
-    use super::{ManifestData, ManifestDependency, RawManifestDependency};
-    use crate::logger::LoggerHandle;
     use std::collections::HashMap;
     use std::path::PathBuf;
+
+    use polyplug_utils::{BundleId, GuestContractId, bundle_id as compute_bundle_id};
+
+    use super::{ManifestData, ManifestDependency, RawManifestDependency};
+    use crate::error::LoaderError;
+    use crate::logger::LoggerHandle;
 
     fn make_manifest(file: &str, name: &str) -> ManifestData {
         ManifestData {
@@ -478,9 +475,9 @@ mod tests {
     #[test]
     fn validate_file_err_when_file_is_empty_string() {
         let m: ManifestData = make_manifest("", "myplugin");
-        let result: Result<(), crate::error::LoaderError> = m.validate_file();
+        let result: Result<(), LoaderError> = m.validate_file();
         match result {
-            Err(crate::error::LoaderError::ManifestMissingFile { bundle }) => {
+            Err(LoaderError::ManifestMissingFile { bundle }) => {
                 assert_eq!(bundle, "myplugin");
             }
             Err(other) => panic!("unexpected error variant: {:?}", other),
@@ -491,9 +488,9 @@ mod tests {
     #[test]
     fn validate_file_err_when_file_is_whitespace_only() {
         let m: ManifestData = make_manifest("   \t\n  ", "myplugin");
-        let result: Result<(), crate::error::LoaderError> = m.validate_file();
+        let result: Result<(), LoaderError> = m.validate_file();
         match result {
-            Err(crate::error::LoaderError::ManifestMissingFile { bundle }) => {
+            Err(LoaderError::ManifestMissingFile { bundle }) => {
                 assert_eq!(bundle, "myplugin");
             }
             Err(other) => panic!("unexpected error variant: {:?}", other),
@@ -505,7 +502,7 @@ mod tests {
     fn validate_file_err_carries_bundle_name() {
         let m: ManifestData = make_manifest("", "special-bundle");
         match m.validate_file() {
-            Err(crate::error::LoaderError::ManifestMissingFile { bundle }) => {
+            Err(LoaderError::ManifestMissingFile { bundle }) => {
                 assert_eq!(
                     bundle, "special-bundle",
                     "error must carry the correct bundle name"
@@ -521,7 +518,7 @@ mod tests {
     #[test]
     fn validate_ok_when_id_matches_bundle_id() {
         let mut m: ManifestData = make_manifest("plugin.so", "my_plugin");
-        m.id = polyplug_utils::bundle_id("my_plugin");
+        m.id = compute_bundle_id("my_plugin");
         assert!(
             m.validate().is_ok(),
             "validate must accept id == bundle_id(name)"
@@ -531,15 +528,15 @@ mod tests {
     #[test]
     fn validate_err_when_id_does_not_match_bundle_id() {
         let mut m: ManifestData = make_manifest("plugin.so", "my_plugin");
-        m.id = polyplug_utils::bundle_id("my_plugin").wrapping_add(1);
+        m.id = compute_bundle_id("my_plugin").wrapping_add(1);
         match m.validate() {
-            Err(crate::error::LoaderError::BundleTampered {
+            Err(LoaderError::BundleTampered {
                 bundle,
                 expected,
                 found,
             }) => {
                 assert_eq!(bundle, "my_plugin");
-                assert_eq!(expected, polyplug_utils::bundle_id("my_plugin"));
+                assert_eq!(expected, compute_bundle_id("my_plugin"));
                 assert_eq!(found, m.id);
             }
             Err(other) => panic!("unexpected error variant: {:?}", other),
@@ -728,7 +725,7 @@ loader = "native"
 [file]
 freebsd.riscv64 = "libtest.so"
 "#;
-        let err: crate::error::LoaderError = ManifestData::parse_from_str(toml)
+        let err: LoaderError = ManifestData::parse_from_str(toml)
             .expect_err("platform table missing the current platform must fail to parse");
         let message: String = err.to_string();
         assert!(

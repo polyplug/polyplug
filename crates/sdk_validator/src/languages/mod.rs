@@ -10,6 +10,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+use core::error::Error;
+#[cfg(test)]
+use std::collections::HashMap;
+
 use serde::Serialize;
 
 use crate::ast_grep::{AstGrepRunner, NamingConvention, transform_name};
@@ -552,6 +557,7 @@ pub fn validate_language(
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
 
     use crate::ast_grep::AstGrepRunner;
@@ -586,7 +592,7 @@ pub(crate) mod test_support {
 
     /// The golden enum sets, mirroring `sdk_validator.yaml` (which itself is
     /// kept honest by listing the Rust ABI sources as targets).
-    pub(crate) fn golden_enum(name: &str) -> std::collections::BTreeMap<String, i64> {
+    pub(crate) fn golden_enum(name: &str) -> BTreeMap<String, i64> {
         let entries: &[(&str, i64)] = match name {
             "AbiErrorCode" => &[
                 ("Ok", 0),
@@ -647,6 +653,7 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_validation_result_new() {
@@ -660,8 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_language_empty_targets_marks_all_missing()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_validate_language_empty_targets_marks_all_missing() -> Result<(), Box<dyn Error>> {
         let runner: AstGrepRunner = test_support::runner();
         let mut validator: RustValidator = RustValidator::new();
 
@@ -763,7 +769,7 @@ mod tests {
     /// A fake validator whose `struct_fields_in_file` returns canned native
     /// field vectors keyed by file path. The method/enum probes are unused.
     struct FakeValidator {
-        fields_by_file: std::collections::HashMap<PathBuf, Vec<String>>,
+        fields_by_file: HashMap<PathBuf, Vec<String>>,
     }
 
     impl LanguageValidator for FakeValidator {
@@ -802,13 +808,12 @@ mod tests {
     fn fake_struct_result(
         golden: &[String],
         native_fields: Vec<String>,
-    ) -> Result<StructFieldValidationResult, Box<dyn core::error::Error>> {
+    ) -> Result<StructFieldValidationResult, Box<dyn Error>> {
         // `validate_language_struct` rejects missing files, so back the fake
         // probe with a real (empty) temp file keyed to its own path.
-        let temp: tempfile::NamedTempFile = tempfile::NamedTempFile::new()?;
+        let temp: NamedTempFile = NamedTempFile::new()?;
         let file: PathBuf = temp.path().to_path_buf();
-        let mut fields_by_file: std::collections::HashMap<PathBuf, Vec<String>> =
-            std::collections::HashMap::new();
+        let mut fields_by_file: HashMap<PathBuf, Vec<String>> = HashMap::new();
         fields_by_file.insert(file.clone(), native_fields);
         let mut validator: FakeValidator = FakeValidator { fields_by_file };
         let runner: AstGrepRunner = test_support::runner();
@@ -818,7 +823,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_struct_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_validate_struct_exact_match_passes() -> Result<(), Box<dyn Error>> {
         let golden: Vec<String> = vec!["ptr".to_string(), "len".to_string()];
         let result: StructFieldValidationResult =
             fake_struct_result(&golden, vec!["ptr".to_string(), "len".to_string()])?;
@@ -827,7 +832,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_struct_missing_field() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_validate_struct_missing_field() -> Result<(), Box<dyn Error>> {
         let golden: Vec<String> = vec!["ptr".to_string(), "len".to_string()];
         let result: StructFieldValidationResult =
             fake_struct_result(&golden, vec!["ptr".to_string()])?;
@@ -842,7 +847,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_struct_extra_field() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_validate_struct_extra_field() -> Result<(), Box<dyn Error>> {
         let golden: Vec<String> = vec!["ptr".to_string(), "len".to_string()];
         let result: StructFieldValidationResult = fake_struct_result(
             &golden,
@@ -855,8 +860,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_struct_out_of_order_sets_order_not_ok()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_validate_struct_out_of_order_sets_order_not_ok() -> Result<(), Box<dyn Error>> {
         let golden: Vec<String> = vec!["ptr".to_string(), "len".to_string()];
         let result: StructFieldValidationResult =
             fake_struct_result(&golden, vec!["len".to_string(), "ptr".to_string()])?;
@@ -874,8 +878,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_struct_leading_underscore_field_skipped()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_validate_struct_leading_underscore_field_skipped() -> Result<(), Box<dyn Error>> {
         let golden: Vec<String> = vec!["items".to_string(), "len".to_string(), "align".to_string()];
         let result: StructFieldValidationResult = fake_struct_result(
             &golden,
@@ -893,8 +896,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_struct_empty_construct_all_missing() -> Result<(), Box<dyn core::error::Error>>
-    {
+    fn test_validate_struct_empty_construct_all_missing() -> Result<(), Box<dyn Error>> {
         let golden: Vec<String> = vec!["ptr".to_string(), "len".to_string()];
         let result: StructFieldValidationResult = fake_struct_result(&golden, Vec::new())?;
         assert!(!result.is_complete());
@@ -908,8 +910,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_struct_pascal_fields_normalize_to_snake()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_validate_struct_pascal_fields_normalize_to_snake() -> Result<(), Box<dyn Error>> {
         // PascalCase native fields (C#) normalize back to the golden snake
         // fields without any naming argument.
         let golden: Vec<String> = vec!["code".to_string(), "contract_id".to_string()];
@@ -923,7 +924,7 @@ mod tests {
     fn test_validate_language_struct_missing_target_file_is_fatal() {
         let runner: AstGrepRunner = test_support::runner();
         let mut validator: FakeValidator = FakeValidator {
-            fields_by_file: std::collections::HashMap::new(),
+            fields_by_file: HashMap::new(),
         };
 
         let result: Result<StructFieldValidationResult, ValidatorError> = validate_language_struct(

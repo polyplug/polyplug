@@ -4,6 +4,7 @@
 //! Generates code using lo/hi u32 split for all u64/pointer values.
 
 use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use super::CodeGenerator;
@@ -809,7 +810,7 @@ fn generate_manifest_toml(ir: &ValidatedIr) -> String {
         )
     };
 
-    let provides_set: std::collections::HashSet<String> = provides.iter().cloned().collect();
+    let provides_set: HashSet<String> = provides.iter().cloned().collect();
     let fn_count_entries: Vec<String> = ir
         .contracts
         .iter()
@@ -1671,7 +1672,7 @@ fn ts_primitive_host(p: &PrimitiveType) -> &'static str {
 }
 
 /// Generate one interface method for a host contract function.
-fn generate_ts_host_interface_method(out: &mut String, func: &crate::ir::ResolvedFunction) {
+fn generate_ts_host_interface_method(out: &mut String, func: &ResolvedFunction) {
     let return_type: String = match &func.returns {
         Some(ty) => ts_host_return_type(ty),
         None => "void".to_owned(),
@@ -1899,7 +1900,7 @@ fn generate_ts_guest_host_contract_caller(
 /// Generate one method for a guest-side host contract caller.
 fn generate_ts_guest_host_contract_method(
     out: &mut String,
-    func: &crate::ir::ResolvedFunction,
+    func: &ResolvedFunction,
     contract_id_lo: u32,
     contract_id_hi: u32,
     ir: &ValidatedIr,
@@ -2625,7 +2626,7 @@ fn emit_ts_caller_pack_value(
 /// callers' FFI-stack buffers (Rule 12 — no per-call global arena read).
 fn emit_ts_guest_host_contract_args_setup(
     out: &mut String,
-    func: &crate::ir::ResolvedFunction,
+    func: &ResolvedFunction,
     ir: &ValidatedIr,
 ) -> Result<(), PolyplugcError> {
     let enums: &[EnumDef] = &ir.enums;
@@ -3688,16 +3689,9 @@ fn generate_ts_peer_caller_method(
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
-    use crate::ir::AbiBuiltin;
-    use crate::ir::EnumDef;
-    use crate::ir::EnumVariant;
-    use crate::ir::PrimitiveType;
-    use crate::ir::ReprType;
     use crate::ir::ResolvedDependency;
-    use crate::ir::ResolvedFunction;
-    use crate::ir::ResolvedHostContract;
-    use crate::ir::ResolvedParam;
     use crate::ir::Version;
+    use polyplug_codegen::ResolvedBundleFile;
 
     #[test]
     fn generate_js_quickjs_enum_non_bitflag() {
@@ -4368,7 +4362,7 @@ mod tests {
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
             enums: vec![],
-            contracts: vec![crate::ir::ResolvedContract {
+            contracts: vec![ResolvedContract {
                 name: "pipeline.Validator".to_owned(),
                 contract_id: validator_id,
                 version: Version {
@@ -4379,7 +4373,7 @@ mod tests {
                 functions: vec![],
             }],
             host_contracts: vec![],
-            bundle: Some(crate::ir::ResolvedBundle {
+            bundle: Some(ResolvedBundle {
                 name: "transformer".to_owned(),
                 version: Version {
                     major: 1,
@@ -4387,7 +4381,7 @@ mod tests {
                     patch: 0,
                 },
                 loader: "js-quickjs".to_owned(),
-                file: polyplug_codegen::ResolvedBundleFile::Single("libtransformer.so".to_owned()),
+                file: ResolvedBundleFile::Single("libtransformer.so".to_owned()),
                 plugins: vec![],
                 bundle_id: 0,
                 dependencies: vec![ResolvedDependency::ByContract {
@@ -4527,10 +4521,10 @@ mod tests {
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
             enums: vec![],
-            contracts: vec![crate::ir::ResolvedContract {
+            contracts: vec![ResolvedContract {
                 name: "pipeline.Validator".to_owned(),
                 contract_id: polyplug_utils::guest_contract_id("pipeline.Validator", 1),
-                version: crate::ir::Version {
+                version: Version {
                     major: 1,
                     minor: 0,
                     patch: 0,
@@ -4561,7 +4555,7 @@ mod tests {
     // The wrappers were historically hardcoded for StringView→StringView; these
     // tests pin the per-signature marshalling for every other shape.
 
-    fn wrapper_ir(types: Vec<crate::ir::ResolvedType>, enums: Vec<EnumDef>) -> ValidatedIr {
+    fn wrapper_ir(types: Vec<ResolvedType>, enums: Vec<EnumDef>) -> ValidatedIr {
         ValidatedIr {
             types,
             enums,
@@ -4575,7 +4569,7 @@ mod tests {
         ResolvedContract {
             name: "test.shapes".to_owned(),
             contract_id: polyplug_utils::guest_contract_id("test.shapes", 1),
-            version: crate::ir::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -4706,14 +4700,14 @@ mod tests {
 
     #[test]
     fn quickjs_guest_wrapper_struct_param_reads_fields() {
-        let types: Vec<crate::ir::ResolvedType> = vec![crate::ir::ResolvedType {
+        let types: Vec<ResolvedType> = vec![ResolvedType {
             name: "AddArgs".to_owned(),
             fields: vec![
-                crate::ir::ResolvedField {
+                ResolvedField {
                     name: "a".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                 },
-                crate::ir::ResolvedField {
+                ResolvedField {
                     name: "b".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                 },
@@ -4745,28 +4739,28 @@ mod tests {
         //                                          the u64) ; size 16, align 8
         // proving both depth-2 recursion AND that the nested struct sits at the
         // C-layout offset its alignment demands.
-        let types: Vec<crate::ir::ResolvedType> = vec![
-            crate::ir::ResolvedType {
+        let types: Vec<ResolvedType> = vec![
+            ResolvedType {
                 name: "Inner".to_owned(),
                 fields: vec![
-                    crate::ir::ResolvedField {
+                    ResolvedField {
                         name: "a".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     },
-                    crate::ir::ResolvedField {
+                    ResolvedField {
                         name: "b".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     },
                 ],
             },
-            crate::ir::ResolvedType {
+            ResolvedType {
                 name: "Boxed".to_owned(),
                 fields: vec![
-                    crate::ir::ResolvedField {
+                    ResolvedField {
                         name: "tag".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
                     },
-                    crate::ir::ResolvedField {
+                    ResolvedField {
                         name: "inner".to_owned(),
                         ty: ResolvedTypeRef::UserDefined("Inner".to_owned()),
                     },
@@ -5031,14 +5025,14 @@ mod tests {
         // Struct-by-value param/return on the guest→host caller path must marshal
         // field-by-field (NOT Number(structObj) = NaN into a 4-byte slot).
         // Pair { a: u32, b: u32 } -> a@0, b@4 ; size 8, align 4.
-        let types: Vec<crate::ir::ResolvedType> = vec![crate::ir::ResolvedType {
+        let types: Vec<ResolvedType> = vec![ResolvedType {
             name: "Pair".to_owned(),
             fields: vec![
-                crate::ir::ResolvedField {
+                ResolvedField {
                     name: "a".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                 },
-                crate::ir::ResolvedField {
+                ResolvedField {
                     name: "b".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                 },
@@ -5097,14 +5091,14 @@ mod tests {
         // A struct param whose field is a StringView must arena-allocate the
         // string bytes (matching the Deno caller) — no per-language limitation.
         // Holder { name: StringView, code: u32 } -> name@0 (16,8), code@16 ; size 24.
-        let types: Vec<crate::ir::ResolvedType> = vec![crate::ir::ResolvedType {
+        let types: Vec<ResolvedType> = vec![ResolvedType {
             name: "Holder".to_owned(),
             fields: vec![
-                crate::ir::ResolvedField {
+                ResolvedField {
                     name: "name".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                 },
-                crate::ir::ResolvedField {
+                ResolvedField {
                     name: "code".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                 },

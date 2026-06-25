@@ -1,5 +1,6 @@
 //! Error types for the SDK validator.
 
+use std::io::Error as IoError;
 use std::path::PathBuf;
 
 use thiserror::Error;
@@ -18,7 +19,7 @@ pub enum ValidatorError {
         path: PathBuf,
         /// The underlying I/O error.
         #[source]
-        source: std::io::Error,
+        source: IoError,
     },
 
     /// The config file is not valid YAML (or fields are malformed).
@@ -198,7 +199,7 @@ pub enum ValidatorError {
         path: PathBuf,
         /// The underlying I/O error.
         #[source]
-        source: std::io::Error,
+        source: IoError,
     },
 
     /// tree-sitter failed to produce a parse tree for a Lua file.

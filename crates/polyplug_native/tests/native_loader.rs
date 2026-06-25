@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use polyplug::error::LoaderError;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::BundleSource;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
@@ -51,7 +53,7 @@ fn test_loader_rejects_missing_file() {
 
     let result = loader.load(
         &manifest,
-        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     assert!(result.is_err());
@@ -78,7 +80,7 @@ fn test_loader_rejects_empty_file() {
 
     let result = loader.load(
         &manifest,
-        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     assert!(result.is_err());
@@ -90,11 +92,11 @@ fn test_loader_rejects_code_source() {
     let runtime = make_runtime();
 
     let manifest = make_manifest("code_plugin", "plugin.so");
-    let source = polyplug::loader::BundleSource::Code("return {}".to_owned());
+    let source = BundleSource::Code("return {}".to_owned());
 
     let result = loader.load(&manifest, &source, &runtime);
     match result {
-        Err(polyplug::error::LoaderError::UnsupportedBundleSource {
+        Err(LoaderError::UnsupportedBundleSource {
             loader,
             source_kind,
             bundle,
@@ -113,11 +115,11 @@ fn test_loader_rejects_bytes_source() {
     let runtime = make_runtime();
 
     let manifest = make_manifest("bytes_plugin", "plugin.so");
-    let source = polyplug::loader::BundleSource::Bytes(vec![0u8, 1, 2, 3]);
+    let source = BundleSource::Bytes(vec![0u8, 1, 2, 3]);
 
     let result = loader.load(&manifest, &source, &runtime);
     match result {
-        Err(polyplug::error::LoaderError::UnsupportedBundleSource {
+        Err(LoaderError::UnsupportedBundleSource {
             loader,
             source_kind,
             bundle,
@@ -151,7 +153,7 @@ fn test_loader_rejects_zero_id() {
 
     let result = loader.load(
         &manifest,
-        &polyplug::loader::BundleSource::Path(manifest.path.clone()),
+        &BundleSource::Path(manifest.path.clone()),
         &runtime,
     );
     assert!(result.is_err());

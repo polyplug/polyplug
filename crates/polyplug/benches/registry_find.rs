@@ -7,12 +7,15 @@
 // Measures: Time for contract lookup with various slot counts
 
 use core::hint::black_box;
+use core::ptr;
 
+use criterion::BenchmarkGroup;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
 use criterion::criterion_group;
 use criterion::criterion_main;
+use criterion::measurement::WallTime;
 
 use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::DispatchMechanisms;
@@ -24,6 +27,8 @@ use polyplug_abi::HostApi;
 use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
+use polyplug_abi::dispatch::VmLoaderData;
+use polyplug_abi::types::Version;
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
 
@@ -31,7 +36,7 @@ use polyplug_utils::GuestContractId;
 
 /// Stub create_instance for benchmarks - writes null instance to out_instance.
 unsafe extern "C" fn bench_create_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
     out_instance: *mut GuestContractInstance,
@@ -44,7 +49,7 @@ unsafe extern "C" fn bench_create_instance(
 
 /// Stub destroy_instance for benchmarks - no cleanup needed.
 unsafe extern "C" fn bench_destroy_instance(
-    _loader_data: polyplug_abi::dispatch::VmLoaderData,
+    _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
@@ -54,7 +59,7 @@ unsafe extern "C" fn bench_destroy_instance(
 
 static BENCH_INTERFACE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(0x0000_0000_0000_0001_u64),
-    contract_version: polyplug_abi::Version {
+    contract_version: Version {
         major: 1,
         minor: 0,
         patch: 0,
@@ -65,7 +70,7 @@ static BENCH_INTERFACE: GuestContractInterface = GuestContractInterface {
     dispatch: DispatchMechanisms {
         native: NativeDispatch {
             function_count: 0,
-            functions: core::ptr::null(),
+            functions: ptr::null(),
         },
     },
 };
@@ -74,7 +79,7 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
     PluginDescriptor {
         name: StringView::from_static(name.as_bytes()),
         contract_name: StringView::from_static(contract_name.as_bytes()),
-        version: polyplug_abi::Version {
+        version: Version {
             major: 1,
             minor: 0,
             patch: 0,
@@ -86,7 +91,7 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
 fn make_interface(id: u64) -> GuestContractInterface {
     GuestContractInterface {
         contract_id: GuestContractId::from_u64(id),
-        contract_version: polyplug_abi::Version {
+        contract_version: Version {
             major: 1,
             minor: 0,
             patch: 0,
@@ -97,7 +102,7 @@ fn make_interface(id: u64) -> GuestContractInterface {
         dispatch: DispatchMechanisms {
             native: NativeDispatch {
                 function_count: 0,
-                functions: core::ptr::null(),
+                functions: ptr::null(),
             },
         },
     }
@@ -123,8 +128,7 @@ fn bench_registry_find_by_contract_single(c: &mut Criterion) {
 
     let contract_id: u64 = BENCH_INTERFACE.contract_id.id();
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("registry");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("registry");
     group.throughput(Throughput::Elements(1));
 
     group.bench_function(
@@ -160,7 +164,7 @@ fn bench_registry_find_by_contract_multi_impl(c: &mut Criterion) {
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView::from_static(b"multi_plugin"),
             contract_name: StringView::from_static(b"multi.contract"),
-            version: polyplug_abi::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -182,8 +186,7 @@ fn bench_registry_find_by_contract_multi_impl(c: &mut Criterion) {
 
     let contract_id: u64 = 0xAAAA_BBBB_CCCC_DDDD_u64;
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("registry");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("registry");
     group.throughput(Throughput::Elements(1));
 
     group.bench_function(
@@ -220,7 +223,7 @@ fn bench_registry_find_by_contract_many_contracts(c: &mut Criterion) {
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView::from_static(b"plugin"),
             contract_name: StringView::from_static(b"contract"),
-            version: polyplug_abi::Version {
+            version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -243,8 +246,7 @@ fn bench_registry_find_by_contract_many_contracts(c: &mut Criterion) {
     // Look up contract at index 50 (middle of the HashMap)
     let target_contract_id: u64 = 0x2000_0000_0000_0032_u64;
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("registry");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("registry");
     group.throughput(Throughput::Elements(1));
 
     group.bench_function(
@@ -283,8 +285,7 @@ fn bench_registry_find_by_contract_not_found(c: &mut Criterion) {
 
     let nonexistent_contract_id: u64 = 0xDEAD_BEEF_CAFE_0000_u64;
 
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("registry");
+    let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("registry");
     group.throughput(Throughput::Elements(1));
 
     group.bench_function(BenchmarkId::new("find_guest_contract", "not_found"), |b| {

@@ -2,6 +2,9 @@
 
 use std::path::Path;
 
+#[cfg(test)]
+use core::error::Error;
+
 use crate::ast_grep::{AstGrepRunner, Match};
 use crate::error::ValidatorError;
 use crate::languages::{LanguageValidator, parse_field_name_trailing, parse_variant_text};
@@ -174,19 +177,14 @@ mod tests {
         validate_language_struct,
     };
 
-    fn create_temp_csharp_file(
-        content: &str,
-    ) -> Result<NamedTempFile, Box<dyn core::error::Error>> {
+    fn create_temp_csharp_file(content: &str) -> Result<NamedTempFile, Box<dyn Error>> {
         let mut file: NamedTempFile = NamedTempFile::with_suffix(".cs")?;
         file.write_all(content.as_bytes())?;
         file.flush()?;
         Ok(file)
     }
 
-    fn validate_file(
-        methods: &[String],
-        file: &Path,
-    ) -> Result<ValidationResult, Box<dyn core::error::Error>> {
+    fn validate_file(methods: &[String], file: &Path) -> Result<ValidationResult, Box<dyn Error>> {
         let mut validator: CSharpValidator = CSharpValidator::new();
         let result: ValidationResult = validate_language(
             &mut validator,
@@ -200,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detects_block_bodied_method() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_block_bodied_method() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_csharp_file(
             r#"
 namespace Polyplug.Abi {
@@ -218,7 +216,7 @@ namespace Polyplug.Abi {
     }
 
     #[test]
-    fn test_detects_expression_bodied_method() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_expression_bodied_method() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_csharp_file(
             r#"
 namespace Polyplug.Abi {
@@ -234,7 +232,7 @@ namespace Polyplug.Abi {
     }
 
     #[test]
-    fn test_detects_extension_method() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_extension_method() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_csharp_file(
             r#"
 namespace Polyplug.Abi {
@@ -252,7 +250,7 @@ namespace Polyplug.Abi {
     }
 
     #[test]
-    fn test_detects_unsafe_method() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_detects_unsafe_method() -> Result<(), Box<dyn Error>> {
         // The consolidated StringViewHelper.ToString is method-level unsafe;
         // ast-grep modifier matching is strict, so without dedicated unsafe
         // rule variants this shape reports missing.
@@ -273,7 +271,7 @@ namespace Polyplug.Abi {
     }
 
     #[test]
-    fn test_renamed_definition_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_renamed_definition_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_csharp_file(
             r#"
 public static class Helper {
@@ -287,7 +285,7 @@ public static class Helper {
     }
 
     #[test]
-    fn test_call_site_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_call_site_only_does_not_match() -> Result<(), Box<dyn Error>> {
         // The pre-rework validator did `class_text.contains(" ToStr(")`,
         // so this call site falsely passed. It must not match now.
         let file: NamedTempFile = create_temp_csharp_file(
@@ -306,7 +304,7 @@ public static class Helper {
     }
 
     #[test]
-    fn test_comment_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_comment_only_does_not_match() -> Result<(), Box<dyn Error>> {
         // A comment containing " ToStr(" inside a static class falsely
         // passed the pre-rework substring check.
         let file: NamedTempFile = create_temp_csharp_file(
@@ -323,7 +321,7 @@ public static class Helper {
     }
 
     #[test]
-    fn test_real_sdk_has_all_golden_methods() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_sdk_has_all_golden_methods() -> Result<(), Box<dyn Error>> {
         let sdk_path: PathBuf = repo_path("sdks/csharp/abi/Abi.cs");
         let result: ValidationResult = validate_file(&golden_methods(), &sdk_path)?;
         assert!(
@@ -338,7 +336,7 @@ public static class Helper {
     fn validate_enum_file(
         enum_name: &str,
         file: &Path,
-    ) -> Result<EnumValidationResult, Box<dyn core::error::Error>> {
+    ) -> Result<EnumValidationResult, Box<dyn Error>> {
         let mut validator: CSharpValidator = CSharpValidator::new();
         let result: EnumValidationResult = validate_language_enum(
             &mut validator,
@@ -351,7 +349,7 @@ public static class Helper {
     }
 
     #[test]
-    fn test_enum_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_exact_match_passes() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_csharp_file(
             r#"
 namespace Polyplug.Abi;
@@ -368,8 +366,7 @@ public enum DispatchType : uint
     }
 
     #[test]
-    fn test_enum_wrong_value_fails_with_expected_vs_found()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_wrong_value_fails_with_expected_vs_found() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_csharp_file(
             r#"
 public enum DispatchType : uint
@@ -391,7 +388,7 @@ public enum DispatchType : uint
     }
 
     #[test]
-    fn test_enum_missing_and_extra_variants_fail() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_missing_and_extra_variants_fail() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_csharp_file(
             r#"
 public enum DispatchType : uint
@@ -414,7 +411,7 @@ public enum DispatchType : uint
     }
 
     #[test]
-    fn test_enum_commented_out_variant_does_not_count() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_commented_out_variant_does_not_count() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_csharp_file(
             r#"
 // DispatchType has VirtualMachine = 1 per the ABI.
@@ -437,7 +434,7 @@ public enum DispatchType : uint
     }
 
     #[test]
-    fn test_enum_value_in_string_does_not_count() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_enum_value_in_string_does_not_count() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_csharp_file(
             r#"
 public static class Doc
@@ -461,7 +458,7 @@ public enum DispatchType : uint
     }
 
     #[test]
-    fn test_real_abi_mirror_matches_golden_enums() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_abi_mirror_matches_golden_enums() -> Result<(), Box<dyn Error>> {
         let path: PathBuf = repo_path("sdks/csharp/abi/Abi.cs");
         for enum_name in [
             "AbiErrorCode",
@@ -476,8 +473,7 @@ public enum DispatchType : uint
     }
 
     #[test]
-    fn test_real_host_reload_phase_matches_golden_enum() -> Result<(), Box<dyn core::error::Error>>
-    {
+    fn test_real_host_reload_phase_matches_golden_enum() -> Result<(), Box<dyn Error>> {
         let path: PathBuf = repo_path("sdks/csharp/host/ReloadPhase.cs");
         let result: EnumValidationResult = validate_enum_file("ReloadPhaseType", &path)?;
         assert!(result.is_complete(), "ReloadPhaseType drift: {result:?}");
@@ -488,7 +484,7 @@ public enum DispatchType : uint
         struct_name: &str,
         golden_fields: &[String],
         file: &Path,
-    ) -> Result<StructFieldValidationResult, Box<dyn core::error::Error>> {
+    ) -> Result<StructFieldValidationResult, Box<dyn Error>> {
         let mut validator: CSharpValidator = CSharpValidator::new();
         // C# struct fields are PascalCase; the comparator normalizes them back
         // to the golden snake spelling, so no naming argument is needed.
@@ -503,7 +499,7 @@ public enum DispatchType : uint
     }
 
     #[test]
-    fn test_struct_exact_match_passes() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_exact_match_passes() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_csharp_file(
             r#"
 public struct StringView
@@ -520,7 +516,7 @@ public struct StringView
     }
 
     #[test]
-    fn test_struct_renamed_field_is_missing_and_extra() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_renamed_field_is_missing_and_extra() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_csharp_file(
             r#"
 public struct StringView
@@ -545,7 +541,7 @@ public struct StringView
     }
 
     #[test]
-    fn test_struct_comment_only_does_not_match() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_comment_only_does_not_match() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_csharp_file(
             r#"
 public static class Doc
@@ -566,8 +562,7 @@ public static class Doc
     }
 
     #[test]
-    fn test_struct_other_struct_in_same_file_not_confused()
-    -> Result<(), Box<dyn core::error::Error>> {
+    fn test_struct_other_struct_in_same_file_not_confused() -> Result<(), Box<dyn Error>> {
         let file: NamedTempFile = create_temp_csharp_file(
             r#"
 public struct Other
@@ -589,7 +584,7 @@ public struct StringView
     }
 
     #[test]
-    fn test_real_abi_mirror_structs_match_golden() -> Result<(), Box<dyn core::error::Error>> {
+    fn test_real_abi_mirror_structs_match_golden() -> Result<(), Box<dyn Error>> {
         let path: PathBuf = repo_path("sdks/csharp/abi/Abi.cs");
         for struct_name in ["StringView", "AbiError"] {
             let result: StructFieldValidationResult =

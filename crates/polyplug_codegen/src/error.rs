@@ -1,6 +1,8 @@
 //! Error — PolyplugcError type hierarchy for polyplugc.
 
+use core::error::Error;
 use core::fmt;
+use std::io;
 
 /// Source location (file path, 1-based line, 1-based column) for diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,12 +44,12 @@ pub enum PolyplugcError {
 
     WriteFailed {
         path: String,
-        source: std::io::Error,
+        source: io::Error,
     },
 
     ReadFailed {
         path: String,
-        source: std::io::Error,
+        source: io::Error,
     },
 
     ValidationFailed {
@@ -370,8 +372,8 @@ impl fmt::Display for PolyplugcError {
     }
 }
 
-impl core::error::Error for PolyplugcError {
-    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+impl Error for PolyplugcError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             PolyplugcError::WriteFailed { source, .. } => Some(source),
             PolyplugcError::ReadFailed { source, .. } => Some(source),

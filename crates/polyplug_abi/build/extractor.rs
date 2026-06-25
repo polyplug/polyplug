@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 
 use syn::{
     Attribute, Expr, ExprLit, Fields, File, Item, ItemConst, ItemEnum, ItemStruct, ItemUnion, Lit,
-    Meta, Visibility, parse_file,
+    Meta, Type, UnOp, Visibility, parse_file,
 };
 
 use crate::types::{
@@ -417,7 +417,7 @@ pub(crate) fn extract_doc(attrs: &[Attribute]) -> Option<String> {
 }
 
 /// Convert a type to a string representation.
-fn type_to_string(ty: &syn::Type) -> String {
+fn type_to_string(ty: &Type) -> String {
     quote::quote!(#ty).to_string().replace(' ', "")
 }
 
@@ -445,7 +445,7 @@ fn expr_to_u64(expr: &Expr) -> Option<u64> {
         Expr::Unary(unary) => {
             let inner: u64 = expr_to_u64(&unary.expr)?;
             match unary.op {
-                syn::UnOp::Neg(_) => Some(inner), // Neg handled by parse
+                UnOp::Neg(_) => Some(inner), // Neg handled by parse
                 _ => None,
             }
         }
