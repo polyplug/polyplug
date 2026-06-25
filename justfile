@@ -493,6 +493,11 @@ verify-id-helpers:
 verify-to-str-errors:
     @bash examples/verify_to_str_errors.sh
 
+# Guard against inline fully-qualified paths (CLAUDE.md import rule). Requires ast-grep.
+verify-no-fq-paths:
+    @echo "=== Verifying no inline fully-qualified paths ==="
+    ast-grep scan --rule no_inline_fq_paths.yaml crates sdks
+
 # Run all tests
 test: test-rust test-host-libs
     @echo ""
@@ -517,8 +522,8 @@ fmt:
     @echo "=== Formatting Code ==="
     cargo fmt
 
-# Run all checks (lint + format)
-check: fmt-check lint
+# Run all checks (lint + format + import hygiene)
+check: fmt-check lint verify-no-fq-paths
     @echo "=== All Checks Passed ==="
 
 # Validate SDK consistency across all languages

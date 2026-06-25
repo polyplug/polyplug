@@ -1,0 +1,13 @@
+id: no-inline-fq-paths
+language: rust
+severity: error
+message: "Inline fully-qualified path: import the symbol at the top of the module and use the short name (CLAUDE.md import rule). Exceptions: core::str::* (primitive collision), module-qualified forms like ptr::/mem::/fs::, and crate:: inside macro_rules! bodies."
+rule:
+  all:
+    - any: [{kind: scoped_type_identifier}, {kind: scoped_identifier}]
+    - not: {inside: {any: [{kind: scoped_type_identifier}, {kind: scoped_identifier}], field: path}}
+    - has: {field: path, any: [{kind: scoped_type_identifier}, {kind: scoped_identifier}]}
+    - not: {inside: {kind: use_declaration, stopBy: end}}
+    - regex: '^(std|core|alloc|crate|polyplug|polyplug_abi|polyplug_utils|polyplug_codegen|polyplug_signing|polyplug_native|polyplug_lua|polyplug_js|polyplug_python|polyplug_dotnet|polyplugc|libloading|tempfile|crossbeam_epoch|crossbeam|serde|mlua|rquickjs|pyo3|netcorehost|ed25519_dalek|loom|criterion|sha2|hex|thiserror|libc)::'
+    - not: {regex: '^(std|core)::str::'}
+    - not: {inside: {kind: macro_definition, stopBy: end}}
