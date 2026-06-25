@@ -383,7 +383,7 @@ def bundle_id(name: str) -> int:
 /// Provenance: mirrors the canonical FNV-1a 64-bit scheme implemented in
 /// `crates/polyplug_utils/src/{lib,guest_contract_id,host_contract_id,bundle_id}.rs`.
 /// Method names are PascalCase to match the C# naming convention validated by
-/// `sdk_validator.yaml` (`fnv1a_64` -> `Fnv1a64`, etc.).
+/// `checks/sdk_validator.yaml` (`fnv1a_64` -> `Fnv1a64`, etc.).
 const HELPER_CSHARP_HASHING: &str = r#"
 /// <summary>
 /// FNV-1a 64-bit hashing and contract/bundle ID computation helpers.

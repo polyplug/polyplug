@@ -1,7 +1,7 @@
 //! SDK Validator - Cross-language SDK consistency validation tool.
 //!
 //! Validates that the golden helper method set defined in
-//! `sdk_validator.yaml` is implemented in every language SDK (Rust, Python,
+//! `checks/sdk_validator.yaml` is implemented in every language SDK (Rust, Python,
 //! C#, C++, JavaScript/TypeScript, and Lua) across three axes: the golden
 //! method set, the golden enum set (every configured enum mirror must match
 //! exactly — no missing variants, wrong values, or stale extras), and the

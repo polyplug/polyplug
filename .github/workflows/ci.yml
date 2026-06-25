@@ -50,9 +50,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install ast-grep
         run: cargo install ast-grep --locked
-      - run: cargo run -p sdk-validator -- --config sdk_validator.yaml --fail-on-missing
+      - run: cargo run -p sdk-validator -- --config checks/sdk_validator.yaml --fail-on-missing
       - name: No inline fully-qualified paths
-        run: ast-grep scan --rule no_inline_fq_paths.yaml crates sdks
+        run: ast-grep scan --rule checks/no_inline_fq_paths.yaml crates sdks
 
   test:
     name: Tests

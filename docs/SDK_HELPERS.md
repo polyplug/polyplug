@@ -1,9 +1,9 @@
 # SDK Helpers — Golden Contract
 
-`sdk_validator.yaml` is the single source of truth for the helper *set* (which
+`checks/sdk_validator.yaml` is the single source of truth for the helper *set* (which
 methods every language must implement, and the one file per language where they
 live). This document pins the *semantics* every implementation must follow.
-The validator gate: `cargo run -p sdk-validator -- --config sdk_validator.yaml --fail-on-missing`.
+The validator gate: `cargo run -p sdk-validator -- --config checks/sdk_validator.yaml --fail-on-missing`.
 
 ## Method Contracts (StringView)
 
@@ -55,7 +55,7 @@ resolved by a host in another).
 | `host_contract_id` | `fnv1a_64("host_contract:" + name + "@" + major)`. The distinct prefix guarantees host and guest IDs never collide for the same `name@major`. |
 
 The helper lives in each language's canonical, idiomatic home (the validated
-`method_targets` in `sdk_validator.yaml`), not necessarily the `abi/` mirror:
+`method_targets` in `checks/sdk_validator.yaml`), not necessarily the `abi/` mirror:
 
 | Language | Home | Names |
 |---|---|---|

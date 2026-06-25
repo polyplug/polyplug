@@ -590,7 +590,7 @@ pub(crate) mod test_support {
         ]
     }
 
-    /// The golden enum sets, mirroring `sdk_validator.yaml` (which itself is
+    /// The golden enum sets, mirroring `checks/sdk_validator.yaml` (which itself is
     /// kept honest by listing the Rust ABI sources as targets).
     pub(crate) fn golden_enum(name: &str) -> BTreeMap<String, i64> {
         let entries: &[(&str, i64)] = match name {
@@ -632,7 +632,7 @@ pub(crate) mod test_support {
     }
 
     /// The golden struct field sets (canonical snake_case, in declaration
-    /// order), mirroring `sdk_validator.yaml`.
+    /// order), mirroring `checks/sdk_validator.yaml`.
     pub(crate) fn golden_struct(name: &str) -> Vec<String> {
         let fields: &[&str] = match name {
             "StringView" => &["ptr", "len"],

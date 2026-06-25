@@ -4,7 +4,7 @@
 //! silently return `""` when handed an already-converted Lua string instead of a
 //! `StringView` cdata (a Lua string has no `.ptr` field). That silent failure hid
 //! a real bug in three example guests (they returned `INVALID:*`). The validated
-//! helper (`sdks/lua/abi/abi.lua`, per `sdk_validator.yaml`) now raises a clear
+//! helper (`sdks/lua/abi/abi.lua`, per `checks/sdk_validator.yaml`) now raises a clear
 //! error on non-cdata input.
 //!
 //! This test loads a Lua guest whose function `probe()` `pcall`s

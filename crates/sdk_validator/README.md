@@ -1,6 +1,6 @@
 # SDK Validator
 
-Cross-language SDK consistency validator for polyplug. Ensures every language SDK implements the golden helper method set defined in `sdk_validator.yaml` (repo root), and that every hand-written or generated enum mirror matches the golden enum set exactly.
+Cross-language SDK consistency validator for polyplug. Ensures every language SDK implements the golden helper method set defined in `checks/sdk_validator.yaml`, and that every hand-written or generated enum mirror matches the golden enum set exactly.
 
 ## Overview
 
@@ -29,7 +29,7 @@ Detection per shape:
 From the repo root:
 
 ```bash
-cargo run -p sdk-validator -- --config sdk_validator.yaml --fail-on-missing
+cargo run -p sdk-validator -- --config checks/sdk_validator.yaml --fail-on-missing
 # or
 just validate-sdk
 ```
@@ -65,7 +65,7 @@ Exit code 2 (fatal, never silently reported as "missing"):
 
 ## Configuration
 
-`sdk_validator.yaml` is the single source of truth. Target paths resolve **relative to the config file's parent directory** (the repo root), not the process CWD.
+`checks/sdk_validator.yaml` is the single source of truth. Target paths resolve **relative to the config base directory** — the config file's parent directory, or the optional `root:` field joined onto it (the config sets `root: ..`, so paths resolve from the repo root) — not the process CWD.
 
 ```yaml
 version: 1
@@ -155,18 +155,18 @@ The Lua validator uses tree-sitter; its dependencies are built into the crate.
 
 ## Adding a New Method
 
-1. Add it to `methods:` in `sdk_validator.yaml`.
+1. Add it to `methods:` in `checks/sdk_validator.yaml`.
 2. Implement it in **all** validated target files (all 6 languages) in the same change.
 3. Run `just validate-sdk` — it must stay green.
 
 ## Adding or Changing an Enum Variant
 
 1. Change the Rust ABI source (owner approval required pre-1.0; frozen at 1.0).
-2. Update `enums:` in `sdk_validator.yaml` to match.
+2. Update `enums:` in `checks/sdk_validator.yaml` to match.
 3. Update every hand-written mirror listed under `enum_targets:` in the same change (generated mirrors regenerate from the ABI build script).
 4. Run `just validate-sdk` — it must stay green.
 
-See rule 19 in the repo `CLAUDE.md`: `sdk_validator.yaml` is the single source of truth for built-in-type helper methods.
+See rule 19 in the repo `CLAUDE.md`: `checks/sdk_validator.yaml` is the single source of truth for built-in-type helper methods.
 
 ## License
 

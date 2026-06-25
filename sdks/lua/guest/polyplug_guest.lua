@@ -7,7 +7,7 @@
 local ffi = require("ffi")
 -- Load-bearing: registers the ABI ffi.cdef definitions (StringView, HostApi,
 -- AbiError, ...) that every ffi.new/ffi.cast below depends on. StringView
--- helpers (to_str, starts_with, ...) also live there — see sdk_validator.yaml.
+-- helpers (to_str, starts_with, ...) also live there — see checks/sdk_validator.yaml.
 require("polyplug_abi")
 
 local M = {}

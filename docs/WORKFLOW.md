@@ -200,10 +200,10 @@ forbidden (CLAUDE.md, rule 20 — the use-site companion to rule 2's "`use` at f
 **Guard:** `just verify-no-fq-paths` (requires `ast-grep` ≥ 0.40)
 
 ```
-ast-grep scan --rule no_inline_fq_paths.yaml crates sdks
+ast-grep scan --rule checks/no_inline_fq_paths.yaml crates sdks
 ```
 
-The rule file lives at `no_inline_fq_paths.yaml`. It is enforced in CI
+The rule file lives at `checks/no_inline_fq_paths.yaml`. It is enforced in CI
 inside the **SDK Consistency** job (`.github/workflows/ci.yml`), which already
 installs `ast-grep`, immediately after the `sdk-validator` step.
 

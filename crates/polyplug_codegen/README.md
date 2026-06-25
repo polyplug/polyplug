@@ -38,10 +38,10 @@ language emitters with this crate by design (see the project `CLAUDE.md`).
 - The `sdks/*/abi` mirrors regenerate when `polyplug_abi` builds (its build
   script runs the emitters).
 - The helper surface and enum mirrors of the emitted SDK files are validated by
-  `sdk_validator` against `sdk_validator.yaml`:
+  `sdk_validator` against `checks/sdk_validator.yaml`:
 
 ```bash
-cargo run -p sdk-validator -- --config sdk_validator.yaml --fail-on-missing
+cargo run -p sdk-validator -- --config checks/sdk_validator.yaml --fail-on-missing
 ```
 
 ## Testing

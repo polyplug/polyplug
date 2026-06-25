@@ -3,7 +3,8 @@
 //! Parses the golden method set configuration that defines the authoritative
 //! method signatures each language SDK must implement. The yaml `naming:`
 //! section is the source of truth for each language's naming convention, and
-//! target paths resolve relative to the config file's parent directory.
+//! target paths resolve relative to the config base directory (the config
+//! file's parent directory, or the optional `root:` override joined onto it).
 
 use core::fmt::{Formatter, Result as FmtResult};
 use core::str::FromStr;
@@ -54,6 +55,12 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 struct ConfigYaml {
     version: u32,
+    /// Optional base directory for resolving all target paths, itself relative
+    /// to the config file's parent directory. Absent => the config file's
+    /// parent directory is the base (e.g. `root: ..` lets the config live in a
+    /// `checks/` subdirectory while target paths stay repo-root-relative).
+    #[serde(default)]
+    root: Option<String>,
     methods: HashMap<String, Vec<String>>,
     naming: HashMap<String, String>,
     targets: HashMap<String, Vec<String>>,
@@ -150,7 +157,11 @@ pub fn parse_config(path: &Path) -> Result<Config, ValidatorError> {
 
     let naming: HashMap<String, NamingConvention> = parse_naming(&yaml.naming, &yaml.targets)?;
 
-    let base_dir: &Path = path.parent().unwrap_or_else(|| Path::new("."));
+    let config_parent: &Path = path.parent().unwrap_or_else(|| Path::new("."));
+    let base_dir: PathBuf = match &yaml.root {
+        Some(root) => config_parent.join(root),
+        None => config_parent.to_path_buf(),
+    };
     let targets: HashMap<String, Vec<PathBuf>> = yaml
         .targets
         .into_iter()
@@ -543,6 +554,25 @@ targets:
         assert_eq!(
             rust_targets[0],
             dir.path().join("sdks/rust/guest/src/lib.rs")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_config_root_field_rebases_target_paths() -> Result<(), Box<dyn Error>> {
+        let dir: tempfile::TempDir = tempfile::tempdir()?;
+        let checks_dir: PathBuf = dir.path().join("checks");
+        fs::create_dir(&checks_dir)?;
+        let config_path: PathBuf = checks_dir.join("cfg.yaml");
+        let yaml: String = VALID_YAML.replace("version: 1", "version: 1\nroot: ..");
+        fs::write(&config_path, &yaml)?;
+
+        let config: Config = parse_config(&config_path)?;
+        let rust_targets: &Vec<PathBuf> =
+            config.targets.get("rust").ok_or("missing rust targets")?;
+        assert_eq!(
+            rust_targets[0],
+            checks_dir.join("../sdks/rust/guest/src/lib.rs")
         );
         Ok(())
     }

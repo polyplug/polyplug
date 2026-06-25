@@ -1,10 +1,14 @@
-# sdk_validator.yaml
+# checks/sdk_validator.yaml
 # Configuration for the cross-language SDK validator.
 # Defines the golden method set and the target SDK file each language must implement.
 #
-# Run with: cargo run -p sdk-validator -- --config sdk_validator.yaml --fail-on-missing
+# Run with: cargo run -p sdk-validator -- --config checks/sdk_validator.yaml --fail-on-missing
 
 version: 1
+
+# This config lives in checks/, but all target paths below are repo-root-relative.
+# `root: ..` rebases path resolution from this file's directory up to the repo root.
+root: ..
 
 # Golden method set (authoritative, NOT extracted from code).
 # Every language SDK must implement these StringView helper methods.

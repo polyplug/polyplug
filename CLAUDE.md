@@ -743,13 +743,13 @@ fn test_something_else() { }
 
 ---
 
-### 19. SDK Helper Surface Is Derived From `sdk_validator.yaml`
+### 19. SDK Helper Surface Is Derived From `checks/sdk_validator.yaml`
 
-**`sdk_validator.yaml` is the single source of truth for built-in-type helper methods. Helpers live ONLY in the validator-target files — duplicate or stale helper implementations anywhere else are FORBIDDEN.**
+**`checks/sdk_validator.yaml` is the single source of truth for built-in-type helper methods. Helpers live ONLY in the validator-target files — duplicate or stale helper implementations anywhere else are FORBIDDEN.**
 
-- The golden method set in `sdk_validator.yaml` defines what every language must implement; the `targets:` section defines the ONE file per language where those helpers live (the `sdks/*/abi` mirrors and `sdks/rust/guest`).
+- The golden method set in `checks/sdk_validator.yaml` defines what every language must implement; the `targets:` section defines the ONE file per language where those helpers live (the `sdks/*/abi` mirrors and `sdks/rust/guest`).
 - Never hand-write a second copy of a helper (or a "Helper" class duplicating one) in guest/host/loader SDK files — consumers use the validated implementation.
-- Adding a new helper concept = add it to `sdk_validator.yaml` AND implement it in ALL validated targets in the same change; the validator must stay green (`cargo run -p sdk-validator -- --config sdk_validator.yaml --fail-on-missing`).
+- Adding a new helper concept = add it to `checks/sdk_validator.yaml` AND implement it in ALL validated targets in the same change; the validator must stay green (`cargo run -p sdk-validator -- --config checks/sdk_validator.yaml --fail-on-missing`).
 - A helper found outside the validated files is stale scaffolding: delete it and retarget any consumers.
 
 ---
@@ -783,7 +783,7 @@ Applies to ALL roots — same-crate (`crate::`), cross-crate (`polyplug_abi::`, 
 3. **`crate::` paths inside `macro_rules!` bodies** — macros expand at the call site and may need the `crate::` root for hygiene.
 4. **FFI function-pointer `type` aliases** (the Rule 16 exception) — defined once in a `use`-topped file and imported by callers.
 
-**Enforcement:** `just verify-no-fq-paths` runs the committed ast-grep rule `no_inline_fq_paths.yaml` (CI: the **SDK Consistency** job). See `docs/WORKFLOW.md` § "Import hygiene".
+**Enforcement:** `just verify-no-fq-paths` runs the committed ast-grep rule `checks/no_inline_fq_paths.yaml` (CI: the **SDK Consistency** job). See `docs/WORKFLOW.md` § "Import hygiene".
 
 ---
 
@@ -887,7 +887,7 @@ polyplug/
 | `ABI_OK` / `ABI_ERROR_*` constants | `AbiErrorCode::Ok` / `AbiErrorCode::*` enum |
 | `pub use other_crate::Type` | consumers import from source crate directly |
 | SDK static / module-global holding runtime or plugin state (any language, host or guest) | state flows through instances and context parameters |
-| duplicate "helper" implementations outside the `sdk_validator.yaml` target files | helpers live only in validated files; golden set in `sdk_validator.yaml` |
+| duplicate "helper" implementations outside the `checks/sdk_validator.yaml` target files | helpers live only in validated files; golden set in `checks/sdk_validator.yaml` |
 | documentation `.md` at repo root (except CLAUDE.md, README.md, CHANGELOG.md) | all docs live in `docs/` |
 | inline fully-qualified path (`std::path::PathBuf`, `crate::error::Foo`) at a use-site | `use` it at module top, write the short name (exceptions: `core::str::*`, module-qualified `ptr::`/`fs::`, macro `crate::`) |
 

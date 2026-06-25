@@ -496,7 +496,7 @@ verify-to-str-errors:
 # Guard against inline fully-qualified paths (CLAUDE.md import rule). Requires ast-grep.
 verify-no-fq-paths:
     @echo "=== Verifying no inline fully-qualified paths ==="
-    ast-grep scan --rule no_inline_fq_paths.yaml crates sdks
+    ast-grep scan --rule checks/no_inline_fq_paths.yaml crates sdks
 
 # Run all tests
 test: test-rust test-host-libs
@@ -529,7 +529,7 @@ check: fmt-check lint verify-no-fq-paths
 # Validate SDK consistency across all languages
 validate-sdks:
     @echo "=== Validating SDK Consistency ==="
-    cargo run -p sdk-validator -- --config sdk_validator.yaml
+    cargo run -p sdk-validator -- --config checks/sdk_validator.yaml
 
 # ============================================================================
 # Examples

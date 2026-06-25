@@ -90,7 +90,7 @@ import {
 } from "@polyplug/abi";
 
 // Re-export the contract-ID helpers from the auto-generated abi.ts (their single
-// definition, per sdk_validator.yaml method_targets) so host code that imports
+// definition, per checks/sdk_validator.yaml method_targets) so host code that imports
 // from this module keeps a stable surface without a duplicate implementation.
 export {
   fnv1a64,

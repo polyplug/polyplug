@@ -222,7 +222,7 @@ Beyond function-pointer signatures, the validator also pins the canonical ABI
 `ArenaOverflowBlock`, `CallArena`, `GuestContractInstance`, and
 `BundleInitContext` — across every language mirror. For each it enforces the
 golden field-name set *and* the golden declaration order (the proxy for ABI
-layout), keyed off `sdk_validator.yaml`'s `structs:` / `struct_targets:`
+layout), keyed off `checks/sdk_validator.yaml`'s `structs:` / `struct_targets:`
 sections. Each mirror's native field spelling (C# PascalCase, etc.) is
 normalized back to snake before comparison, so the check is convention-agnostic.
 As with enums, the rust ABI source is listed as a target for each struct, so
@@ -233,5 +233,5 @@ layout. The out-param *convention* on the function pointers themselves remains
 runtime-proven by the lua-cdef floor and the `just verify-abi` ceiling above.
 
 Import hygiene across the workspace (no inline fully-qualified paths at use-sites)
-is enforced by a separate guard — `just verify-no-fq-paths` / `no_inline_fq_paths.yaml`
+is enforced by a separate guard — `just verify-no-fq-paths` / `checks/no_inline_fq_paths.yaml`
 — also in the SDK Consistency CI job. See `docs/WORKFLOW.md` § "Import hygiene".

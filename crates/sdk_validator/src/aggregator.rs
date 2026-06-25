@@ -994,7 +994,7 @@ mod tests {
 
     #[test]
     fn test_real_config_structs_match_golden() -> Result<(), Box<dyn Error>> {
-        let config: Config = parse_config(&repo_path("sdk_validator.yaml"))?;
+        let config: Config = parse_config(&repo_path("checks/sdk_validator.yaml"))?;
         let report: ValidationReport = aggregate_results(&config, &runner())?;
 
         assert!(
