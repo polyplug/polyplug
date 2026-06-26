@@ -1,86 +1,66 @@
-# JavaScript / TypeScript — polyplug
+# JavaScript / QuickJS — polyplug
 
-JavaScript and TypeScript are first-class citizens in polyplug on both sides of
-the boundary: a JS/TS application can act as a **host** that loads and calls
-plugins written in any language, and a developer can write a plugin **guest** in
-TypeScript that the embedded QuickJS loader executes.
-
-The two roles use different runtimes by design:
-
-- **JS host** — runs on Deno, Node.js, or Bun. The SDK detects the runtime at
-  startup and selects the appropriate FFI backend (Deno's native FFI, koffi on
-  Node, or `bun:ffi` on Bun). A single package works across all three.
-- **JS guest** — runs inside the embedded [QuickJS](https://bellard.org/quickjs/)
-  interpreter managed by the `polyplug_js` loader (`loader = "js-quickjs"`). The
-  plugin is a single self-contained flat `bundle.js` produced by
-  [rolldown](https://rolldown.rs/); no `node_modules`, no imports at runtime.
-
----
+JavaScript works as both a host and a guest. As a host it runs on Deno, Node.js,
+or Bun from one package. As a guest it runs inside the
+embedded [QuickJS](https://bellard.org/quickjs/) interpreter (`loader =
+"js-quickjs"`) as a single self-contained flat `bundle.js`. For measured
+overhead, see [Performance](../PERFORMANCE.md).
 
 ## Install
 
-### CLI — `polyplugc`
-
-`polyplugc` turns a contract `.toml` into typed glue code. Install it once; the
-non-`cargo` paths ship a prebuilt binary and need no Rust toolchain:
+**CLI** — generates host callers and guest glue from an `api.toml` contract:
 
 ```bash
-npm install -g @polyplug/cli          # Node (also: bunx @polyplug/cli)
-deno install -A npm:@polyplug/cli     # Deno
-cargo install polyplugc               # from source
-curl -fsSL https://polyplug.github.io/install.sh | bash  # prebuilt binary
+npm install -g @polyplug/cli          # npm / Bun (also: bunx @polyplug/cli)
+deno install -gA -n polyplugc npm:@polyplug/cli   # Deno (CLI is npm-only)
 ```
 
-### Host SDK
+**Host SDK** — add the runtime and a loader per guest language you support:
 
 ```bash
-# npm / Node / Bun
+# npm / Bun
 npm install @polyplug/host \
-            @polyplug/loaders-native \
-            @polyplug/loaders-js \
+            @polyplug/loaders-native \   # native (.so / .dylib / .dll) bundles
+            @polyplug/loaders-js \       # JavaScript (QuickJS) bundles
             @polyplug/loaders-lua \
             @polyplug/loaders-python \
             @polyplug/loaders-dotnet
 
-# Deno — jsr mirrors (same package, JSR import map)
+# Deno (jsr mirrors — same packages)
 deno add jsr:@polyplug/host \
           jsr:@polyplug/loaders-native \
-          jsr:@polyplug/loaders-js \
-          jsr:@polyplug/loaders-lua \
-          jsr:@polyplug/loaders-python \
-          jsr:@polyplug/loaders-dotnet
+          jsr:@polyplug/loaders-js
 ```
 
-Register only the loaders for the guest languages your application needs to
-support. `@polyplug/loaders-native` covers Rust/C/C++ bundles and is almost
-always included.
+`@polyplug/loaders-native` covers Rust/C/C++ bundles and is almost always
+included.
 
-### Guest SDK
+**Guest SDK** — add to your plugin project, plus rolldown to bundle:
 
 ```bash
 # npm / Bun
 npm install @polyplug/guest
+npm install --save-dev rolldown
 
 # Deno
 deno add jsr:@polyplug/guest
 ```
 
----
-
 ## Guides
 
-- **[JS — Host (app)](js-host.md)** — embed the runtime, register loaders, load
-  bundles, and call plugin contracts from a Deno, Node, or Bun application.
-- **[JS — Guest (plugin)](js-guest.md)** — write a TypeScript plugin that runs
-  inside the QuickJS loader and can be loaded by any polyplug host.
+- **[JS — Host (app)](js-host.md)** — embed the runtime on Deno/Node/Bun, load
+  plugins of any language, call contracts.
+- **[JS — Guest (plugin)](js-guest.md)** — write a TypeScript plugin, generate
+  glue, bundle to a flat `bundle.js`, assemble and validate the bundle.
 
----
+New to polyplug? Start with the [Quick Start](../QUICKSTART.md).
 
 ## Examples
 
-Working code lives in the repo:
+- Host: `examples/hosts/js/` (`host.js`) — Deno host that registers all five
+  loaders and runs the full five-stage pipeline.
+- Guests: `examples/guests/js/` — five TypeScript plugins (`decoder`,
+  `transformer`, `encoder`, `reporter`, `validator`).
 
-- `examples/hosts/js/` — Deno host that loads all six guest languages and runs
-  the full pipeline.
-- `examples/guests/js/` — five TypeScript plugins (`decoder`, `encoder`,
-  `transformer`, `reporter`, `validator`) each bundled to a single `bundle.js`.
+Generated code lives under `examples/hosts/js/generated/` (host callers) and
+`examples/guests/js/<plugin>/generated/` (guest glue).

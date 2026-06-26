@@ -1,27 +1,27 @@
 # C# / .NET — Host (app)
 
-A C# host embeds the polyplug runtime, registers a loader per guest language, loads
-bundles, then resolves and calls contracts through generated, typed callers. A C#
-host can load guests written in **any** language — it only needs the matching
-loader package registered.
+Embed the polyplug runtime in a C# application, load plugins written in any
+supported language, and call their contracts through generated typed callers.
 
-See [`examples/hosts/csharp/`](../../examples/hosts/csharp/) for the complete
-reference host.
+See also: [C# overview](csharp.md) · [C# — Guest (plugin)](csharp-guest.md) ·
+[glossary](../glossary.md)
 
-## Step 1 — Add the SDK + loader packages and the CLI
+## 1. Install
+
+Install the CLI and add the host SDK plus a loader package per guest language:
 
 ```bash
-dotnet add package Polyplug.Host
-dotnet add package Polyplug.Loaders.Native     # native cdylib guests
-dotnet add package Polyplug.Loaders.Python     # Python guests
-dotnet add package Polyplug.Loaders.Lua        # Lua guests
-dotnet add package Polyplug.Loaders.Js         # JS (QuickJS) guests
-dotnet add package Polyplug.Loaders.Dotnet     # .NET/C# guests
+dotnet tool install -g Polyplug.Cli      # or: cargo install polyplugc
 
-dotnet tool install -g Polyplug.Cli            # or: cargo install polyplugc
+dotnet add package Polyplug.Host
+dotnet add package Polyplug.Loaders.Native    # always needed for native bundles
+dotnet add package Polyplug.Loaders.Python    # + Python guests
+dotnet add package Polyplug.Loaders.Lua       # + Lua guests
+dotnet add package Polyplug.Loaders.Js        # + JS (QuickJS) guests
+dotnet add package Polyplug.Loaders.Dotnet    # + .NET / C# guests
 ```
 
-Your `.csproj` needs `AllowUnsafeBlocks` for the generated marshalling:
+The generated marshalling needs `AllowUnsafeBlocks` in your `.csproj`:
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -35,25 +35,25 @@ Your `.csproj` needs `AllowUnsafeBlocks` for the generated marshalling:
 </Project>
 ```
 
-## Step 2 — Generate host callers
+A C# host can load guests written in any supported language — register the
+matching loader when you build the runtime.
 
-`polyplugc` reads the contract `.toml` and emits typed contract callers plus
-the host-contract interface factories.
+## 2. Generate host callers
+
+Author or obtain the shared `api.toml` contract (see `examples/api.toml`), then
+generate the typed callers. Re-run whenever the contract changes.
 
 ```bash
 polyplugc generate --api api.toml --lang csharp --out host/generated
 ```
 
-This produces, in the `Polyplug.Generated` namespace:
+Writes the typed callers into `Polyplug.Generated`. Never edit them — see
+[Generated names](../generated-names.md).
 
-- one `*ContractCaller` per contract (e.g. `PipelineDecoderContractCaller`),
-- `InterfaceFactories` for host contracts you provide to plugins,
-- `ContractIds` / `Types` constants.
+## 3. Build the runtime
 
-## Step 3 — Build the runtime and register loaders
-
-Use `RuntimeBuilder` to configure and `Build()` the `Runtime`, then register a
-loader per guest language you want to load.
+Use `RuntimeBuilder` to `Build()` the runtime, then register one loader per guest
+language you want to load.
 
 ```csharp
 using Polyplug.Host;
@@ -63,13 +63,7 @@ using Polyplug.Loaders.Lua;
 using Polyplug.Loaders.Js;
 using Polyplug.Loaders.Dotnet;
 
-var rt = new RuntimeBuilder()
-    .OnReload(phase =>
-    {
-        if (phase.IsPreparing())
-            Console.Error.WriteLine($"[HOT-RELOAD] {phase.BundleName} (0x{phase.BundleId:X16})");
-    })
-    .Build();
+var rt = new RuntimeBuilder().Build();
 
 rt.RegisterNativeLoader();
 rt.RegisterPythonLoader();
@@ -78,17 +72,47 @@ rt.RegisterJsLoader();
 rt.RegisterDotnetLoader();
 ```
 
-`RuntimeBuilder` also exposes `.PluginDir(path)` (auto-load at build time),
-`.SignaturePolicy(...)`, and `.TrustedKeys(...)`. Note that builder-time
-auto-loading runs **before** the loaders above are registered, so a host that
-loads non-native guests should register loaders first and load bundles
-explicitly (Step 5).
+Register loaders before loading any non-native bundle. (`.PluginDir(path)`
+auto-loads at build time, before loaders exist — native only.) The full
+multi-loader host is `examples/hosts/csharp/Program.cs`.
 
-## Step 4 — (Optional) Provide a host contract to plugins
+### Hot-reload callback (optional)
 
-If your contract `.toml` declares a `host_contract`, plugins can call back into
-the host. Build the interface with the generated factory and register it. The
-struct is copied into unmanaged memory the runtime keeps for its whole lifetime.
+Pass `.OnReload(...)` to observe reload phases. Hot-reload applies to native,
+Lua, and JS bundles — Python and .NET do not reload. See
+[Hot Reload](../HOT_RELOAD_DESIGN.md) and
+[Reload limitations](../RELOAD_LIMITATIONS.md).
+
+```csharp
+var rt = new RuntimeBuilder()
+    .OnReload(phase =>
+    {
+        if (phase.IsPreparing())
+            Console.Error.WriteLine($"[reload] preparing {phase.BundleName}");
+        else if (phase.IsReloaded())
+            Console.Error.WriteLine($"[reload] reloaded {phase.BundleName}");
+        else if (phase.IsFailed())
+            Console.Error.WriteLine($"[reload] failed {phase.BundleName}: {phase.Reason}");
+    })
+    .Build();
+```
+
+### Signature policy (optional)
+
+```csharp
+var rt = new RuntimeBuilder()
+    .SignaturePolicy(SignaturePolicy.Required)
+    .Build();
+```
+
+`Required` rejects unsigned or tampered bundles; `.TrustedKeys(...)` pins
+accepted signers. See the [Trust Model](../TRUST_MODEL.md).
+
+## 4. Register a host contract (optional)
+
+If your `api.toml` defines a host contract (a service the host provides to
+plugins), build it with the generated factory and register it before loading
+bundles:
 
 ```csharp
 using System.Runtime.InteropServices;
@@ -109,9 +133,10 @@ class ConsoleLogger : IHostLogger
 }
 ```
 
-## Step 5 — Load bundles
+## 5. Load bundles
 
-A bundle is a directory containing a `manifest.toml`. Load each one explicitly:
+A bundle is a directory containing a `manifest.toml`. Load each one explicitly;
+`LoadBundle` dispatches to the loader matching the bundle's `loader` field.
 
 ```csharp
 foreach (var bundleDir in Directory.GetDirectories(pluginPath)
@@ -121,7 +146,7 @@ foreach (var bundleDir in Directory.GetDirectories(pluginPath)
 }
 ```
 
-## Step 6 — Resolve and call a contract
+## 6. Call a contract
 
 Create a generated caller from the runtime, marshal inputs with
 `PinnedStringView`, and read `StringView` results with `StringViewHelper`.
@@ -141,21 +166,12 @@ if (PipelineDecoderContractCaller.Create(rt) is { } decoder)
 ```
 
 Each `*ContractCaller` is `IDisposable`; `Create(rt)` returns `null` when no
-provider for that contract is loaded. The caller caches the resolved interface
-and re-resolves automatically across reloads/unloads via the runtime's revision
-counter, so a cached caller never dispatches through a dangling interface.
+provider for that contract is loaded.
 
-## Runtime constraints
+.NET guests do not hot-reload — see [Reload limitations](../RELOAD_LIMITATIONS.md).
 
-- A C# host can load guests of **any** language — register the matching loader.
-- Native, Lua, and JS (QuickJS) bundles support hot-reload; Python and .NET do
-  not.
-- **CLR once per process:** the .NET CLR initializes once per process, so
-  multiple `Runtime` instances in the same process share one CLR — .NET guests
-  from different runtimes share the loader cache. For full isolation with .NET
-  guests, use separate processes.
+## Full reference
 
-## See also
-
-- [C# overview](csharp.md) · [C# — Guest (plugin)](csharp-guest.md)
-- [`docs/QUICKSTART.md`](../QUICKSTART.md) for the canonical end-to-end flow.
+`examples/hosts/csharp/Program.cs` registers all five loaders, a host contract,
+scans a directory, loads every bundle, and runs a five-stage pipeline end to
+end. Generated callers live at `examples/hosts/csharp/generated/`.

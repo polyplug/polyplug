@@ -1,65 +1,56 @@
 # polyplug JavaScript SDK
 
-JavaScript/TypeScript support for the polyplug plugin runtime.
+Build polyplug hosts and plugins in JavaScript/TypeScript. The host side loads
+the native runtime through FFI; guest plugins run in an embedded QuickJS VM.
+Strings are native UTF-8 — no transcoding.
 
-> **Runtime requirement: Deno.** The host library loads the native runtime
-> through Deno's FFI (`Deno.dlopen`) and reads `Deno.build` / `Deno.env`. The
-> package installs and imports under Node.js, but the host loader throws at
-> runtime there because those APIs do not exist. A Node FFI backend (so the same
-> package runs on Node) is planned — until then, use Deno.
+> **Runtime: Deno.** The host loader uses `Deno.dlopen` and `Deno.build` /
+> `Deno.env`. The package installs under Node.js but the host loader throws
+> there. A Node FFI backend is planned — until then, run hosts on Deno.
 
-## Structure
-
-```
-sdks/js/
-├── abi/           # ABI type definitions (auto-generated from Rust)
-├── host/          # Host runtime library for JS/TS applications
-├── guest/         # Guest library for JS/TS plugin authors
-└── loaders/       # Loader implementations (QuickJS runtime adapter)
-```
-
-## Installation
-
-### Via JSR (Deno)
+## Install
 
 ```bash
-deno add @polyplug/core
+# Host application (+ a loader package per guest language you support)
+npm install @polyplug/host @polyplug/loaders-native
+# @polyplug/loaders-{js,lua,python,dotnet} as needed
+# Deno: deno add jsr:@polyplug/host jsr:@polyplug/loaders-native
+
+# Plugin author (rolldown bundles the entry script)
+npm install @polyplug/guest
+npm install --save-dev rolldown
 ```
 
-### Via npm
+Install the CLI to generate bindings:
 
 ```bash
-npm install @polyplug/core
+npm install -g @polyplug/cli          # or, on Deno: deno install -gA -n polyplugc npm:@polyplug/cli
 ```
 
-## Quick Start
+## Generate bindings
 
-### Host Application (Deno)
+```bash
+polyplugc generate --bundle bundle.toml --lang js --out ./generated
+```
+
+## Host application
 
 ```typescript
-import { Runtime } from "@polyplug/core";
+import { Runtime } from "@polyplug/host";
 
-const runtime = Runtime.builder()
-    .pluginDir("./plugins")
-    .build();
+const runtime = Runtime.builder().pluginDir("./plugins").build();
 
-// Load a plugin bundle
-runtime.loadBundle("./plugins/my_plugin");
-
-// Use generated host callers to interact with plugins
 const decoder = PipelineDecoder.create(runtime);
 if (decoder) {
     const result = decoder.decode(input);
 }
 ```
 
-### Plugin Author
+## Plugin author
 
-Each bundle runs in its own QuickJS VM (one VM per runtime per bundle), so
-module state inside the VM is instance state. The generated `guest/init` module
-owns `polyplug_init`; you implement the contract functions, register them with
-the generated `set<Contract>Impl`, and bundle everything (e.g. with rolldown)
-into the single entry script:
+Implement the contract functions, register them with the generated
+`set<Contract>Impl`, and bundle everything (e.g. with rolldown) into one entry
+script. The host bridge is threaded in — never `globalThis`:
 
 ```javascript
 import { setDecoderImpl } from './generated/guest/contracts';
@@ -67,8 +58,7 @@ import { polyplug_init } from './generated/guest/init';
 import { toStr, allocStringArena } from '@polyplug/guest';
 
 function decode(input) {
-    const s = toStr(input);
-    const result = allocStringArena(`DECODED:${s}`);
+    const result = allocStringArena(`DECODED:${toStr(input)}`);
     return {
         ptr_lo: Number(result.ptr & 0xFFFFFFFFn),
         ptr_hi: Number((result.ptr >> 32n) & 0xFFFFFFFFn),
@@ -77,146 +67,17 @@ function decode(input) {
 }
 
 setDecoderImpl(decode);
-
 export { polyplug_init };
 ```
 
-## Code Generation
+## Learn more
 
-Use `polyplugc` to generate type-safe bindings:
+- [JavaScript — Host guide][host] — embed the runtime, hot-reload, signing
+- [JavaScript — Guest guide][guest] — generate → implement → bundle
+- [JavaScript overview][overview] · [polyplug docs][docs] · [examples][examples]
 
-```bash
-# Generate TypeScript bindings from api.toml
-polyplugc generate --api api.toml --lang js --out ./generated
-
-# Generate TypeScript bindings from bundle.toml
-polyplugc generate --bundle bundle.toml --lang js --out ./src/generated
-```
-
-## Bundle layout
-
-After bundling, assemble the bundle directory yourself:
-
-```
-dist/my-plugin/
-├── manifest.toml          # emitted by `generate` (carries the precomputed bundle_id)
-└── bundle.js              # the entry script the QuickJS loader evaluates (loader = "js-quickjs")
-```
-
-Validate the assembled directory before shipping:
-
-```bash
-polyplugc validate --bundle-dir dist/my-plugin/
-```
-
-## Components
-
-### ABI (`abi/`)
-
-Auto-generated from Rust ABI definitions:
-- `StringView` — UTF-8 string view
-- `Buffer` — Byte buffer with host allocator
-- `AbiError` — Error code and message
-- `GuestContractHandle` — Opaque plugin reference (lo/hi split for u64)
-- `GuestContractInterface` — Plugin vtable with dispatch mechanism
-
-### Host Library (`host/`)
-
-TypeScript wrappers over the polyplug C ABI:
-- `Runtime` — Main runtime class
-- `RuntimeConfig` — Configuration options
-- `ReloadPhase` — Hot-reload notifications
-- Deno.dlopen or Node.js FFI bindings
-
-### Guest Library (`guest/`)
-
-Helpers for JavaScript plugins (the entry point is generated; the QuickJS
-loader calls it):
-- `toStr(sv)` / `allocString(str)` / `allocStringArena(str)` — string crossings
-  via the host allocator or the per-call arena
-- `readBytes` / `writeBytes` / `freeBytes` — raw boundary memory helpers
-- `log(level, scope, message)` — host logging funnel
-- `AbiErrorCode` / `LogLevel` enum mirrors
-- Error boundary — Plugin errors don't take down host
-
-### Loaders (`loaders/`)
-
-QuickJS runtime adapter:
-- `registerJsLoader()` — Register JS loader with runtime
-- Embedded QuickJS via `rquickjs` crate
-- Automatic module bundling via Rolldown
-
-## Hot-Reload
-
-To enable hot-reload, pass `config.hotReloadEnabled: true` and an `onReload`
-callback per-instance to `runtimeNew` (no module-level state — each runtime
-owns its own callback):
-
-```typescript
-import { openPolyplug, runtimeNew, ReloadPhase } from "@polyplug/core";
-
-const lib = openPolyplug(libPath);
-const runtime = runtimeNew(lib, {
-    config: { hotReloadEnabled: true },
-    onReload: (phase) => {
-        switch (phase.type) {
-            case ReloadPhase.TYPE_PREPARING:
-                // Destroy instances for this bundle
-                instances.delete(phase.bundleId);
-                break;
-            case ReloadPhase.TYPE_RELOADED:
-                console.log(`Reloaded: ${phase.bundleName}`);
-                break;
-            case ReloadPhase.TYPE_FAILED:
-                console.error(`Failed: ${phase.reason}`);
-                break;
-        }
-    },
-});
-// runtime.destroy() closes the runtime AND the FFI callback it owns.
-```
-
-**Key points:**
-- `hotReloadEnabled` defaults to `false` — must be explicitly enabled
-- The callback is per-runtime (passed at construction); call `runtime.destroy()`
-  to release the runtime and its `Deno.UnsafeCallback`
-- Host must track and destroy instances on `TYPE_PREPARING` notification
-- See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
-
-## Runtime Support
-
-### Deno
-
-- Native FFI support via `Deno.dlopen`
-- Requires `--allow-ffi` flag
-- Full TypeScript support
-
-### Node.js
-
-- Requires `node-ffi-napi` or similar
-- ESM and CJS support
-- TypeScript via tsc
-
-### Bun
-
-- Native FFI support
-- Fast startup times
-
-## Performance Notes
-
-- **Backend**: QuickJS (embedded) or Deno (V8)
-- **u64 handling**: Split into lo/hi number pairs (JS lacks 64-bit integers)
-- **Strings**: Native UTF-8, no transcoding
-- **Memory**: All cross-boundary data in host allocator
-
-## Requirements
-
-- Deno 1.40+ or Node.js 18+
-- For bundling: `rolldown` (installed automatically)
-
-## See Also
-
-- `../csharp/` — C# SDK
-- `../python/` — Python SDK
-- `../../examples/` — Working examples
-- `../../docs/` — Design documentation
+[overview]: https://github.com/polyplug/polyplug/blob/main/docs/languages/js.md
+[host]: https://github.com/polyplug/polyplug/blob/main/docs/languages/js-host.md
+[guest]: https://github.com/polyplug/polyplug/blob/main/docs/languages/js-guest.md
+[docs]: https://github.com/polyplug/polyplug/tree/main/docs
+[examples]: https://github.com/polyplug/polyplug/tree/main/examples

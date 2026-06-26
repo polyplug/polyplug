@@ -1,58 +1,52 @@
 # Lua — polyplug
 
-Lua (LuaJIT) is a first-class host **and** guest in polyplug. A Lua app can embed the runtime, register loaders for any language, scan plugin directories, and dispatch through generated typed callers — all from LuaJIT via FFI. A Lua plugin is a plain `.lua` file: no build step, shipped as-is alongside generated glue modules.
-
----
+Lua works as both a host and a guest. A Lua app embeds the runtime and calls
+plugins through generated typed callers; a Lua plugin is a
+plain `.lua` file shipped as-is — no build step. For measured overhead, see
+[Performance](../PERFORMANCE.md).
 
 ## Install
 
-### `polyplugc` CLI
+**CLI** — generates host callers and guest glue from an `api.toml` contract:
 
 ```bash
-cargo install polyplugc                             # from source (needs Rust toolchain)
-curl -fsSL https://polyplug.github.io/install.sh | bash   # prebuilt binary
+cargo install polyplugc
 ```
 
-Or grab a binary from the [GitHub Releases](https://github.com/polyplug/polyplug/releases) page. Lua has no language-registry CLI package.
-
-### Host SDK + loaders (LuaRocks)
+**Host SDK + loaders** — install the core host SDK plus one loader per guest
+language:
 
 ```bash
-luarocks install polyplug          # core host SDK (polyplug, polyplug_abi)
-luarocks install polyplug-loader-native    # native (.so/.dylib/.dll) bundles + hot-reload
-luarocks install polyplug-loader-lua       # Lua (LuaJIT) bundles + hot-reload
-luarocks install polyplug-loader-js        # JavaScript (QuickJS) bundles + hot-reload
-luarocks install polyplug-loader-python    # Python bundles
-luarocks install polyplug-loader-dotnet    # .NET/C# bundles
+luarocks install polyplug                # core host SDK (polyplug, polyplug_abi)
+luarocks install polyplug-loader-native  # native (.so / .dylib / .dll) bundles
+luarocks install polyplug-loader-lua     # Lua (LuaJIT) bundles
+luarocks install polyplug-loader-js      # JavaScript (QuickJS) bundles
+luarocks install polyplug-loader-python  # Python bundles
+luarocks install polyplug-loader-dotnet  # .NET / C# bundles
 ```
 
-Install only the loaders you need. `polyplug-loader-native` and `polyplug-loader-lua` are the most common pair for a Lua host.
-
-### Guest SDK (LuaRocks)
+**Guest SDK** — for plugin authors:
 
 ```bash
-luarocks install polyplug-guest    # polyplug_guest helpers for plugin authors
-luarocks install polyplug-abi      # ABI type mirror (polyplug_abi)
+luarocks install polyplug-guest          # guest helpers (polyplug_guest)
+luarocks install polyplug-abi            # ABI type mirror (polyplug_abi)
 ```
-
----
 
 ## Guides
 
-- **[Lua — Host (app)](lua-host.md)** — embed polyplug in a Lua application; generate typed callers, load bundles, dispatch contracts.
-- **[Lua — Guest (plugin)](lua-guest.md)** — write a Lua plugin; generate glue, implement a contract, assemble and validate the bundle.
+- **[Lua — Host (app)](lua-host.md)** — embed the runtime, load plugins of any
+  language, call contracts.
+- **[Lua — Guest (plugin)](lua-guest.md)** — write a Lua plugin, generate glue,
+  implement a contract, assemble and validate the bundle.
 
----
+New to polyplug? Start with the [Quick Start](../QUICKSTART.md).
 
 ## Examples
 
-Working reference implementations are checked in under `examples/`:
+- Host: `examples/hosts/lua/` (`host.lua`) — registers all five loaders and runs
+  the full five-stage pipeline.
+- Guests: `examples/guests/lua/` — five `.lua` plugins (`decoder`, `transformer`,
+  `encoder`, `reporter`, `validator`).
 
-- `examples/hosts/lua/` — full pipeline host; loads native, Lua, JS, Python, and .NET bundles; drives the five-stage pipeline through generated callers; installs a custom runtime logger.
-- `examples/guests/lua/` — five Lua plugins (`decoder`, `transformer`, `encoder`, `reporter`, `validator`) implementing the pipeline API.
-
-Run them after building all plugins with `examples/build_all.sh`:
-
-```bash
-POLYPLUG_PLUGIN_PATH=examples/plugins luajit examples/hosts/lua/host.lua
-```
+Generated code lives under `examples/hosts/lua/generated/` (host callers) and
+`examples/guests/lua/<plugin>/generated/` (guest glue).

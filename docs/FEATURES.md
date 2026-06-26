@@ -1,12 +1,23 @@
 # polyplug Features — Current State
 
-A reference overview of what polyplug provides today and how each feature
-behaves. This is a status/reference document; for the end-to-end pipelines (how
-to author APIs, generate, build, assemble, and ship) see
-[`WORKFLOW.md`](./WORKFLOW.md). Each section points to the deeper doc or the code
-that owns the detail rather than restating it.
+Everything below is shipped unless a section marks otherwise. Each feature links
+to the deeper doc or the code that owns its detail; for the end-to-end pipelines
+(author, generate, build, assemble, ship) see [`WORKFLOW.md`](./WORKFLOW.md).
 
-Status legend: shipped unless explicitly marked otherwise.
+| # | Feature | Status |
+|---|---|---|
+| [1](#1-cross-language-plugin-runtime) | Cross-language plugin runtime (6×6 host×guest) | Shipped |
+| [2](#2-code-generation-polyplugc) | Code generation (`polyplugc`) | Shipped |
+| [3](#3-call-arena-goal-3) | Call Arena | Shipped |
+| [4](#4-hot-reload) | Hot-reload (native, Lua, JS) | Shipped |
+| [5](#5-unload-true-unload) | Unload (true unload) | Shipped |
+| [6](#6-host-contracts) | Host contracts (bidirectional) | Shipped |
+| [7](#7-cross-dispatch-plugin--plugin) | Cross-dispatch (plugin → plugin) | Shipped |
+| [8](#8-runtime-isolation) | Runtime isolation | Shipped |
+| [9](#9-platform-support) | Platform support | Linux/macOS full; Windows in progress |
+| [10](#10-trust-model) | Trust model | Shipped |
+| [11](#11-bundle-signing--verification) | Bundle signing & verification | Shipped |
+| [12](#12-performance-posture) | Performance posture | Shipped |
 
 ---
 
@@ -14,8 +25,8 @@ Status legend: shipped unless explicitly marked otherwise.
 
 A host application loads plugin bundles at runtime; each bundle exports one or
 more guest contracts the host discovers and calls through a frozen C ABI. Each of
-the six languages is a first-class **host** (embed the runtime, load and call
-plugins) **and** a first-class **guest** (write a plugin other apps load) — any
+the six languages works as both a **host** (embed the runtime, load and call
+plugins) and a **guest** (write a plugin other apps load) — any
 host language pairs with any guest language, a full **6×6 matrix**, all at
 near-native dispatch (~2.4 ns/call for native languages).
 
@@ -54,7 +65,7 @@ See CLAUDE.md (Architecture) for the crate map and loader list.
 - **`generate`** — emits both sides of the contract glue. `--api api.toml`
   produces host-side typed callers + registration glue; `--bundle bundle.toml`
   produces guest-side contract stubs, `polyplug_init`, dispatch shims, and a
-  ship-ready `manifest.toml` with the precomputed `bundle_id`.
+  `manifest.toml` with the precomputed `bundle_id`.
 - **`validate --bundle-dir <dir>`** — drives the runtime loader's own manifest
   machinery so the CLI accepts exactly what the runtime would: manifest parses,
   `id == fnv1a_64(name)` (tamper check), the per-platform `[file]` entry resolves

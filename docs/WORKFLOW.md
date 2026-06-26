@@ -4,14 +4,11 @@ polyplug has exactly two kinds of developers, and `polyplugc` has exactly two
 verbs for them:
 
 - **`generate`** — emit the polyplug-specific code: contract glue for either
-  side, plus the ship-ready `manifest.toml` (guest side).
+  side, plus the `manifest.toml` (guest side).
 - **`validate`** — check things without generating: a contract `.toml`, or an
   assembled bundle directory (`--bundle-dir`).
 
-Everything in between — compiling, linking, bundling — belongs to **your own
-toolchain**. polyplug never wraps cargo, CMake, dotnet, or rolldown; there are
-no scaffolding or build commands to learn, and nothing limits which flags you
-build with.
+Compiling, linking, and bundling use your own toolchain.
 
 ---
 
@@ -52,9 +49,6 @@ build with.
 │  let mut decoder = find_contract::<PipelineDecoderContract>(       │
 │      runtime, PIPELINE_DECODER_CONTRACT_ID);                       │
 │  decoder.decode(input)?;               // single indirect call     │
-│                                                                    │
-│  Native, lua, and js-quickjs bundles support hot-reload            │
-│  (runtime.reload()); python / dotnet return HotReloadDisabled.     │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -85,7 +79,7 @@ Working reference hosts for all six languages live in `examples/hosts/`.
 │  polyplugc generate --bundle bundle.toml --lang rust --out gen/   │
 │  → guest glue: typed contract stubs + polyplug_init + dispatch    │
 │    shims                                                          │
-│  → manifest.toml — ship-ready, with the precomputed bundle_id     │
+│  → manifest.toml — with the precomputed bundle_id                 │
 │    (id == fnv1a_64(name); never hand-written, never edited)       │
 └───────────────────────────────────────────────────────────────────┘
 ┌─ 4. IMPLEMENT + BUILD  ← 100% your toolchain, any flags ──────────┐
@@ -176,39 +170,6 @@ dist/decoder/
 
 ---
 
-## Import hygiene (no inline fully-qualified paths)
-
-**Rule:** `use` statements belong at the top of every file. Inline fully-qualified
-paths at use-sites — `std::collections::HashMap::new()`, `crate::error::MyError`,
-`polyplug_abi::AbiError` written inside a function body or expression — are
-forbidden (CLAUDE.md, rule 20 — the use-site companion to rule 2's "`use` at file top").
-
-**Exceptions** (the rule does not flag these):
-
-- `core::str::*` / `std::str::*` — primitive-method collision; short names conflict
-  with built-ins.
-- Module-qualified forms whose leading segment is an *imported module*, not a crate
-  root — e.g. `ptr::write`, `mem::size_of`, `fs::read` — do not cross a crate
-  boundary and are idiomatic Rust.
-- `crate::` paths inside `macro_rules!` bodies — macros may need to name their home
-  crate explicitly for hygienic expansion.
-- FFI function-pointer `type` aliases (the Rule 16 exception) — a `type` alias
-  whose right-hand side is `unsafe extern "C"` / `extern "system"` is a single
-  definition point; it lives in a `use`-topped file and is imported by callers, so
-  it never creates inline FQ drift.
-
-**Guard:** `just verify-no-fq-paths` (requires `ast-grep` ≥ 0.40)
-
-```
-ast-grep scan --rule checks/no_inline_fq_paths.yaml crates sdks
-```
-
-The rule file lives at `checks/no_inline_fq_paths.yaml`. It is enforced in CI
-inside the **SDK Consistency** job (`.github/workflows/ci.yml`), which already
-installs `ast-grep`, immediately after the `sdk-validator` step.
-
----
-
 ## Where things come from — quick reference
 
 | Artifact | Produced by | Edited by hand? |
@@ -221,8 +182,4 @@ installs `ast-grep`, immediately after the `sdk-validator` step.
 | bundle dir | your build script (`cp`) | n/a |
 | bundle correctness | `polyplugc validate --bundle-dir` | n/a |
 
-`polyplugc generate` writes incrementally: a binding whose freshly generated content
-is byte-identical to what is already on disk is left untouched (its mtime is preserved,
-so a no-op regeneration does not trigger downstream rebuilds), while `manifest.toml` is
-always rewritten so its precomputed ids stay current. The run prints how many files it
-wrote versus skipped (`generated N files (W written, U unchanged)`).
+Regenerating is idempotent — unchanged files are left untouched.

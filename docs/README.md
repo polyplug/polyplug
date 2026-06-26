@@ -1,39 +1,24 @@
 # polyplug
 
-**A high-performance, zero/minimal-overhead, cross-language, cross-platform plugin runtime — write both your app *and* its plugins in any of six languages.**
+**A fast, cross-language, cross-platform plugin runtime — write both your app *and* its plugins in any of six languages (Rust, C++, C#, Python, Lua, JavaScript).**
 
-polyplug lets you build **both sides** of an extensible application — the **host app** and
-its **plugins** — in any of six languages (**Rust, C++, C#, Python, Lua, JavaScript**), in
-**any combination**, over a frozen C ABI with near-native dispatch (~2.4 ns/call for native
-languages). A Rust host can load a Python plugin; a Bun/JavaScript host can load a C++
-plugin; **any host language pairs with any guest language — a full 6×6 matrix**. Plugins
-run as real native code or real language runtimes (CPython, the .NET CLR, LuaJIT, QuickJS) —
-*not* compiled to WebAssembly — so you keep zero-copy data sharing and full language-native
-behavior **at native speed**. The `polyplugc` CLI generates the typed glue for each language
-from a small `.toml` contract.
+A Rust host can load a Python plugin; a Bun/JavaScript host can load a C++ plugin — any
+host language pairs with any guest language, over a frozen C ABI with near-native dispatch
+([~2.4 ns/call for native languages](PERFORMANCE.md)). Plugins run as real native code or
+real language runtimes (CPython, the .NET CLR, LuaJIT, QuickJS), not WebAssembly — see
+[Architecture](ARCHITECTURE.md). The `polyplugc` CLI generates the typed glue for each
+language from a small `.toml` contract.
 
-> **Host *or* guest, your choice.** Each of the six languages is a first-class **host**
-> language (embed the runtime, load and call plugins) *and* a first-class **guest** language
-> (write a plugin other apps load). Pick per side independently — see the per-language
-> **Host** and **Guest** guides in the Languages section.
+Each language is both a host language (embed the runtime, load and call plugins) and a
+guest language (write a plugin other apps load); pick per side independently — see the
+per-language **Host** and **Guest** guides in the Languages section.
 
 ![one plugin call, end to end — by plugin language](assets/benches/hero.svg)
 
-> One plugin call, end to end — **lower is better**, log scale (a bar twice as long is
-> 10× slower, not 2×). Measured locally from live benchmark runs; see
-> [Performance](PERFORMANCE.md#how-to-read-these-charts) for how to read these charts.
+> One plugin call, end to end — **lower is better**, log scale. Measured locally from live
+> benchmark runs; see [Performance](PERFORMANCE.md#how-to-read-these-charts).
 
 ## Built for *trusted* plugins — vet the author, not the sandbox
-
-polyplug is built for **trusted** plugins: code you write or vet — first-party features,
-partner integrations, a vetted-author ecosystem. Because those plugins are trusted and run
-**in-process with no sandbox**, you pay **zero sandbox tax**: a call into a plugin is a
-direct function-pointer dispatch (~2.4 ns for native languages) with zero-copy data
-sharing, not a marshalled hop across an isolation boundary — that is where the
-high-performance, zero/minimal-overhead positioning comes from. If you need to run
-**untrusted** third-party code, use a WebAssembly runtime (Extism, Wasmtime) instead. This
-is the same trust model the most successful native extension ecosystems use (e.g. VS Code
-extensions): **vet the author, not the sandbox.**
 
 | | **polyplug** (native C ABI) | **WASM runtimes** (Extism, Wasmtime) |
 |---|---|---|
@@ -44,29 +29,23 @@ extensions): **vet the author, not the sandbox.**
 | Languages | Real CPython, .NET CLR, LuaJIT, QuickJS, native Rust/C++/C# | Anything that compiles to WASM (toolchain maturity varies) |
 | Cold start | None | Per-module instantiation cost |
 
-**Rule of thumb:** if you control or vet your plugin authors and want native speed with
-real language runtimes, use polyplug. If you must run arbitrary untrusted code safely,
-use a WASM runtime — we'll happily tell you so. The full threat model is in
+**Rule of thumb:** if you control or vet your plugin authors, use polyplug; if you must
+run arbitrary untrusted code safely, use a WASM runtime. The full threat model is in
 [Trust Model](TRUST_MODEL.md).
 
 ## What polyplug guarantees
 
-Within the "trusted, in-process" boundary, polyplug still makes hard guarantees:
+Within the trusted, in-process boundary, polyplug guarantees:
 
 - **ABI compatibility is checked at load** — a bundle whose contract version doesn't
   match is rejected with a clear error, never silent UB.
 - **The runtime's own create/destroy path is crash-isolated** — a bug in polyplug's two
   C ABI exports surfaces as a null/no-op plus a recorded error, never a host abort.
-- **Lock-free reads + safe true-unload** — contract resolution serves from an
-  epoch-published snapshot; unloading reclaims the interface *and* the backing
-  library/VM once no reader is still pinned (model-checked with
-  [loom](https://docs.rs/loom)).
-- **Bundle signing & verification** — a bundle can carry a detached Ed25519 `bundle.sig`
-  over a canonical digest of every file it contains. The host picks a `SignaturePolicy`
-  — `Off` (default), `WarnOnly`, or `Required`. The default model is **TOFU** (integrity
-  without pre-known signers); a host that trusts specific authors opts into **key
-  pinning** for authenticity. See [Trust Model § Bundle Signing](TRUST_MODEL.md#bundle-signing)
-  and [Feature Guide § 11](FEATURES.md).
+- **Lock-free reads + safe true-unload** — contract resolution is lock-free, and
+  unloading reclaims the interface and its backing library/VM once no reader is still
+  pinned. See [Architecture](ARCHITECTURE.md).
+- **Bundle signing** — optional Ed25519 bundle signing. See
+  [Trust Model § Bundle Signing](TRUST_MODEL.md#bundle-signing).
 
 ## Where to go next
 

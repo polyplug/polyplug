@@ -418,6 +418,15 @@ class Runtime:
             raise RuntimeError("Runtime is closed")
         return self._host
 
+    @property
+    def host(self) -> int:
+        """The runtime's `HostApi` pointer, for constructing generated contract callers.
+
+        Pass this as the `host` argument to a generated `*ContractCaller.create(...)`.
+        Raises `RuntimeError` if the runtime is closed.
+        """
+        return self._ensure_host()
+
     def _get_error(self) -> str:
         """Get last error message from HostApi."""
         host: int = self._ensure_host()

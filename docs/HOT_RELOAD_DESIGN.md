@@ -1,18 +1,12 @@
 # Hot-Reload Notification Design
 
-## Overview
-
-This document describes the hot-reload notification system for polyplug. The design achieves:
+The hot-reload notification system achieves:
 - **Zero overhead** on the hot path (no per-call checks)
 - **Callback-based coordination** — host destroys instances before reload
 - **Clean API** — app developers see contract objects, not interfaces/guards
 - **Actionable notifications** — host knows exactly what to do
 
-## Terminology Note
-
-This document uses the following terminology (current as of the pre-1.0 ABI):
-- **GuestContractInterface**: The interface struct a plugin provides for the host to call
-- **HostApi**: The runtime's ABI table provided to guests
+Terms are defined once in [the glossary](./glossary.md).
 
 Interfaces are stored in `RuntimeStore` as interface slots guarded by a single `RwLock`. On reload, the slot is swapped in place via `apply_reload_swap` under the write guard.
 

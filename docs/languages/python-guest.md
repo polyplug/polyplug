@@ -1,63 +1,33 @@
 # Python — Guest (plugin)
 
-A Python guest is a single `.py` file. There is no build step — you ship plain
-Python source. The polyplug runtime discovers, loads, and calls it through a
-generated ABI glue layer produced by `polyplugc`.
+Write a polyplug plugin in Python: generate the ABI glue and ship a plain `.py`
+file any polyplug host can load. No build step, no Rust toolchain. New to
+polyplug? Start with the [Quick Start](../QUICKSTART.md).
 
-See the [Python overview](python.md) for install instructions.
+See also: [Python overview](python.md) · [Python — Host (app)](python-host.md) ·
+[glossary](../glossary.md)
 
-The five Python guest examples live in `examples/guests/python/` (decoder,
-encoder, transformer, reporter, validator). Each follows the steps below.
+## 1. Install
 
----
-
-## 1. Install the guest SDK
+Install the CLI and the guest SDK packages:
 
 ```bash
+uv tool install polyplugc        # or: pipx install polyplugc / pip install polyplugc
 pip install polyplug-guest polyplug-abi
-
-# Install the CLI for code generation
-pip install polyplugc               # or: uv tool install polyplugc
 ```
 
----
+## 2. Write the bundle manifest
 
-## 2. Define the contract (`api.toml`)
-
-Contracts are shared between host and guest; the host author typically provides
-`api.toml`. The pipeline example uses:
-
-```toml
-# examples/api.toml (excerpt)
-
-[api]
-name = "pipeline"
-version = "1.0.0"
-
-[[contract]]
-name = "pipeline.Decoder"
-version = "1.0"
-
-[[contract.function]]
-name = "decode"
-args = [{ name = "input", type = "StringView" }]
-returns = "StringView"
-```
-
----
-
-## 3. Write `bundle.toml`
-
-`bundle.toml` is your plugin's manifest. Set `loader = "python"` and `file` to
-your main `.py` file name.
+`bundle.toml` declares the bundle name, target loader, the entry `.py` file, and
+which contracts this bundle implements. The `api` field points at the shared
+`api.toml` contract (see `examples/api.toml`).
 
 ```toml
 # bundle.toml
-
 [bundle]
 name = "python_decoder"
 version = "1.0.0"
-api = "../../../api.toml"   # path to the shared api.toml
+api = "../../../api.toml"   # path to api.toml, relative to this file
 loader = "python"
 file = "decoder.py"
 
@@ -66,50 +36,37 @@ name = "decoder"
 implements = ["pipeline.Decoder@1.0"]
 ```
 
-`implements` identifies the contract as `name@major_version`. The `loader` value
-must be exactly `"python"`.
+`loader` must be exactly `"python"`. `implements` names each contract as
+`<namespace>.<Name>@<major_version>`. Add one `[[plugin]]` section per plugin in
+the bundle. To declare a runtime dependency on another contract, add a
+`[[dependency]]` section:
 
----
+```toml
+[[dependency]]
+kind        = "contract"
+contract    = "pipeline.Validator"
+min_version = "1.0"
+```
 
-## 4. Generate guest glue code
+## 3. Generate the guest glue
 
 ```bash
 polyplugc generate --bundle bundle.toml --lang python --out generated
 ```
 
-This writes the following files into `generated/`:
+This writes the contract base class(es), factory setter, `polyplug_init`,
+generated types, and a `manifest.toml` under `generated/`. Re-run
+whenever `bundle.toml` or `api.toml` changes; never edit generated files. For the
+emitted symbol names, see [Generated names](../generated-names.md).
 
-```
-generated/
-├── manifest.toml            ship-ready manifest (never edit by hand)
-└── guest/
-    ├── contracts.py         generated plugin base class + factory setter + ABI dispatch
-    ├── contracts.pyi        type stubs
-    ├── host_contracts.py    host-contract callers (if api.toml defines host contracts)
-    ├── host_contracts.pyi
-    ├── init.py              polyplug_init entry point
-    ├── types.py             generated enums and structs
-    └── types.pyi
-```
+## 4. Implement the plugin
 
-Never edit the generated files — regenerate with the same command when
-`bundle.toml` or `api.toml` changes.
-
-For the `pipeline.Decoder` contract the generator produces a base class named
-`DECODERPipelineDecoderPlugin`, a `set_decoder_factory` function, and the
-`polyplug_init` entry point that the loader calls.
-
----
-
-## 5. Implement the contract
-
-Create your implementation file (e.g. `decoder.py`) next to `bundle.toml`.
-Import the generated base class, subclass it, and call `set_decoder_factory`
-at module import time:
+Create your `.py` file next to `bundle.toml`. Import the generated base class and
+factory setter, subclass the base class, and register the factory at module
+import time. Full source: `examples/guests/python/decoder`.
 
 ```python
 # decoder.py
-
 from generated.guest.contracts import (
     DECODERPipelineDecoderPlugin,
     set_decoder_factory,
@@ -118,8 +75,6 @@ from generated.guest.contracts import (
 
 
 class DecoderImpl(DECODERPipelineDecoderPlugin):
-    """The factory receives the HostApi pointer at polyplug_init time."""
-
     def __init__(self, host_ptr: int) -> None:
         self._host_ptr: int = host_ptr
 
@@ -127,86 +82,67 @@ class DecoderImpl(DECODERPipelineDecoderPlugin):
         return f"DECODED:{input.replace(',', '|')}"
 
 
-# Register the factory; the generated polyplug_init constructs the
-# implementation with its owning runtime's host pointer.
-set_decoder_factory(lambda host_ptr: DecoderImpl(host_ptr))
+set_decoder_factory(DecoderImpl)
 ```
 
-Key points:
+- The loader calls the factory once per instance with the runtime's `HostApi`
+  pointer; store it on the instance ([instance payload](../glossary.md)), never
+  in a module global.
+- Method signatures use plain `str`.
+- Call `set_decoder_factory` at module top level. Base-class and setter names come
+  from [Generated names](../generated-names.md).
 
-- The base class method signature uses plain `str` — the generated ABI dispatch
-  layer handles `StringView` ↔ `str` conversion.
-- `host_ptr` is the raw `HostApi` pointer for this runtime instance. Store it
-  as an instance field if you need to call host contracts or log through the
-  host. Do not store it in module globals.
-- `set_decoder_factory` must be called at import time (module top level), not
-  lazily, because the loader imports the file once and immediately calls
-  `polyplug_init`.
+To call a host contract (such as a logging service) from your plugin, use the
+caller in the generated `host_contracts.py`. See `examples/guests/python/reporter`
+for the full pattern.
 
----
+## 5. Assemble the bundle
 
-## 6. Assemble the bundle
-
-There is no compile step. Assemble the bundle directory:
+There is no build step. Place the entry `.py`, the generated glue, and the
+generated `manifest.toml` together, and vendor the SDK packages under
+`site-packages/`:
 
 ```
-my_decoder/
-├── manifest.toml          (copied from generated/manifest.toml)
-├── decoder.py             your implementation
-├── generated/             (or vendor the generated files alongside decoder.py)
-│   └── guest/
-│       ├── contracts.py
-│       ├── init.py
-│       └── types.py
-└── site-packages/         vendored Python packages (polyplug_guest, polyplug_abi, …)
-    ├── polyplug_guest/
-    └── polyplug_abi/
+dist/python_decoder/
+├── manifest.toml          # from generated/manifest.toml
+├── decoder.py             # your implementation
+├── generated/guest/       # generated glue (contracts.py, init.py, types.py)
+└── site-packages/         # vendored polyplug_guest, polyplug_abi
 ```
 
-The Python loader automatically prepends the bundle directory and
-`<bundle_dir>/site-packages/` to `sys.path`, so vendored SDK packages are found
-without any host-side configuration. `build_all.sh` in the examples directory
-handles this assembly automatically.
+Vendored SDK packages under `site-packages/` load automatically — no path setup.
+`examples/build_all.sh` performs this assembly.
 
----
-
-## 7. Validate the bundle
+## 6. Validate the bundle
 
 ```bash
-polyplugc validate --bundle-dir my_decoder/
+polyplugc validate --bundle-dir dist/python_decoder
 ```
 
-This checks `manifest.toml` for correctness, verifies the declared contracts
-match `api.toml`, and confirms the required files are present.
+This checks the manifest is consistent, the declared contracts match `api.toml`,
+and the entry file is present.
 
----
+## 7. Sign the bundle (optional)
 
-## 8. (Optional) Sign the bundle
+If the target host enforces a signature policy, sign the bundle:
 
 ```bash
-polyplugc sign --bundle-dir my_decoder/ --key signing_key.pem
+polyplugc keygen --out keys/           # generate keypair once; keep signing.key secret
+polyplugc sign --bundle-dir dist/python_decoder --key keys/signing.key
+polyplugc verify --bundle-dir dist/python_decoder
 ```
 
-Signing adds a signature that the host can verify when `RuntimeConfig` is
-configured with trusted public keys. See `docs/TRUST_MODEL.md` for details.
+`sign` validates the bundle, then writes a detached `bundle.sig`. See the
+[Trust Model](../TRUST_MODEL.md).
 
----
+## Full reference
 
-## Known limitations
+Reference plugins:
 
-**Python guests do not support hot-reload.** Calling `reload_bundle` on a Python
-bundle returns `RuntimeError::HotReloadDisabled`. This is a CPython constraint —
-the interpreter initializes once per process and Python modules cannot be
-cleanly unloaded. Native (cdylib), Lua, and JavaScript (QuickJS) bundles do
-support hot-reload.
-
-**Multiple runtimes share the CPython interpreter.** Python plugins from
-different `Runtime` instances in the same process can see each other's modules
-and state. For full isolation, use separate processes.
-
----
-
-## Full examples
-
-See `examples/guests/python/` for five complete Python guest plugins built
-against the shared `examples/api.toml`.
+| Plugin | Path | Contract |
+|---|---|---|
+| decoder | `examples/guests/python/decoder/` | `pipeline.Decoder` |
+| transformer | `examples/guests/python/transformer/` | `data.Transformer` (declares a dependency) |
+| encoder | `examples/guests/python/encoder/` | `pipeline.Encoder` |
+| reporter | `examples/guests/python/reporter/` | `data.Reporter` (calls a host contract) |
+| validator | `examples/guests/python/validator/` | `pipeline.Validator` |

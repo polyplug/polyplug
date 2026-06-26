@@ -1,22 +1,15 @@
 # DataRecord ABI Type Reference
 
-## Terminology Note
+`DataRecord` is the example payload type the `examples/` plugins (decoder,
+transformer, encoder, reporter, validator) pass across the boundary. It is **not**
+part of the polyplug core ABI: every language plugin mirrors these
+`#[repr(C)]`-compatible definitions **inline** rather than depending on a shared
+crate. Copy these struct definitions verbatim — if a plugin's local copy diverges
+from the layout below, it silently corrupts data across the boundary. The polyplug
+ABI freezes at v1.0 (currently pre-1.0; see `crates/polyplug_abi/`).
 
-This document uses the following terminology (current as of the pre-1.0 ABI):
-- **HostApi**: The runtime's ABI table provided to guests during `polyplug_init`
-- **GuestContractInterface**: The interface struct a plugin provides for the host to call
-
-## Overview
-
-This document is the **canonical reference** for the `DataRecord` type used across all
-example plugins in the `examples/` directory (decoder, transformer, encoder, reporter, validator). All language
-bindings must mirror these layouts **inline** — plugins must NOT depend on any shared
-crate or library for these definitions. The polyplug ABI **freezes at v1.0**
-(currently pre-1.0; see `crates/polyplug_abi/`).
-
-The rule: every language plugin copies these `#[repr(C)]`-compatible struct definitions
-verbatim. If the definitions here and the plugin's local copy diverge, the plugin will
-silently corrupt data across the boundary.
+For ABI terms (`HostApi`, `GuestContractInterface`, `StringView`), see the
+[glossary](glossary.md).
 
 ---
 
@@ -70,7 +63,6 @@ pub struct StringView {
 
 /// Example data record — passed across the ABI boundary between plugins.
 /// NOT part of polyplug core ABI — defined here for all example plugins.
-/// NOT part of polyplug core ABI — defined here for all showcase plugins.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct DataRecord {
