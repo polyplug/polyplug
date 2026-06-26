@@ -1,66 +1,23 @@
 # C# / .NET — Guest (plugin)
 
-A C# guest is a .NET class library that implements a contract and is loaded by a
-polyplug host of any language. `polyplugc` emits the glue (the `polyplug_init`
-trampoline, `StringView` marshalling, the factory hook); you implement the
-contract interface and build a `.dll`.
+Write a polyplug plugin in C#: generate the ABI glue, build a `.NET` class
+library, and assemble a bundle any polyplug host can load. New to polyplug? Start
+with the [Quick Start](../QUICKSTART.md).
 
-This mirrors [`docs/QUICKSTART.md`](../QUICKSTART.md) in C#. See
-[`examples/guests/csharp/`](../../examples/guests/csharp/) for five complete
-plugins.
+See also: [C# overview](csharp.md) · [C# — Host (app)](csharp-host.md) ·
+[glossary](../glossary.md)
 
-## Step 1 — Add the Guest SDK and the CLI
+## 1. Install
+
+Install the CLI and add the guest SDK to a class-library project:
 
 ```bash
-dotnet add package Polyplug.Guest
 dotnet tool install -g Polyplug.Cli      # or: cargo install polyplugc
+dotnet add package Polyplug.Guest
 ```
 
-## Step 2 — Define the contract (`api.toml`)
-
-The contract is shared between host and guest. For a decoder:
-
-```toml
-[[plugin_contract]]
-name = "pipeline.Decoder"
-version = "1.0.0"
-
-[[plugin_contract.functions]]
-name = "decode"
-params = [{ name = "input", type = "StringView" }]
-return = "StringView"
-```
-
-## Step 3 — Write `bundle.toml`
-
-Declare `loader = "dotnet"` and point `file` at the built assembly:
-
-```toml
-[bundle]
-name = "csharp_decoder"
-version = "1.0.0"
-api = "../api.toml"
-loader = "dotnet"
-file = "decoder.dll"
-
-[[plugin]]
-name = "decoder"
-implements = ["pipeline.Decoder@1.0"]
-```
-
-## Step 4 — Generate guest glue code
-
-```bash
-polyplugc generate --bundle bundle.toml --lang csharp --out generated
-```
-
-This emits, in the `Polyplug.Generated` namespace:
-
-- `IPipelineDecoderGuestContract` — the interface you implement,
-- `DecoderInterfaces.SetDecoderFactory(...)` — the factory registration hook,
-- the `polyplug_init` trampoline (`Init.cs`) and bundle constants.
-
-## Step 5 — Set up the class-library project
+The generated marshalling needs `AllowUnsafeBlocks`, and `AssemblyName` must
+match the `file` in `bundle.toml`:
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -74,15 +31,53 @@ This emits, in the `Polyplug.Generated` namespace:
 </Project>
 ```
 
-`AssemblyName` must match the `file` in `bundle.toml` (`decoder.dll`).
+## 2. Write the bundle manifest
 
-## Step 6 — Implement the contract
+`bundle.toml` declares the bundle name, target loader, the assembly file, and
+which contracts this bundle implements. The `api` field points at the shared
+`api.toml` contract (see `examples/api.toml`).
 
-Implement the generated interface. Read `StringView` inputs with
-`StringViewHelper`; return owned strings via `PolyplugHost.AllocString` (which
-uses the **host allocator** — never the managed heap — for cross-boundary
-memory). Register the factory from a `[ModuleInitializer]`; the factory receives
-the `HostApi` pointer for each instance and stores it as an instance field.
+```toml
+# bundle.toml
+[bundle]
+name = "csharp_decoder"
+version = "1.0.0"
+api = "../api.toml"   # path to api.toml, relative to this file
+loader = "dotnet"
+file = "decoder.dll"
+
+[[plugin]]
+name = "decoder"
+implements = ["pipeline.Decoder@1.0"]
+```
+
+`implements` names each contract as `<namespace>.<Name>@<major_version>`. Add one
+`[[plugin]]` section per plugin in the bundle. To declare a runtime dependency on
+another contract, add a `[[dependency]]` section:
+
+```toml
+[[dependency]]
+kind        = "contract"
+contract    = "pipeline.Validator"
+min_version = "1.0"
+```
+
+## 3. Generate the guest glue
+
+```bash
+polyplugc generate --bundle bundle.toml --lang csharp --out generated
+```
+
+This writes the contract interface(s), the factory registration hook, the
+`polyplug_init` trampoline, bundle constants, and a `manifest.toml`
+under `generated/`, all in the `Polyplug.Generated` namespace. Re-run whenever
+`bundle.toml` or `api.toml` changes; never edit generated files. For the emitted
+symbol names, see [Generated names](../generated-names.md).
+
+## 4. Implement the plugin
+
+Implement the generated interface, then register the factory from a
+`[ModuleInitializer]`. Full source: `examples/guests/csharp/decoder`.
 
 ```csharp
 using System.Runtime.CompilerServices;
@@ -114,60 +109,63 @@ public static class Registration
 }
 ```
 
-The captured `_host` pointer also lets you call host contracts —
-`PolyplugHost.Log(_host, level, scope, message)` invokes the host logger.
+- The factory receives the `HostApi` pointer for each instance; store it as an
+  instance field (see [instance payload](../glossary.md)).
+- Read `StringView` inputs with `StringViewHelper.ToString`; return owned strings
+  with `PolyplugHost.AllocString(_host, ...)`.
+- The captured `_host` pointer also lets you call host contracts:
+  `PolyplugHost.Log(_host, level, scope, message)` invokes the host logger.
 
-## Step 7 — Build
+Interface and factory names come from [Generated names](../generated-names.md).
+
+## 5. Build
 
 ```bash
 dotnet build -c Release      # → decoder.dll
 ```
 
-## Step 8 — Assemble the bundle
+## 6. Assemble the bundle
 
-Copy `decoder.dll`, the generated `manifest.toml`, and **every dependency
-assembly** the plugin needs into one bundle directory beside `manifest.toml` —
-the dotnet loader resolves assemblies from the bundle directory.
+Copy the built assembly, the generated `manifest.toml`, and **every dependency
+assembly** the plugin needs into one bundle directory:
 
 ```
 dist/csharp_decoder/
-├── manifest.toml
-├── decoder.dll
+├── manifest.toml          # from generated/manifest.toml
+├── decoder.dll            # from bin/Release/net10.0/
 └── <dependency assemblies, if any>
 ```
 
-## Step 9 — Validate (and optionally sign)
+## 7. Validate the bundle
 
 ```bash
 polyplugc validate --bundle-dir dist/csharp_decoder
 ```
 
-If the host enforces a signature policy, sign the assembled bundle:
+This checks the manifest is consistent, the declared assembly is present, and the
+bundle conforms to the ABI rules.
+
+## 8. Sign the bundle (optional)
+
+If the target host enforces a signature policy, sign the bundle:
 
 ```bash
-polyplugc sign   --bundle-dir dist/csharp_decoder --key keys/signing.key
+polyplugc keygen --out keys/           # generate keypair once; keep signing.key secret
+polyplugc sign --bundle-dir dist/csharp_decoder --key keys/signing.key
 polyplugc verify --bundle-dir dist/csharp_decoder
 ```
 
-`sign` runs the same checks as `validate --bundle-dir`, then writes
-`bundle.sig` — a detached Ed25519 signature over a canonical digest of every
-file in the bundle.
+`sign` validates the bundle, then writes a detached `bundle.sig`. See the
+[Trust Model](../TRUST_MODEL.md).
 
-## Step 10 — Load it from a host
+## Full reference
 
-Any polyplug host with the **dotnet loader** registered can now load the bundle
-directory and call `pipeline.Decoder`. See [C# — Host (app)](csharp-host.md) for
-the C# side.
+Reference plugins:
 
-## Runtime constraints
-
-- **.NET guests do not hot-reload.** The dotnet loader returns
-  `HotReloadDisabled` from `reload()`. To pick up a new build, the host must
-  unload and load again.
-- The CLR initializes once per process; .NET guests in the same process share
-  one CLR (and its loader cache).
-
-## See also
-
-- [C# overview](csharp.md) · [C# — Host (app)](csharp-host.md)
-- [`docs/QUICKSTART.md`](../QUICKSTART.md) for the canonical flow.
+| Plugin | Path | Contract |
+|---|---|---|
+| decoder | `examples/guests/csharp/decoder/` | `pipeline.Decoder` |
+| transformer | `examples/guests/csharp/transformer/` | `data.Transformer` (declares a dependency) |
+| encoder | `examples/guests/csharp/encoder/` | `pipeline.Encoder` |
+| reporter | `examples/guests/csharp/reporter/` | `data.Reporter` (calls a host contract) |
+| validator | `examples/guests/csharp/validator/` | `pipeline.Validator` |

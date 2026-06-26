@@ -1,18 +1,10 @@
 # GuestContractInterface Design Rationale
 
-> **Historical Document** — This document describes the design rationale for the `GuestContractInterface` architecture, which replaced an earlier native-only interface that stored a flat function-pointer array. The implementation is complete and this document is preserved for historical reference. For current implementation details, see the code in `crates/polyplug_abi/src/guest/` and `sdks/*/abi/`.
+> **Historical document.** The `GuestContractInterface` architecture replaced an earlier native-only interface that stored a flat function-pointer array. The implementation is complete; this page is preserved for the rationale. For current implementation details, see the code in `crates/polyplug_abi/src/guest/` and `sdks/*/abi/`.
 
-## Terminology Note
+Terms are defined once in [the glossary](./glossary.md).
 
-This document uses the following terminology (current as of the pre-1.0 ABI):
-- **GuestContractInterface**: The interface struct a plugin provides for the host to call
-- **HostApi**: The runtime's ABI table provided to guests
-- **Guest Contract**: A contract implemented by plugins
-- **Host Contract**: A contract provided by the host to plugins
-
-## Overview
-
-This document explains the design decisions behind the `GuestContractInterface` architecture, which replaced an earlier native-only interface (a flat function-pointer array, referred to below as the "old native-only interface"). The key goals are:
+The `GuestContractInterface` architecture replaces an earlier native-only interface (a flat function-pointer array, referred to below as the "old native-only interface") to meet four goals:
 
 1. **Zero overhead for native plugins** - Direct function call, no indirection
 2. **Minimal overhead for VM plugins** - One dispatch call, no global state

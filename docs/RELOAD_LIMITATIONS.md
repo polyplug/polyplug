@@ -4,6 +4,19 @@
 > are not hot-reloadable, so the .NET case can be reassessed once a
 > collectible-ALC swap strategy is designed. Not a current-work item.
 
+## Support matrix
+
+| Loader        | Per-bundle reclaimable unit      | Unload            | Reload |
+|---------------|----------------------------------|-------------------|--------|
+| native        | per-bundle dylib (`dlclose`)     | yes               | yes    |
+| lua           | per-bundle Lua state             | yes               | yes    |
+| js (QuickJS)  | per-bundle QuickJS context       | yes               | yes    |
+| python        | — (one shared interpreter)       | partial (purge)   | no     |
+| .NET          | per-bundle collectible ALC       | yes (async)       | no     |
+
+The three reloadable loaders each own a per-bundle unit they can drop and
+recreate — exactly what reload's drop-old + swap + epoch-reclaim cycle needs.
+
 ## What hot-reload requires
 
 The reload path (`crates/polyplug/src/reload.rs`) needs two things from a loader:
@@ -18,20 +31,6 @@ The reload path (`crates/polyplug/src/reload.rs`) needs two things from a loader
 A loader that cannot provide both cannot hot-reload safely. Such a loader reports
 `supports_hot_reload() == false`, and the runtime returns
 `RuntimeError::HotReloadDisabled` without calling its `reload()`.
-
-## Per-loader status
-
-| Loader        | Per-bundle reclaimable unit      | Unload            | Reload |
-|---------------|----------------------------------|-------------------|--------|
-| native        | per-bundle dylib (`dlclose`)     | yes               | yes    |
-| lua           | per-bundle Lua state             | yes               | yes    |
-| js (QuickJS)  | per-bundle QuickJS context       | yes               | yes    |
-| python        | — (one shared interpreter)       | partial (purge)   | no     |
-| .NET          | per-bundle collectible ALC       | yes (async)       | no     |
-
-The three reloadable loaders each own a per-bundle unit they can drop and
-recreate; that is exactly what reload's drop-old + swap + epoch-reclaim cycle
-needs.
 
 ## Python — fundamental limitation
 

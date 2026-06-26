@@ -1,0 +1,46 @@
+# lefthook — each check is a named command. Fast ones gate the commit, the test
+# matrix gates the push. Setup: lefthook install. Bypass: LEFTHOOK=0 git push.
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      glob: "*.rs"
+      run: just fmt-check
+    import-hygiene:
+      run: just verify-no-fq-paths
+    sdk-validator:
+      glob:
+        - "crates/polyplug_abi/**/*"
+        - "crates/polyplug_codegen/**/*"
+        - "sdks/**/*"
+        - "checks/sdk_validator.yaml"
+      run: just validate-sdks
+    lint:
+      glob: "*.rs"
+      run: just lint
+    js-typecheck:
+      glob:
+        - "sdks/js/**/*.ts"
+        - "sdks/js/**/*.js"
+      run: just js-typecheck
+    docs:
+      glob:
+        - "**/*.md"
+        - "*.md"
+        - "book.toml"
+      run: just docs-check
+
+pre-push:
+  commands:
+    tests:
+      run: just test-all
+
+commit-msg:
+  commands:
+    check-message:
+      run: |
+        if ! grep -qE '^(feat|fix|docs|style|refactor|test|chore)(\(.+\))?: .+' {1}; then
+          echo "Commit message must follow conventional commits format"
+          exit 1
+        fi

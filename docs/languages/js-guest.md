@@ -1,92 +1,78 @@
 # JavaScript — Guest (plugin)
 
-A polyplug JS guest is a TypeScript/JavaScript plugin that runs inside the
-embedded **QuickJS** interpreter, managed by the `polyplug_js` loader
-(`loader = "js-quickjs"`). The plugin is built into a single self-contained flat
-`bundle.js` using [rolldown](https://rolldown.rs/); no `node_modules` or dynamic
-imports exist at runtime.
+Write a polyplug plugin in TypeScript: generate the ABI glue, bundle it to a
+single flat `bundle.js`, and assemble a bundle any polyplug host can load. The
+plugin runs inside the embedded **QuickJS** interpreter (`loader =
+"js-quickjs"`). New to polyplug? Start with the [Quick Start](../QUICKSTART.md).
 
-JS/QuickJS bundles support **hot-reload**: the loader re-reads `bundle.js` from
-disk and swaps the live implementation when the host calls `reloadBundle`.
+See also: [JS overview](js.md) · [JS — Host (app)](js-host.md) ·
+[glossary](../glossary.md)
 
-See [JS — overview](js.md) for install instructions and the CLI install.
+## 1. Install
 
----
-
-## Step 1 — Install the guest SDK
+Install the CLI, the guest SDK, and rolldown to bundle:
 
 ```bash
 # npm / Bun
+npm install -g @polyplug/cli
 npm install @polyplug/guest
+npm install --save-dev rolldown
 
 # Deno
+deno install -gA -n polyplugc npm:@polyplug/cli   # CLI is npm-only, not JSR
 deno add jsr:@polyplug/guest
 ```
 
-Also install rolldown as a dev dependency:
+## 2. Write the bundle manifest
 
-```bash
-npm install --save-dev rolldown
-```
-
----
-
-## Step 2 — Get the contract definition (`api.toml`)
-
-Obtain the `api.toml` from the host application developer. It defines every
-contract your plugin may implement and every host service it may call.
-
----
-
-## Step 3 — Write `bundle.toml`
+`bundle.toml` declares the bundle name, target loader, the flat JS file, and
+which contracts this bundle implements. The `api` field points at the shared
+`api.toml` contract (see `examples/api.toml`).
 
 ```toml
+# bundle.toml
 [bundle]
 name    = "my_decoder"
 version = "1.0.0"
-api     = "../api.toml"
+api     = "../api.toml"      # path to api.toml, relative to this file
 loader  = "js-quickjs"
-file    = "bundle.js"
+file    = "bundle.js"        # the flat file rolldown produces
 
 [[plugin]]
 name       = "decoder"
 implements = ["pipeline.Decoder@1.0"]
 ```
 
-`implements` references contracts as `name@major_version`. Multiple `[[plugin]]`
-sections register multiple contracts from one bundle.
+`implements` names each contract as `<namespace>.<Name>@<major_version>`. Add one
+`[[plugin]]` section per plugin in the bundle. To declare a runtime dependency on
+another contract, add a `[[dependency]]` section:
 
----
+```toml
+[[dependency]]
+kind        = "contract"
+contract    = "pipeline.Validator"
+min_version = "1.0"
+```
 
-## Step 4 — Generate guest glue
+## 3. Generate the guest glue
 
 ```bash
-polyplugc generate --bundle bundle.toml --lang js-quickjs --out generated/
+polyplugc generate --bundle bundle.toml --lang js-quickjs --out generated
 ```
 
-This produces into `generated/guest/`:
+This writes the contract glue (`contracts.ts`), host-contract callers
+(`host_contracts.ts`), `polyplug_init` (`init.ts`), dispatch wrappers
+(`interface.ts`), and a `manifest.toml` under `generated/`. Re-run
+whenever `bundle.toml` or `api.toml` changes; never edit generated files. For
+the emitted symbol names — interface/descriptor consts, the factory setter, and
+the positional `fn{N}` methods — see [Generated names](../generated-names.md).
 
-```
-generated/guest/
-├── contracts.ts         # DECODER_INTERFACE, DECODER_DESCRIPTOR, setDecoderFactory
-├── host_contracts.ts    # typed callers for host-provided services (e.g. HostLoggerContract)
-├── init.ts              # polyplug_init — the ABI entry point
-├── interface.ts         # dispatch wrappers
-├── index.ts             # re-exports
-└── types.ts             # shared enum/struct types
-generated/
-└── manifest.toml        # precomputed bundle_id (never edit by hand)
-```
+## 4. Implement the plugin
 
-The generated `manifest.toml` carries the precomputed `bundle_id`
-(`fnv1a_64(name)`). Never hand-write or edit it.
-
----
-
-## Step 5 — Implement the contract
-
-Create your entry-point source file (e.g. `index.ts`). Import the generated
-factory setter and provide your implementation:
+Create your entry-point source file, import the generated factory setter, and
+return an instance object whose methods are **positional** (`fn0`, `fn1`, … in
+the contract's declared method order). Full source:
+`examples/guests/js/decoder`.
 
 ```ts
 // index.ts
@@ -94,25 +80,26 @@ import { setDecoderFactory } from "./generated/guest/contracts";
 import { polyplug_init }     from "./generated/guest/init";
 import { toStr }             from "@polyplug/guest";
 
-// The loader calls this factory once per instance, threading the bridge and
-// host pointer explicitly. Capture bridge in the returned object so methods
-// can reach host services through it.
+// Capture `bridge` in the returned object so methods can reach host services.
 setDecoderFactory((bridge, hostLo, hostHi) => ({
-  fn0: (input) => {
+  fn0: (input) => {                       // fn0 == decode (first declared method)
     const s = toStr(bridge, input);
     return `DECODED:${s.replace(/,/g, "|")}`;
   },
 }));
 
-// Re-export so rolldown promotes polyplug_init to globalThis (required).
+// Re-export so the bundler promotes polyplug_init to the entry point (required).
 export { polyplug_init };
 ```
 
-The bridge object provides memory accessors, host-contract callers, and the
-arena allocator. Never store it in a module-level variable; the loader threads
-it per-call.
+- Store `bridge` in the returned instance — never a module global.
+- `toStr` reads a `StringView` as a string.
+- Methods are positional: `fn0` is the first declared method, `fn1` the second,
+  and so on. For the descriptor's contract-id fields, see
+  [Generated names](../generated-names.md).
 
-To call a host service (e.g. `host.logger`):
+To call a host contract (such as a logging service) from your plugin, use the
+typed caller in the generated `host_contracts.ts`:
 
 ```ts
 import { HostLoggerContract } from "./generated/guest/host_contracts";
@@ -121,7 +108,7 @@ setDecoderFactory((bridge, hostLo, hostHi) => {
   const logger = HostLoggerContract.fromHost(bridge, { lo: hostLo, hi: hostHi });
   return {
     fn0: (input) => {
-      logger?.Log("decoding…");
+      logger?.log("decoding…");
       const s = toStr(bridge, input);
       return `DECODED:${s.replace(/,/g, "|")}`;
     },
@@ -129,73 +116,58 @@ setDecoderFactory((bridge, hostLo, hostHi) => {
 });
 ```
 
----
+## 5. Bundle to a single flat file
 
-## Step 6 — Bundle to a single flat file
+QuickJS has no module loader, so bundle your source, the generated glue, and any
+pure-logic npm packages into one self-contained `bundle.js`:
 
 ```bash
 rolldown index.ts --format iife --platform neutral --file bundle.js
 ```
 
-This bundles your source, the generated glue, and any pure-logic npm packages
-into one self-contained `bundle.js`. The IIFE format promotes `polyplug_init` to
-`globalThis`, which is how the QuickJS loader finds the plugin entry point.
+No `node_modules` directory is needed at runtime — every dependency is inlined.
+The re-exported `polyplug_init` becomes the entry point the QuickJS loader calls.
 
-No `node_modules` directory is needed at runtime; all dependencies are inlined.
+## 6. Assemble the bundle
 
----
-
-## Step 7 — Assemble the bundle directory
+Copy the bundled `bundle.js` next to the generated `manifest.toml`:
 
 ```
 dist/my_decoder/
-├── manifest.toml   # copy from generated/manifest.toml
-└── bundle.js       # rolldown output
+├── manifest.toml       # from generated/manifest.toml — never the hand-written bundle.toml
+└── bundle.js           # rolldown output
 ```
 
-Copy `generated/manifest.toml` (never the hand-written `bundle.toml`) into the
-bundle directory alongside `bundle.js`.
-
----
-
-## Step 8 — Validate
+## 7. Validate the bundle
 
 ```bash
-polyplugc validate --bundle-dir dist/my_decoder/
+polyplugc validate --bundle-dir dist/my_decoder
 ```
 
-The validator runs the same checks the loader performs at runtime:
-- `manifest.toml` parses correctly
-- `bundle_id` matches `fnv1a_64(name)`
-- `bundle.js` is present and has a `.js` extension
-- contract references resolve against `api.toml`
+This checks the manifest is consistent, the declared `bundle.js` is present, and
+the bundle conforms to the ABI rules.
 
-Fix any errors before shipping the bundle.
+## 8. Sign the bundle (optional)
 
----
-
-## Step 9 — Sign (optional)
+If the target host enforces a signature policy, sign the bundle:
 
 ```bash
-polyplugc sign --bundle-dir dist/my_decoder/ --key my_private_key.pem
+polyplugc keygen --out keys/           # generate keypair once; keep signing.key secret
+polyplugc sign --bundle-dir dist/my_decoder --key keys/signing.key
+polyplugc verify --bundle-dir dist/my_decoder
 ```
 
-See `docs/TRUST_MODEL.md` for the full signing and verification workflow.
+`sign` validates the bundle, then writes a detached `bundle.sig`. See the
+[Trust Model](../TRUST_MODEL.md).
 
----
+## Full reference
 
-## Example plugins
+Reference plugins:
 
-Five complete TypeScript plugins live in `examples/guests/js/`:
-
-| Plugin      | Contract             |
-|-------------|----------------------|
-| decoder     | `pipeline.Decoder`   |
-| transformer | `data.Transformer`   |
-| encoder     | `pipeline.Encoder`   |
-| reporter    | `data.Reporter`      |
-| validator   | `pipeline.Validator` |
-
-Each follows the same structure: a `bundle.toml`, an `index.ts` (or equivalent
-entry file), a `generated/` directory produced by `polyplugc`, and a `bundle.js`
-assembled by `rolldown`.
+| Plugin | Path | Contract |
+|---|---|---|
+| decoder | `examples/guests/js/decoder/` | `pipeline.Decoder` |
+| transformer | `examples/guests/js/transformer/` | `data.Transformer` (declares a dependency) |
+| encoder | `examples/guests/js/encoder/` | `pipeline.Encoder` |
+| reporter | `examples/guests/js/reporter/` | `data.Reporter` (calls a host contract) |
+| validator | `examples/guests/js/validator/` | `pipeline.Validator` |

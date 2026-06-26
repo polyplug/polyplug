@@ -52,10 +52,6 @@ from generated.host.callers import (
     DataReporterContractCaller,
     PipelineValidatorContractCaller,
     PIPELINE_DECODER_CONTRACT_ID,
-    DATA_TRANSFORMER_CONTRACT_ID,
-    PIPELINE_ENCODER_CONTRACT_ID,
-    DATA_REPORTER_CONTRACT_ID,
-    PIPELINE_VALIDATOR_CONTRACT_ID,
 )
 # The generated host package imports its siblings as `host.*` (the layout the
 # generators emit for sys.path-rooted packages), so `generated/` must be
@@ -87,18 +83,6 @@ class ConsoleLogger(HostLogger):
         }
         level_str = names.get(level, "INFO")
         print(f"[plugin][{level_str}] {message}")
-
-
-def make_caller(caller_cls, rt, contract_id: int):
-    """Resolve a contract handle and build a caller, or None if unavailable.
-
-    find_guest_contract returns a GuestContractHandle struct (index: u32, generation: u32);
-    the null/invalid handle has index == 0xFFFFFFFF.
-    """
-    handle = rt.find_guest_contract(contract_id, 0)
-    if handle.index == 0xFFFFFFFF:
-        return None
-    return caller_cls.create(handle, rt._ensure_host(), owner=rt)
 
 
 def handle_reload(phase: ReloadPhase) -> None:
@@ -182,25 +166,25 @@ def main():
     print(f'Input: "{input_str}"\n')
     keepalive: list = []
 
-    if decoder := make_caller(PipelineDecoderContractCaller, rt, PIPELINE_DECODER_CONTRACT_ID):
+    if decoder := PipelineDecoderContractCaller.create(rt):
         result = to_str(decoder.decode(str_view(input_str, keepalive)))
         print(f'[decoder] decode("{input_str}") = "{result}"')
 
     decoded = f"DECODED:{input_str.replace(',', '|')}"
-    if transformer := make_caller(DataTransformerContractCaller, rt, DATA_TRANSFORMER_CONTRACT_ID):
+    if transformer := DataTransformerContractCaller.create(rt):
         result = to_str(transformer.transform(str_view(decoded, keepalive)))
         print(f'[transformer] transform("{decoded}") = "{result}"')
 
     transformed = "TRANSFORMED:NAME|value (transformed)|43"
-    if encoder := make_caller(PipelineEncoderContractCaller, rt, PIPELINE_ENCODER_CONTRACT_ID):
+    if encoder := PipelineEncoderContractCaller.create(rt):
         result = to_str(encoder.encode(str_view(transformed, keepalive)))
         print(f'[encoder] encode("{transformed}") = "{result}"')
 
-    if reporter := make_caller(DataReporterContractCaller, rt, DATA_REPORTER_CONTRACT_ID):
+    if reporter := DataReporterContractCaller.create(rt):
         result = to_str(reporter.report(str_view(transformed, keepalive)))
         print(f'[reporter] report("{transformed}") = "{result}"')
 
-    if validator := make_caller(PipelineValidatorContractCaller, rt, PIPELINE_VALIDATOR_CONTRACT_ID):
+    if validator := PipelineValidatorContractCaller.create(rt):
         result = to_str(validator.validate(str_view(decoded, keepalive)))
         print(f'[validator] validate("{decoded}") = "{result}"')
 
@@ -220,7 +204,7 @@ def run_roundtrip_bench(rt, iters: int) -> None:
     """Time `decoder.decode(input)` over `iters` calls; print ROUNDTRIP_NS=<ns/call>."""
     import time
 
-    decoder = make_caller(PipelineDecoderContractCaller, rt, PIPELINE_DECODER_CONTRACT_ID)
+    decoder = PipelineDecoderContractCaller.create(rt)
     if decoder is None:
         print("ROUNDTRIP_NS=nan LANG=python  # decoder unavailable", file=sys.stderr)
         return

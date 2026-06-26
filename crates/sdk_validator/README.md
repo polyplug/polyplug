@@ -1,10 +1,6 @@
 # SDK Validator
 
-Cross-language SDK consistency validator for polyplug. Ensures every language SDK implements the golden helper method set defined in `checks/sdk_validator.yaml`, and that every hand-written or generated enum mirror matches the golden enum set exactly.
-
-## Overview
-
-The validator checks that the golden method set (e.g. the `StringView` helpers `to_str`, `starts_with`, `ends_with`, `strip_prefix`, `split`) has a **real definition** in every target SDK file for every language (Rust, Python, C#, C++, JavaScript/TypeScript, Lua).
+Cross-language SDK consistency validator for polyplug. It checks that the golden helper method set defined in `checks/sdk_validator.yaml` (e.g. the `StringView` helpers `to_str`, `starts_with`, `ends_with`, `strip_prefix`, `split`) has a **real definition** in every target SDK file for every language (Rust, Python, C#, C++, JavaScript/TypeScript, Lua), and that every hand-written or generated enum mirror matches the golden enum set exactly.
 
 Detection is AST-based — call sites, comments, and renamed lookalikes (`to_str2`) never count:
 

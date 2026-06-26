@@ -1,71 +1,46 @@
 # Rust — Host (app)
 
-This guide walks through embedding the polyplug runtime in a Rust application,
-loading plugins written in any supported language, and calling their contracts
-via generated typed callers.
+Embed the polyplug runtime in a Rust application, load plugins written in any
+supported language, and call their contracts through generated typed callers.
 
-See also: [Rust overview](rust.md) · [Rust — Guest (plugin)](rust-guest.md)
+See also: [Rust overview](rust.md) · [Rust — Guest (plugin)](rust-guest.md) ·
+[glossary](../glossary.md)
 
----
+## 1. Install
 
-## 1. Add dependencies
+Install the CLI and add the runtime crates to your app's `Cargo.toml`:
+
+```bash
+cargo install polyplugc
+```
 
 ```toml
-# Cargo.toml
 [dependencies]
 polyplug        = "0.1"
 polyplug_abi    = "0.1"
 polyplug_native = "0.1"   # always needed for native bundles
-# add whichever language loaders you want to support:
+# add a loader per guest language you want to support:
 polyplug_js     = "0.1"
 polyplug_lua    = "0.1"
 polyplug_python = "0.1"
 polyplug_dotnet = "0.1"
 ```
 
-A Rust host can load guest plugins written in **any** of the six supported
-languages — just register the matching loader(s) when building the runtime.
+## 2. Generate host callers
 
-## 2. Install `polyplugc`
-
-```bash
-cargo install polyplugc
-```
-
-`polyplugc` generates the typed host callers from an `api.toml` contract
-definition. Re-run it whenever the contract changes.
-
-## 3. Obtain `api.toml`
-
-`api.toml` is the shared contract definition authored once and consumed by both
-hosts and guests. It declares the contracts your plugins implement and the types
-they exchange. See `examples/api.toml` for a full example with five contracts,
-an enum, and a host-provided logging contract.
-
-## 4. Generate host callers
+Author or obtain the shared `api.toml` contract (see `examples/api.toml`), then
+generate the typed callers. Re-run whenever the contract changes.
 
 ```bash
 polyplugc generate --api api.toml --lang rust --out host/generated
 ```
 
-This writes three files into `host/generated/host/`:
+This writes `host/generated/host/` with the typed caller structs, host-contract
+traits, contract-ID constants, interface factories, and generated types. Never
+edit these files. For the emitted symbol names, see
+[Generated names](../generated-names.md).
 
-```
-host/generated/
-├── mod.rs
-└── host/
-    ├── mod.rs
-    ├── host_callers.rs        typed caller structs (one per contract)
-    ├── host_contracts.rs      host-contract traits + contract-ID constants
-    ├── interface_factories.rs create_<name>_interface helpers
-    └── types.rs               generated enums and structs
-```
-
-The caller struct for contract `pipeline.Decoder` is `PipelineDecoderContract`;
-its contract-ID constant is `PIPELINE_DECODER_CONTRACT_ID`. Never edit these
-files — regenerate when the contract changes.
-
-Include the generated module from your binary:
+Include the module from your binary:
 
 ```rust
 #[path = "host/generated/mod.rs"]
@@ -75,7 +50,7 @@ use generated::host::host_callers::*;
 use generated::host::types::*;
 ```
 
-## 5. Build and configure the runtime
+## 3. Build the runtime
 
 ```rust
 use polyplug::runtime::Runtime;
@@ -97,14 +72,11 @@ let runtime: Arc<Runtime> = Runtime::builder()
     .expect("runtime build");
 ```
 
-To support plugins written in other languages, register their loaders:
+Register one loader per guest language. The config argument differs by loader —
+a unit struct (`JsConfig {}`) where there are no options, `Config::default()`
+otherwise:
 
 ```rust
-use polyplug_js::{JsConfig, JsLoader};
-use polyplug_lua::{LuaConfig, LuaLoader};
-use polyplug_python::{PythonConfig, PythonLoader};
-use polyplug_dotnet::{DotnetConfig, DotnetLoader};
-
 let runtime: Arc<Runtime> = Runtime::builder()
     .loader(NativeLoader::new(NativeConfig {}))
     .loader(JsLoader::new(JsConfig {}))
@@ -116,11 +88,12 @@ let runtime: Arc<Runtime> = Runtime::builder()
     .expect("runtime build");
 ```
 
-`Runtime::builder()` returns an `Arc<Runtime>` — the `Arc` target has a stable
-address for its lifetime, so generated callers that cache a `*const HostApi`
-remain valid as long as the `Arc` is alive.
+The full multi-loader host is `examples/hosts/rust/src/main.rs`.
 
 ### Hot-reload callback (optional)
+
+Pass `.on_reload(...)` to observe reload phases. Hot-reload applies to native,
+Lua, and JS bundles — see [Hot Reload](../HOT_RELOAD_DESIGN.md).
 
 ```rust
 use polyplug_abi::runtime::{ReloadPhase, ReloadPhaseType};
@@ -130,19 +103,15 @@ let runtime: Arc<Runtime> = Runtime::builder()
     .config(config)
     .on_reload(|_user_data: *mut core::ffi::c_void, phase: ReloadPhase| {
         match phase.phase_type {
-            ReloadPhaseType::Preparing => eprintln!("[HOT-RELOAD] Preparing"),
-            ReloadPhaseType::Reloaded  => eprintln!("[HOT-RELOAD] Reloaded"),
-            ReloadPhaseType::Failed    => eprintln!("[HOT-RELOAD] Failed"),
-            ReloadPhaseType::Unloading => eprintln!("[HOT-RELOAD] Unloading"),
+            ReloadPhaseType::Preparing => eprintln!("[reload] preparing"),
+            ReloadPhaseType::Reloaded  => eprintln!("[reload] reloaded"),
+            ReloadPhaseType::Failed    => eprintln!("[reload] failed"),
+            ReloadPhaseType::Unloading => eprintln!("[reload] unloading"),
         }
     })
     .build()
     .expect("runtime build");
 ```
-
-Hot-reload is supported for **native** (`cdylib`), **Lua**, and **JavaScript
-(QuickJS)** bundles. Python and .NET bundles return
-`RuntimeError::HotReloadDisabled` from `reload()` unconditionally.
 
 ### Signature policy (optional)
 
@@ -157,10 +126,10 @@ let runtime: Arc<Runtime> = Runtime::builder()
     .expect("runtime build");
 ```
 
-`Required` rejects unsigned or tampered bundles. See
-[`TRUST_MODEL.md`](../TRUST_MODEL.md) for the full signing model.
+`Required` rejects unsigned or tampered bundles. See the
+[Trust Model](../TRUST_MODEL.md).
 
-## 6. Register a host contract (optional)
+## 4. Register a host contract (optional)
 
 If your `api.toml` defines a host contract (a service the host provides to
 plugins), register it before loading bundles:
@@ -189,35 +158,31 @@ runtime
     .expect("register host contract");
 ```
 
-## 7. Scan and load bundles
+## 5. Load bundles
 
 ```rust
 use polyplug::loader::scanner;
 use std::path::PathBuf;
 
 let plugin_path: PathBuf = PathBuf::from("dist");
-let scan: scanner::ScanResult = scanner::scan_dirs(core::slice::from_ref(&plugin_path));
+let scan: scanner::ScanResult = scanner::scan_dirs(std::slice::from_ref(&plugin_path));
 
 for diagnostic in &scan.diagnostics {
     eprintln!("warning: {diagnostic}");
 }
 
-let bundles: Vec<(PathBuf, _)> = scan.found;
-for (path, _manifest) in &bundles {
-    runtime
-        .load_bundle(path)
-        .expect("load bundle");
+for (path, _manifest) in &scan.found {
+    runtime.load_bundle(path).expect("load bundle");
 }
 ```
 
-`scan_dirs` discovers every `manifest.toml` under the given directories.
-`load_bundle` dispatches to the registered loader that matches the bundle's
-`loader` field.
+`scan_dirs` discovers every `manifest.toml` under the given directories;
+`load_bundle` loads the bundle at the given path.
 
-## 8. Resolve a contract and call it
+## 6. Call a contract
 
 ```rust
-use polyplug_abi::GuestContractHandle;
+use polyplug_abi::{GuestContractHandle, StringView};
 use generated::host::types::PIPELINE_DECODER_CONTRACT_ID;
 use generated::host::host_callers::PipelineDecoderContract;
 
@@ -229,11 +194,8 @@ let mut caller: PipelineDecoderContract =
     PipelineDecoderContract::new(handle, runtime.as_context_ptr())
         .expect("caller init");
 
-let input = polyplug_abi::StringView {
-    ptr: b"name,value,42".as_ptr(),
-    len: 13,
-};
-let result: polyplug_abi::StringView = caller.decode(input).expect("decode failed");
+let input = StringView { ptr: b"name,value,42".as_ptr(), len: 13 };
+let result: StringView = caller.decode(input).expect("decode failed");
 
 // SAFETY: result is a valid StringView in host-allocator memory, live for this scope.
 let s: &str = unsafe {
@@ -242,16 +204,12 @@ let s: &str = unsafe {
 println!("{s}");   // DECODED:name|value|42
 ```
 
-The second argument to `find_guest_contract` is a minimum packed version
-(`major << 16 | minor`); pass `0` to accept any version.
-
-Generated callers cache the resolved `GuestContractInterface` pointer and
-validate it against the runtime's revision counter on every call, so a
-hot-reloaded plugin is picked up automatically without re-resolving the handle.
+The second argument to `find_guest_contract` is the minimum version to accept;
+pass `0` for any version. A hot-reloaded plugin
+is picked up automatically — see [Hot Reload](../HOT_RELOAD_DESIGN.md).
 
 ## Full reference
 
-The Rust host example at `examples/hosts/rust/src/main.rs` is the primary
-reference: it registers all six loaders, a host contract, scans a directory,
-loads every bundle it finds, and runs a five-contract pipeline end to end.
-Generated callers live at `examples/hosts/rust/generated/`.
+`examples/hosts/rust/src/main.rs` registers all five loaders, a host contract,
+scans a directory, loads every bundle, and runs a five-stage pipeline end to
+end. Generated callers live at `examples/hosts/rust/generated/`.

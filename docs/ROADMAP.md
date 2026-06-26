@@ -1,11 +1,10 @@
 # polyplug Roadmap
 
-This is the living tracker: **what shipped**, **what's coming**, **what we
-deferred (and why)**, and **what needs an owner decision**. The ABI is **pre-1.0**
-and stays there for the foreseeable future — there is **no scheduled 1.0 freeze**,
-so ABI-visible changes (`HostApi` / `RuntimeConfig` / dispatch shape) remain
-permitted between releases. The "Harden" lane is complete and the SDKs are
-published; the open work below is adopter-facing DX and polish.
+The ABI is **pre-1.0** and stays there for the foreseeable future — there is
+**no scheduled 1.0 freeze**, so ABI-visible changes (`HostApi` /
+`RuntimeConfig` / dispatch shape) remain permitted between releases. The
+"Harden" lane is complete and the SDKs are published; the open work below is
+adopter-facing DX and polish.
 
 _Last updated: 2026-06-23._
 
@@ -251,7 +250,7 @@ toolchains and assemble the bundle directory themselves.
 
 1. **`generate` output compiles with zero hand edits** for all 6 languages
    (`rust`, `cpp`, `csharp`, `python`, `lua`, `js-quickjs`): emits guest-side
-   contract glue + a ship-ready `manifest.toml` with precomputed `bundle_id`.
+   contract glue + a `manifest.toml` with precomputed `bundle_id`.
 2. **`validate --bundle-dir <dir>`** drives the runtime loader's own manifest
    machinery (`polyplug::loader::parse_manifest` + `ManifestData::validate`) so
    the CLI accepts exactly what the runtime would: manifest parses;

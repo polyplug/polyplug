@@ -1,12 +1,6 @@
 # Quick Start — Write Your First Plugin in 10 Minutes
 
-This guide walks through the full plugin-development flow end-to-end: define a
-contract, generate the glue code, implement the plugin, build it, validate it.
-The host-side embedding walkthrough follows. This guide uses a Rust guest and a
-Rust host — the simplest, most self-contained path. Remember polyplug is
-**host⇄guest in any of six languages**: once you have the shape here, the
-per-language **Host** and **Guest** guides in the Languages section show the same
-flow in C++, C#, Python, Lua, and JavaScript.
+This guide uses a Rust guest and host. For other languages, see the Languages guides.
 
 ---
 
@@ -14,10 +8,8 @@ flow in C++, C#, Python, Lua, and JavaScript.
 
 ### Install the `polyplugc` CLI
 
-`polyplugc` turns a `.toml` contract into typed glue. Install it whichever way
-suits your stack — **only the `cargo` path needs the Rust toolchain**; every other
-method ships a prebuilt binary, so a Python, JS/Bun, or .NET developer never
-touches Rust:
+`polyplugc` turns a `.toml` contract into typed glue. Install via your ecosystem's
+package manager:
 
 ```bash
 cargo install polyplugc                       # Rust
@@ -30,9 +22,8 @@ curl -fsSL https://polyplug.github.io/install.sh | bash   # prebuilt binary
 ```
 
 Or grab a binary straight from the [GitHub Releases](https://github.com/polyplug/polyplug/releases)
-page. The registry packages (`npm`/`pip`/`uv`/`dotnet`) embed the prebuilt binary, so
-they install **fully offline** with no download step. To build from a checkout of this
-repo instead: `cargo build --release -p polyplugc` → `target/release/polyplugc`.
+page. To build from a checkout of this repo instead: `cargo build --release -p polyplugc`
+→ `target/release/polyplugc`.
 
 ### For this guide
 
@@ -70,9 +61,8 @@ referenced as types.
 
 ## Step 2 — Write `bundle.toml`
 
-The `bundle.toml` is the plugin developer's manifest. It declares what this
-bundle is, which language it targets, what file the loader will find at runtime,
-and which contracts it implements.
+The `bundle.toml` is the plugin developer's manifest. It declares the bundle's
+identity, loader, artifact, and contracts.
 
 ```toml
 # bundle.toml
@@ -108,7 +98,7 @@ This writes six files into `generated/`:
 
 ```
 generated/
-├── manifest.toml          ship-ready manifest (never edit by hand)
+├── manifest.toml          generated manifest (never edit by hand)
 └── guest/
     ├── mod.rs
     ├── contracts.rs       the trait(s) you implement
@@ -194,9 +184,7 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 Key points:
 
 - `HostContext` is the per-instance handle to the host runtime. Store it in
-  your struct and use `host.alloc_string(...)` / `host.log(...)` — no
-  process-wide host storage exists, so two runtimes loading the same plugin
-  stay fully isolated.
+  your struct and use `host.alloc_string(...)` / `host.log(...)`.
 - `host.alloc_string` allocates the return value through the host allocator so
   the host can safely free it after the call. All strings returned across the
   ABI must go through this helper.
@@ -257,8 +245,7 @@ OK: dist/my_greeter
 This runs the same manifest checks the loader applies at runtime: the `id` is
 consistent with the `name`, the artifact named in `[file]` exists for the
 current platform, the version parses correctly, and the artifact extension
-matches the declared runtime. Catching mistakes here is cheaper than chasing a
-load-time error inside the host.
+matches the declared runtime.
 
 ---
 

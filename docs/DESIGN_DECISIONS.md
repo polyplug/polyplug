@@ -1,8 +1,6 @@
 # Design Decisions — Native String Helpers
 
-## Overview
-
-This document explains why polyplug uses native string helper functions in each language SDK instead of routing all string operations through FFI.
+polyplug implements native string helper functions in each language SDK instead of routing all string operations through FFI. This page explains why.
 
 ## The Problem
 

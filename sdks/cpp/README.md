@@ -1,211 +1,83 @@
 # polyplug C++ SDK
 
-Complete C++ support for polyplug plugin runtime.
+Build polyplug hosts and plugins in C++. The SDK is header-only: the host side
+links the native runtime through a RAII `Runtime` binding, and the guest side
+compiles to a native `cdylib` (`.so` / `.dylib` / `.dll`) sharing the same ABI
+structs the host uses.
 
-## Structure
+## Install
+
+The C++ SDK is header-only. Vendor `sdks/cpp/` into your project (or pull it
+from a [GitHub release](https://github.com/polyplug/polyplug/releases)) and add
+the include roots you need:
 
 ```
 sdks/cpp/
-├── abi/           # ABI type definitions (auto-generated from Rust)
-├── host/          # Host runtime library for C++ applications
-├── guest/         # Guest library for C++ plugin authors
-└── loaders/       # Loader implementations
+├── abi/        polyplug/abi.hpp     — frozen C ABI structs + StringView helpers
+├── host/       polyplug.hpp         — RAII Runtime + Builder (host side)
+├── guest/      polyplug_guest.hpp   — contract base + factory glue
+└── loaders/    native/ python/ lua/ js/ dotnet/ — per-language loader registration
 ```
 
-## Installation
+Linking a host or guest also needs the prebuilt runtime libraries
+(`libpolyplug.so` and the loader `.so`s) from the same release. Requires C++17+.
 
-### Via vcpkg
+Install the CLI to generate bindings:
 
 ```bash
-vcpkg install polyplug
+cargo install polyplugc
 ```
 
-### Via Conan
+## Generate bindings
 
 ```bash
-conan install --requires=polyplug/0.1
+polyplugc generate --bundle bundle.toml --lang cpp --out ./generated
 ```
 
-### Manual
-
-Download from [releases](https://github.com/polyplug/polyplug/releases) and link manually.
-
-## Quick Start
-
-### Host Application
+## Host application
 
 ```cpp
 #include <polyplug/runtime.hpp>
 
-auto runtime = polyplug::Runtime::Builder()
-    .PluginDir("./plugins")
-    .Build();
+auto runtime = polyplug::Runtime::Builder().PluginDir("./plugins").Build();
 
-// Load a plugin bundle
-runtime.LoadBundle("./plugins/my_plugin");
-
-// Use generated host callers to interact with plugins
 auto decoder = PipelineDecoder::Create(runtime);
 if (decoder) {
     auto result = decoder->Decode(input);
 }
 ```
 
-### Plugin Author
+## Plugin author
 
-The generated `guest/init.hpp` already exports `polyplug_init` and registers the
-contract. You only implement the contract class and the author factory
-(`polyplug_create_<plugin>`), which the generated `create_instance` calls for
-every host-created instance — the `HostApi` pointer is captured per instance,
-never stored in a global:
+Implement the generated `<Contract>GuestContract` class and export the author
+factory. The `HostApi` pointer is captured per instance, never in a global:
 
 ```cpp
 #include "generated/guest/init.hpp"
 
-namespace polyplug_plugin {
-
 class DecoderImpl : public PipelineDecoderGuestContract {
 public:
     explicit DecoderImpl(const HostApi* host) : host_(host) {}
-
     StringView decode(StringView input) override {
-        std::string s = polyplug::abi::to_string(input);
-        return polyplug::alloc_string(host_, "DECODED:" + s);
+        return polyplug::alloc_string(host_, "DECODED:" + polyplug::abi::to_string(input));
     }
-
 private:
-    // Host handle for this runtime, captured at instance creation.
     const HostApi* host_;
 };
 
-// Factory called by the generated create_instance for every host-created
-// instance. Ownership of the returned object transfers to the instance.
 PipelineDecoderGuestContract* polyplug_create_decoder(const HostApi* host) {
     return new DecoderImpl(host);
 }
-
-}  // namespace polyplug_plugin
 ```
 
-## Code Generation
+## Learn more
 
-Use `polyplugc` to generate type-safe bindings:
+- [C++ — Host guide][host] — embed the runtime, hot-reload, signing
+- [C++ — Guest guide][guest] — generate → implement → build → bundle
+- [C++ overview][overview] · [polyplug docs][docs] · [examples][examples]
 
-```bash
-# Generate C++ bindings from api.toml
-polyplugc generate --api api.toml --lang cpp --out ./generated
-
-# Generate C++ bindings from bundle.toml
-polyplugc generate --bundle bundle.toml --lang cpp --out ./src/generated
-```
-
-## Bundle layout
-
-After building, assemble the bundle directory yourself:
-
-```
-dist/my-plugin/
-├── manifest.toml          # emitted by `generate` (carries the precomputed bundle_id)
-└── libmy_plugin.so        # the cdylib you compiled (.dylib on macOS, .dll on Windows)
-```
-
-Validate the assembled directory before shipping:
-
-```bash
-polyplugc validate --bundle-dir dist/my-plugin/
-```
-
-## Components
-
-### ABI (`abi/`)
-
-Auto-generated from Rust ABI definitions. Contains:
-- `StringView` — UTF-8 string view (non-owning)
-- `Buffer` — Byte buffer with host allocator
-- `AbiError` — Error code and message
-- `GuestContractHandle` — Opaque plugin reference
-- `GuestContractInterface` — Plugin vtable with dispatch mechanism
-
-### Host Library (`host/`)
-
-C++ wrappers over the polyplug C ABI:
-- `Runtime` — Main runtime class with RAII
-- `RuntimeConfig` — Configuration options
-- `ReloadPhase` — Hot-reload notifications
-- Zero-overhead ABI wrappers
-
-### Guest Library (`guest/`)
-
-Helpers for C++ plugins (the entry point itself is generated by `polyplugc`):
-- `polyplug::alloc_string(const HostApi* host, const std::string&)` — allocate a
-  returned `StringView` through the host allocator (host passed explicitly —
-  there is no stored global host pointer)
-- Exception boundary — Plugin crashes don't take down host
-- Authors implement the generated `<Contract>GuestContract` class and export the
-  `polyplug_create_<plugin>(const HostApi*)` factory
-
-### Loaders (`loaders/`)
-
-Runtime adapters for loading C++ plugins:
-- Native loader (dlopen/LoadLibrary)
-- Register loader functions for other runtimes
-
-## Hot-Reload
-
-To enable hot-reload, set `hot_reload_enabled = true` on the config and pass
-the `on_reload` callback through the builder (per-instance — the built Runtime
-owns the callback functor, no globals):
-
-```cpp
-#include <polyplug/runtime.hpp>
-
-RuntimeConfig config{};
-config.hot_reload_enabled = true;
-
-auto runtime = polyplug::Runtime::builder()
-    .config(config)
-    .on_reload([](const ReloadPhase& phase) {
-        switch (phase.phase_type) {
-            case ReloadPhaseType::Preparing:
-                // Destroy instances for this bundle
-                instances_[phase.bundle_id].clear();
-                break;
-            case ReloadPhaseType::Reloaded:
-                std::cout << "Reloaded: "
-                          << polyplug::abi::to_string(phase.bundle_name) << "\n";
-                break;
-            case ReloadPhaseType::Failed:
-                std::cerr << "Failed: "
-                          << polyplug::abi::to_string(phase.reason) << "\n";
-                break;
-            case ReloadPhaseType::Unloading:
-                break;
-        }
-    })
-    .build();
-```
-
-**Key points:**
-- `hot_reload_enabled` defaults to `false` — must be explicitly enabled
-- The callback is supplied at build time and owned by the Runtime instance
-- Host must track and destroy instances on `Preparing` notification
-- See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
-
-## Performance Notes
-
-- **Hot path**: Single indirect function call
-- **Memory**: All cross-boundary data uses host allocator
-- **Strings**: `std::string_view` for zero-copy string passing
-- **RAII**: Automatic cleanup via destructors
-
-## Requirements
-
-- C++17 or later
-- CMake 3.16+ for build integration
-
-## See Also
-
-- `../csharp/` — C# SDK
-- `../python/` — Python SDK
-- `../../examples/` — Working examples
-- `../../docs/` — Design documentation
+[overview]: https://github.com/polyplug/polyplug/blob/main/docs/languages/cpp.md
+[host]: https://github.com/polyplug/polyplug/blob/main/docs/languages/cpp-host.md
+[guest]: https://github.com/polyplug/polyplug/blob/main/docs/languages/cpp-guest.md
+[docs]: https://github.com/polyplug/polyplug/tree/main/docs
+[examples]: https://github.com/polyplug/polyplug/tree/main/examples

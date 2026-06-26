@@ -1,51 +1,50 @@
-# Architecture Clarifications: Per-Instance Implementations + Caller Wrappers
+# Architecture Clarifications: the instance model
 
-**Critical clarification about polyplug's instance model.**
+polyplug creates a real instance per `create_instance` call in every language,
+and the host owns each instance through an RAII caller wrapper. This page is the
+authoritative description of that instance model — what `create_instance`
+produces, how the two dispatch families carry per-instance state, and how the
+host-side wrappers own it. For the runtime pipelines that move data across the
+boundary (load, dispatch, reload, unload), see
+[Architecture — runtime pipelines](ARCHITECTURE.md).
 
-## Terminology Note
+See the [glossary](glossary.md) for `GuestContractInterface`, `HostApi`,
+*instance*, and *instance payload*.
 
-This document uses the following terminology (current as of the static-free wave):
-- **GuestContractInterface**: The interface struct a plugin provides for the host to call
-- **HostApi**: The runtime's ABI table provided to guests
-- **Instance payload**: The per-instance state carried in `GuestContractInstance.data`
+Interfaces live in `RuntimeStore` as interface slots guarded by a single
+`RwLock`; there is no separate slot-wrapper struct around an individual
+interface.
 
-Interfaces are stored in `RuntimeStore` as interface slots guarded by a single `RwLock`. There is no separate slot wrapper struct around individual interfaces.
+## What the instance model guarantees
 
----
+- **Real instances, every language** — every `create_instance` invokes the
+  plugin's author factory and returns a fresh implementation. This holds for
+  **native-dispatch** guests (Rust/C++/C#, factory `polyplug_create_<plugin>` /
+  `Set<Plugin>Factory`) **and** **VM-dispatch** guests (Python/Lua/JS, factory
+  `set_<plugin>_factory` / `set<Plugin>Factory`). The two families carry the
+  instance differently — see [the two dispatch families](#the-two-dispatch-families).
+- **Per-instance host context** — the `HostApi` pointer is captured at instance
+  creation and stored in the instance payload, so every host call routes to the
+  runtime that owns it.
+- **Caller wrappers** — host-side RAII objects that own exactly one instance
+  (`create_instance` in `new()`, `destroy_instance` in `drop()`).
+- **Callback-based lifecycle** — the host destroys instances before hot-reload
+  completes.
 
-## The Instance Model
+What the model excludes (CLAUDE.md Rule 12):
 
-### What polyplug HAS
+- **No static implementation storage** — generated code and SDKs hold no
+  `OnceLock`, module-level, or class-static slot for the implementation or the
+  host pointer. Two `Runtime`s loading the same plugin binary get fully isolated
+  instances.
+- **No process-wide host pointer** — helpers like `alloc_string` and `log` take
+  the host context explicitly (Rust `HostContext`, C++ `const HostApi*`, C#
+  `IntPtr`, Python `int`).
 
-✅ **Real instances, every language** — every `create_instance` call invokes the plugin's
-   author factory and returns a fresh implementation. This holds for **native-dispatch**
-   guests (Rust/C++/C#, factory `polyplug_create_<plugin>` / `Set<Plugin>Factory`) **and**
-   for **VM-dispatch** guests (Python/Lua/JS, factory `set_<plugin>_factory` /
-   `set<Plugin>Factory`), whose loaders previously stubbed `create_instance` to null and
-   shared one implementation. The two families carry the instance differently — see
-   [Instance payload, two dispatch families](#instance-payload-two-dispatch-families) below.
-✅ **Per-instance host context** — the `HostApi` pointer is captured at instance creation and
-   stored in the instance payload, so every host call routes to the runtime that owns it
-✅ **Caller wrappers** — host-side RAII objects that own exactly one instance
-   (`create_instance` in `new()`, `destroy_instance` in `drop()`)
-✅ **Callback-based lifecycle** — host destroys instances before hot-reload completes
+## Factory and instance payload
 
-### What polyplug DOESN'T Have
-
-❌ **NO static implementation storage** — generated code and SDKs hold no `OnceLock`,
-   module-level, or class-static slot for the implementation or the host pointer
-   (CLAUDE.md Rule 12). Two `Runtime`s loading the same plugin binary get fully
-   isolated instances.
-❌ **NO process-wide host pointer** — helpers like `alloc_string` and `log` take the host
-   context explicitly (Rust `HostContext`, C++ `const HostApi*`, C# `IntPtr`, Python `int`)
-
----
-
-## Architecture Deep Dive
-
-### Plugin Side: Factory + Instance Payload
-
-The generated glue declares an author factory and constructs the implementation per instance:
+The generated glue declares an author factory and constructs the implementation
+per instance:
 
 ```rust
 // generated/guest/interfaces.rs (Rust shape; other languages mirror it)
@@ -69,18 +68,19 @@ unsafe extern "C" fn VALIDATOR_create_instance(
 }
 ```
 
-**Consequences:**
-- Each `create_instance` produces an independent implementation with its own state
+Consequences:
+
+- Each `create_instance` produces an independent implementation with its own state.
 - The dispatch wrappers read the implementation from `instance.data` (see the two
-  families below for how a null/zero instance is handled)
-- `destroy_instance` drops the payload exactly once
+  families below for how a null/zero instance is handled).
+- `destroy_instance` drops the payload exactly once.
 - Re-running `polyplug_init` after an in-place binary overwrite re-creates
-  instances through the new factory — no stale static survives a reload
+  instances through the new factory — no stale static survives a reload.
 
-### Instance payload, two dispatch families
+## The two dispatch families
 
-`GuestContractInstance.data` means something different per dispatch family, but both
-deliver real per-instance state:
+`GuestContractInstance.data` means something different per dispatch family, but
+both deliver real per-instance state:
 
 | | Native dispatch (Rust/C++/C#) | VM dispatch (Python/Lua/JS) |
 |---|---|---|
@@ -90,10 +90,10 @@ deliver real per-instance state:
 | Null / zero `instance.data` | Rejected with `InvalidPointer` | Resolves to the per-contract `default_impl` (a valid stateless instance) |
 | `destroy_instance` | Drops the box exactly once | Removes the id from the `instances` map (dropping the VM-side impl) |
 
-The VM family must mint **non-zero** ids because `GuestContractInstance::is_null` keys on
-`data` — id 0 is reserved for "the default instance". Ids start at 1.
+The VM family must mint **non-zero** ids because `GuestContractInstance::is_null`
+keys on `data` — id 0 is reserved for "the default instance". Ids start at 1.
 
-### Host Side: Caller Wrappers Own Instances
+## Caller wrappers own instances
 
 ```rust
 // examples/hosts/rust/generated/host/host_callers.rs
@@ -104,49 +104,43 @@ pub struct PipelineValidatorContract {
 }
 ```
 
-The wrapper holds the `*const GuestContractInterface` that `resolve_guest_contract`
-returned — a plain raw pointer with no RAII guard around the interface itself. Its
-validity is governed by the epoch/quiesce contract: it stays valid for as long as
-the owning bundle is loaded (so the stored pointer survives a hot-reload, still
-serving the version it resolved), and runtime-mediated calls pin a crossbeam-epoch
-guard so a concurrent unload cannot free it mid-dispatch. Using the pointer **after**
-its owning bundle is unloaded is undefined behaviour — the host must quiesce before
-unloading. The instance, by contrast, is owned by the wrapper: `new()` calls
-`create_instance`, `drop()` calls `destroy_instance`.
+The wrapper holds the `*const GuestContractInterface` that
+`resolve_guest_contract` returned — a plain raw pointer with no RAII guard around
+the interface itself. Its validity is governed by the epoch/quiesce contract (see
+[Pipeline 2 — lock-free registry read](ARCHITECTURE.md#pipeline-2--lock-free-registry-read)
+and the [*epoch*](glossary.md) / [*unload*](glossary.md) glossary entries): the
+stored pointer survives a hot-reload, still serving the version it resolved, and
+runtime-mediated calls pin a crossbeam-epoch guard so a concurrent unload cannot
+free it mid-dispatch. Using the pointer **after** its owning bundle is unloaded is
+undefined behaviour — the host must quiesce before unloading. The instance, by
+contrast, is owned by the wrapper: `new()` calls `create_instance`, `drop()` calls
+`destroy_instance`.
 
----
+## Hot-reload coordination
 
-## Hot-Reload Implications
-
-### Callback-Based Coordination
-
-The host must destroy all instances when receiving the `Preparing` notification:
+The host destroys all instances when it receives the `Preparing` notification, so
+the runtime can swap the interface slot with no live instance pointing at the old
+code (the runtime-side mechanics are [Pipeline 6 — hot-reload](ARCHITECTURE.md#pipeline-6--hot-reload)):
 
 ```rust
 // Hot-reload: Preparing phase
 // Host drops all wrappers (each drop calls destroy_instance)
 drop(w1); drop(w2); drop(w3);
-
-// Runtime can now safely swap the interface slot via apply_reload_swap
-// (under the RuntimeStore RwLock write guard)
 ```
 
-**Notification flow:**
-```
-1. Runtime fires Preparing notification
-2. Host drops all wrappers for this bundle (instances destroyed)
-3. Runtime swaps interface
-4. Runtime fires Reloaded notification
-5. Host creates new wrappers — create_instance runs against the NEW code,
-   so the new factory produces fresh implementations
-```
+Notification flow from the instance perspective:
 
----
+1. Runtime fires `Preparing`.
+2. Host drops all wrappers for this bundle (instances destroyed).
+3. Runtime swaps the interface.
+4. Runtime fires `Reloaded`.
+5. Host creates new wrappers — `create_instance` runs against the **new** code, so
+   the new factory produces fresh implementations.
 
-## Multiple Implementations Across Bundles
+## Multiple implementations across bundles
 
-Loading **multiple bundles** that each implement the same contract yields independent
-providers (in addition to per-wrapper instances within each):
+Loading **multiple bundles** that each implement the same contract yields
+independent providers (in addition to per-wrapper instances within each):
 
 ```rust
 runtime.load_bundle("./plugins/validator_v1")?;
@@ -159,28 +153,3 @@ let count = runtime.find_all_by_contract(VALIDATOR_ID, 1, &mut handles)?;
 let wrapper_v1 = ValidatorContract::new(handles[0], runtime)?;  // → bundle A instance
 let wrapper_v2 = ValidatorContract::new(handles[1], runtime)?;  // → bundle B instance
 ```
-
----
-
-## Terminology Guide
-
-| Term | What It Means | What It DOESN'T Mean |
-|------|---------------|---------------------|
-| **Caller Wrapper** | Host-side RAII object owning one instance | NOT a shared reference to a singleton |
-| **Instance payload** | Factory-created state in `GuestContractInstance.data` | NOT static/global plugin state |
-| **Author factory** | `polyplug_create_<plugin>` (Rust/C++) / `Set<Plugin>Factory` (C#) / `set_<plugin>_factory` (Python/Lua) / `set<Plugin>Factory` (JS) — one per language, all invoked per instance | NOT a registration of a single shared object |
-| **Resolved interface pointer** | `*const GuestContractInterface` from `resolve_guest_contract` | NOT instance state |
-| **Hot-Reload** | Interface swap via callback coordination | NOT instance migration |
-
----
-
-## Summary
-
-1. **Plugins export a factory** — the generated `create_instance` calls it per instance
-2. **Instances carry their own host context** — no process-wide host pointer exists
-3. **Host wrappers own instances** — `new()` creates, `drop()` destroys
-4. **Callback coordination** — host destroys instances before hot-reload
-5. **Rule 12 holds end to end** — no statics holding runtime or plugin state in any
-   SDK or generated file, in any language
-
-**The architecture is: Factory-Created Instances + Callback-Based Coordination.**

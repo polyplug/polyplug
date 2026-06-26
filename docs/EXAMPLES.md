@@ -57,8 +57,7 @@ All five Rust plugins are `cdylib` crates. They depend only on
 | reporter | `guests/rust/reporter/` | `data.Reporter` | Formats a human-readable report string; calls the `host.logger` host contract |
 | validator | `guests/rust/validator/` | `pipeline.Validator` | Validates the three-part pipe-delimited format; returns `VALID:…` or `INVALID:reason` |
 
-The reporter is the most instructive Rust guest: it demonstrates calling back
-into the host via the generated `HostLoggerCaller` in
+The reporter calls back into the host via the generated `HostLoggerCaller` in
 `generated/guest/host_contract_callers.rs`.
 
 ### C++ (`examples/guests/cpp/`)
@@ -121,8 +120,9 @@ directory to `package.path` and `package.cpath` so the generated guest glue
 
 ### JavaScript / QuickJS (`examples/guests/js/`)
 
-Five JS plugins bundled to a single IIFE file with `rolldown`. `polyplug_init`
-is promoted to `globalThis` after bundling so the QuickJS loader can call it.
+Five JS plugins bundled to a single IIFE file with `rolldown`. Each plugin
+re-exports `polyplug_init` so the bundler exposes it as the entry point the
+QuickJS loader calls.
 
 | Plugin | Path | Contract |
 |---|---|---|
@@ -153,13 +153,8 @@ and most closely tracks internal API changes. Read it alongside the generated
 code in `hosts/rust/generated/` to understand the full host-side flow.
 
 The Lua host additionally installs a **custom runtime logger**
-(`Runtime.new{ log = ..., log_max_level = ... }`, routed through the
-`polyplug_lua` loader cdylib's log trampoline because LuaJIT callbacks cannot
-receive the ABI's by-value `StringView`s). Its output goes to **stderr** as
-`[host-log][<level>][<scope>] <message>` lines so the pipeline stdout stays
-byte-identical across hosts (`verify_hosts.sh`). The lua decoder guest emits a
-one-time `guest.lua_decoder` Info line through the funnel on its first
-dispatch (visible from any host whose logger delivers Info). See
+(`Runtime.new{ log = ..., log_max_level = ... }`) whose output goes to stderr,
+keeping the pipeline stdout byte-identical across hosts. See
 `sdks/lua/README.md` § Custom Logger.
 
 ### Cross-language parity host (`hosts/parity/`)

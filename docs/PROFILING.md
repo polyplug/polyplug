@@ -1,9 +1,7 @@
 # Profiling polyplug
 
-A practical reference for profiling the runtime locally. Like the benchmarks,
-profiling is a **local** activity — nothing here runs in CI. The goal of this
-document is that anyone can produce a flamegraph of any hot path with one
-command and know how to read it.
+Profiling is a **local** activity — nothing here runs in CI. Produce a
+flamegraph of any hot path with one command, then read it:
 
 > **TL;DR**
 > ```bash

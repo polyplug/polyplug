@@ -11,6 +11,7 @@ the cross-links to the deep-dive docs:
 |---|---|
 | ABI surface, `polyplug_init`, `HostApi` self-passing | [`ABI_ARCHITECTURE.md`](ABI_ARCHITECTURE.md) |
 | `GuestContractInterface`, native vs VM dispatch | [`PLUGIN_INTERFACE_DESIGN.md`](PLUGIN_INTERFACE_DESIGN.md) |
+| Per-instance model, caller wrappers, instance payload | [`ARCHITECTURE_CLARIFICATIONS.md`](ARCHITECTURE_CLARIFICATIONS.md) |
 | Bundle identity, declared dependencies, peer-call safety | [`TRUST_MODEL.md`](TRUST_MODEL.md) |
 | Hot-reload phases and the safety window | [`HOT_RELOAD_DESIGN.md`](HOT_RELOAD_DESIGN.md), [`RELOAD_LIMITATIONS.md`](RELOAD_LIMITATIONS.md) |
 | Unload, epoch reclamation, dependency refusal | [`UNLOAD_DESIGN.md`](UNLOAD_DESIGN.md) |
@@ -160,8 +161,9 @@ flowchart TD
 **Instance lifecycle.** Constructing and destroying a guest instance is
 host-mediated: `create_guest_instance` / `destroy_guest_instance` pin the epoch
 across the whole operation and attribute each live instance to its contract, so an
-unload can't reclaim an interface mid-construction. See
-[`FEATURES.md`](FEATURES.md).
+unload can't reclaim an interface mid-construction. The per-instance payload, the
+two dispatch families, and the host-side caller wrappers that own each instance
+are covered in [`ARCHITECTURE_CLARIFICATIONS.md`](ARCHITECTURE_CLARIFICATIONS.md).
 
 ---
 

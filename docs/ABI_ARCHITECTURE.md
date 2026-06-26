@@ -1,16 +1,10 @@
 # Polyplug ABI Architecture
 
-## Terminology Note
+Polyplug uses a dual-ABI system: both the **host** (runtime) and the **guest**
+(plugins) export C functions across the FFI boundary.
 
-This document uses the following terminology (current as of the pre-1.0 ABI):
-- **HostApi**: The runtime's ABI table provided to guests (a `#[repr(C)]` struct of function pointers)
-- **GuestContractInterface**: The interface struct a plugin provides for the host to call
-- **Host Contract**: A contract provided by the host to plugins
-- **Guest Contract**: A contract implemented by plugins
-
-## Overview
-
-Polyplug uses a dual-ABI system where both the **host** (runtime) and **guest** (plugins) export C functions across the FFI boundary.
+For ABI terms (`HostApi`, `GuestContractInterface`, host contract, guest contract),
+see the [glossary](glossary.md).
 
 ## Plugin ABI (Guest Exports)
 

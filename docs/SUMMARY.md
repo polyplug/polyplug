@@ -32,24 +32,25 @@
 # Concepts & Architecture
 
 - [Architecture Overview](ARCHITECTURE.md)
-- [Architecture Clarifications](ARCHITECTURE_CLARIFICATIONS.md)
-- [Design Decisions](DESIGN_DECISIONS.md)
+- [The Instance Model](ARCHITECTURE_CLARIFICATIONS.md)
 - [Plugin Interface Design](PLUGIN_INTERFACE_DESIGN.md)
-- [Host Contracts](HOST_CONTRACTS.md)
-
-# ABI Reference
-
-- [ABI Architecture](ABI_ARCHITECTURE.md)
-- [ABI Types](abi_types.md)
-- [SDK Helpers](SDK_HELPERS.md)
-- [API Reference (rustdoc)](API_REFERENCE.md)
-
-# Features
-
-- [Feature Guide](FEATURES.md)
 - [Hot Reload](HOT_RELOAD_DESIGN.md)
+- [Unload & Reclamation](UNLOAD_DESIGN.md)
+- [Host Contracts](HOST_CONTRACTS.md)
+- [Native String Helpers](DESIGN_DECISIONS.md)
+- [Call Arena](call-arena.md)
+
+# Reference
+
+- [Generated Names](generated-names.md)
+- [CLI (`polyplugc`)](cli.md)
+- [ABI Types](abi_types.md)
+- [ABI Architecture](ABI_ARCHITECTURE.md)
+- [SDK Helpers](SDK_HELPERS.md)
 - [Reload Limitations](RELOAD_LIMITATIONS.md)
-- [Unload Design](UNLOAD_DESIGN.md)
+- [Feature Guide](FEATURES.md)
+- [API Reference (rustdoc)](API_REFERENCE.md)
+- [Glossary](glossary.md)
 
 # Security & Trust
 

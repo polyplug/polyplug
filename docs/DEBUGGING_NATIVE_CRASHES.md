@@ -6,11 +6,6 @@ has a direct operational consequence: **a defect in a plugin can crash the host
 process.** There is no fault isolation boundary to catch a wild pointer write, a stack
 smash, or a foreign-memory free inside a loaded bundle.
 
-This guide is the field manual for diagnosing those crashes in a trusted-plugin
-deployment — what crashes look like, how to build for debuggability, and how to extract a
-symbolicated backtrace from a live crash, a core dump, or a sanitizer run, across all six
-plugin languages.
-
 > If you are evaluating *whether* in-process is acceptable for your threat model, read
 > the [Trust Model](TRUST_MODEL.md) first — this guide assumes you have already chosen the
 > trusted-plugin path.

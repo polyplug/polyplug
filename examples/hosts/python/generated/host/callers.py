@@ -142,24 +142,30 @@ class PipelineDecoderContractCaller:
         self._owner = None
 
     @classmethod
-    def create(cls, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> Optional[Self]:
-        """Factory method - creates instance or None if failed.
+    def create(cls, runtime, min_version: int = 0, owner: object | None = None) -> Optional[Self]:
+        """Resolve this contract from `runtime` and build a caller, or None if not loaded.
+
+        Resolves the first implementation registered for the contract; returns None
+        when no provider is loaded. Pass `min_version` to require a minimum version;
+        pass `owner` to override the lifetime anchor (defaults to `runtime`).
 
         Args:
-            handle: Contract handle from find_guest_contract
-            host: Host interface pointer
-            owner: Python object that owns `host` (e.g. a polyplug.Runtime).
-                The caller keeps a reference for its lifetime so the runtime
+            runtime: polyplug.Runtime to resolve the contract from. Its host pointer
+                and contract handle are resolved internally.
+            min_version: Minimum contract version to accept (0 = any).
+            owner: Lifetime anchor held for this caller's lifetime so the runtime
                 cannot be finalized before __del__ runs (which calls
-                destroy_instance and arena teardown through the runtime). If
-                None, the embedder is responsible for keeping the runtime alive
-                past the caller.
+                destroy_instance and arena teardown through the runtime).
+                Defaults to `runtime`.
 
         Returns:
-            Self if interface found and instance created, None otherwise
+            Self if a provider is loaded and the instance was created, None otherwise
         """
+        handle = runtime.find_guest_contract(PIPELINE_DECODER_CONTRACT_ID, min_version)
+        if handle.index == 0xFFFFFFFF:
+            return None
         try:
-            return cls(handle, host, owner)
+            return cls(handle, runtime.host, owner if owner is not None else runtime)
         except ValueError:
             return None
 
@@ -331,24 +337,30 @@ class DataTransformerContractCaller:
         self._owner = None
 
     @classmethod
-    def create(cls, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> Optional[Self]:
-        """Factory method - creates instance or None if failed.
+    def create(cls, runtime, min_version: int = 0, owner: object | None = None) -> Optional[Self]:
+        """Resolve this contract from `runtime` and build a caller, or None if not loaded.
+
+        Resolves the first implementation registered for the contract; returns None
+        when no provider is loaded. Pass `min_version` to require a minimum version;
+        pass `owner` to override the lifetime anchor (defaults to `runtime`).
 
         Args:
-            handle: Contract handle from find_guest_contract
-            host: Host interface pointer
-            owner: Python object that owns `host` (e.g. a polyplug.Runtime).
-                The caller keeps a reference for its lifetime so the runtime
+            runtime: polyplug.Runtime to resolve the contract from. Its host pointer
+                and contract handle are resolved internally.
+            min_version: Minimum contract version to accept (0 = any).
+            owner: Lifetime anchor held for this caller's lifetime so the runtime
                 cannot be finalized before __del__ runs (which calls
-                destroy_instance and arena teardown through the runtime). If
-                None, the embedder is responsible for keeping the runtime alive
-                past the caller.
+                destroy_instance and arena teardown through the runtime).
+                Defaults to `runtime`.
 
         Returns:
-            Self if interface found and instance created, None otherwise
+            Self if a provider is loaded and the instance was created, None otherwise
         """
+        handle = runtime.find_guest_contract(DATA_TRANSFORMER_CONTRACT_ID, min_version)
+        if handle.index == 0xFFFFFFFF:
+            return None
         try:
-            return cls(handle, host, owner)
+            return cls(handle, runtime.host, owner if owner is not None else runtime)
         except ValueError:
             return None
 
@@ -520,24 +532,30 @@ class PipelineEncoderContractCaller:
         self._owner = None
 
     @classmethod
-    def create(cls, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> Optional[Self]:
-        """Factory method - creates instance or None if failed.
+    def create(cls, runtime, min_version: int = 0, owner: object | None = None) -> Optional[Self]:
+        """Resolve this contract from `runtime` and build a caller, or None if not loaded.
+
+        Resolves the first implementation registered for the contract; returns None
+        when no provider is loaded. Pass `min_version` to require a minimum version;
+        pass `owner` to override the lifetime anchor (defaults to `runtime`).
 
         Args:
-            handle: Contract handle from find_guest_contract
-            host: Host interface pointer
-            owner: Python object that owns `host` (e.g. a polyplug.Runtime).
-                The caller keeps a reference for its lifetime so the runtime
+            runtime: polyplug.Runtime to resolve the contract from. Its host pointer
+                and contract handle are resolved internally.
+            min_version: Minimum contract version to accept (0 = any).
+            owner: Lifetime anchor held for this caller's lifetime so the runtime
                 cannot be finalized before __del__ runs (which calls
-                destroy_instance and arena teardown through the runtime). If
-                None, the embedder is responsible for keeping the runtime alive
-                past the caller.
+                destroy_instance and arena teardown through the runtime).
+                Defaults to `runtime`.
 
         Returns:
-            Self if interface found and instance created, None otherwise
+            Self if a provider is loaded and the instance was created, None otherwise
         """
+        handle = runtime.find_guest_contract(PIPELINE_ENCODER_CONTRACT_ID, min_version)
+        if handle.index == 0xFFFFFFFF:
+            return None
         try:
-            return cls(handle, host, owner)
+            return cls(handle, runtime.host, owner if owner is not None else runtime)
         except ValueError:
             return None
 
@@ -709,24 +727,30 @@ class DataReporterContractCaller:
         self._owner = None
 
     @classmethod
-    def create(cls, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> Optional[Self]:
-        """Factory method - creates instance or None if failed.
+    def create(cls, runtime, min_version: int = 0, owner: object | None = None) -> Optional[Self]:
+        """Resolve this contract from `runtime` and build a caller, or None if not loaded.
+
+        Resolves the first implementation registered for the contract; returns None
+        when no provider is loaded. Pass `min_version` to require a minimum version;
+        pass `owner` to override the lifetime anchor (defaults to `runtime`).
 
         Args:
-            handle: Contract handle from find_guest_contract
-            host: Host interface pointer
-            owner: Python object that owns `host` (e.g. a polyplug.Runtime).
-                The caller keeps a reference for its lifetime so the runtime
+            runtime: polyplug.Runtime to resolve the contract from. Its host pointer
+                and contract handle are resolved internally.
+            min_version: Minimum contract version to accept (0 = any).
+            owner: Lifetime anchor held for this caller's lifetime so the runtime
                 cannot be finalized before __del__ runs (which calls
-                destroy_instance and arena teardown through the runtime). If
-                None, the embedder is responsible for keeping the runtime alive
-                past the caller.
+                destroy_instance and arena teardown through the runtime).
+                Defaults to `runtime`.
 
         Returns:
-            Self if interface found and instance created, None otherwise
+            Self if a provider is loaded and the instance was created, None otherwise
         """
+        handle = runtime.find_guest_contract(DATA_REPORTER_CONTRACT_ID, min_version)
+        if handle.index == 0xFFFFFFFF:
+            return None
         try:
-            return cls(handle, host, owner)
+            return cls(handle, runtime.host, owner if owner is not None else runtime)
         except ValueError:
             return None
 
@@ -898,24 +922,30 @@ class PipelineValidatorContractCaller:
         self._owner = None
 
     @classmethod
-    def create(cls, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> Optional[Self]:
-        """Factory method - creates instance or None if failed.
+    def create(cls, runtime, min_version: int = 0, owner: object | None = None) -> Optional[Self]:
+        """Resolve this contract from `runtime` and build a caller, or None if not loaded.
+
+        Resolves the first implementation registered for the contract; returns None
+        when no provider is loaded. Pass `min_version` to require a minimum version;
+        pass `owner` to override the lifetime anchor (defaults to `runtime`).
 
         Args:
-            handle: Contract handle from find_guest_contract
-            host: Host interface pointer
-            owner: Python object that owns `host` (e.g. a polyplug.Runtime).
-                The caller keeps a reference for its lifetime so the runtime
+            runtime: polyplug.Runtime to resolve the contract from. Its host pointer
+                and contract handle are resolved internally.
+            min_version: Minimum contract version to accept (0 = any).
+            owner: Lifetime anchor held for this caller's lifetime so the runtime
                 cannot be finalized before __del__ runs (which calls
-                destroy_instance and arena teardown through the runtime). If
-                None, the embedder is responsible for keeping the runtime alive
-                past the caller.
+                destroy_instance and arena teardown through the runtime).
+                Defaults to `runtime`.
 
         Returns:
-            Self if interface found and instance created, None otherwise
+            Self if a provider is loaded and the instance was created, None otherwise
         """
+        handle = runtime.find_guest_contract(PIPELINE_VALIDATOR_CONTRACT_ID, min_version)
+        if handle.index == 0xFFFFFFFF:
+            return None
         try:
-            return cls(handle, host, owner)
+            return cls(handle, runtime.host, owner if owner is not None else runtime)
         except ValueError:
             return None
 

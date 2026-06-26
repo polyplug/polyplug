@@ -457,7 +457,7 @@ fn generate_host_caller_class_stub(out: &mut String, contract: &ResolvedContract
     out.push_str("    def __del__(self) -> None: ...\n");
     out.push_str("    @classmethod\n");
     out.push_str(
-        "    def create(cls, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> Optional[Self]: ...\n",
+        "    def create(cls, runtime, min_version: int = ..., owner: object | None = ...) -> Optional[Self]: ...\n",
     );
     out.push_str("    def is_valid(self) -> bool: ...\n");
     out.push_str("    def reset(self) -> None: ...\n");
@@ -759,7 +759,7 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract, enu
     let struct_name: String = contract_name_to_struct(&contract.name);
     let caller_name: String = format!("{struct_name}Caller");
     let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
-    let _contract_id_const: String = format!("{}_CONTRACT_ID", contract_upper);
+    let contract_id_const: String = format!("{}_CONTRACT_ID", contract_upper);
     let needs_arena: bool = contract_needs_arena(contract);
 
     out.push_str(&format!("class {caller_name}:\n"));
@@ -890,28 +890,47 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract, enu
     out.push_str("        self._owner = None\n");
     out.push('\n');
 
-    // Factory method
+    // Factory method: resolve the contract from the runtime and build a caller.
     out.push_str("    @classmethod\n");
     out.push_str(
-        "    def create(cls, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> Optional[Self]:\n",
+        "    def create(cls, runtime, min_version: int = 0, owner: object | None = None) -> Optional[Self]:\n",
     );
-    out.push_str("        \"\"\"Factory method - creates instance or None if failed.\n\n");
-    out.push_str("        Args:\n");
-    out.push_str("            handle: Contract handle from find_guest_contract\n");
-    out.push_str("            host: Host interface pointer\n");
-    out.push_str("            owner: Python object that owns `host` (e.g. a polyplug.Runtime).\n");
-    out.push_str("                The caller keeps a reference for its lifetime so the runtime\n");
-    out.push_str("                cannot be finalized before __del__ runs (which calls\n");
-    out.push_str("                destroy_instance and arena teardown through the runtime). If\n");
+    out.push_str("        \"\"\"Resolve this contract from `runtime` and build a caller, or None if not loaded.\n\n");
     out.push_str(
-        "                None, the embedder is responsible for keeping the runtime alive\n",
+        "        Resolves the first implementation registered for the contract; returns None\n",
     );
-    out.push_str("                past the caller.\n\n");
+    out.push_str(
+        "        when no provider is loaded. Pass `min_version` to require a minimum version;\n",
+    );
+    out.push_str(
+        "        pass `owner` to override the lifetime anchor (defaults to `runtime`).\n\n",
+    );
+    out.push_str("        Args:\n");
+    out.push_str(
+        "            runtime: polyplug.Runtime to resolve the contract from. Its host pointer\n",
+    );
+    out.push_str("                and contract handle are resolved internally.\n");
+    out.push_str("            min_version: Minimum contract version to accept (0 = any).\n");
+    out.push_str(
+        "            owner: Lifetime anchor held for this caller's lifetime so the runtime\n",
+    );
+    out.push_str("                cannot be finalized before __del__ runs (which calls\n");
+    out.push_str("                destroy_instance and arena teardown through the runtime).\n");
+    out.push_str("                Defaults to `runtime`.\n\n");
     out.push_str("        Returns:\n");
-    out.push_str("            Self if interface found and instance created, None otherwise\n");
+    out.push_str(
+        "            Self if a provider is loaded and the instance was created, None otherwise\n",
+    );
     out.push_str("        \"\"\"\n");
+    out.push_str(&format!(
+        "        handle = runtime.find_guest_contract({contract_id_const}, min_version)\n"
+    ));
+    out.push_str("        if handle.index == 0xFFFFFFFF:\n");
+    out.push_str("            return None\n");
     out.push_str("        try:\n");
-    out.push_str("            return cls(handle, host, owner)\n");
+    out.push_str(
+        "            return cls(handle, runtime.host, owner if owner is not None else runtime)\n",
+    );
     out.push_str("        except ValueError:\n");
     out.push_str("            return None\n\n");
 

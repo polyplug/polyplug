@@ -507,5 +507,8 @@ examples/hosts/cpp/*.d
 # C++ SDK test runner artifacts (built by sdks/cpp/Makefile)
 sdks/cpp/build/
 
+# pytest cache directories (stray under sdks/python/*)
+**/.pytest_cache/
+
 # mdBook documentation site build output
 /book

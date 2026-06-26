@@ -38,13 +38,13 @@ version := `grep -m1 '^version =' crates/polyplug/Cargo.toml | sed 's/.*"\([^"]*
 # Use this for local development. CI embeds natives automatically during release.
 download-native-local: build-ffi
     @echo "=== Copying Local Native Library ==="
-    @mkdir -p {{sdks_dir}}/csharp/host/Polyplug/runtimes/linux-x64/native
+    @mkdir -p {{sdks_dir}}/csharp/host/runtimes/linux-x64/native
     @mkdir -p {{sdks_dir}}/python/host/polyplug/_native/linux-x64
     @mkdir -p {{sdks_dir}}/js/host/_native/linux-x64
     @mkdir -p {{sdks_dir}}/lua/host/_native/linux-x64
     @mkdir -p {{sdks_dir}}/cpp/host/_native/linux-x64
     @if [ -f {{target_dir}}/libpolyplug.so ]; then \
-        cp {{target_dir}}/libpolyplug.so {{sdks_dir}}/csharp/host/Polyplug/runtimes/linux-x64/native/ && \
+        cp {{target_dir}}/libpolyplug.so {{sdks_dir}}/csharp/host/runtimes/linux-x64/native/ && \
         cp {{target_dir}}/libpolyplug.so {{sdks_dir}}/python/host/polyplug/_native/linux-x64/ && \
         cp {{target_dir}}/libpolyplug.so {{sdks_dir}}/js/host/_native/linux-x64/ && \
         cp {{target_dir}}/libpolyplug.so {{sdks_dir}}/lua/host/_native/linux-x64/ && \
@@ -101,10 +101,11 @@ _build-host-cpp:
         exit 0; \
     fi
     @if g++ -std=c++17 -fsyntax-only -I{{sdks_dir}}/cpp/host \
-        {{sdks_dir}}/cpp/host/polyplug.hpp 2>/dev/null; then \
+        {{sdks_dir}}/cpp/host/polyplug.hpp >{{marker_dir}}/host-cpp.log 2>&1; then \
         echo "  [host-cpp] ✓ Headers valid"; \
     else \
-        echo "  [host-cpp] ✗ Header validation failed"; \
+        echo "  [host-cpp] ✗ Header validation failed:"; \
+        sed 's/^/      /' {{marker_dir}}/host-cpp.log | tail -20; \
         touch {{marker_dir}}/host-cpp.failed; \
     fi
 
@@ -115,10 +116,11 @@ _build-host-python:
         echo "  [host-python] SKIPPED (previously failed)"; \
         exit 0; \
     fi
-    @if python3 -m py_compile {{sdks_dir}}/python/host/polyplug/*.py 2>/dev/null; then \
+    @if python3 -m py_compile {{sdks_dir}}/python/host/polyplug/*.py >{{marker_dir}}/host-python.log 2>&1; then \
         echo "  [host-python] ✓ Modules valid"; \
     else \
-        echo "  [host-python] ✗ Validation failed"; \
+        echo "  [host-python] ✗ Validation failed:"; \
+        sed 's/^/      /' {{marker_dir}}/host-python.log | tail -20; \
         touch {{marker_dir}}/host-python.failed; \
     fi
 
@@ -130,10 +132,11 @@ _build-host-csharp:
         exit 0; \
     fi
     @if command -v dotnet >/dev/null 2>&1; then \
-        if dotnet build {{sdks_dir}}/csharp/host/Polyplug/Polyplug.csproj -c Release 2>/dev/null; then \
+        if dotnet build {{sdks_dir}}/csharp/host/Polyplug.Host.csproj -c Release >{{marker_dir}}/host-csharp.log 2>&1; then \
             echo "  [host-csharp] ✓ Build succeeded"; \
         else \
-            echo "  [host-csharp] ✗ Build failed"; \
+            echo "  [host-csharp] ✗ Build failed:"; \
+            sed 's/^/      /' {{marker_dir}}/host-csharp.log | tail -20; \
             touch {{marker_dir}}/host-csharp.failed; \
         fi; \
     else \
@@ -148,10 +151,11 @@ _build-host-lua:
         exit 0; \
     fi
     @if command -v luajit >/dev/null 2>&1; then \
-        if luajit -bl {{sdks_dir}}/lua/host/polyplug.lua >/dev/null 2>&1; then \
+        if luajit -bl {{sdks_dir}}/lua/host/polyplug.lua >{{marker_dir}}/host-lua.log 2>&1; then \
             echo "  [host-lua] ✓ Modules valid"; \
         else \
-            echo "  [host-lua] ✗ Validation failed"; \
+            echo "  [host-lua] ✗ Validation failed:"; \
+            sed 's/^/      /' {{marker_dir}}/host-lua.log | tail -20; \
             touch {{marker_dir}}/host-lua.failed; \
         fi; \
     else \
@@ -166,10 +170,11 @@ _build-host-js:
         exit 0; \
     fi
     @if command -v deno >/dev/null 2>&1; then \
-        if deno check {{sdks_dir}}/js/host/polyplug.js 2>/dev/null; then \
+        if deno check --config {{sdks_dir}}/js/host/deno.json {{sdks_dir}}/js/host/mod.js >{{marker_dir}}/host-js.log 2>&1; then \
             echo "  [host-js] ✓ Modules valid"; \
         else \
-            echo "  [host-js] ✗ Validation failed"; \
+            echo "  [host-js] ✗ Validation failed:"; \
+            sed 's/^/      /' {{marker_dir}}/host-js.log | tail -20; \
             touch {{marker_dir}}/host-js.failed; \
         fi; \
     else \
@@ -294,18 +299,28 @@ build: build-rust build-host-libs build-guest-libs
     @echo "=== Build Complete ==="
     @just _show-build-status
 
-# Show build status
+# Show build status; FAIL (exit 1) if any component failed so a red build can
+# never pass silently. The marker is the SDK's own .failed file under marker_dir.
 _show-build-status:
     @echo ""
     @echo "Build Status:"
     @echo "  Core Rust:    ✓"
-    @if [ -d {{marker_dir}} ]; then \
+    @failed=0; \
+    if [ -d {{marker_dir}} ]; then \
         for f in {{marker_dir}}/*.failed; do \
             if [ -f "$f" ]; then \
                 name=$(basename "$f" .failed); \
                 echo "  $name: ✗ (failed)"; \
+                failed=1; \
             fi; \
         done; \
+    fi; \
+    if [ "$failed" != "0" ]; then \
+        echo ""; \
+        echo "ERROR: one or more SDK components failed to build (see ✗ above)."; \
+        echo "  See {{marker_dir}}/<name>.log for the captured error,"; \
+        echo "  fix it, run 'just clean-markers', and rebuild. Never push on a red build."; \
+        exit 1; \
     fi
 
 # ============================================================================
@@ -372,7 +387,9 @@ test-host-python:
         echo "SKIPPED (build failed)"; \
         exit 0; \
     fi
-    @cd tests/integration/python && PYTHONPATH="../../../sdks/python/host:../../../sdks/python/polyplug_abi:../../../sdks/python" python3 test_hot_reload.py
+    @POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/target/{{profile}}/libpolyplug.so}" \
+    POLYPLUG_NATIVE_LIB="${POLYPLUG_NATIVE_LIB:-$(pwd)/target/{{profile}}/libpolyplug_native.so}" \
+    sh -c 'cd tests/integration/python && PYTHONPATH="../../../sdks/python/host:../../../sdks/python/polyplug_abi:../../../sdks/python" python3 test_hot_reload.py'
     @POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/target/{{profile}}/libpolyplug.so}" \
     POLYPLUG_NATIVE_LIB="${POLYPLUG_NATIVE_LIB:-$(pwd)/target/{{profile}}/libpolyplug_native.so}" \
     python3 sdks/python/host/tests/test_reload_runtime.py
@@ -503,14 +520,36 @@ test: test-rust test-host-libs
     @echo ""
     @echo "=== All Tests Complete ==="
 
+# Run every check in one shot (manual / CI equivalent of the lefthook gate).
+gate:
+    just fmt-check
+    just verify-no-fq-paths
+    just validate-sdks
+    just lint
+    just build
+    just docs-check
+    just test-all
+    @echo ""
+    @echo "✓✓✓ GATE PASSED — fmt, hygiene, SDK validator, ABI-mirror drift, lint, every SDK build, docs, full test matrix."
+
+# Full test matrix: rust workspace + every SDK host suite + C++/C# SDK + integration + cross-language conformance.
+test-all: download-native-local test-rust-all test-host-libs test-sdk-cpp test-sdk-csharp test-integration verify-id-helpers verify-to-str-errors
+    @echo ""
+    @echo "=== Full Test Matrix Passed ==="
+
+# Type-check the JS SDK (deno; `deno run` in the host suites does not type-check).
+js-typecheck:
+    @echo "=== Type-checking JS SDK (deno) ==="
+    cd sdks/js && deno task check
+
 # ============================================================================
 # Linting & Formatting
 # ============================================================================
 
-# Run clippy on all Rust code
+# Run clippy on all Rust code (workspace + test/bench targets, deny warnings)
 lint:
     @echo "=== Running Clippy ==="
-    cargo clippy --{{profile}} -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
 
 # Check formatting
 fmt-check:
@@ -526,10 +565,23 @@ fmt:
 check: fmt-check lint verify-no-fq-paths
     @echo "=== All Checks Passed ==="
 
-# Validate SDK consistency across all languages
-validate-sdks:
+# Regenerate + drift-check the ABI mirrors, then validate all helpers exist in every language.
+validate-sdks: verify-abi-mirrors
     @echo "=== Validating SDK Consistency ==="
-    cargo run -p sdk-validator -- --config checks/sdk_validator.yaml
+    cargo run -q -p sdk-validator -- --config checks/sdk_validator.yaml --fail-on-missing
+
+# Build the mdBook docs strictly (broken links fail).
+docs-check:
+    @echo "=== Building docs (mdbook, strict) ==="
+    mdbook build
+
+# Regenerate the sdks/*/abi mirrors and assert no drift (Rule 10 — never hand-edited).
+verify-abi-mirrors:
+    @echo "=== Verifying generated ABI mirrors are in sync (Rule 10) ==="
+    cargo build -q -p polyplug_abi
+    @git diff --exit-code -- sdks/cpp/abi sdks/csharp/abi sdks/python/abi sdks/lua/abi sdks/js/abi \
+        || { echo "ERROR: committed ABI mirrors are stale or hand-edited (Rule 10)."; \
+             echo "Run 'cargo build -p polyplug_abi' and commit the regenerated sdks/*/abi."; exit 1; }
 
 # ============================================================================
 # Examples
@@ -891,14 +943,14 @@ _dist-copy-host-libs:
     @# C# - Build DLLs in source location, copy ONLY built DLLs to dist
     @if command -v dotnet >/dev/null 2>&1; then \
         echo "  [dist] Building C# host library and loaders..."; \
-        dotnet build {{sdks_dir}}/csharp/host/Polyplug/Polyplug.csproj -c Release 2>/dev/null || true; \
+        dotnet build {{sdks_dir}}/csharp/host/Polyplug.Host.csproj -c Release 2>/dev/null || true; \
         dotnet build {{sdks_dir}}/csharp/host/Loaders/Native/Polyplug.Loaders.Native.csproj -c Release 2>/dev/null || true; \
         dotnet build {{sdks_dir}}/csharp/host/Loaders/Python/Polyplug.Loaders.Python.csproj -c Release 2>/dev/null || true; \
         dotnet build {{sdks_dir}}/csharp/host/Loaders/Lua/Polyplug.Loaders.Lua.csproj -c Release 2>/dev/null || true; \
         dotnet build {{sdks_dir}}/csharp/host/Loaders/Js/Polyplug.Loaders.Js.csproj -c Release 2>/dev/null || true; \
         dotnet build {{sdks_dir}}/csharp/host/Loaders/Dotnet/Polyplug.Loaders.Dotnet.csproj -c Release 2>/dev/null || true; \
         mkdir -p {{dist_dir}}/host-libs/csharp; \
-        cp {{sdks_dir}}/csharp/host/Polyplug/bin/Release/net10.0/Polyplug.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/csharp/host/bin/Release/net10.0/Polyplug.Host.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
         cp {{sdks_dir}}/csharp/host/Loaders/Native/bin/Release/net10.0/Polyplug.Loaders.Native.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
         cp {{sdks_dir}}/csharp/host/Loaders/Python/bin/Release/net10.0/Polyplug.Loaders.Python.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
         cp {{sdks_dir}}/csharp/host/Loaders/Lua/bin/Release/net10.0/Polyplug.Loaders.Lua.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
@@ -916,7 +968,7 @@ _dist-copy-host-libs:
     @find {{dist_dir}}/host-libs/lua/loaders -name "*.rockspec" -delete 2>/dev/null || true
     @# JS (pure JS) - ONLY .js/.ts files, NO .so files
     @mkdir -p {{dist_dir}}/host-libs/js-deno/polyplug
-    @cp {{sdks_dir}}/js/host/polyplug.js {{dist_dir}}/host-libs/js-deno/
+    @cp {{sdks_dir}}/js/host/mod.js {{dist_dir}}/host-libs/js-deno/
     @cp {{sdks_dir}}/js/host/polyplug.d.ts {{dist_dir}}/host-libs/js-deno/ 2>/dev/null || true
     @cp {{sdks_dir}}/js/host/polyplug/*.js {{dist_dir}}/host-libs/js-deno/polyplug/
     @# JS loaders - ONLY .js/.ts files
@@ -1014,7 +1066,7 @@ _prepare-nuget-packages:
     @echo "  [nuget] Preparing packages..."
     @if command -v dotnet >/dev/null 2>&1; then \
         echo "  [nuget] Packing core libraries..."; \
-        dotnet pack {{sdks_dir}}/csharp/host/Polyplug/Polyplug.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
+        dotnet pack {{sdks_dir}}/csharp/host/Polyplug.Host.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
         dotnet pack {{sdks_dir}}/csharp/guest/Polyplug.Guest.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
         echo "  [nuget] Packing loaders..."; \
         dotnet pack {{sdks_dir}}/csharp/host/Loaders/Native/Polyplug.Loaders.Native.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
@@ -1112,7 +1164,7 @@ _prepare-jsr-packages:
         cp {{sdks_dir}}/js/host/deno.json {{dist_dir}}/host-libs/js-deno/; \
         cp {{sdks_dir}}/js/host/package.json {{dist_dir}}/host-libs/js-deno/; \
         cp {{sdks_dir}}/js/host/README.md {{dist_dir}}/host-libs/js-deno/; \
-        cp {{sdks_dir}}/js/host/polyplug.js {{dist_dir}}/host-libs/js-deno/; \
+        cp {{sdks_dir}}/js/host/mod.js {{dist_dir}}/host-libs/js-deno/; \
         cp {{sdks_dir}}/js/host/polyplug.d.ts {{dist_dir}}/host-libs/js-deno/; \
         cp -r {{sdks_dir}}/js/host/polyplug/* {{dist_dir}}/host-libs/js-deno/polyplug/; \
         (cd {{dist_dir}}/host-libs/js-deno && deno publish --dry-run 2>&1 | head -20) || true; \

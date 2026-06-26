@@ -1,7 +1,5 @@
 # True Unload Design — Generation-Counted Handles + Epoch Reclamation
 
-## Overview
-
 polyplug supports **true unload**: `unload_bundle` fully reclaims a loaded bundle's
 resources — the registered `GuestContractInterface` `Arc`, the native dylib mapping or
 per-bundle VM state, and the bundle's registry indices — at runtime, with no dangling
@@ -22,9 +20,6 @@ Two mechanisms cooperate:
 `unload_bundle` always reclaims when it is safe to do so — there is no opt-in tier and
 no separate "keep it mapped" path. The memory is released as soon as the epoch advances
 past every reader that was pinned before the unload landed.
-
-This document mirrors the tone and structure of
-[`HOT_RELOAD_DESIGN.md`](./HOT_RELOAD_DESIGN.md).
 
 ---
 

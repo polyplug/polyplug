@@ -50,7 +50,12 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install ast-grep
         run: cargo install ast-grep --locked
-      - run: cargo run -p sdk-validator -- --config checks/sdk_validator.yaml --fail-on-missing
+      - name: Install just
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      # Regenerate + drift-check the ABI mirrors, then validate all helpers (Rule 10).
+      - run: just validate-sdks
       - name: No inline fully-qualified paths
         run: ast-grep scan --rule checks/no_inline_fq_paths.yaml crates sdks
 
@@ -181,6 +186,14 @@ jobs:
         env:
           POLYPLUG_LIB: ${{ github.workspace }}/target/debug/libpolyplug.so
           POLYPLUG_NATIVE_LIB: ${{ github.workspace }}/target/debug/libpolyplug_native.so
+      # Cross-language conformance: ID-helper hash parity + to_str invalid-UTF-8 errors, all 6 langs.
+      - name: Cross-language helper conformance
+        if: runner.os == 'Linux'
+        run: just verify-id-helpers verify-to-str-errors
+      # deno run (host suites above) does not type-check; this is the only deno type gate.
+      - name: Type-check JS SDK (deno)
+        if: runner.os == 'Linux'
+        run: just js-typecheck
 
   windows:
     name: Windows (build + tests)

@@ -1,29 +1,6 @@
 # Trust Model — polyplug
 
-This document defines the security boundaries, dependency enforcement mechanisms, and trust assumptions of the polyplug runtime platform.
-
-## Executive Summary
-
-**What this document covers:** How polyplug enforces dependency contracts between plugins without sacrificing performance.
-
-**Key insight:** Dependency enforcement happens once at load time (Phase 1), not on every call (Phase 2). This gives us zero-overhead hot paths while maintaining architectural integrity.
-
-**Trust boundaries:**
-- Host app: Fully trusted (unrestricted access)
-- Plugins: Semi-trusted (restricted to declared dependencies during init)
-- Runtime: Root of trust (enforces all contracts)
-
-**What we protect against:** Undeclared dependencies, version mismatches, use-after-unload, malformed binaries, null pointer inputs.
-
-**What we don't protect against:** Malicious memory access, plugin crashes, privilege escalation. Plugins run in-process with full host privileges.
-
-**Bottom line:** polyplug is an architecture enforcement tool, not a security sandbox. For untrusted plugins, use OS-level isolation (containers, separate processes).
-
-**Reporting a vulnerability:** this document describes the security *model*; for how to *report* a security issue privately, see [`SECURITY.md`](../SECURITY.md).
-
----
-
-This document defines the security boundaries, dependency enforcement mechanisms, and trust assumptions of the polyplug runtime platform.
+To *report* a vulnerability privately, see [`SECURITY.md`](../SECURITY.md); the rest of this page is the security *model* — the boundaries, dependency-enforcement mechanisms, and trust assumptions of the polyplug runtime. Its defining property: dependency enforcement happens once at load time (Phase 1), never on the per-call hot path (Phase 2).
 
 ## 1. Overview
 
@@ -369,47 +346,29 @@ post-freeze expansion slot; producers set it to null, consumers must not read it
 
 ## Hot-Reload Safety Guarantees
 
-polyplug uses **crossbeam-epoch** to make hot-reload and unload memory-safe without freezing
-the runtime. Readers serve calls lock-free against an immutable published `ReadView`; a
-superseded interface `Arc` and its mapping are freed only once no reader is still pinned in
-the prior epoch.
+Hot-reload swaps a bundle's live interface in place without freezing the runtime, and the
+trust-relevant guarantee is that the swap is **memory-safe under concurrent readers**. A
+reader pins a crossbeam-epoch guard before resolving an interface, so a `*const
+GuestContractInterface` resolved under that pin keeps both the old interface `Arc` and its
+still-mapped library alive until the guard unpins — there is no window in which a live
+interface points at an unmapped library. To observe the new version, a caller
+re-`find_guest_contract`s and re-`resolve_guest_contract`s.
 
-- **Interface swap is a single write-locked operation.** `RuntimeStore::apply_reload_swap`
-  moves each freshly-registered `Arc<GuestContractInterface>` into the bundle's existing
-  pre-reload slot under one write lock, republishes a new `ReadView`, and `defer_destroy`s
-  the old one, so concurrent readers observe either the complete old state or the complete
-  new state — never a half-swapped registry.
-- **Pointer validity under epoch.** A reader pins the epoch (`crossbeam_epoch::pin()`) before
-  loading the `ReadView`. A `*const GuestContractInterface` resolved under a pin keeps both
-  the old interface `Arc` and the still-mapped library alive until the guard unpins, so there
-  is no live-interface/unmapped-library window. Callers must re-find (`find_guest_contract`)
-  and re-resolve to observe the new version.
-- **Superseded native libraries are epoch-reclaimed.** The native loader's old
-  `libloading::Library` is dropped through the same epoch path — `dlclose` / `FreeLibrary`
-  runs only after every reader pinned in the old epoch has unpinned.
 - **Reload failure leaves the active version untouched.** If `loader.reload()` (which calls
-  `polyplug_init`) fails, no interface swap occurs and the pre-reload state remains live.
-- **Phase callbacks.** `reload_bundle` fires the host's `on_reload` callback with a
-  `ReloadPhase { phase_type, bundle_id, bundle_name, reason }`: `Preparing` before the
-  swap (host must destroy all live instances here), `Reloaded` after a successful swap, and
-  `Failed` (with a reason string) on any failure. After the `Preparing` callback returns,
-  the runtime emits a "live guest instance" warning if any stateful instance (non-null
-  `instance.data`) for the bundle is still counted, naming the use-after-free hazard, but
-  proceeds with the reload regardless.
+  `polyplug_init`) fails, no interface swap occurs and the pre-reload state stays live.
 - **Hot-reload must be enabled in config.** `reload_bundle` and the native loader's
   `reload()` both return `RuntimeError::HotReloadDisabled` when `hot_reload_enabled` is false.
 - **Reloadability by loader.** Native, Lua, and JavaScript (QuickJS) bundles are reloadable.
-  The Python and .NET loaders return `RuntimeError::HotReloadDisabled` from `reload()` due to
-  the process-level single-initialization constraints of CPython and the CLR.
+  The Python and .NET loaders return `RuntimeError::HotReloadDisabled` from `reload()` because
+  CPython and the CLR initialize once per process.
+- **Handles survive a reload.** A hot-reload swap does **not** bump the slot generation, so a
+  `GuestContractHandle` minted before the swap stays valid and resolves to the new
+  interface — contrast unload, which bumps the generation (see §5 and the Unload Trust Model
+  below).
 
-> **Note:** `GuestContractHandle` carries a generation counter (bumped on unload; verified
-> by `resolve_guest_contract`). There is no `ArcSwap`, no `PluginGuard`/`VTableSlot`
-> quiescence spin, no `QuiescenceTimeout`, and no cascade-depth cap. Memory safety across
-> reload and unload comes from epoch-deferred reclamation: the immutable `ReadView` is
-> republished under the write lock and the old view `defer_destroy`d, so a superseded
-> interface `Arc`, native library, or VM is freed only after the last reader pinned in the
-> old epoch unpins. **Unload always reclaims when safe** — there is no opt-in mode and no
-> retain tier; see the Unload Trust Model below.
+For the swap mechanism, the three-phase `Preparing` / `Reloaded` / `Failed` callback
+contract, the informational live-instance leak check, and reload serialization, see
+[`HOT_RELOAD_DESIGN.md`](HOT_RELOAD_DESIGN.md).
 
 ## 8. Security & Lifecycle Hardening
 
@@ -512,77 +471,31 @@ with `ReloadPhaseType::Unloading` (3) before invalidation so the host can quiesc
 
 Unload always reclaims when safe — there is no opt-in mode and no retain tier. The
 generation bump and index removal are unconditional and fully safe. Loader-owned resources
-are freed through crossbeam-epoch: the superseded interface `Arc` and the mapping / VM are
-`defer_destroy`d under the write lock and run only once no reader is still pinned in the
-prior epoch.
+(the superseded interface `Arc` and the mapping / VM) are `defer_destroy`d under the write
+lock through crossbeam-epoch and run only once no reader is still pinned in the prior epoch.
 
 - **Runtime-mediated calls are epoch-safe.** `create_guest_instance` (offset 152) and
   `destroy_guest_instance` (offset 160) pin the epoch across their operation, so a
   lifecycle call racing a concurrent unload keeps the interface and its mapping alive
-  until the guard unpins. (The former `call_guest_method` field, which also pinned the
-  epoch, has been removed from the ABI — peer callers now dispatch directly.)
+  until the guard unpins.
 - **Direct FFI host-callers are host-coordinated.** Direct FFI callers do not pin per call;
   they take the fast path and rely on the documented quiesce-before-unload contract. The
   host must not call a bundle concurrently with unloading it (trusted-same-process model).
   Caching a raw `*const GuestContractInterface` and using it after the bundle is unloaded is
   **undefined behaviour** — the same posture as hot-reload's `Preparing` contract.
-  - **Native (`dlclose` / `FreeLibrary`).** The `libloading::Library` is dropped through the
-    epoch path. Native dispatch is raw function pointers into the library, so the host's
-    quiesce contract is what guarantees no thread is mid-call or holds a pointer into the
-    bundle when it is freed.
-  - **VM reclaim (Lua/JS).** The per-bundle VM is dropped through the same epoch path.
-    Runtime-mediated dispatch into the VM is epoch-pinned; a host that drives the VM through
-    direct FFI must quiesce first.
-  - **Python reclaim is memory-safe regardless of in-flight calls.** It only purges the
-    bundle's re-keyed `sys.modules` entries (a module-cache purge, not an interpreter
-    unload); CPython refcounts/GC keep any referenced objects alive.
-  - **.NET reclaim.** Each `(runtime, bundle)` pair owns a collectible
-    `AssemblyLoadContext`; unload calls `AssemblyLoadContext.Unload()` and the assemblies are
-    GC-reclaimed once references and native frames clear. C#-guest bundles register native
-    function pointers, so the host-cached-pointer UB caveat applies to them too.
+
+The per-loader reclaim mechanics — native `dlclose` / `FreeLibrary`, Lua/JS VM drop, Python
+`sys.modules` purge, and .NET collectible-ALC unload — are in
+[`UNLOAD_DESIGN.md`](UNLOAD_DESIGN.md).
 
 ### Hot-Reload
-Hot-reload is implemented for native, Lua, and JavaScript (QuickJS) bundles using
-crossbeam-epoch: the active version is swapped under a single write lock that republishes an
-immutable `ReadView` and `defer_destroy`s the old one, so a pointer resolved under an epoch
-pin stays valid until its guard unpins. Reload is driven explicitly by
-`reload_bundle`; there is no file-watcher and no automatic retry. The Python and .NET loaders
-return `HotReloadDisabled` (CPython / CLR single-initialization constraints). See the
-Hot-Reload Safety Guarantees section above.
+Native, Lua, and JavaScript (QuickJS) bundles support hot-reload; the Python and .NET loaders
+return `HotReloadDisabled` (CPython / CLR single-initialization). Reload is driven explicitly
+by `reload_bundle` — there is no file-watcher and no automatic retry. See the Hot-Reload
+Safety Guarantees section above and [`HOT_RELOAD_DESIGN.md`](HOT_RELOAD_DESIGN.md).
 
 ### Scripting and JS Bindings
 Python, Lua, and JavaScript (QuickJS) plugins are implemented. All respect the same trust model rules — scripted plugins have their own bundle ID and declare dependencies in `bundle.toml`. The runtime enforces these through the same `INIT_BUNDLE_ID` mechanism used by native code.
 
 ### Priority Resolution (planned)
 A weighting system for multi-impl providers is planned for a future version. This will allow the host or a "Coordinator Bundle" to assign priorities to implementations, ensuring that `find_guest_contract` returns the "best" provider rather than just the first one registered.
-
-## Plugin crash isolation
-
-Plugins run in-process. A plugin that dereferences a null pointer, causes a stack
-overflow, or triggers any hardware exception (SIGSEGV, SIGBUS, SIGILL) takes down
-the entire host process. **This is expected and intentional behaviour.**
-
-Isolating plugin crashes would require either:
-- Out-of-process execution with IPC — violates the zero-overhead hot-path goal
-- OS-level sandboxing (seccomp, pledge) — platform-specific, adds significant complexity
-
-Neither is acceptable for v1.
-
-App developers who need crash isolation should run plugins in a separate worker process
-and communicate via IPC. polyplug does not provide this facility.
-
-
-
-// =============================================================================
-// ABI FREEZE TARGET — v1.0 (currently pre-1.0, no public release yet)
-// =============================================================================
-//
-// The following types and function signatures constitute the polyplug ABI that
-// freezes at v1.0. While pre-1.0, changes to #[repr(C)] structs, function pointer
-// signatures, or the field order of HostApi ARE permitted, but ONLY after
-// explicit owner approval — never unilaterally. At and after v1.0, NO such changes
-// are permitted.
-//
-// New functionality should go through the host/guest contract model
-// (get_host_contract / register_host_contract). For rationale and trust model, see TRUST_MODEL.md.
-// =============================================================================
