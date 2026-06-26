@@ -333,7 +333,7 @@ jobs:
           set -e
           VER="$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')"
           # Dependency order: utils/abi before their dependents. Do NOT reorder.
-          CRATES="polyplug_utils polyplug_abi polyplug polyplug_codegen polyplug_native polyplug_python polyplug_lua polyplug_js polyplug_dotnet polyplugc polyplug_guest"
+          CRATES="polyplug_utils polyplug_abi polyplug_signing polyplug polyplug_codegen polyplug_native polyplug_python polyplug_lua polyplug_js polyplug_dotnet polyplugc polyplug_guest"
           # Publish one crate, tolerating the two non-fatal cases so a re-run after
           # a partial publish converges: already-published (skip) and the crates.io
           # new-crate rate limit (429 -> wait ~10-min refill, retry). crates.io's
