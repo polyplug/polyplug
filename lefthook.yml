@@ -1,11 +1,12 @@
 # lefthook — every check is its own NAMED command, so you see exactly what runs.
 #
 # Setup once per clone:        lefthook install
-# Run a check by hand:         just fmt-check | just lint | just validate-sdks | just test-all
+# Run a check by hand:         just fmt-check | just lint | just validate-sdks | just docs-check | just test-all
 # Bypass in a REAL emergency:  LEFTHOOK=0 git push
 
-# Every commit: format, import hygiene, SDK consistency, and clippy. clippy IS
-# the compile check (cargo check under the hood), so there is no separate build.
+# Every commit: format, import hygiene, SDK consistency, clippy (the compile
+# check), plus docs and ABI-mirror drift when those files change. clippy IS the
+# compile check (cargo check under the hood), so there is no separate build.
 pre-commit:
   parallel: true
   commands:
@@ -19,6 +20,15 @@ pre-commit:
     lint:
       glob: "*.rs"
       run: just lint
+    docs:
+      glob: "**/*.md"
+      run: just docs-check
+    abi-mirrors:
+      glob:
+        - "crates/polyplug_abi/**/*"
+        - "crates/polyplug_codegen/**/*"
+        - "sdks/*/abi/**/*"
+      run: just verify-abi-mirrors
 
 # Before code leaves the machine: the full test matrix. The code is already
 # compiled (clippy at commit time + cargo test here), so no separate build step.

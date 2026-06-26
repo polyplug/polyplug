@@ -48,12 +48,12 @@ cargo build --workspace
 
 ## The gate
 
-`just gate` is the single source of truth for "everything passes": format +
-clippy + import hygiene, a build of **every** SDK (host and guest, all six
-languages — the build exits non-zero if any one fails), a strict mdbook docs
-build, the SDK helper validator, and the full test matrix (Rust workspace,
-every language's host-runtime tests, the C++/C# SDK suites, and integration
-tests).
+`just gate` is the single source of truth for "everything passes": format,
+import hygiene, the SDK helper validator, ABI-mirror drift, clippy, a build of
+**every** SDK (host and guest, all six languages — the build exits non-zero if
+any one fails), a strict mdbook docs build, and the full test matrix (Rust
+workspace, every language's host-runtime tests, the C++/C# SDK suites, and
+integration tests).
 
 ```sh
 just gate
@@ -68,8 +68,14 @@ build can never be pushed. Install the hooks once per clone:
 lefthook install
 ```
 
-- **pre-commit** runs the fast checks (`cargo fmt --check`, import hygiene).
-- **pre-push** runs the full `just gate`; if anything fails, the push is blocked.
+Each check is its own named command, split by cost:
+
+- **pre-commit** (fast, every commit): `fmt`, `import-hygiene`, `sdk-validator`,
+  `lint` (clippy), `docs` (mdbook, on `*.md` changes), `abi-mirrors` (generated
+  ABI mirror drift, on ABI/codegen changes).
+- **pre-push** (heavy): `tests` — `just test-all` (the full matrix). clippy
+  already compiled everything at commit time, so there is no separate build.
+- **commit-msg**: Conventional Commits format.
 
 Bypass only in a genuine emergency: `LEFTHOOK=0 git push`.
 
