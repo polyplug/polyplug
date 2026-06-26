@@ -669,6 +669,11 @@ jobs:
         with:
           deno-version: v2.x
 
+      # Populate node_modules so deno's type-check can resolve @types/node for the node: builtins the FFI backend imports.
+      - name: Install JS workspace deps
+        run: deno install
+        working-directory: sdks/js
+
       - name: Publish to jsr.io (dry-run)
         if: inputs.dry-run
         run: |

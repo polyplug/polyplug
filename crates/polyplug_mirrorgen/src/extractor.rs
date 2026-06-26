@@ -34,30 +34,23 @@ use crate::types::{
 
 /// Extract all ABI types by recursively walking the module tree starting from `src_dir/lib.rs`.
 ///
-/// Returns both the extracted types and all source file paths discovered
-/// (for `cargo:rerun-if-changed` tracking).
-///
 /// # Arguments
 /// * `src_dir` - The `src/` directory containing `lib.rs`.
 ///
 /// # Returns
-/// A tuple of `(AbiTypes, Vec<PathBuf>)` containing extracted types and tracked files.
-pub fn extract_from_dir(src_dir: &Path) -> Result<(AbiTypes, Vec<PathBuf>), String> {
+/// The extracted `AbiTypes`.
+pub fn extract_from_dir(src_dir: &Path) -> Result<AbiTypes, String> {
     let lib_rs: PathBuf = src_dir.join("lib.rs");
     if !lib_rs.exists() {
         return Err(format!("lib.rs not found at {}", lib_rs.display()));
     }
 
     let mut abi_types: AbiTypes = AbiTypes::new();
-    let mut tracked_files: Vec<PathBuf> = Vec::new();
-
-    // Track lib.rs itself
-    tracked_files.push(lib_rs.clone());
 
     // Walk the module tree starting from lib.rs
-    walk_module_tree(src_dir, &lib_rs, &mut abi_types, &mut tracked_files)?;
+    walk_module_tree(src_dir, &lib_rs, &mut abi_types)?;
 
-    Ok((abi_types, tracked_files))
+    Ok(abi_types)
 }
 
 /// Recursively walk the module tree, extracting types from each file.
@@ -71,12 +64,10 @@ pub fn extract_from_dir(src_dir: &Path) -> Result<(AbiTypes, Vec<PathBuf>), Stri
 /// * `dir` - The directory containing the current module file.
 /// * `module_file` - Path to the `.rs` file to parse.
 /// * `abi_types` - Mutable accumulator for discovered types.
-/// * `tracked_files` - Mutable accumulator for all discovered source paths.
 fn walk_module_tree(
     dir: &Path,
     module_file: &Path,
     abi_types: &mut AbiTypes,
-    tracked_files: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
     let source: String = fs::read_to_string(module_file).map_err(|e| {
         format!(
@@ -119,10 +110,8 @@ fn walk_module_tree(
                 continue;
             };
 
-            tracked_files.push(target.to_path_buf());
-
             // Recursively walk the sub-module
-            walk_module_tree(&sub_dir, target, abi_types, tracked_files)?;
+            walk_module_tree(&sub_dir, target, abi_types)?;
         }
     }
 

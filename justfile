@@ -578,10 +578,10 @@ docs-check:
 # Regenerate the sdks/*/abi mirrors and assert no drift (Rule 10 — never hand-edited).
 verify-abi-mirrors:
     @echo "=== Verifying generated ABI mirrors are in sync (Rule 10) ==="
-    cargo build -q -p polyplug_abi
+    cargo run -q -p polyplug_mirrorgen
     @git diff --exit-code -- sdks/cpp/abi sdks/csharp/abi sdks/python/abi sdks/lua/abi sdks/js/abi \
         || { echo "ERROR: committed ABI mirrors are stale or hand-edited (Rule 10)."; \
-             echo "Run 'cargo build -p polyplug_abi' and commit the regenerated sdks/*/abi."; exit 1; }
+             echo "Run 'cargo run -p polyplug_mirrorgen' and commit the regenerated sdks/*/abi."; exit 1; }
 
 # ============================================================================
 # Examples

@@ -1,13 +1,12 @@
-//! Build script for polyplug_abi — generates SDK bindings from ABI definitions.
+//! Dev-only binary that regenerates the polyplug SDK ABI mirror files.
 //!
-//! This build script:
-//! 1. Recursively walks the module tree starting from `src/lib.rs`
+//! This tool:
+//! 1. Recursively walks the `polyplug_abi` module tree starting from its `src/lib.rs`
 //! 2. Auto-discovers all `#[repr(C)]` structs/enums/unions and `POLYPLUG_` constants
 //! 3. Scans loader crate config files for additional ABI types
 //! 4. Validates that all types can be represented in target languages
 //! 5. Calls polyplug_codegen for each target language
 //! 6. Writes generated SDK files to `sdks/{lang}/abi/`
-//! 7. Emits `cargo:rerun-if-changed` for all tracked source files
 
 #![allow(clippy::std_instead_of_core)]
 
@@ -41,14 +40,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     let manifest_dir: PathBuf = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let workspace_root: PathBuf = manifest_dir
         .parent()
-        .ok_or("polyplug_abi should be in crates/ directory")?
+        .ok_or("polyplug_mirrorgen should be in crates/ directory")?
         .parent()
         .ok_or("crates/ should be in workspace root")?
         .to_path_buf();
 
     // ─── Step 1: Extract ABI types from polyplug_abi module tree ─────────────
-    let src_dir: PathBuf = manifest_dir.join("src");
-    let (mut abi_types, mut tracked_files) = extract_from_dir(&src_dir)?;
+    let src_dir: PathBuf = workspace_root
+        .join("crates")
+        .join("polyplug_abi")
+        .join("src");
+    let mut abi_types: AbiTypes = extract_from_dir(&src_dir)?;
 
     // ─── Step 2: Scan loader crates for config structs ───────────────────────
     for loader_name in LOADER_CRATES {
@@ -100,11 +102,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
 
             abi_types.merge(loader_types);
-            tracked_files.push(target_path);
         }
     }
 
     // ─── Step 3: Generate SDKs ───────────────────────────────────────────────
-    generate_all_sdks(&mut abi_types, &workspace_root, &tracked_files)?;
+    generate_all_sdks(&mut abi_types, &workspace_root)?;
     Ok(())
 }

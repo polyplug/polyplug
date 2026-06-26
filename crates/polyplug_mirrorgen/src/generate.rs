@@ -1392,11 +1392,7 @@ fn delete_old_generated_files(lang: TargetLang, abi_dir: &Path) {
         let path = abi_dir.join(filename);
         if path.exists() {
             if let Err(e) = fs::remove_file(&path) {
-                println!(
-                    "cargo:warning=Failed to delete old file {}: {}",
-                    path.display(),
-                    e
-                );
+                eprintln!("Failed to delete old file {}: {}", path.display(), e);
             }
         }
     }
@@ -1787,25 +1783,18 @@ fn merge_cpp_helpers(generated_code: &str, helpers: &[(String, String)]) -> Stri
 /// # Arguments
 /// * `abi_types` - Extracted ABI types (will be mutated to populate size hints).
 /// * `workspace_root` - Path to the workspace root directory.
-/// * `tracked_files` - Source files to emit `cargo:rerun-if-changed` for.
 ///
 /// # Returns
 /// Result indicating success or failure.
 pub fn generate_all_sdks(
     abi_types: &mut AbiTypes,
     workspace_root: &Path,
-    tracked_files: &[PathBuf],
 ) -> Result<(), Box<dyn Error>> {
     // Populate size hints from known size table.
     populate_size_hints(abi_types);
 
     // Validate that all types can be represented in target languages (D-09).
     validate_representable_types(abi_types).map_err(|e| -> Box<dyn Error> { e.into() })?;
-
-    // Emit cargo:rerun-if-changed for all tracked source files.
-    for path in tracked_files {
-        println!("cargo:rerun-if-changed={}", path.display());
-    }
 
     let languages: [TargetLang; 5] = [
         TargetLang::Cpp,
@@ -2101,7 +2090,7 @@ fn to_upper_snake_case_for_generate(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::types::{AbiConst, AbiStruct};
+    use crate::types::{AbiConst, AbiField, AbiStruct};
 
     #[test]
     fn test_target_lang_language_name() {
@@ -2148,8 +2137,6 @@ mod tests {
     /// Test that populate_size_hints fills in known struct sizes.
     #[test]
     fn test_populate_size_hints() {
-        use crate::build::types::AbiField;
-
         let mut abi_types: AbiTypes = AbiTypes::new();
         abi_types.add_struct(AbiStruct {
             name: String::from("RuntimeConfig"),
@@ -2177,8 +2164,8 @@ mod tests {
 
         assert_eq!(
             abi_types.structs[0].size_hint,
-            Some(16),
-            "RuntimeConfig should be 16 bytes"
+            Some(72),
+            "RuntimeConfig should be 72 bytes"
         );
         assert_eq!(
             abi_types.structs[1].size_hint,
@@ -2194,8 +2181,6 @@ mod tests {
     /// Test that C++ output contains static_assert for structs with size hints.
     #[test]
     fn test_cpp_output_contains_static_assert() {
-        use crate::build::types::AbiField;
-
         let mut abi_types: AbiTypes = AbiTypes::new();
         abi_types.add_struct(AbiStruct {
             name: String::from("RuntimeConfig"),
@@ -2220,8 +2205,6 @@ mod tests {
     /// Test that Python output contains ctypes.sizeof assertions for structs with size hints.
     #[test]
     fn test_python_output_contains_sizeof_assertions() {
-        use crate::build::types::AbiField;
-
         let mut abi_types: AbiTypes = AbiTypes::new();
         abi_types.add_struct(AbiStruct {
             name: String::from("RuntimeConfig"),

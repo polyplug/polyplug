@@ -1686,10 +1686,7 @@ dependencies = [
 name = "polyplug_abi"
 version = "0.1.2"
 dependencies = [
- "polyplug_codegen",
  "polyplug_utils",
- "quote",
- "syn",
  "thiserror",
 ]
 
@@ -1749,6 +1746,17 @@ dependencies = [
  "polyplug_abi",
  "polyplug_utils",
  "tempfile",
+]
+
+[[package]]
+name = "polyplug_mirrorgen"
+version = "0.1.2"
+dependencies = [
+ "polyplug_abi",
+ "polyplug_codegen",
+ "polyplug_utils",
+ "quote",
+ "syn",
 ]
 
 [[package]]

@@ -1,0 +1,27 @@
+[package]
+name = "polyplug_mirrorgen"
+description = "Dev-only generator for the polyplug SDK ABI mirror files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "polyplug_mirrorgen"
+path = "src/main.rs"
+
+[dependencies]
+polyplug_abi = { workspace = true }
+polyplug_codegen = { workspace = true }
+polyplug_utils = { workspace = true }
+syn = { workspace = true }
+quote = { workspace = true }

@@ -10,7 +10,6 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-build = "build/main.rs"
 
 [lints]
 workspace = true
@@ -24,8 +23,3 @@ tracking = []
 [dependencies]
 thiserror = { workspace = true }
 polyplug_utils = { workspace = true }
-
-[build-dependencies]
-syn = { workspace = true }
-quote = { workspace = true }
-polyplug_codegen = { workspace = true }
