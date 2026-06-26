@@ -70,13 +70,11 @@ lefthook install
 
 Each check is its own named command, split by cost:
 
-- **pre-commit** (fast, every commit): `fmt`, `import-hygiene`, `sdk-validator`,
-  `lint` (clippy), `js-typecheck` (deno, on JS changes), `docs` (mdbook, on
-  `*.md` changes), `abi-mirrors` (generated ABI mirror drift, on ABI/codegen
-  changes).
-- **pre-push** (heavy): `tests` — `just test-all` (the full matrix plus the
-  cross-language helper conformance gates). clippy already compiled everything
-  at commit time, so there is no separate build.
+- **pre-commit** (fast): `fmt`, `import-hygiene`, `sdk-validator` (ABI-mirror
+  drift + helper parity), `lint`, `js-typecheck`, `docs` — each globbed to the
+  files it checks.
+- **pre-push** (heavy): `tests` — `just test-all` (full matrix + cross-language
+  conformance). clippy already compiled at commit time, so there is no build.
 - **commit-msg**: Conventional Commits format.
 
 Bypass only in a genuine emergency: `LEFTHOOK=0 git push`.
