@@ -1,23 +1,42 @@
-# lefthook — make "everything passes" a hard gate before code leaves the machine.
+# lefthook — every check is its own NAMED command, so you see exactly what runs.
+# Split by cost: fast checks gate the commit; compile-heavy checks gate the push.
 #
-# One-time setup per clone:   lefthook install
-# Run the gate by hand:       just gate
-# Bypass in a REAL emergency:  LEFTHOOK=0 git push   (or  git push --no-verify)
-#
-# pre-commit  fast local checks, so obvious problems fail in seconds.
-# pre-push    the FULL gate — every SDK builds and every test passes (`just gate`).
-#             This is the guard against ever pushing a red build again.
+# Setup once per clone:        lefthook install
+# Run a check by hand:         just fmt-check | just lint | just validate-sdks | just build | just test-all
+# Bypass in a REAL emergency:  LEFTHOOK=0 git push
 
+# Fast — run on every commit (seconds).
 pre-commit:
   parallel: true
   commands:
-    format:
+    fmt:
       glob: "*.rs"
-      run: cargo fmt --check
+      run: just fmt-check
     import-hygiene:
       run: just verify-no-fq-paths
+    sdk-validator:
+      run: just validate-sdks
 
+# Compile-heavy — run before code leaves the machine. piped: run in order,
+# stop at the first failure (no point building if clippy fails, etc.).
 pre-push:
+  piped: true
   commands:
-    gate:
-      run: just gate
+    lint:
+      priority: 1
+      run: just lint
+    build:
+      priority: 2
+      run: just build
+    tests:
+      priority: 3
+      run: just test-all
+
+commit-msg:
+  commands:
+    check-message:
+      run: |
+        if ! grep -qE '^(feat|fix|docs|style|refactor|test|chore)(\(.+\))?: .+' {1}; then
+          echo "Commit message must follow conventional commits format"
+          exit 1
+        fi

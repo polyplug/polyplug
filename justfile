@@ -520,41 +520,35 @@ test: test-rust test-host-libs
     @echo ""
     @echo "=== All Tests Complete ==="
 
-# Full pre-push gate: literally everything must pass before code leaves the
-# machine. Wired to git via lefthook (pre-push) — see lefthook.yml. Every step
-# below is run by `just build`'s loud-fail gate or a test recipe that exits
-# non-zero on failure, so a single red step aborts the whole gate.
-# Bypass only in a genuine emergency: `LEFTHOOK=0 git push`.
+# lefthook runs these same recipes split across pre-commit (fast) and pre-push
+# (compile-heavy); see lefthook.yml. This recipe is the one-command manual / CI
+# equivalent — run everything: fmt, hygiene, SDK validator, lint, build, docs, tests.
 gate:
-    @echo "═══ GATE 1/8 — format + clippy + import hygiene ═══"
-    just check
-    @echo "═══ GATE 2/8 — build every SDK (host + guest, fails loud on any) ═══"
+    just fmt-check
+    just verify-no-fq-paths
+    just validate-sdks
+    just lint
     just build
-    @echo "═══ GATE 3/8 — docs (strict mdbook build) ═══"
     mdbook build
-    @echo "═══ GATE 4/8 — SDK helper validator ═══"
-    cargo run -q -p sdk-validator -- --config checks/sdk_validator.yaml --fail-on-missing
-    @echo "═══ GATE 5/8 — stage native libs for runtime tests ═══"
-    just download-native-local
-    @echo "═══ GATE 6/8 — Rust workspace tests ═══"
-    just test-rust-all
-    @echo "═══ GATE 7/8 — SDK host runtime tests (all 6 languages) ═══"
-    just test-host-libs
-    @echo "═══ GATE 8/8 — C++/C# SDK suites + integration tests ═══"
-    just test-sdk-cpp
-    just test-sdk-csharp
-    just test-integration
+    just test-all
     @echo ""
-    @echo "✓✓✓ GATE PASSED — every SDK builds and every test passes. Safe to push."
+    @echo "✓✓✓ GATE PASSED — format, lint, SDK validator, every SDK build, docs, full test matrix."
+
+# Full test matrix: rust workspace + every SDK host suite + C++/C# SDK + integration.
+# Stages libpolyplug for the runtime suites; assumes `just build` already produced
+# the loader cdylibs (the gate and lefthook pre-push run `build` first).
+test-all: download-native-local test-rust-all test-host-libs test-sdk-cpp test-sdk-csharp test-integration
+    @echo ""
+    @echo "=== Full Test Matrix Passed ==="
 
 # ============================================================================
 # Linting & Formatting
 # ============================================================================
 
-# Run clippy on all Rust code
+# Run clippy on all Rust code (workspace + test/bench targets, deny warnings)
 lint:
     @echo "=== Running Clippy ==="
-    cargo clippy --{{profile}} -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
 
 # Check formatting
 fmt-check:
@@ -570,10 +564,10 @@ fmt:
 check: fmt-check lint verify-no-fq-paths
     @echo "=== All Checks Passed ==="
 
-# Validate SDK consistency across all languages
+# Validate SDK consistency across all languages (strict — fail on any missing helper)
 validate-sdks:
     @echo "=== Validating SDK Consistency ==="
-    cargo run -p sdk-validator -- --config checks/sdk_validator.yaml
+    cargo run -q -p sdk-validator -- --config checks/sdk_validator.yaml --fail-on-missing
 
 # ============================================================================
 # Examples
