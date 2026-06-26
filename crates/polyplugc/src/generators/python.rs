@@ -902,19 +902,25 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract, enu
     out.push_str(
         "        when no provider is loaded. Pass `min_version` to require a minimum version;\n",
     );
-    out.push_str("        pass `owner` to override the lifetime anchor (defaults to `runtime`).\n\n");
+    out.push_str(
+        "        pass `owner` to override the lifetime anchor (defaults to `runtime`).\n\n",
+    );
     out.push_str("        Args:\n");
     out.push_str(
         "            runtime: polyplug.Runtime to resolve the contract from. Its host pointer\n",
     );
     out.push_str("                and contract handle are resolved internally.\n");
     out.push_str("            min_version: Minimum contract version to accept (0 = any).\n");
-    out.push_str("            owner: Lifetime anchor held for this caller's lifetime so the runtime\n");
+    out.push_str(
+        "            owner: Lifetime anchor held for this caller's lifetime so the runtime\n",
+    );
     out.push_str("                cannot be finalized before __del__ runs (which calls\n");
     out.push_str("                destroy_instance and arena teardown through the runtime).\n");
     out.push_str("                Defaults to `runtime`.\n\n");
     out.push_str("        Returns:\n");
-    out.push_str("            Self if a provider is loaded and the instance was created, None otherwise\n");
+    out.push_str(
+        "            Self if a provider is loaded and the instance was created, None otherwise\n",
+    );
     out.push_str("        \"\"\"\n");
     out.push_str(&format!(
         "        handle = runtime.find_guest_contract({contract_id_const}, min_version)\n"

@@ -1,0 +1,23 @@
+# lefthook — make "everything passes" a hard gate before code leaves the machine.
+#
+# One-time setup per clone:   lefthook install
+# Run the gate by hand:       just gate
+# Bypass in a REAL emergency:  LEFTHOOK=0 git push   (or  git push --no-verify)
+#
+# pre-commit  fast local checks, so obvious problems fail in seconds.
+# pre-push    the FULL gate — every SDK builds and every test passes (`just gate`).
+#             This is the guard against ever pushing a red build again.
+
+pre-commit:
+  parallel: true
+  commands:
+    format:
+      glob: "*.rs"
+      run: cargo fmt --check
+    import-hygiene:
+      run: just verify-no-fq-paths
+
+pre-push:
+  commands:
+    gate:
+      run: just gate

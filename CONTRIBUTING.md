@@ -48,13 +48,30 @@ cargo build --workspace
 
 ## The gate
 
-Every PR must pass all three checks. Run them locally before pushing:
+`just gate` is the single source of truth for "everything passes": format +
+clippy + import hygiene, a build of **every** SDK (host and guest, all six
+languages — the build exits non-zero if any one fails), a strict mdbook docs
+build, the SDK helper validator, and the full test matrix (Rust workspace,
+every language's host-runtime tests, the C++/C# SDK suites, and integration
+tests).
 
 ```sh
-cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+just gate
 ```
+
+### Enforced by lefthook
+
+This repo uses [lefthook](https://github.com/evilmartians/lefthook) so a red
+build can never be pushed. Install the hooks once per clone:
+
+```sh
+lefthook install
+```
+
+- **pre-commit** runs the fast checks (`cargo fmt --check`, import hygiene).
+- **pre-push** runs the full `just gate`; if anything fails, the push is blocked.
+
+Bypass only in a genuine emergency: `LEFTHOOK=0 git push`.
 
 Zero warnings are tolerated. Test failures must be fixed, never skipped or
 `#[ignore]`d (see CLAUDE.md §18).
