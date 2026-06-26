@@ -194,18 +194,19 @@ def str_view(s: str, keepalive: list) -> StringView:
     keepalive.append(buf)
     return StringView(ptr=ctypes.cast(buf, ctypes.c_void_p), len=len(data))
 
-handle = rt.find_guest_contract(PIPELINE_DECODER_CONTRACT_ID, 0)
-if handle.index == 0xFFFFFFFF:          # null/missing handle
+caller = PipelineDecoderContractCaller.create(rt)
+if caller is None:                      # no provider loaded
     raise RuntimeError("decoder not found")
 
-caller = PipelineDecoderContractCaller.create(handle, rt.host, owner=rt)
 keepalive: list = []
 result: StringView = caller.decode(str_view("name,value,42", keepalive))
 print(to_str(result))   # DECODED:name|value|42
 ```
 
-The second argument to `find_guest_contract` is the minimum version to accept;
-pass `0` for any version.
+`create(rt)` resolves the contract from the runtime — it finds the host pointer
+and contract handle internally — and returns `None` when no provider is loaded.
+Pass `min_version=` to require a minimum contract version (the default `0`
+accepts any).
 
 Python bundles do not hot-reload — see [Reload limitations](../RELOAD_LIMITATIONS.md).
 

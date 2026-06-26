@@ -87,7 +87,6 @@ from host.contracts import HostLogger  # noqa: E402
 from host.interface_factories import create_host_logger_interface  # noqa: E402
 from host.types import LogLevel  # noqa: E402
 from host.callers import (  # noqa: E402
-    DATA_REPORTER_CONTRACT_ID,
     DataReporterContractCaller,
 )
 
@@ -127,9 +126,8 @@ def main() -> None:
 
     rt.load_bundle(_REPORTER_BUNDLE)
 
-    handle = rt.find_guest_contract(DATA_REPORTER_CONTRACT_ID, 0)
-    assert handle.index != 0xFFFFFFFF, "data.Reporter contract must be registered"
-    caller = DataReporterContractCaller.create(handle, rt._ensure_host(), owner=rt)
+    caller = DataReporterContractCaller.create(rt)
+    assert caller is not None, "data.Reporter contract must be registered"
 
     report_input: str = "TRANSFORMED:NAME|value (transformed)|43"
     keepalive: list = []

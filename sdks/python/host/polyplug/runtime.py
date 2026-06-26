@@ -420,10 +420,11 @@ class Runtime:
 
     @property
     def host(self) -> int:
-        """The runtime's `HostApi` pointer, for constructing generated contract callers.
+        """The runtime's `HostApi` pointer.
 
-        Pass this as the `host` argument to a generated `*ContractCaller.create(...)`.
-        Raises `RuntimeError` if the runtime is closed.
+        Generated `*ContractCaller.create(rt)` reads this internally; exposed as a
+        low-level accessor for advanced FFI use. Raises `RuntimeError` if the
+        runtime is closed.
         """
         return self._ensure_host()
 
