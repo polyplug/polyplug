@@ -20,6 +20,11 @@ pre-commit:
     lint:
       glob: "*.rs"
       run: just lint
+    js-typecheck:
+      glob:
+        - "sdks/js/**/*.ts"
+        - "sdks/js/**/*.js"
+      run: just js-typecheck
     docs:
       glob:
         - "**/*.md"     # docs/ pages and any nested markdown

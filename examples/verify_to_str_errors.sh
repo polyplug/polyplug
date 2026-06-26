@@ -119,14 +119,14 @@ EOF
     # QuickJS guest path: force the manual _decodeUtf8 decoder (TextDecoder off)
     # and stub the host readMemory bridge so toStr exercises the validating scan.
     cat > "$TMP/tostr_guest.ts" <<EOF
-let buf = new Uint8Array([0x68, 0x69, 0xff]).buffer;
-(globalThis as Record<string, unknown>).polyplug = { readMemory: () => buf };
 (globalThis as Record<string, unknown>).TextDecoder = undefined;
 const { toStr } = await import("$ROOT/sdks/js/guest/polyplug_guest.js");
+// Bridge-threaded API (R12): toStr(bridge, sv); the bridge supplies readMemory.
+const badBridge = { readMemory: () => new Uint8Array([0x68, 0x69, 0xff]).buffer };
+const goodBridge = { readMemory: () => new Uint8Array([0x68, 0x69]).buffer };
 let inv = "NOERR";
-try { toStr({ ptr_hi: 0, ptr_lo: 1, len: 3 }); } catch (_e) { inv = "ERR"; }
-buf = new Uint8Array([0x68, 0x69]).buffer;
-console.log(inv, toStr({ ptr_hi: 0, ptr_lo: 1, len: 2 }));
+try { toStr(badBridge, { ptr_hi: 0, ptr_lo: 1, len: 3 }); } catch (_e) { inv = "ERR"; }
+console.log(inv, toStr(goodBridge, { ptr_hi: 0, ptr_lo: 1, len: 2 }));
 EOF
     OUT="$(deno run --quiet "$TMP/tostr_guest.ts" 2>/dev/null)"
     check js-quickjs-guest "$OUT"

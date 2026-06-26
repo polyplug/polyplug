@@ -535,12 +535,19 @@ gate:
     @echo ""
     @echo "✓✓✓ GATE PASSED — fmt, hygiene, SDK validator, ABI-mirror drift, lint, every SDK build, docs, full test matrix."
 
-# Full test matrix: rust workspace + every SDK host suite + C++/C# SDK + integration.
-# Stages libpolyplug for the runtime suites; assumes `just build` already produced
-# the loader cdylibs (the gate and lefthook pre-push run `build` first).
-test-all: download-native-local test-rust-all test-host-libs test-sdk-cpp test-sdk-csharp test-integration
+# Full test matrix: rust workspace + every SDK host suite + C++/C# SDK +
+# integration + cross-language helper conformance (id helpers compute identical
+# hashes everywhere; to_str errors on invalid UTF-8 everywhere). Stages
+# libpolyplug for the runtime suites.
+test-all: download-native-local test-rust-all test-host-libs test-sdk-cpp test-sdk-csharp test-integration verify-id-helpers verify-to-str-errors
     @echo ""
     @echo "=== Full Test Matrix Passed ==="
+
+# Type-check the JS SDK (host + guest + loaders). `deno run`, which the host
+# suites use, does NOT type-check — this is the only deno type gate.
+js-typecheck:
+    @echo "=== Type-checking JS SDK (deno) ==="
+    cd sdks/js && deno task check
 
 # ============================================================================
 # Linting & Formatting

@@ -181,6 +181,21 @@ jobs:
         env:
           POLYPLUG_LIB: ${{ github.workspace }}/target/debug/libpolyplug.so
           POLYPLUG_NATIVE_LIB: ${{ github.workspace }}/target/debug/libpolyplug_native.so
+      # Cross-language helper conformance: the contract/bundle-ID helpers compute
+      # byte-identical hashes in every language (else a plugin built in one
+      # language can't be resolved by a host in another), and to_str errors on
+      # invalid UTF-8 in every SDK. Pure helper tests (no native libs); each
+      # missing toolchain skips loudly. Driven through the justfile recipes so
+      # CI and `just verify-{id-helpers,to-str-errors}` can never drift.
+      - name: Cross-language helper conformance
+        if: runner.os == 'Linux'
+        run: just verify-id-helpers verify-to-str-errors
+      # Type-check the JS SDK (host + guest + loaders + abi). The deno host
+      # suites above use `deno run`, which does NOT type-check — this is the only
+      # deno type gate, mirroring `just build`'s host/guest deno checks.
+      - name: Type-check JS SDK (deno)
+        if: runner.os == 'Linux'
+        run: just js-typecheck
 
   windows:
     name: Windows (build + tests)
