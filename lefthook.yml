@@ -1,11 +1,11 @@
 # lefthook — every check is its own NAMED command, so you see exactly what runs.
-# Split by cost: fast checks gate the commit; compile-heavy checks gate the push.
 #
 # Setup once per clone:        lefthook install
-# Run a check by hand:         just fmt-check | just lint | just validate-sdks | just build | just test-all
+# Run a check by hand:         just fmt-check | just lint | just validate-sdks | just test-all
 # Bypass in a REAL emergency:  LEFTHOOK=0 git push
 
-# Fast — run on every commit (seconds).
+# Every commit: format, import hygiene, SDK consistency, and clippy. clippy IS
+# the compile check (cargo check under the hood), so there is no separate build.
 pre-commit:
   parallel: true
   commands:
@@ -16,20 +16,15 @@ pre-commit:
       run: just verify-no-fq-paths
     sdk-validator:
       run: just validate-sdks
-
-# Compile-heavy — run before code leaves the machine. piped: run in order,
-# stop at the first failure (no point building if clippy fails, etc.).
-pre-push:
-  piped: true
-  commands:
     lint:
-      priority: 1
+      glob: "*.rs"
       run: just lint
-    build:
-      priority: 2
-      run: just build
+
+# Before code leaves the machine: the full test matrix. The code is already
+# compiled (clippy at commit time + cargo test here), so no separate build step.
+pre-push:
+  commands:
     tests:
-      priority: 3
       run: just test-all
 
 commit-msg:
