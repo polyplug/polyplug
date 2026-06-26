@@ -21,7 +21,10 @@ pre-commit:
       glob: "*.rs"
       run: just lint
     docs:
-      glob: "**/*.md"
+      glob:
+        - "**/*.md"     # docs/ pages and any nested markdown
+        - "*.md"        # root files the book {{#include}}s (e.g. SECURITY.md)
+        - "book.toml"
       run: just docs-check
     abi-mirrors:
       glob:
