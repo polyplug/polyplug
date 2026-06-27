@@ -2,7 +2,7 @@
 
 **A blazing-fast, zero-overhead, cross-language, cross-platform plugin runtime — load real plugins written in any of six languages (Rust, C++, C#, Python, Lua, JavaScript) through a frozen C ABI.**
 
-You build both sides of an extensible application — the host app and its plugins — in any of the six languages, in any combination, talking over a frozen C ABI with near-native dispatch (~2.4 ns/call for native languages). A Rust host can load a Python plugin; a Bun host can load a C++ plugin; any host language pairs with any guest language — a full 6×6 matrix. Plugins run as real native code or real language runtimes (CPython, the .NET CLR, LuaJIT, QuickJS) — not compiled to WebAssembly — so you keep zero-copy data sharing and language-native behavior at native speed.
+You build both sides of an extensible application — the host app and its plugins — in any of the six languages, in any combination, talking over a frozen C ABI with near-native dispatch — a native call is one guard load, one pointer dereference, and one indirect call, ~2.4 ns/call ([anatomy](docs/PERFORMANCE.md#anatomy-of-a-native-dispatch--the-three-operations)). A Rust host can load a Python plugin; a Bun host can load a C++ plugin; any host language pairs with any guest language — a full 6×6 matrix. Plugins run as real native code or real language runtimes (CPython, the .NET CLR, LuaJIT, QuickJS) — not compiled to WebAssembly — so you keep zero-copy data sharing and language-native behavior at native speed.
 
 ![one plugin call, end to end — by plugin language](docs/assets/benches/hero.svg)
 

@@ -42,6 +42,46 @@ unloaded is undefined behaviour — the host must quiesce (no thread calling int
 holding a pointer into the bundle) before unloading it. To observe a *new* version
 after a hot-reload, re-`find_guest_contract` + re-`resolve_guest_contract`.
 
+### Anatomy of a native dispatch — the three operations
+
+Once the interface pointer is cached, a native call is **three machine operations**,
+and that is the whole of polyplug's per-call cost (~2.4 ns measured):
+
+1. **One guard load.** An acquire-ordered atomic load of the runtime's **registry
+   revision counter** — a single `u64` the runtime bumps on every load, reload, and
+   unload — read through a pointer the caller fetched once via `HostApi.revision_counter`,
+   then compared against the revision captured when the interface was resolved. If it
+   is unchanged (the overwhelmingly common case) the cached interface pointer is still
+   valid and the call proceeds; if it changed, the caller re-resolves the interface and
+   rebuilds its instance *before* dispatching. On x86-64 an acquire load is a plain
+   `mov` (no fence); on AArch64 a `ldar`. Cost: a fraction of a nanosecond.
+2. **One pointer dereference.** Read the function pointer out of the cached
+   `*const GuestContractInterface`'s `functions[fn_id]` table.
+3. **One indirect call.** Call through that function pointer —
+   `fn_ptr(instance, args, out, …)`.
+
+#### What the guard load buys, and whether it can go away
+
+The guard load is the price of caching a raw interface pointer **safely** across
+hot-reload and unload. Without it, a cached pointer used after the owning bundle was
+reloaded or unloaded would dangle — documented undefined behaviour. The guard turns
+that into a checked, lock-free re-resolve.
+
+It is already the cheapest *correct* mechanism: the only alternatives — pinning a
+crossbeam-epoch guard on every call, or taking a lock — cost **more**, not less. So
+removing the guard does not make dispatch faster; it makes it unsound. Two cases where
+it costs effectively nothing anyway:
+
+- **Reload and unload statically disabled.** When neither can happen, the interface
+  pointer can never move for the runtime's lifetime, so the guard is provably
+  unnecessary and could be elided entirely. It is a real but *sub-nanosecond*
+  optimization, intentionally not taken today — the path is already a thin tower (see
+  [Profiling](PROFILING.md)) and a branch on "is this runtime frozen" is not worth the
+  complexity until a workload proves it.
+- **Host supplies no counter.** If `HostApi.revision_counter` returns null, the caller
+  treats the revision as always-unchanged — the guard short-circuits to nothing. A host
+  that opts out of reload safety pays zero for it.
+
 ### Two boundaries, two charts
 
 A complete user-facing call crosses **two** ABI boundaries, and they are measured

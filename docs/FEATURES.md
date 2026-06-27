@@ -454,7 +454,7 @@ free, and every number below is measured, not asserted.
 
 - **Native path is near-zero overhead:** the hot path is one guard load, one
   pointer dereference, and one indirect call (~2.4 ns for a trivial native
-  dispatch, measured). VM loaders add bounded overhead (~8 ns .NET, ~34 ns Lua,
+  dispatch, measured — see [Anatomy of a native dispatch](./PERFORMANCE.md#anatomy-of-a-native-dispatch--the-three-operations)). VM loaders add bounded overhead (~8 ns .NET, ~34 ns Lua,
   ~98 ns QuickJS; Python ~62 ns, dominated by GIL acquisition).
 - **The Call Arena** removes the per-value `host->alloc` round trip from VM return
   paths (see §3), turning steady-state string returns into a pointer increment.

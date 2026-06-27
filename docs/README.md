@@ -3,8 +3,9 @@
 **A blazing-fast, zero-overhead, cross-language, cross-platform plugin runtime — write both your app *and* its plugins in any of six languages (Rust, C++, C#, Python, Lua, JavaScript), over a frozen C ABI.**
 
 A Rust host can load a Python plugin; a Bun/JavaScript host can load a C++ plugin — any
-host language pairs with any guest language, over a frozen C ABI with near-native dispatch
-([~2.4 ns/call for native languages](PERFORMANCE.md)). Plugins run as real native code or
+host language pairs with any guest language, over a frozen C ABI with near-native dispatch —
+a native call is one guard load, one pointer dereference, and one indirect call, ~2.4 ns
+([anatomy](PERFORMANCE.md#anatomy-of-a-native-dispatch--the-three-operations)). Plugins run as real native code or
 real language runtimes (CPython, the .NET CLR, LuaJIT, QuickJS), not WebAssembly — see
 [Architecture](ARCHITECTURE.md). The `polyplugc` CLI generates the typed glue for each
 language from a small `.toml` contract.
