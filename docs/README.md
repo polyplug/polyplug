@@ -1,6 +1,6 @@
 # polyplug
 
-**A fast, cross-language, cross-platform plugin runtime — write both your app *and* its plugins in any of six languages (Rust, C++, C#, Python, Lua, JavaScript).**
+**A blazing-fast, zero-overhead, cross-language, cross-platform plugin runtime — write both your app *and* its plugins in any of six languages (Rust, C++, C#, Python, Lua, JavaScript), over a frozen C ABI.**
 
 A Rust host can load a Python plugin; a Bun/JavaScript host can load a C++ plugin — any
 host language pairs with any guest language, over a frozen C ABI with near-native dispatch
@@ -18,7 +18,7 @@ per-language **Host** and **Guest** guides in the Languages section.
 > One plugin call, end to end — **lower is better**, log scale. Measured locally from live
 > benchmark runs; see [Performance](PERFORMANCE.md#how-to-read-these-charts).
 
-## Built for *trusted* plugins — vet the author, not the sandbox
+## No sandbox, by design — vet the author, not the runtime
 
 | | **polyplug** (native C ABI) | **WASM runtimes** (Extism, Wasmtime) |
 |---|---|---|

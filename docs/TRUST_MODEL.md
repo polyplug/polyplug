@@ -4,7 +4,7 @@ To *report* a vulnerability privately, see [`SECURITY.md`](../SECURITY.md); the 
 
 ## 1. Overview
 
-The polyplug trust model governs how independent plugin bundles interact within a shared process space. Unlike OS-level process isolation, polyplug operates within a single address space, prioritizing performance and architectural integrity over hostile-actor sandboxing.
+The polyplug trust model governs how independent plugin bundles interact within a shared process space. polyplug operates within a single address space with **no sandbox, by design** — a deliberate trade that prioritizes zero-overhead, native-speed dispatch over hostile-actor isolation. Trust is established once at load time (vet the author, verify the signature), never re-checked on the per-call hot path.
 
 ### Design Philosophy
 The model is built on three pillars: **Bundle Identity**, **Declared Dependencies**, and a strictly defined **Enforcement Window**. Our design philosophy favors a "catch-at-load-time" approach. By verifying the dependency graph during the initialization phase, we eliminate the need for expensive per-call authorization checks in the runtime hot path. If a dependency exists and was declared, the call proceeds at the speed of a raw function pointer dereference.

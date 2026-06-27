@@ -5,7 +5,7 @@ GuestContractInterface, arena, epoch, revision counter, and the rest).
 
 ## Hot path call flow
 
-polyplug is built for **zero-overhead hot path calls**. The architecture ensures:
+polyplug is **blazing-fast by construction** — built for **zero-overhead, native-speed hot path calls**. The architecture ensures:
 
 1. **Resolve once** - Find the contract handle, then resolve it to an interface pointer
 2. **Cache the pointer** - The resolved `*const GuestContractInterface` stays valid while the bundle is loaded

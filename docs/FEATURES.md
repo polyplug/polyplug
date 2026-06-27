@@ -449,6 +449,9 @@ Full spec — digest algorithm, `bundle.sig`/key file formats, and threat model:
 
 ## 12. Performance posture
 
+polyplug is **blazing-fast where it counts** — the native hot path is effectively
+free, and every number below is measured, not asserted.
+
 - **Native path is near-zero overhead:** the hot path is one guard load, one
   pointer dereference, and one indirect call (~2.4 ns for a trivial native
   dispatch, measured). VM loaders add bounded overhead (~8 ns .NET, ~34 ns Lua,

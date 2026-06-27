@@ -1,6 +1,6 @@
 # polyplug
 
-**A native-speed runtime that loads trusted, first-party plugins written in any of six languages — Rust, C++, C#, Python, Lua, JavaScript — through a frozen C ABI.**
+**A blazing-fast, zero-overhead, cross-language, cross-platform plugin runtime — load real plugins written in any of six languages (Rust, C++, C#, Python, Lua, JavaScript) through a frozen C ABI.**
 
 You build both sides of an extensible application — the host app and its plugins — in any of the six languages, in any combination, talking over a frozen C ABI with near-native dispatch (~2.4 ns/call for native languages). A Rust host can load a Python plugin; a Bun host can load a C++ plugin; any host language pairs with any guest language — a full 6×6 matrix. Plugins run as real native code or real language runtimes (CPython, the .NET CLR, LuaJIT, QuickJS) — not compiled to WebAssembly — so you keep zero-copy data sharing and language-native behavior at native speed.
 
@@ -8,11 +8,11 @@ You build both sides of an extensible application — the host app and its plugi
 
 > One plugin call, end to end — **lower is better**, log scale. Measured locally from live benchmark runs; see [Performance](docs/PERFORMANCE.md#how-to-read-these-charts) for how to read these charts.
 
-## Built for trusted plugins — vet the author, not the sandbox
+## No sandbox, by design — vet the author, not the runtime
 
-polyplug is for plugins you write or vet: first-party features, partner integrations, a vetted-author ecosystem. Because those plugins are trusted and run in-process with no sandbox, a call into a plugin is a direct function-pointer dispatch with zero-copy data sharing — not a marshalled hop across an isolation boundary. That is where the native speed comes from. It is the same trust model the most successful native extension ecosystems use (e.g. VS Code extensions): vet the author, not the sandbox.
+polyplug runs plugins **in-process, with no isolation boundary — a deliberate trade.** That single choice is what turns a plugin call into a direct function-pointer dispatch with zero-copy data sharing, instead of a marshalled hop across a sandbox — and it is where the speed comes from. So trust is established when you *load* a bundle (you vetted the author; a signature proves the bytes weren't tampered with), not re-checked on every call. It is the same model the most successful native-extension ecosystems use — e.g. VS Code extensions: vet the author, not the sandbox.
 
-If you must run untrusted third-party code, use a WebAssembly runtime (Extism, Wasmtime) instead — and we'll happily tell you so. The full threat model is in the [Trust Model](docs/TRUST_MODEL.md).
+Today, if you need to run arbitrary untrusted code, reach for a WebAssembly runtime (Extism, Wasmtime) — and we'll say so plainly. The full threat model is in the [Trust Model](docs/TRUST_MODEL.md).
 
 ## What polyplug guarantees
 
@@ -21,7 +21,7 @@ Within the trusted, in-process boundary, polyplug still makes hard guarantees:
 - **ABI compatibility is checked at load** — a bundle whose contract version doesn't match is rejected with a clear error, never silent UB.
 - **The runtime's create/destroy path is crash-isolated** — a bug in polyplug's two C ABI exports surfaces as a null/no-op plus a recorded error, never a host abort.
 - **Lock-free reads and safe true-unload** — contract resolution serves from an epoch-published snapshot; unloading reclaims the interface and the backing library/VM once no reader is still pinned (model-checked with [loom](https://docs.rs/loom)).
-- **Bundle signing and verification** — a bundle can carry a detached Ed25519 signature over a canonical digest of every file it contains, with a host-chosen `SignaturePolicy` from TOFU integrity up to pinned-key authenticity.
+- **Bundle identity and integrity** — a bundle can carry a detached Ed25519 signature over a canonical digest of every file it contains, with a host-chosen `SignaturePolicy` from TOFU integrity up to pinned-key authenticity. This proves *who* authored a bundle and that it wasn't tampered with — it is identity, not isolation.
 
 ## Six languages, host and guest
 
