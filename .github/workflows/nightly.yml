@@ -115,6 +115,9 @@ jobs:
           dispatch::stress_direct_swap_under_concurrent_reader_load
         env:
           RUSTFLAGS: -Zsanitizer=thread
+          # crossbeam-epoch's membarrier-based epoch advance is invisible to TSAN,
+          # producing false races on crossbeam's own GC reclamation. See checks/tsan.supp.
+          TSAN_OPTIONS: suppressions=${{ github.workspace }}/checks/tsan.supp
 
   loom:
     name: Loom (epoch publish/reclaim model)

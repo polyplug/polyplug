@@ -1,0 +1,12 @@
+# ThreadSanitizer suppressions for the concurrency suite.
+#
+# crossbeam-epoch's epoch-advance (Global::try_advance) synchronizes via an
+# asymmetric membarrier fence that ThreadSanitizer does not model as a
+# happens-before edge. Under -Zbuild-std (crossbeam fully instrumented) this
+# yields false-positive data-race reports on crossbeam's OWN garbage-collection
+# reclamation: the deferred free of an internal Local handle or SealedBag queue
+# node racing a concurrent Global::collect/try_advance read. Every flagged
+# address belongs to crossbeam's GC structures, never to polyplug memory, so
+# polyplug's epoch-protected read path is unaffected. Matches crossbeam's own
+# upstream ci/tsan suppression.
+race:crossbeam_epoch
