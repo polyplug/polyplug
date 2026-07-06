@@ -27,7 +27,10 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use langprint::backends::cpp_backend::{CppBackend, CppFunction, CppParameter, CppVisibility};
+use langprint::renderers::FunctionRenderer;
 use polyplug_codegen::PolyplugcError;
+use std::io;
 
 /// The C++ code generator.
 pub(crate) struct CppGenerator;
@@ -102,7 +105,7 @@ impl CodeGenerator for CppGenerator {
         });
 
         // ── File 2: contracts.hpp ────────────────────────────────────────────
-        let contracts_hpp: String = generate_contracts_hpp(ir);
+        let contracts_hpp: String = generate_contracts_hpp(ir)?;
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/contracts.hpp"),
             content: contracts_hpp,
@@ -198,7 +201,7 @@ fn generate_types_hpp(ir: &ValidatedIr) -> String {
 
 // ─── contracts.hpp generator ─────────────────────────────────────────────────
 
-fn generate_contracts_hpp(ir: &ValidatedIr) -> String {
+fn generate_contracts_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CPP_FILE_HEADER);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
@@ -209,14 +212,17 @@ fn generate_contracts_hpp(ir: &ValidatedIr) -> String {
     out.push_str("struct RuntimeError { uint32_t code; };\n\n");
 
     for contract in &ir.contracts {
-        generate_cpp_guest_contract_class(&mut out, contract);
+        generate_cpp_guest_contract_class(&mut out, contract)?;
     }
 
     out.push_str("}  // namespace polyplug_plugin\n");
-    out
+    Ok(out)
 }
 
-fn generate_cpp_guest_contract_class(out: &mut String, contract: &ResolvedContract) {
+fn generate_cpp_guest_contract_class(
+    out: &mut String,
+    contract: &ResolvedContract,
+) -> Result<(), PolyplugcError> {
     let class_name: String = contract_name_to_guest_contract_class(&contract.name);
     out.push_str(&format!(
         "/// Abstract plugin base for contract `{}` (id=0x{:016X})\n",
@@ -226,38 +232,71 @@ fn generate_cpp_guest_contract_class(out: &mut String, contract: &ResolvedContra
     out.push_str(&format!("    virtual ~{}() = default;\n", class_name));
 
     for func in &contract.functions {
-        generate_cpp_guest_abstract_method(out, func);
+        out.push_str(&cpp_render_abstract_method(func)?);
     }
 
     out.push_str("};\n\n");
+    Ok(())
 }
 
-fn generate_cpp_guest_abstract_method(out: &mut String, func: &ResolvedFunction) {
+/// Render one pure-virtual guest-contract method via langprint (declaration-mode
+/// `CppFunction`). Preserves polyplugc's parameter rule: a user-defined param is
+/// taken by `const T&`, primitives/ABI types by value.
+fn cpp_render_abstract_method(func: &ResolvedFunction) -> Result<String, PolyplugcError> {
     let return_type: String = func
         .returns
         .as_ref()
         .map(cpp_type_name)
         .unwrap_or_else(|| "void".to_owned());
 
-    let params: Vec<String> = func
+    let parameters: Vec<CppParameter> = func
         .params
         .iter()
-        .map(|p| {
+        .map(|p: &ResolvedParam| {
             let cpp_ty: String = cpp_type_name(&p.ty);
-            match &p.ty {
-                ResolvedTypeRef::UserDefined(_) => format!("const {}& {}", cpp_ty, p.name),
-                ResolvedTypeRef::Primitive(_) | ResolvedTypeRef::AbiType(_) => {
-                    format!("{} {}", cpp_ty, p.name)
-                }
+            let param_type: String = match &p.ty {
+                ResolvedTypeRef::UserDefined(_) => format!("const {}&", cpp_ty),
+                ResolvedTypeRef::Primitive(_) | ResolvedTypeRef::AbiType(_) => cpp_ty,
+            };
+            CppParameter {
+                name: p.name.clone(),
+                param_type,
+                default_value: None,
             }
         })
-        .collect();
-    let params_str: String = params.join(", ");
+        .collect::<Vec<CppParameter>>();
 
-    out.push_str(&format!(
-        "    virtual {} {}({}) = 0;\n",
-        return_type, func.name, params_str
-    ));
+    let method: CppFunction = CppFunction {
+        name: func.name.clone(),
+        parent_name: None,
+        visibility: CppVisibility::Public,
+        parameters,
+        template_params: Vec::new(),
+        return_type: Some(return_type),
+        is_static: false,
+        is_const: false,
+        is_virtual: true,
+        is_pure_virtual: true,
+        is_inline: false,
+        is_noexcept: false,
+        is_override: false,
+        is_final: false,
+        is_extern_c: false,
+        is_friend: false,
+        is_deleted: false,
+        is_default: false,
+        body: None,
+        docs: None,
+    };
+    let backend: CppBackend = CppBackend::default();
+    let mut indent_level: i32 = 1;
+    let rendered: String = backend
+        .render_function(&method, None::<&str>, None::<&str>, None, &mut indent_level)
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/contracts.hpp".to_owned(),
+            source,
+        })?;
+    Ok(format!("{rendered}\n"))
 }
 
 // ─── interfaces.hpp generator ───────────────────────────────────────────────────
