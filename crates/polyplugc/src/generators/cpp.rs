@@ -27,7 +27,10 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
-use langprint::backends::cpp_backend::{CppBackend, CppFunction, CppParameter, CppVisibility};
+use langprint::backends::cpp_backend::{
+    CppBackend, CppEnum, CppEnumVariant, CppFunction, CppParameter, CppVisibility, DocsStyle,
+};
+use langprint::renderers::EnumRenderer;
 use langprint::renderers::FunctionRenderer;
 use polyplug_codegen::PolyplugcError;
 use std::io;
@@ -45,7 +48,7 @@ impl CodeGenerator for CppGenerator {
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
         // ── File 1: types.hpp ────────────────────────────────────────────────
-        let types_hpp: String = generate_types_hpp(ir);
+        let types_hpp: String = generate_types_hpp(ir)?;
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/types.hpp"),
             content: types_hpp,
@@ -97,7 +100,7 @@ impl CodeGenerator for CppGenerator {
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
         // ── File 1: types.hpp ────────────────────────────────────────────────
-        let types_hpp: String = generate_types_hpp(ir);
+        let types_hpp: String = generate_types_hpp(ir)?;
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/types.hpp"),
             content: types_hpp,
@@ -167,7 +170,7 @@ impl CodeGenerator for CppGenerator {
 
 // ─── types.hpp generator ─────────────────────────────────────────────────────
 
-fn generate_types_hpp(ir: &ValidatedIr) -> String {
+fn generate_types_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CPP_FILE_HEADER);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
@@ -188,7 +191,7 @@ fn generate_types_hpp(ir: &ValidatedIr) -> String {
 
     // Emit enums before struct types
     for e in &ir.enums {
-        generate_cpp_enum(&mut out, e);
+        generate_cpp_enum(&mut out, e)?;
     }
 
     for ty in &ir.types {
@@ -196,7 +199,7 @@ fn generate_types_hpp(ir: &ValidatedIr) -> String {
     }
 
     out.push_str("}  // namespace polyplug_generated\n");
-    out
+    Ok(out)
 }
 
 // ─── contracts.hpp generator ─────────────────────────────────────────────────
@@ -1068,16 +1071,12 @@ fn substitute_variant_refs_cpp(
     result
 }
 
-fn generate_cpp_enum(out: &mut String, e: &EnumDef) {
+fn generate_cpp_enum(out: &mut String, e: &EnumDef) -> Result<(), PolyplugcError> {
     let repr_cpp: &str = e.repr.cpp_name();
-    out.push_str(&format!("/// Enum `{}` (repr: {})\n", e.name, repr_cpp));
-    out.push_str(&format!("enum class {} : {} {{\n", e.name, repr_cpp));
-    for variant in &e.variants {
-        let subst_value: String =
-            substitute_variant_refs_cpp(&e.variants, &variant.value, &e.name, repr_cpp);
-        out.push_str(&format!("    {} = {},\n", variant.name, subst_value));
-    }
-    out.push_str("};\n");
+    // The `enum class Name : underlying { … };` declaration is FORM — langprint
+    // renders it. The bitflag operator overloads below stay hand-emitted (they are
+    // free functions, not part of the enum).
+    out.push_str(&render_cpp_enum_decl(e, repr_cpp)?);
     if e.bitflag {
         out.push_str(&format!(
             "inline {} operator|({}  a, {} b) {{ return static_cast<{}>(static_cast<{}>(a) | static_cast<{}>(b)); }}\n",
@@ -1093,6 +1092,51 @@ fn generate_cpp_enum(out: &mut String, e: &EnumDef) {
         ));
     }
     out.push('\n');
+    Ok(())
+}
+
+/// Render the `enum class Name : underlying { … };` declaration via langprint's
+/// C++ EnumRenderer (TripleSlash docs for `///`, variants unaligned). No C++
+/// formatter, so langprint emits the exact bytes.
+fn render_cpp_enum_decl(e: &EnumDef, repr_cpp: &str) -> Result<String, PolyplugcError> {
+    let variants: Vec<CppEnumVariant> = e
+        .variants
+        .iter()
+        .map(|variant: &EnumVariant| CppEnumVariant {
+            name: variant.name.clone(),
+            value: Some(substitute_variant_refs_cpp(
+                &e.variants,
+                &variant.value,
+                &e.name,
+                repr_cpp,
+            )),
+            docs: None,
+        })
+        .collect::<Vec<CppEnumVariant>>();
+    let cpp_enum: CppEnum = CppEnum {
+        name: e.name.clone(),
+        variants,
+        is_enum_class: true,
+        underlying_type: Some(repr_cpp.to_owned()),
+        docs: Some(vec![format!("Enum `{}` (repr: {})", e.name, repr_cpp)]),
+    };
+    let backend: CppBackend = CppBackend {
+        docs_style: DocsStyle::TripleSlash,
+        ..CppBackend::default()
+    };
+    let mut indent_level: i32 = 0;
+    backend
+        .render_enum(
+            &cpp_enum,
+            None::<&str>,
+            None::<&str>,
+            None,
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/types.hpp".to_owned(),
+            source,
+        })
 }
 
 // ─── Per-type struct emitter ──────────────────────────────────────────────────
@@ -3553,7 +3597,7 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_cpp_enum(&mut out, &e);
+        generate_cpp_enum(&mut out, &e).expect("render enum");
         assert!(
             out.contains("enum class PixelFormat : uint32_t"),
             "missing enum class: {out}"
@@ -3586,7 +3630,7 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_cpp_enum(&mut out, &e);
+        generate_cpp_enum(&mut out, &e).expect("render enum");
         assert!(
             out.contains("enum class ImageFlags : uint32_t"),
             "missing enum class: {out}"

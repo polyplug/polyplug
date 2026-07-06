@@ -13,7 +13,7 @@ constexpr uint64_t DATA_REPORTER_CONTRACT_ID = 0x76BB4643A9F5AD68;
 constexpr uint64_t PIPELINE_VALIDATOR_CONTRACT_ID = 0x45173A959EEC57C5;
 
 /// Enum `LogLevel` (repr: uint32_t)
-enum class LogLevel : uint32_t {
+enum class LogLevel: uint32_t {
     Debug = 0,
     Info = 1,
     Warn = 2,
