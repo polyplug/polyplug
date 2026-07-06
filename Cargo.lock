@@ -1217,6 +1217,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "langprint"
+version = "0.2.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1808,6 +1815,7 @@ version = "0.1.2"
 dependencies = [
  "clap",
  "ed25519-dalek",
+ "langprint",
  "libloading",
  "polyplug",
  "polyplug_abi",

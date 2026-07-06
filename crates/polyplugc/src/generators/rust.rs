@@ -28,7 +28,11 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use langprint::backends::rust_backend::{
+    RustBackend, RustFunction, RustParameter, RustSelfKind, RustTrait, RustVisibility,
+};
 use polyplug_codegen::PolyplugcError;
+use std::io;
 
 /// The Rust code generator.
 pub(crate) struct RustGenerator;
@@ -295,7 +299,7 @@ impl CodeGenerator for RustGenerator {
         contracts_out.push_str("use super::types::*;\n\n");
 
         for contract in &ir.contracts {
-            generate_guest_contract_trait(&mut contracts_out, contract);
+            generate_guest_contract_trait(&mut contracts_out, contract)?;
         }
 
         files.files.push(GeneratedFile {
@@ -476,54 +480,84 @@ fn generate_bundle_manifest(ir: &ValidatedIr) -> String {
 
 // ─── Guest code generation helpers ────────────────────────────────────────────────
 
-/// Generate the guest trait for one contract.
-fn generate_guest_contract_trait(out: &mut String, contract: &ResolvedContract) {
-    let trait_name: String = contract_name_to_guest_trait(&contract.name);
-    out.push_str(&format!(
-        "/// Guest trait for contract `{}` (id=0x{:016X})\n",
-        contract.name, contract.contract_id
-    ));
-    out.push_str(&format!("pub trait {trait_name}: Send + Sync {{\n"));
-    for func in &contract.functions {
-        generate_guest_trait_method(out, func, &contract_name_to_struct(&contract.name));
-    }
-    out.push_str("}\n\n");
+/// Guest trait for one contract — structure (trait + method signatures) rendered by langprint FORM;
+/// the type/name strings remain polyplugc's, so the output is byte-identical to the former emission.
+fn generate_guest_contract_trait(
+    out: &mut String,
+    contract: &ResolvedContract,
+) -> Result<(), PolyplugcError> {
+    let methods: Vec<RustFunction> = contract
+        .functions
+        .iter()
+        .map(guest_trait_method_form)
+        .collect();
+    let trait_def: RustTrait = RustTrait {
+        name: contract_name_to_guest_trait(&contract.name),
+        visibility: RustVisibility::Pub,
+        generic_args: Vec::new(),
+        supertraits: vec!["Send".to_owned(), "Sync".to_owned()],
+        methods,
+        attributes: Vec::new(),
+        docs: Some(vec![format!(
+            "Guest trait for contract `{}` (id=0x{:016X})",
+            contract.name, contract.contract_id
+        )]),
+    };
+    let backend: RustBackend = RustBackend::default();
+    let mut indent_level: i32 = 0;
+    let rendered: String = backend
+        .render_trait(&trait_def, None, &mut indent_level)
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/contracts.rs".to_owned(),
+            source,
+        })?;
+    out.push_str(&rendered);
+    out.push('\n');
+    Ok(())
 }
 
-/// Emit one trait method line into the contracts.rs trait.
-fn generate_guest_trait_method(out: &mut String, func: &ResolvedFunction, contract_struct: &str) {
+/// Bodyless `RustFunction` FORM for one guest-trait method (`&self` + params → `Result<T, GuestError>`).
+/// Preserves the former parameter rule exactly: a lone user-defined param is taken by `&`, else by value.
+fn guest_trait_method_form(func: &ResolvedFunction) -> RustFunction {
     let ret_type: String = match &func.returns {
         Some(ty) => rust_type_name(ty),
         None => "()".to_owned(),
     };
-    let sig_params: String = build_guest_trait_params(func, contract_struct);
-    out.push_str(&format!(
-        "    fn {}(&self{}) -> Result<{ret_type}, GuestError>;\n",
-        func.name, sig_params
-    ));
-}
-
-/// Build the trait method parameter list (after `&self`).
-fn build_guest_trait_params(func: &ResolvedFunction, contract_struct: &str) -> String {
-    if func.params.is_empty() {
-        return String::new();
-    }
-    if func.params.len() == 1 {
+    let parameters: Vec<RustParameter> = if func.params.len() == 1 {
         let param: &ResolvedParam = &func.params[0];
-        return match &param.ty {
-            ResolvedTypeRef::UserDefined(_) => {
-                format!(", {}: &{}", param.name, rust_type_name(&param.ty))
-            }
-            _ => format!(", {}: {}", param.name, rust_type_name(&param.ty)),
+        let param_type: String = match &param.ty {
+            ResolvedTypeRef::UserDefined(_) => format!("&{}", rust_type_name(&param.ty)),
+            _ => rust_type_name(&param.ty),
         };
+        vec![RustParameter {
+            name: param.name.clone(),
+            param_type,
+        }]
+    } else {
+        func.params
+            .iter()
+            .map(|p: &ResolvedParam| RustParameter {
+                name: p.name.clone(),
+                param_type: rust_type_name(&p.ty),
+            })
+            .collect()
+    };
+    RustFunction {
+        name: func.name.clone(),
+        visibility: RustVisibility::Private,
+        self_kind: RustSelfKind::Ref,
+        parameters,
+        generic_args: Vec::new(),
+        return_type: Some(format!("Result<{ret_type}, GuestError>")),
+        is_unsafe: false,
+        is_async: false,
+        is_const: false,
+        abi: None,
+        body: None,
+        attributes: Vec::new(),
+        docs: None,
+        comments: Vec::new(),
     }
-    // Multiple primitive params — individual args
-    let _ = contract_struct;
-    func.params
-        .iter()
-        .map(|p: &ResolvedParam| format!(", {}: {}", p.name, rust_type_name(&p.ty)))
-        .collect::<Vec<_>>()
-        .join("")
 }
 
 /// Convert contract name to guest trait name, e.g. "test.add" -> "TestAddGuestContract".
