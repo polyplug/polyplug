@@ -21,9 +21,10 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use langprint::backends::csharp_backend::{
-    CSharpBackend, CSharpMethod, CSharpParameter, CSharpVisibility,
+    CSharpBackend, CSharpEnum, CSharpEnumMember, CSharpField, CSharpMethod, CSharpParameter,
+    CSharpType, CSharpTypeKind, CSharpVisibility,
 };
-use langprint::renderers::FunctionRenderer;
+use langprint::renderers::{EnumRenderer, FunctionRenderer, StructRenderer};
 use polyplug_codegen::PolyplugcError;
 use polyplug_codegen::ResolvedBundleFile;
 use std::io;
@@ -61,33 +62,118 @@ fn cs_type_name(ty: &ResolvedTypeRef) -> String {
     }
 }
 
-/// Emit a C# struct definition for a user-defined IR type.
-fn generate_cs_user_type(ty: &ResolvedType) -> String {
-    let mut out: String = String::new();
-    out.push_str("[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]\n");
-    out.push_str(&format!("public struct {} {{\n", ty.name));
-    for field in &ty.fields {
-        let cs_ty: String = cs_type_name(&field.ty);
-        out.push_str(&format!("    public {} {};\n", cs_ty, field.name));
+/// The langprint C# backend configured to match polyplugc's golden output:
+/// 4-space indent, LF newlines, and K&R braces (opening `{` hugs the header
+/// line, not Allman). FORM (declarations, signatures, field layout) is emitted
+/// through this backend; polyplugc keeps only the bodies/logic.
+fn cs_backend() -> CSharpBackend {
+    CSharpBackend {
+        open_brace_on_new_line: false,
+        ..CSharpBackend::default()
     }
-    out.push_str("}\n");
-    out
+}
+
+/// Map a langprint render `io::Error` to a `PolyplugcError` for `Types.cs`.
+fn cs_types_write_err(source: io::Error) -> PolyplugcError {
+    PolyplugcError::WriteFailed {
+        path: "Types.cs".to_owned(),
+        source,
+    }
+}
+
+/// Render a `[StructLayout(Sequential)]` POD struct (user-defined type or
+/// arg-pack) as C# FORM via langprint. Both `Types.cs` structs are plain
+/// blittable field bags, so they share one emitter.
+fn render_cs_pod_struct(
+    name: String,
+    fields: Vec<(String, String)>,
+) -> Result<String, PolyplugcError> {
+    let cs_struct: CSharpType = CSharpType {
+        kind: CSharpTypeKind::Struct,
+        name,
+        visibility: CSharpVisibility::Public,
+        is_abstract: false,
+        is_sealed: false,
+        is_static: false,
+        is_unsafe: false,
+        is_partial: false,
+        generic_args: Vec::new(),
+        base_class: None,
+        interfaces: Vec::new(),
+        fields: fields
+            .into_iter()
+            .map(|(field_type, field_name)| CSharpField {
+                name: field_name,
+                field_type,
+                visibility: CSharpVisibility::Public,
+                is_static: false,
+                is_const: false,
+                is_readonly: false,
+                initializer: None,
+                attributes: Vec::new(),
+                docs: None,
+            })
+            .collect(),
+        properties: Vec::new(),
+        methods: Vec::new(),
+        attributes: vec![
+            "System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)"
+                .to_owned(),
+        ],
+        docs: None,
+    };
+    let mut indent_level: i32 = 0;
+    cs_backend()
+        .render_struct(
+            &cs_struct,
+            None::<&str>,
+            None::<&str>,
+            None,
+            &mut indent_level,
+        )
+        .map_err(cs_types_write_err)
+}
+
+/// Emit a C# struct definition for a user-defined IR type.
+fn generate_cs_user_type(ty: &ResolvedType) -> Result<String, PolyplugcError> {
+    let fields: Vec<(String, String)> = ty
+        .fields
+        .iter()
+        .map(|field| (cs_type_name(&field.ty), field.name.clone()))
+        .collect();
+    render_cs_pod_struct(ty.name.clone(), fields)
 }
 
 /// Emit a C# enum definition for a validated IR enum.
-fn generate_cs_enum(e: &EnumDef) -> String {
-    let repr_cs: &str = e.repr.cs_name();
-    let mut out: String = String::new();
-    if e.bitflag {
-        out.push_str("[Flags]\n");
-    }
-    out.push_str(&format!("public enum {} : {} {{\n", e.name, repr_cs));
-    for variant in &e.variants {
-        // C# supports integer expressions natively, emit verbatim
-        out.push_str(&format!("    {} = {},\n", variant.name, variant.value));
-    }
-    out.push_str("}\n");
-    out
+fn generate_cs_enum(e: &EnumDef) -> Result<String, PolyplugcError> {
+    let cs_enum: CSharpEnum = CSharpEnum {
+        name: e.name.clone(),
+        visibility: CSharpVisibility::Public,
+        underlying_type: Some(e.repr.cs_name().to_owned()),
+        members: e
+            .variants
+            .iter()
+            // C# supports integer expressions natively, emit the value verbatim.
+            .map(|variant| CSharpEnumMember {
+                name: variant.name.clone(),
+                value: Some(variant.value.clone()),
+                docs: None,
+            })
+            .collect(),
+        is_flags: e.bitflag,
+        attributes: Vec::new(),
+        docs: None,
+    };
+    let mut indent_level: i32 = 0;
+    cs_backend()
+        .render_enum(
+            &cs_enum,
+            None::<&str>,
+            None::<&str>,
+            None,
+            &mut indent_level,
+        )
+        .map_err(cs_types_write_err)
 }
 
 /// Returns true if the function needs an arg-pack struct (2+ parameters).
@@ -226,24 +312,17 @@ fn emit_cs_call_arena_helpers(out: &mut String) {
 }
 
 /// Emit a C# arg-pack struct for a function with 2+ primitive parameters.
-fn emit_cs_arg_pack(contract_struct: &str, func: &ResolvedFunction) -> String {
-    let mut out: String = String::new();
-    out.push_str("[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]\n");
-    out.push_str(&format!(
-        "public struct {}{}Args {{\n",
-        contract_struct,
-        pascal_case(&func.name)
-    ));
-    for param in &func.params {
-        let cs_ty: String = cs_type_name(&param.ty);
-        out.push_str(&format!(
-            "    public {} {};\n",
-            cs_ty,
-            pascal_case(&param.name)
-        ));
-    }
-    out.push_str("}\n");
-    out
+fn emit_cs_arg_pack(
+    contract_struct: &str,
+    func: &ResolvedFunction,
+) -> Result<String, PolyplugcError> {
+    let name: String = format!("{}{}Args", contract_struct, pascal_case(&func.name));
+    let fields: Vec<(String, String)> = func
+        .params
+        .iter()
+        .map(|param| (cs_type_name(&param.ty), pascal_case(&param.name)))
+        .collect();
+    render_cs_pod_struct(name, fields)
 }
 
 /// Convert a name to PascalCase (e.g. "add_primitive" → "AddPrimitive", "test.add" → "TestAdd").
@@ -285,7 +364,7 @@ fn cs_return_type(func: &ResolvedFunction) -> String {
 }
 
 /// Generate the `Types.cs` file content for guest (uses Polyplug.Guest and Polyplug.Abi).
-fn generate_cs_types_file(ir: &ValidatedIr) -> String {
+fn generate_cs_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
     out.push_str("using Polyplug.Guest;\n");
@@ -294,13 +373,13 @@ fn generate_cs_types_file(ir: &ValidatedIr) -> String {
 
     // Emit enums before struct types
     for e in &ir.enums {
-        out.push_str(&generate_cs_enum(e));
+        out.push_str(&generate_cs_enum(e)?);
         out.push('\n');
     }
 
     // Emit user-defined types
     for ty in &ir.types {
-        out.push_str(&generate_cs_user_type(ty));
+        out.push_str(&generate_cs_user_type(ty)?);
         out.push('\n');
     }
 
@@ -309,17 +388,17 @@ fn generate_cs_types_file(ir: &ValidatedIr) -> String {
         let struct_name: String = pascal_case(&contract.name) + "Contract";
         for func in &contract.functions {
             if needs_arg_pack(&func.params) {
-                out.push_str(&emit_cs_arg_pack(&struct_name, func));
+                out.push_str(&emit_cs_arg_pack(&struct_name, func)?);
                 out.push('\n');
             }
         }
     }
 
-    out
+    Ok(out)
 }
 
 /// Generate the `Types.cs` file content for host (uses Polyplug.Host namespace).
-fn generate_cs_host_types_file(ir: &ValidatedIr) -> String {
+fn generate_cs_host_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
     out.push_str("using Polyplug.Host;\n");
@@ -340,17 +419,17 @@ fn generate_cs_host_types_file(ir: &ValidatedIr) -> String {
 
     // Emit enums before struct types
     for e in &ir.enums {
-        out.push_str(&generate_cs_enum(e));
+        out.push_str(&generate_cs_enum(e)?);
         out.push('\n');
     }
 
     // Emit user-defined types
     for ty in &ir.types {
-        out.push_str(&generate_cs_user_type(ty));
+        out.push_str(&generate_cs_user_type(ty)?);
         out.push('\n');
     }
 
-    out
+    Ok(out)
 }
 
 /// Generate `guest/Contracts.cs` — guest interfaces for each contract.
@@ -2040,7 +2119,7 @@ fn emit_cs_log_call_failure_helper(out: &mut String) {
     out.push_str("}\n\n");
 }
 
-fn generate_cs_guest_host_contracts_file(ir: &ValidatedIr) -> String {
+fn generate_cs_guest_host_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
     out.push_str("using Polyplug.Guest;\n");
@@ -2056,7 +2135,7 @@ fn generate_cs_guest_host_contracts_file(ir: &ValidatedIr) -> String {
         let caller_name: String = host_contract_name_to_cs_caller(&contract.name);
         for func in &contract.functions {
             if needs_arg_pack(&func.params) {
-                out.push_str(&emit_cs_arg_pack(&caller_name, func));
+                out.push_str(&emit_cs_arg_pack(&caller_name, func)?);
                 out.push('\n');
             }
         }
@@ -2082,7 +2161,7 @@ fn generate_cs_guest_host_contracts_file(ir: &ValidatedIr) -> String {
         out.push_str("}\n\n");
     }
 
-    out
+    Ok(out)
 }
 
 /// Generate `guest/BundleConstants.cs` — bundle-level C# constants (only emitted when `ir.bundle.is_some()`).
@@ -3273,7 +3352,7 @@ impl CodeGenerator for CSharpGenerator {
     ) -> Result<(), PolyplugcError> {
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/Types.cs"),
-            content: generate_cs_host_types_file(ir),
+            content: generate_cs_host_types_file(ir)?,
             force_regenerate: false,
         });
         files.files.push(GeneratedFile {
@@ -3312,7 +3391,7 @@ impl CodeGenerator for CSharpGenerator {
     ) -> Result<(), PolyplugcError> {
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/Types.cs"),
-            content: generate_cs_types_file(ir),
+            content: generate_cs_types_file(ir)?,
             force_regenerate: false,
         });
         files.files.push(GeneratedFile {
@@ -3345,7 +3424,7 @@ impl CodeGenerator for CSharpGenerator {
         if !ir.host_contracts.is_empty() {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/HostContracts.cs"),
-                content: generate_cs_guest_host_contracts_file(ir),
+                content: generate_cs_guest_host_contracts_file(ir)?,
                 force_regenerate: false,
             });
         }
@@ -3389,7 +3468,7 @@ mod tests {
                 },
             ],
         };
-        let out: String = generate_cs_enum(&e);
+        let out: String = generate_cs_enum(&e).expect("render enum");
         assert!(
             out.contains("public enum PixelFormat : uint"),
             "missing enum def: {out}"
@@ -3418,7 +3497,7 @@ mod tests {
                 },
             ],
         };
-        let out: String = generate_cs_enum(&e);
+        let out: String = generate_cs_enum(&e).expect("render enum");
         assert!(
             out.contains("[Flags]"),
             "bitflag should have [Flags]: {out}"
@@ -3879,7 +3958,8 @@ mod tests {
             }],
             bundle: None,
         };
-        let out: String = generate_cs_guest_host_contracts_file(&ir);
+        let out: String =
+            generate_cs_guest_host_contracts_file(&ir).expect("render host contracts");
         assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
         assert!(
             out.contains("public sealed class HostLoggerContract"),
