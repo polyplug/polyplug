@@ -28,7 +28,8 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use langprint::backends::cpp_backend::{
-    CppBackend, CppEnum, CppEnumVariant, CppFunction, CppParameter, CppVisibility, DocsStyle,
+    CppBackend, CppEnum, CppEnumVariant, CppFunction, CppFunctionRenderOptions, CppParameter,
+    CppVisibility, DocsStyle,
 };
 use langprint::renderers::EnumRenderer;
 use langprint::renderers::FunctionRenderer;
@@ -369,7 +370,7 @@ fn generate_cpp_guest_plugin_interface(
         &plugin_lower,
         &class_name,
         &state_struct,
-    );
+    )?;
 
     for func in &contract.functions {
         generate_cpp_guest_abi_wrapper(out, &plugin_lower, &state_struct, func)?;
@@ -428,7 +429,7 @@ fn generate_cpp_guest_contract_interface(
         upper, contract.contract_id
     ));
 
-    emit_cpp_guest_instance_machinery(out, &upper, &lower, &class_name, &state_struct);
+    emit_cpp_guest_instance_machinery(out, &upper, &lower, &class_name, &state_struct)?;
 
     // ABI wrapper functions — one per function
     for func in &contract.functions {
@@ -480,13 +481,96 @@ fn generate_cpp_guest_contract_interface(
 /// `create_instance` call and carried — together with the HostApi pointer —
 /// in `GuestContractInstance.data`. No DSO-global storage is involved, so two
 /// runtimes loading the same plugin DSO get fully isolated instances.
+/// Render a `interfaces.hpp` free-function definition via langprint. langprint
+/// owns the signature (FORM); the caller owns every body byte (LOGIC) through
+/// `verbatim_body` — C++ has no post-hoc formatter, so exact whitespace (and
+/// even the pre-existing irregular indentation of some wrapper bodies) is baked
+/// into `body` and emitted unchanged.
+fn render_cpp_defn_fn(
+    name: String,
+    parameters: Vec<CppParameter>,
+    is_static: bool,
+    is_inline: bool,
+    docs: Vec<String>,
+    body: String,
+) -> Result<String, PolyplugcError> {
+    let func: CppFunction = CppFunction {
+        name,
+        parent_name: None,
+        visibility: CppVisibility::Default,
+        parameters,
+        template_params: Vec::new(),
+        return_type: Some("void".to_owned()),
+        is_static,
+        is_const: false,
+        is_virtual: false,
+        is_pure_virtual: false,
+        is_inline,
+        is_noexcept: true,
+        is_override: false,
+        is_final: false,
+        is_extern_c: false,
+        is_friend: false,
+        is_deleted: false,
+        is_default: false,
+        body: Some(vec![body]),
+        docs: if docs.is_empty() { None } else { Some(docs) },
+    };
+    let options: CppFunctionRenderOptions = CppFunctionRenderOptions {
+        render_definition: true,
+        docs_on_definition: true,
+        verbatim_body: true,
+        ..CppFunctionRenderOptions::default()
+    };
+    let backend: CppBackend = CppBackend::default();
+    let mut indent_level: i32 = 0;
+    backend
+        .render_function(
+            &func,
+            None::<&str>,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/interfaces.hpp".to_owned(),
+            source,
+        })
+}
+
+/// The four `VmLoaderData/HostApi/…` parameters shared by the create-instance signature.
+fn cpp_create_instance_params() -> Vec<CppParameter> {
+    vec![
+        CppParameter {
+            name: "loader_data".to_owned(),
+            param_type: "VmLoaderData".to_owned(),
+            default_value: None,
+        },
+        CppParameter {
+            name: "host".to_owned(),
+            param_type: "const HostApi*".to_owned(),
+            default_value: None,
+        },
+        CppParameter {
+            name: "args".to_owned(),
+            param_type: "const void*".to_owned(),
+            default_value: None,
+        },
+        CppParameter {
+            name: "out_instance".to_owned(),
+            param_type: "GuestContractInstance*".to_owned(),
+            default_value: None,
+        },
+    ]
+}
+
 fn emit_cpp_guest_instance_machinery(
     out: &mut String,
     prefix_upper: &str,
     lower: &str,
     class_name: &str,
     state_struct: &str,
-) {
+) -> Result<(), PolyplugcError> {
     out.push_str(&format!(
         "// Author-provided factory — implement this in your plugin .cpp. Called once\n\
          // per host-created instance; ownership of the returned object transfers to\n\
@@ -505,12 +589,8 @@ fn emit_cpp_guest_instance_machinery(
          }};\n\n"
     ));
 
-    out.push_str(&format!(
-        "// Create a new instance: calls the author factory and heap-allocates the payload.\n\
-         // Writes a null handle to *out_instance when host is null, the factory returns\n\
-         // null, or it throws.\n\
-         static void {prefix_upper}_create_instance(VmLoaderData loader_data, const HostApi* host, const void* args, GuestContractInstance* out_instance) noexcept {{\n\
-         \x20   (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.\n\
+    let create_body: String = format!(
+        "    (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.\n\
          \x20   (void)args;  // Contract-specific init args are unused by generated glue.\n\
          \x20   if (out_instance == nullptr) return;\n\
          \x20   if (host == nullptr) {{\n\
@@ -527,24 +607,63 @@ fn emit_cpp_guest_instance_machinery(
          \x20       *out_instance = GuestContractInstance{{state, {prefix_upper}_CONTRACT_ID}};\n\
          \x20   }} catch (...) {{\n\
          \x20       *out_instance = GuestContractInstance{{nullptr, 0U}};\n\
-         \x20   }}\n\
-         }}\n\n"
-    ));
+         \x20   }}"
+    );
+    out.push_str(&render_cpp_defn_fn(
+        format!("{prefix_upper}_create_instance"),
+        cpp_create_instance_params(),
+        true,
+        false,
+        vec![
+            "Create a new instance: calls the author factory and heap-allocates the payload."
+                .to_owned(),
+            "Writes a null handle to *out_instance when host is null, the factory returns"
+                .to_owned(),
+            "null, or it throws.".to_owned(),
+        ],
+        create_body,
+    )?);
+    out.push_str("\n\n");
 
-    out.push_str(&format!(
-        "// Destroy an instance created by {prefix_upper}_create_instance: deletes the\n\
-         // implementation (ownership transferred from the factory) and the payload.\n\
-         static void {prefix_upper}_destroy_instance(VmLoaderData loader_data, const HostApi* host, GuestContractInstance instance) noexcept {{\n\
-         \x20   (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.\n\
+    let destroy_body: String = format!(
+        "    (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.\n\
          \x20   (void)host;  // The payload is guest-owned; no host call is needed to free it.\n\
          \x20   if (instance.data == nullptr) {{\n\
          \x20       return;\n\
          \x20   }}\n\
          \x20   auto* state = static_cast<{state_struct}*>(instance.data);\n\
          \x20   delete state->impl;\n\
-         \x20   delete state;\n\
-         }}\n\n"
-    ));
+         \x20   delete state;"
+    );
+    out.push_str(&render_cpp_defn_fn(
+        format!("{prefix_upper}_destroy_instance"),
+        vec![
+            CppParameter {
+                name: "loader_data".to_owned(),
+                param_type: "VmLoaderData".to_owned(),
+                default_value: None,
+            },
+            CppParameter {
+                name: "host".to_owned(),
+                param_type: "const HostApi*".to_owned(),
+                default_value: None,
+            },
+            CppParameter {
+                name: "instance".to_owned(),
+                param_type: "GuestContractInstance".to_owned(),
+                default_value: None,
+            },
+        ],
+        true,
+        false,
+        vec![
+            format!("Destroy an instance created by {prefix_upper}_create_instance: deletes the"),
+            "implementation (ownership transferred from the factory) and the payload.".to_owned(),
+        ],
+        destroy_body,
+    )?);
+    out.push_str("\n\n");
+    Ok(())
 }
 
 /// Convert a lowercase snake identifier to PascalCase, e.g. "my_plugin" -> "MyPlugin".
