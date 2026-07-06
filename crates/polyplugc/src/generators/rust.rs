@@ -21,6 +21,7 @@ use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
 use crate::ir::ResolvedDependency;
+use crate::ir::ResolvedField;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -29,10 +30,13 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use langprint::backends::rust_backend::{
-    RustBackend, RustExternBlock, RustFunction, RustParameter, RustSelfKind, RustTrait,
-    RustVisibility,
+    RustBackend, RustEnum, RustEnumRenderOptions, RustEnumVariant, RustEnumVariantValue,
+    RustExternBlock, RustField, RustFunction, RustParameter, RustSelfKind, RustStruct,
+    RustStructRenderOptions, RustTrait, RustVisibility,
 };
+use langprint::renderers::EnumRenderer;
 use langprint::renderers::FunctionRenderer;
+use langprint::renderers::StructRenderer;
 use polyplug_codegen::PolyplugcError;
 use std::io;
 
@@ -61,11 +65,11 @@ impl CodeGenerator for RustGenerator {
 
         // Emit enums before struct types
         for e in &ir.enums {
-            generate_rust_enum(&mut types_out, e);
+            generate_rust_enum(&mut types_out, e)?;
         }
         // Emit user-defined types from IR
         for ty in &ir.types {
-            generate_rust_type(&mut types_out, ty);
+            generate_rust_type(&mut types_out, ty)?;
         }
 
         // Emit generated arg-pack structs for multi-primitive-param functions
@@ -73,7 +77,7 @@ impl CodeGenerator for RustGenerator {
             let struct_name: String = contract_name_to_struct(&contract.name);
             for func in &contract.functions {
                 if needs_arg_pack(&func.params) {
-                    emit_arg_pack_struct(&mut types_out, &struct_name, func);
+                    emit_arg_pack_struct(&mut types_out, &struct_name, func)?;
                 }
             }
         }
@@ -83,7 +87,7 @@ impl CodeGenerator for RustGenerator {
             let struct_name: String = host_contract_name_to_trait(&contract.name);
             for func in &contract.functions {
                 if needs_arg_pack(&func.params) {
-                    emit_arg_pack_struct(&mut types_out, &struct_name, func);
+                    emit_arg_pack_struct(&mut types_out, &struct_name, func)?;
                 }
             }
         }
@@ -263,17 +267,17 @@ impl CodeGenerator for RustGenerator {
         types_out.push_str("use polyplug_abi::StringView;\n\n");
         // Emit enums before struct types
         for e in &ir.enums {
-            generate_rust_enum(&mut types_out, e);
+            generate_rust_enum(&mut types_out, e)?;
         }
         for ty in &ir.types {
-            generate_rust_type(&mut types_out, ty);
+            generate_rust_type(&mut types_out, ty)?;
         }
 
         for contract in &ir.contracts {
             let struct_name: String = contract_name_to_struct(&contract.name);
             for func in &contract.functions {
                 if needs_arg_pack(&func.params) {
-                    emit_arg_pack_struct(&mut types_out, &struct_name, func);
+                    emit_arg_pack_struct(&mut types_out, &struct_name, func)?;
                 }
             }
         }
@@ -282,7 +286,7 @@ impl CodeGenerator for RustGenerator {
             let struct_name: String = host_contract_name_to_trait(&contract.name);
             for func in &contract.functions {
                 if needs_arg_pack(&func.params) {
-                    emit_arg_pack_struct(&mut types_out, &struct_name, func);
+                    emit_arg_pack_struct(&mut types_out, &struct_name, func)?;
                 }
             }
         }
@@ -1380,23 +1384,74 @@ fn needs_arg_pack(params: &[ResolvedParam]) -> bool {
 }
 
 /// Emit a `#[repr(C)]` arg-pack struct for a multi-param function into `types.rs`.
-fn emit_arg_pack_struct(out: &mut String, contract_struct: &str, func: &ResolvedFunction) {
+fn emit_arg_pack_struct(
+    out: &mut String,
+    contract_struct: &str,
+    func: &ResolvedFunction,
+) -> Result<(), PolyplugcError> {
     let struct_name: String = arg_pack_struct_name(contract_struct, &func.name);
-    out.push_str(&format!(
-        "/// Auto-generated arg-pack for `{contract_struct}::{}`\n",
+    let doc: String = format!(
+        "Auto-generated arg-pack for `{contract_struct}::{}`",
         func.name
-    ));
-    out.push_str("#[repr(C)]\n");
-    out.push_str("#[derive(Debug, Clone, Copy)]\n");
-    out.push_str(&format!("pub struct {struct_name} {{\n"));
-    for param in &func.params {
-        out.push_str(&format!(
-            "    pub {}: {},\n",
-            param.name,
-            rust_type_name(&param.ty)
-        ));
-    }
-    out.push_str("}\n\n");
+    );
+    let fields: Vec<(String, String)> = func
+        .params
+        .iter()
+        .map(|p: &ResolvedParam| (p.name.clone(), rust_type_name(&p.ty)))
+        .collect::<Vec<(String, String)>>();
+    out.push_str(&render_rust_repr_c_struct(&struct_name, doc, fields)?);
+    Ok(())
+}
+
+/// Render a `#[repr(C)] #[derive(Debug, Clone, Copy)]` struct via langprint's Rust
+/// StructRenderer. `attributes_before_derives` reproduces polyplugc's `#[repr(C)]`
+/// then `#[derive(...)]` order (rustfmt does not reorder attributes). rustfmt on
+/// write canonicalizes everything else, so this is byte-identical.
+fn render_rust_repr_c_struct(
+    name: &str,
+    doc: String,
+    fields: Vec<(String, String)>,
+) -> Result<String, PolyplugcError> {
+    let rust_fields: Vec<RustField> = fields
+        .into_iter()
+        .map(|(fname, ftype): (String, String)| RustField {
+            name: fname,
+            field_type: ftype,
+            visibility: RustVisibility::Pub,
+            attributes: Vec::new(),
+            docs: None,
+        })
+        .collect::<Vec<RustField>>();
+    let strukt: RustStruct = RustStruct {
+        name: name.to_owned(),
+        visibility: RustVisibility::Pub,
+        generic_args: Vec::new(),
+        fields: rust_fields,
+        methods: Vec::new(),
+        derives: vec!["Debug".to_owned(), "Clone".to_owned(), "Copy".to_owned()],
+        attributes: vec!["repr(C)".to_owned()],
+        is_tuple: false,
+        docs: Some(vec![doc]),
+    };
+    let options: RustStructRenderOptions = RustStructRenderOptions {
+        attributes_before_derives: true,
+        ..RustStructRenderOptions::default()
+    };
+    let backend: RustBackend = RustBackend::default();
+    let mut indent_level: i32 = 0;
+    let rendered: String = backend
+        .render_struct(
+            &strukt,
+            None::<&str>,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/types.rs".to_owned(),
+            source,
+        })?;
+    Ok(format!("{rendered}\n"))
 }
 
 /// Generate the PascalCase arg-pack struct name for a function.
@@ -2085,19 +2140,15 @@ fn args_type_comment(func: &ResolvedFunction, contract_struct: &str) -> String {
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
-fn generate_rust_type(out: &mut String, ty: &ResolvedType) {
-    out.push_str(&format!("/// User-defined type `{}`\n", ty.name));
-    out.push_str("#[repr(C)]\n");
-    out.push_str("#[derive(Debug, Clone, Copy)]\n");
-    out.push_str(&format!("pub struct {} {{\n", ty.name));
-    for field in &ty.fields {
-        out.push_str(&format!(
-            "    pub {}: {},\n",
-            field.name,
-            rust_type_name(&field.ty)
-        ));
-    }
-    out.push_str("}\n\n");
+fn generate_rust_type(out: &mut String, ty: &ResolvedType) -> Result<(), PolyplugcError> {
+    let doc: String = format!("User-defined type `{}`", ty.name);
+    let fields: Vec<(String, String)> = ty
+        .fields
+        .iter()
+        .map(|f: &ResolvedField| (f.name.clone(), rust_type_name(&f.ty)))
+        .collect::<Vec<(String, String)>>();
+    out.push_str(&render_rust_repr_c_struct(&ty.name, doc, fields)?);
+    Ok(())
 }
 
 fn rust_type_name(ty: &ResolvedTypeRef) -> String {
@@ -2181,7 +2232,7 @@ fn substitute_variant_refs_rust_bitflag(declared_variants: &[EnumVariant], expr:
     result
 }
 
-fn generate_rust_enum(out: &mut String, e: &EnumDef) {
+fn generate_rust_enum(out: &mut String, e: &EnumDef) -> Result<(), PolyplugcError> {
     let repr_str: &str = e.repr.rust_name();
     if e.bitflag {
         let mod_name: String = to_snake_case(&e.name);
@@ -2204,17 +2255,61 @@ fn generate_rust_enum(out: &mut String, e: &EnumDef) {
         out.push_str("}\n");
         out.push_str(&format!("pub use {}::{};\n\n", mod_name, e.name));
     } else {
-        out.push_str(&format!("/// Enum `{}` (repr {})\n", e.name, repr_str));
-        out.push_str(&format!("#[repr({})]\n", repr_str));
-        out.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
-        out.push_str(&format!("pub enum {} {{\n", e.name));
-        for variant in &e.variants {
+        out.push_str(&render_rust_enum_decl(e, repr_str)?);
+    }
+    Ok(())
+}
+
+/// Render a `#[repr(_)] #[derive(...)] pub enum` (the non-bitflag path) via
+/// langprint's Rust EnumRenderer. `attributes_before_derives` reproduces
+/// polyplugc's `#[repr(_)]`-first order; rustfmt canonicalizes the rest.
+fn render_rust_enum_decl(e: &EnumDef, repr_str: &str) -> Result<String, PolyplugcError> {
+    let variants: Vec<RustEnumVariant> = e
+        .variants
+        .iter()
+        .map(|variant: &EnumVariant| {
             let subst_value: String =
                 substitute_variant_refs_rust_enum(&e.variants, &variant.value, &e.name, repr_str);
-            out.push_str(&format!("    {} = {},\n", variant.name, subst_value));
-        }
-        out.push_str("}\n\n");
-    }
+            RustEnumVariant {
+                name: variant.name.clone(),
+                value: RustEnumVariantValue::Discriminant(subst_value),
+                docs: None,
+            }
+        })
+        .collect::<Vec<RustEnumVariant>>();
+    let rust_enum: RustEnum = RustEnum {
+        name: e.name.clone(),
+        visibility: RustVisibility::Pub,
+        variants,
+        repr: Some(repr_str.to_owned()),
+        derives: vec![
+            "Debug".to_owned(),
+            "Clone".to_owned(),
+            "Copy".to_owned(),
+            "PartialEq".to_owned(),
+            "Eq".to_owned(),
+        ],
+        docs: Some(vec![format!("Enum `{}` (repr {})", e.name, repr_str)]),
+    };
+    let options: RustEnumRenderOptions = RustEnumRenderOptions {
+        attributes_before_derives: true,
+        ..RustEnumRenderOptions::default()
+    };
+    let backend: RustBackend = RustBackend::default();
+    let mut indent_level: i32 = 0;
+    let rendered: String = backend
+        .render_enum(
+            &rust_enum,
+            None::<&str>,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/types.rs".to_owned(),
+            source,
+        })?;
+    Ok(format!("{rendered}\n"))
 }
 
 fn contract_name_to_struct(name: &str) -> String {
@@ -4068,7 +4163,7 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_rust_enum(&mut out, &e);
+        generate_rust_enum(&mut out, &e).expect("render enum");
         assert!(out.contains("#[repr(u32)]"), "missing repr attr: {out}");
         assert!(
             out.contains("pub enum PixelFormat"),
@@ -4098,7 +4193,7 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_rust_enum(&mut out, &e);
+        generate_rust_enum(&mut out, &e).expect("render enum");
         assert!(out.contains("pub mod image_flags"), "missing module: {out}");
         assert!(
             out.contains("pub type ImageFlags = u32"),
@@ -4133,7 +4228,7 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_rust_enum(&mut out, &e);
+        generate_rust_enum(&mut out, &e).expect("render enum");
         assert!(
             out.contains("Self::Compressed as u32"),
             "missing Self::Compressed cast: {out}"
