@@ -20,8 +20,13 @@ use crate::ir::ResolvedParam;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use langprint::backends::csharp_backend::{
+    CSharpBackend, CSharpMethod, CSharpParameter, CSharpVisibility,
+};
+use langprint::renderers::FunctionRenderer;
 use polyplug_codegen::PolyplugcError;
 use polyplug_codegen::ResolvedBundleFile;
+use std::io;
 
 /// The C# code generator.
 pub(crate) struct CSharpGenerator;
@@ -349,7 +354,7 @@ fn generate_cs_host_types_file(ir: &ValidatedIr) -> String {
 }
 
 /// Generate `guest/Contracts.cs` — guest interfaces for each contract.
-fn generate_cs_guest_contracts(ir: &ValidatedIr) -> String {
+fn generate_cs_guest_contracts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
     out.push_str("using Polyplug.Guest;\n");
@@ -362,41 +367,64 @@ fn generate_cs_guest_contracts(ir: &ValidatedIr) -> String {
             contract.name, contract.contract_id
         ));
         out.push_str(&format!("public interface {} {{\n", iface_name));
+        // The typed method signature is FORM — langprint renders it (single source of
+        // truth for C# signature formatting). The `interface { … }` shell stays here.
         for func in &contract.functions {
-            let ret: String = cs_return_type(func);
-            let method_name: String = pascal_case(&func.name);
-            if func.params.is_empty() {
-                out.push_str(&format!("    {} {}();\n", ret, method_name));
-            } else if func.params.len() == 1 {
-                let param: &ResolvedParam = &func.params[0];
-                let is_struct: bool = matches!(&param.ty, ResolvedTypeRef::UserDefined(_));
-                if is_struct {
-                    let cs_ty: String = cs_type_name(&param.ty);
-                    out.push_str(&format!(
-                        "    {} {}(ref {} {});\n",
-                        ret, method_name, cs_ty, param.name
-                    ));
-                } else {
-                    let cs_ty: String = cs_type_name(&param.ty);
-                    out.push_str(&format!(
-                        "    {} {}({} {});\n",
-                        ret, method_name, cs_ty, param.name
-                    ));
-                }
-            } else {
-                // Multiple params — list individually
-                let params_str: String = func
-                    .params
-                    .iter()
-                    .map(|p: &ResolvedParam| format!("{} {}", cs_type_name(&p.ty), p.name))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                out.push_str(&format!("    {} {}({});\n", ret, method_name, params_str));
-            }
+            out.push_str(&cs_render_interface_method(func)?);
         }
         out.push_str("}\n\n");
     }
-    out
+    Ok(out)
+}
+
+/// Render one guest-interface method signature via langprint as a bodyless
+/// `CSharpMethod`. Preserves polyplugc's parameter rule exactly: a lone
+/// user-defined param takes `ref`, everything else is by value.
+fn cs_render_interface_method(func: &ResolvedFunction) -> Result<String, PolyplugcError> {
+    let parameters: Vec<CSharpParameter> = if func.params.len() == 1
+        && matches!(&func.params[0].ty, ResolvedTypeRef::UserDefined(_))
+    {
+        let param: &ResolvedParam = &func.params[0];
+        vec![CSharpParameter {
+            name: param.name.clone(),
+            param_type: format!("ref {}", cs_type_name(&param.ty)),
+            default_value: None,
+        }]
+    } else {
+        func.params
+            .iter()
+            .map(|p: &ResolvedParam| CSharpParameter {
+                name: p.name.clone(),
+                param_type: cs_type_name(&p.ty),
+                default_value: None,
+            })
+            .collect::<Vec<CSharpParameter>>()
+    };
+    let method: CSharpMethod = CSharpMethod {
+        name: pascal_case(&func.name),
+        visibility: CSharpVisibility::Default,
+        parameters,
+        generic_args: Vec::new(),
+        return_type: Some(cs_return_type(func)),
+        is_static: false,
+        is_abstract: false,
+        is_virtual: false,
+        is_override: false,
+        is_sealed: false,
+        is_async: false,
+        is_unsafe: false,
+        body: None,
+        attributes: Vec::new(),
+        docs: None,
+    };
+    let backend: CSharpBackend = CSharpBackend::default();
+    let mut indent_level: i32 = 1;
+    backend
+        .render_function(&method, None::<&str>, None::<&str>, None, &mut indent_level)
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/Contracts.cs".to_owned(),
+            source,
+        })
 }
 
 /// Generate `guest/Interfaces.cs` — [UnmanagedCallersOnly] ABI methods + interface construction.
@@ -3289,7 +3317,7 @@ impl CodeGenerator for CSharpGenerator {
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/Contracts.cs"),
-            content: generate_cs_guest_contracts(ir),
+            content: generate_cs_guest_contracts(ir)?,
             force_regenerate: false,
         });
         files.files.push(GeneratedFile {
