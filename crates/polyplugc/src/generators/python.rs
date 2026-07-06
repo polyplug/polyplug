@@ -22,7 +22,10 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use langprint::backends::python_backend::{PythonBackend, PythonFunction, PythonParameter};
+use langprint::renderers::FunctionRenderer;
 use polyplug_codegen::PolyplugcError;
+use std::io;
 
 pub(crate) struct PythonGenerator;
 
@@ -95,7 +98,7 @@ impl CodeGenerator for PythonGenerator {
     ) -> Result<(), PolyplugcError> {
         let types_py: String = generate_python_types_file(ir);
         let types_pyi: String = generate_python_types_stub(ir);
-        let contracts_py: String = generate_guest_contracts_file(ir);
+        let contracts_py: String = generate_guest_contracts_file(ir)?;
         let contracts_pyi: String = generate_guest_contracts_stub(ir);
 
         files.files.push(GeneratedFile {
@@ -468,7 +471,7 @@ fn generate_host_caller_class_stub(out: &mut String, contract: &ResolvedContract
     out.push('\n');
 }
 
-fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
+fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
@@ -544,7 +547,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
-                    generate_guest_plugin_trait(&mut out, &plugin.name, contract);
+                    generate_guest_plugin_trait(&mut out, &plugin.name, contract)?;
                     generate_guest_plugin_interface(&mut out, &plugin.name, contract);
                     let plugin_lower: String = plugin.name.to_lowercase().replace('.', "_");
                     registrations.push((
@@ -558,7 +561,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
         }
     } else {
         for contract in &ir.contracts {
-            generate_guest_contract_trait(&mut out, contract);
+            generate_guest_contract_trait(&mut out, contract)?;
             generate_guest_contract_interface(&mut out, contract);
             let lower: String = contract.name.replace('.', "_");
             let upper: String = contract_name_to_upper_snake(&contract.name);
@@ -625,7 +628,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("    return registrations, AbiError(code=int(AbiErrorCode.Ok))\n");
     out.push('\n');
 
-    out
+    Ok(out)
 }
 
 /// Whether a function returns a `StringView` (the variable-size return the guest
@@ -1323,14 +1326,18 @@ fn collect_type_refs(
     }
 }
 
-fn generate_guest_contract_trait(out: &mut String, contract: &ResolvedContract) {
+fn generate_guest_contract_trait(
+    out: &mut String,
+    contract: &ResolvedContract,
+) -> Result<(), PolyplugcError> {
     let trait_name: String = contract_name_to_guest_trait(&contract.name);
     out.push_str(&format!("class {}:\n", trait_name));
     for func in &contract.functions {
-        generate_guest_trait_method(out, func);
+        generate_guest_trait_method(out, func)?;
     }
     let upper: String = contract_name_to_upper_snake(&contract.name);
     emit_python_factory_slot(out, &upper, &trait_name);
+    Ok(())
 }
 
 /// Emit the author-factory slot and registration helper for one impl variable.
@@ -1357,24 +1364,58 @@ fn emit_python_factory_slot(out: &mut String, var: &str, class_name: &str) {
     out.push_str(&format!("    _{var}_FACTORY = factory\n\n"));
 }
 
-fn generate_guest_plugin_trait(out: &mut String, plugin_name: &str, contract: &ResolvedContract) {
+fn generate_guest_plugin_trait(
+    out: &mut String,
+    plugin_name: &str,
+    contract: &ResolvedContract,
+) -> Result<(), PolyplugcError> {
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
     let class_name: String = plugin_guest_trait_name(plugin_name, &contract.name);
     out.push_str(&format!("class {class_name}:\n"));
     for func in &contract.functions {
-        generate_guest_trait_method(out, func);
+        generate_guest_trait_method(out, func)?;
     }
     emit_python_factory_slot(out, &plugin_lower, &class_name);
+    Ok(())
 }
 
-fn generate_guest_trait_method(out: &mut String, func: &ResolvedFunction) {
-    let sig_params: String = build_python_guest_impl_sig_params(func);
-    let ret_type: String = python_guest_impl_return_type(&func.returns);
-    out.push_str(&format!(
-        "    def {}(self{}) -> {}:\n",
-        func.name, sig_params, ret_type
-    ));
-    out.push_str("        raise NotImplementedError\n");
+fn generate_guest_trait_method(
+    out: &mut String,
+    func: &ResolvedFunction,
+) -> Result<(), PolyplugcError> {
+    // The typed `def` signature is FORM — langprint renders it (single source of
+    // truth for Python signature formatting). The `raise NotImplementedError`
+    // body is the trivial LOGIC slot. `self` leads with no type hint.
+    let mut parameters: Vec<PythonParameter> = Vec::with_capacity(func.params.len() + 1);
+    parameters.push(PythonParameter {
+        name: "self".to_owned(),
+        type_hint: None,
+        default: None,
+    });
+    for p in &func.params {
+        parameters.push(PythonParameter {
+            name: p.name.clone(),
+            type_hint: Some(python_guest_impl_type_name(&p.ty)),
+            default: None,
+        });
+    }
+    let method: PythonFunction = PythonFunction {
+        name: func.name.clone(),
+        parameters,
+        return_type: Some(python_guest_impl_return_type(&func.returns)),
+        docstring: None,
+        body: Some(vec!["raise NotImplementedError".to_owned()]),
+    };
+    let backend: PythonBackend = PythonBackend::default();
+    let mut indent_level: i32 = 1;
+    let rendered: String = backend
+        .render_function(&method, None::<&str>, None::<&str>, None, &mut indent_level)
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/contracts.py".to_owned(),
+            source,
+        })?;
+    out.push_str(&rendered);
+    Ok(())
 }
 
 fn generate_guest_trait_stub_method(out: &mut String, func: &ResolvedFunction) {
