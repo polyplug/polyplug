@@ -19,7 +19,10 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use langprint::backends::lua_backend::{LuaBackend, LuaFunction};
+use langprint::renderers::FunctionRenderer;
 use polyplug_codegen::PolyplugcError;
+use std::io;
 
 pub(crate) struct LuaGenerator;
 
@@ -664,6 +667,40 @@ fn generate_host_caller_method(
     out.push_str("    end");
 }
 
+/// Render the `M.set_<plugin>_factory(factory)` registration function via
+/// langprint's Lua backend (the `function … end` shell is FORM; the single
+/// assignment is the body slot). Byte-identical to the former hand-written form —
+/// Lua output has no formatter, so langprint emits the exact bytes.
+fn render_lua_set_factory(
+    set_factory_name: &str,
+    plugin_var: &str,
+) -> Result<String, PolyplugcError> {
+    let function: LuaFunction = LuaFunction {
+        name: format!("M.{set_factory_name}"),
+        parameters: vec!["factory".to_owned()],
+        doc: None,
+        body: Some(vec![format!("{plugin_var}_FACTORY = factory")]),
+    };
+    // polyplugc's Lua output indents 4, not the Lua-idiomatic 2.
+    let backend: LuaBackend = LuaBackend {
+        indent_size: 4,
+        ..LuaBackend::default()
+    };
+    let mut indent_level: i32 = 0;
+    backend
+        .render_function(
+            &function,
+            None::<&str>,
+            None::<&str>,
+            None,
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/contracts.lua".to_owned(),
+            source,
+        })
+}
+
 fn generate_guest_plugin_interface(
     out: &mut String,
     plugin_name: &str,
@@ -704,9 +741,9 @@ fn generate_guest_plugin_interface(
     // calls this once at module import time; the loader reads it from the handler
     // entry and calls it to build each impl instance.
     let set_factory_name: String = format!("set_{plugin_lower}_factory");
-    out.push_str(&format!("function M.{set_factory_name}(factory)\n"));
-    out.push_str(&format!("    {plugin_var}_FACTORY = factory\n"));
-    out.push_str("end\n");
+    // The factory-registration function is FORM — langprint's Lua backend renders
+    // the `function … end` shell; the single assignment is the body slot.
+    out.push_str(&render_lua_set_factory(&set_factory_name, &plugin_var)?);
 
     // _register_<plugin>(registrations) builds the low-level dispatch handlers and
     // stores them under a per-contract entry in the `registrations` table that
