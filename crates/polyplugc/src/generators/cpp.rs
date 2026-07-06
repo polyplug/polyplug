@@ -571,13 +571,57 @@ fn emit_cpp_guest_instance_machinery(
     class_name: &str,
     state_struct: &str,
 ) -> Result<(), PolyplugcError> {
-    out.push_str(&format!(
-        "// Author-provided factory — implement this in your plugin .cpp. Called once\n\
-         // per host-created instance; ownership of the returned object transfers to\n\
-         // the instance (deleted in {prefix_upper}_destroy_instance).\n\
-         {class_name}* polyplug_create_{lower}(const HostApi* host);\n\n"
-    ));
+    // Author factory forward declaration (no body → declaration mode).
+    let factory_decl: CppFunction = CppFunction {
+        name: format!("polyplug_create_{lower}"),
+        parent_name: None,
+        visibility: CppVisibility::Default,
+        parameters: vec![CppParameter {
+            name: "host".to_owned(),
+            param_type: "const HostApi*".to_owned(),
+            default_value: None,
+        }],
+        template_params: Vec::new(),
+        return_type: Some(format!("{class_name}*")),
+        is_static: false,
+        is_const: false,
+        is_virtual: false,
+        is_pure_virtual: false,
+        is_inline: false,
+        is_noexcept: false,
+        is_override: false,
+        is_final: false,
+        is_extern_c: false,
+        is_friend: false,
+        is_deleted: false,
+        is_default: false,
+        body: None,
+        docs: Some(vec![
+            "Author-provided factory — implement this in your plugin .cpp. Called once".to_owned(),
+            "per host-created instance; ownership of the returned object transfers to".to_owned(),
+            format!("the instance (deleted in {prefix_upper}_destroy_instance)."),
+        ]),
+    };
+    let backend: CppBackend = CppBackend::default();
+    let mut decl_indent: i32 = 0;
+    let factory_rendered: String = backend
+        .render_function(
+            &factory_decl,
+            None::<&str>,
+            None::<&str>,
+            None,
+            &mut decl_indent,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/interfaces.hpp".to_owned(),
+            source,
+        })?;
+    out.push_str(&factory_rendered);
+    out.push_str("\n\n");
 
+    // Per-instance payload struct. Left hand-emitted: langprint's C++ struct
+    // renderer emits a blank line before the closing `};` (its house style),
+    // which this golden does not have — not worth a new option for a 2-field POD.
     out.push_str(&format!(
         "// Per-instance payload carried in GuestContractInstance.data.\n\
          struct {state_struct} {{\n\
@@ -693,98 +737,127 @@ fn generate_cpp_guest_abi_wrapper(
     );
     let has_params: bool = !func.params.is_empty();
 
-    out.push_str(&format!(
-        "// ABI wrapper for {} (function_id = {})\n",
-        func.name, fn_id
-    ));
-    out.push_str(&format!(
-        "inline void {0}_{1}_abi(GuestContractInstance instance, const void* args, void* out, AbiError* out_err) noexcept {{\n",
-        contract_lower, func.name
-    ));
-    out.push_str("    if (instance.data == nullptr) {\n");
-    out.push_str("        static constexpr const char* null_inst_msg = \"instance is null\";\n");
-    out.push_str(
+    let mut body: String = String::new();
+    body.push_str("    if (instance.data == nullptr) {\n");
+    body.push_str("        static constexpr const char* null_inst_msg = \"instance is null\";\n");
+    body.push_str(
         "        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(null_inst_msg), 16}};\n",
     );
-    out.push_str("        return;\n");
-    out.push_str("    }\n");
-    out.push_str("    // SAFETY: instance.data was produced by create_instance and stays valid\n");
-    out.push_str("    // until destroy_instance; the host never mutates it.\n");
-    out.push_str(&format!(
+    body.push_str("        return;\n");
+    body.push_str("    }\n");
+    body.push_str("    // SAFETY: instance.data was produced by create_instance and stays valid\n");
+    body.push_str("    // until destroy_instance; the host never mutates it.\n");
+    body.push_str(&format!(
         "    const auto* state = static_cast<const {state_struct}*>(instance.data);\n"
     ));
-    out.push_str("    try {\n");
+    body.push_str("    try {\n");
 
     if has_params {
-        out.push_str("        if (args == nullptr) {\n");
-        out.push_str(
+        body.push_str("        if (args == nullptr) {\n");
+        body.push_str(
             "            *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};\n",
         );
-        out.push_str("            return;\n");
-        out.push_str("        }\n");
+        body.push_str("            return;\n");
+        body.push_str("        }\n");
     }
     if !is_void_return {
-        out.push_str("        if (out == nullptr) {\n");
-        out.push_str(
+        body.push_str("        if (out == nullptr) {\n");
+        body.push_str(
             "            *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};\n",
         );
-        out.push_str("            return;\n");
-        out.push_str("        }\n");
+        body.push_str("            return;\n");
+        body.push_str("        }\n");
     }
 
     // Build the call expression
     let call_expr: String = build_guest_call_expr(contract_lower, func);
-    out.push_str(&call_expr);
+    body.push_str(&call_expr);
 
     if is_void_return {
         // For void, emit success return (call_expr already emits the call + newline)
-        out.push_str("        // SAFETY: out pointer is not dereferenced for void return per ABI contract.\n");
-        out.push_str("        (void)out;\n");
-        out.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
-        out.push_str("        return;\n");
+        body.push_str("        // SAFETY: out pointer is not dereferenced for void return per ABI contract.\n");
+        body.push_str("        (void)out;\n");
+        body.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
+        body.push_str("        return;\n");
     } else {
         let ret_type: String = func
             .returns
             .as_ref()
             .map(cpp_type_name)
             .unwrap_or_else(|| "void".to_owned());
-        out.push_str(&format!(
+        body.push_str(&format!(
             "        // SAFETY: out is a valid void* pointing to a {ret_type} per ABI contract.\n"
         ));
-        out.push_str("        // The host guarantees proper alignment and size before calling this wrapper.\n");
-        out.push_str(&format!(
+        body.push_str("        // The host guarantees proper alignment and size before calling this wrapper.\n");
+        body.push_str(&format!(
             "        *static_cast<{}*>(out) = result;\n",
             ret_type
         ));
-        out.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
-        out.push_str("        return;\n");
+        body.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
+        body.push_str("        return;\n");
     }
 
-    out.push_str("    } catch (const std::exception&) {\n");
-    out.push_str(
+    body.push_str("    } catch (const std::exception&) {\n");
+    body.push_str(
         "        // The AbiError message must outlive this stack frame; the host never frees it.\n",
     );
-    out.push_str(
+    body.push_str(
         "        // e.what() points into the (about-to-be-destroyed) exception object, so we\n",
     );
-    out.push_str("        // return a static literal instead of a dangling pointer.\n");
-    out.push_str(
+    body.push_str("        // return a static literal instead of a dangling pointer.\n");
+    body.push_str(
         "        // SAFETY: err_msg is a static constexpr string literal with known length 26.\n",
     );
-    out.push_str(
+    body.push_str(
         "        static constexpr const char* err_msg = \"guest threw std::exception\";\n",
     );
-    out.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 26}};\n");
-    out.push_str("        return;\n");
-    out.push_str("    } catch (...) {\n");
-    out.push_str(
+    body.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 26}};\n");
+    body.push_str("        return;\n");
+    body.push_str("    } catch (...) {\n");
+    body.push_str(
         "        // SAFETY: panic_msg is a static constexpr string literal with known length 15.\n",
     );
-    out.push_str("        static constexpr const char* panic_msg = \"plugin panicked\";\n");
-    out.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};\n");
-    out.push_str("        return;\n");
-    out.push_str("    }\n");
-    out.push_str("}\n\n");
+    body.push_str("        static constexpr const char* panic_msg = \"plugin panicked\";\n");
+    body.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};\n");
+    body.push_str("        return;\n");
+    body.push_str("    }\n");
+
+    let wrapper_params: Vec<CppParameter> = vec![
+        CppParameter {
+            name: "instance".to_owned(),
+            param_type: "GuestContractInstance".to_owned(),
+            default_value: None,
+        },
+        CppParameter {
+            name: "args".to_owned(),
+            param_type: "const void*".to_owned(),
+            default_value: None,
+        },
+        CppParameter {
+            name: "out".to_owned(),
+            param_type: "void*".to_owned(),
+            default_value: None,
+        },
+        CppParameter {
+            name: "out_err".to_owned(),
+            param_type: "AbiError*".to_owned(),
+            default_value: None,
+        },
+    ];
+    // Strip the trailing newline: verbatim_body appends its own before `}`.
+    let body: String = body.strip_suffix('\n').unwrap_or(&body).to_owned();
+    out.push_str(&render_cpp_defn_fn(
+        format!("{contract_lower}_{}_abi", func.name),
+        wrapper_params,
+        false,
+        true,
+        vec![format!(
+            "ABI wrapper for {} (function_id = {})",
+            func.name, fn_id
+        )],
+        body,
+    )?);
+    out.push_str("\n\n");
 
     Ok(())
 }
