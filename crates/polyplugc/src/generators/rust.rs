@@ -865,6 +865,19 @@ fn generate_guest_plugin_interface(
 /// `create_instance` call and carried — together with the `HostContext` —
 /// in `GuestContractInstance.data`. No static storage is involved, so two
 /// runtimes loading the same plugin dylib get fully isolated instances.
+/// Render a Rust function for `interfaces.rs` via langprint, mapping the
+/// `io::Error` to a `PolyplugcError`. The emitted text is later canonicalized
+/// by polyplugc's rustfmt pass, so only equivalent tokens are required.
+fn render_rust_interface_fn(func: &RustFunction) -> Result<String, PolyplugcError> {
+    let mut indent_level: i32 = 0;
+    RustBackend::default()
+        .render_function(func, None::<&str>, None::<&str>, None, &mut indent_level)
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/interfaces.rs".to_owned(),
+            source,
+        })
+}
+
 fn emit_guest_instance_machinery(
     out: &mut String,
     prefix_upper: &str,
@@ -915,81 +928,178 @@ fn emit_guest_instance_machinery(
     out.push_str(&rendered);
     out.push('\n');
 
-    out.push_str(&format!(
-        "/// Per-instance payload carried in `GuestContractInstance.data`.\n\
-         struct {state_struct} {{\n\
-         \x20   /// Host context captured at instance creation — routes every host call\n\
-         \x20   /// (allocation, logging, error reporting) to the runtime that owns it.\n\
-         \x20   host: HostContext,\n\
-         \x20   /// The author's implementation, created by `{factory_name}`.\n\
-         \x20   implementation: Box<dyn {trait_name}>,\n\
-         }}\n\n"
-    ));
+    let state_strukt: RustStruct = RustStruct {
+        name: state_struct.to_owned(),
+        visibility: RustVisibility::Private,
+        generic_args: Vec::new(),
+        fields: vec![
+            RustField {
+                name: "host".to_owned(),
+                field_type: "HostContext".to_owned(),
+                visibility: RustVisibility::Private,
+                attributes: Vec::new(),
+                docs: Some(vec![
+                    "Host context captured at instance creation — routes every host call"
+                        .to_owned(),
+                    "(allocation, logging, error reporting) to the runtime that owns it."
+                        .to_owned(),
+                ]),
+            },
+            RustField {
+                name: "implementation".to_owned(),
+                field_type: format!("Box<dyn {trait_name}>"),
+                visibility: RustVisibility::Private,
+                attributes: Vec::new(),
+                docs: Some(vec![format!(
+                    "The author's implementation, created by `{factory_name}`."
+                )]),
+            },
+        ],
+        methods: Vec::new(),
+        derives: Vec::new(),
+        attributes: Vec::new(),
+        is_tuple: false,
+        docs: Some(vec![
+            "Per-instance payload carried in `GuestContractInstance.data`.".to_owned(),
+        ]),
+    };
+    let mut state_indent: i32 = 0;
+    let state_rendered: String = RustBackend::default()
+        .render_struct(
+            &state_strukt,
+            None::<&str>,
+            None::<&str>,
+            None,
+            &mut state_indent,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/interfaces.rs".to_owned(),
+            source,
+        })?;
+    out.push_str(&state_rendered);
+    out.push_str("\n\n");
 
-    out.push_str(&format!(
-        "/// Create a new instance: calls the author factory and boxes the payload.\n\
-         /// Writes a null handle through `out_instance` when `host` is null or the factory panics.\n\
-         unsafe extern \"C\" fn {prefix_upper}_create_instance(\n\
-         \x20   _loader_data: polyplug_abi::dispatch::VmLoaderData,\n\
-         \x20   host: *const HostApi,\n\
-         \x20   _args: *const (),\n\
-         \x20   out_instance: *mut GuestContractInstance,\n\
-         ) {{\n\
-         \x20   if out_instance.is_null() {{\n\
-         \x20       return;\n\
-         \x20   }}\n\
-         \x20   if host.is_null() {{\n\
-         \x20       // SAFETY: out_instance is non-null (checked above) and writable per the ABI contract.\n\
-         \x20       unsafe {{ out_instance.write(GuestContractInstance::null()); }}\n\
-         \x20       return;\n\
-         \x20   }}\n\
-         \x20   // SAFETY: host is non-null (checked above) and valid per the ABI contract\n\
-         \x20   // for create_instance; it stays valid for the runtime's lifetime.\n\
-         \x20   let host_ctx: HostContext = unsafe {{ HostContext::new(host) }};\n\
-         \x20   let implementation: Box<dyn {trait_name}> =\n\
-         \x20       match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {{\n\
-         \x20           // SAFETY: the author defines `{factory_name}` in the plugin crate\n\
-         \x20           // with `#[unsafe(no_mangle)]`; same-crate Rust ABI, signature enforced\n\
-         \x20           // by the extern declaration above.\n\
-         \x20           unsafe {{ {factory_name}(host_ctx) }}\n\
-         \x20       }})) {{\n\
-         \x20           Ok(i) => i,\n\
-         \x20           Err(_) => {{\n\
-         \x20               // SAFETY: out_instance is non-null and writable per the ABI contract.\n\
-         \x20               unsafe {{ out_instance.write(GuestContractInstance::null()); }}\n\
-         \x20               return;\n\
-         \x20           }}\n\
-         \x20       }};\n\
-         \x20   let state: Box<{state_struct}> = Box::new({state_struct} {{\n\
-         \x20       host: host_ctx,\n\
-         \x20       implementation,\n\
-         \x20   }});\n\
-         \x20   // SAFETY: out_instance is non-null (checked above) and writable per the ABI contract.\n\
-         \x20   unsafe {{\n\
-         \x20       out_instance.write(GuestContractInstance {{\n\
-         \x20           data: Box::into_raw(state) as *mut c_void,\n\
-         \x20           contract_id: GuestContractId::from_u64({contract_id_const}),\n\
-         \x20       }});\n\
-         \x20   }}\n\
-         }}\n\n"
-    ));
+    // FORM: langprint renders the fn shell; the body (rustfmt-canonicalized) is the slot.
+    let create_body: String = format!(
+        "if out_instance.is_null() {{\n\
+         return;\n\
+         }}\n\
+         if host.is_null() {{\n\
+         // SAFETY: out_instance is non-null (checked above) and writable per the ABI contract.\n\
+         unsafe {{ out_instance.write(GuestContractInstance::null()); }}\n\
+         return;\n\
+         }}\n\
+         // SAFETY: host is non-null (checked above) and valid per the ABI contract\n\
+         // for create_instance; it stays valid for the runtime's lifetime.\n\
+         let host_ctx: HostContext = unsafe {{ HostContext::new(host) }};\n\
+         let implementation: Box<dyn {trait_name}> =\n\
+         match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {{\n\
+         // SAFETY: the author defines `{factory_name}` in the plugin crate\n\
+         // with `#[unsafe(no_mangle)]`; same-crate Rust ABI, signature enforced\n\
+         // by the extern declaration above.\n\
+         unsafe {{ {factory_name}(host_ctx) }}\n\
+         }})) {{\n\
+         Ok(i) => i,\n\
+         Err(_) => {{\n\
+         // SAFETY: out_instance is non-null and writable per the ABI contract.\n\
+         unsafe {{ out_instance.write(GuestContractInstance::null()); }}\n\
+         return;\n\
+         }}\n\
+         }};\n\
+         let state: Box<{state_struct}> = Box::new({state_struct} {{\n\
+         host: host_ctx,\n\
+         implementation,\n\
+         }});\n\
+         // SAFETY: out_instance is non-null (checked above) and writable per the ABI contract.\n\
+         unsafe {{\n\
+         out_instance.write(GuestContractInstance {{\n\
+         data: Box::into_raw(state) as *mut c_void,\n\
+         contract_id: GuestContractId::from_u64({contract_id_const}),\n\
+         }});\n\
+         }}"
+    );
+    let create_fn: RustFunction = RustFunction {
+        name: format!("{prefix_upper}_create_instance"),
+        visibility: RustVisibility::Private,
+        self_kind: RustSelfKind::None,
+        parameters: vec![
+            RustParameter {
+                name: "_loader_data".to_owned(),
+                param_type: "polyplug_abi::dispatch::VmLoaderData".to_owned(),
+            },
+            RustParameter {
+                name: "host".to_owned(),
+                param_type: "*const HostApi".to_owned(),
+            },
+            RustParameter {
+                name: "_args".to_owned(),
+                param_type: "*const ()".to_owned(),
+            },
+            RustParameter {
+                name: "out_instance".to_owned(),
+                param_type: "*mut GuestContractInstance".to_owned(),
+            },
+        ],
+        generic_args: Vec::new(),
+        return_type: None,
+        is_unsafe: true,
+        is_async: false,
+        is_const: false,
+        abi: Some("C".to_owned()),
+        body: Some(vec![create_body]),
+        attributes: Vec::new(),
+        docs: Some(vec![
+            "Create a new instance: calls the author factory and boxes the payload.".to_owned(),
+            "Writes a null handle through `out_instance` when `host` is null or the factory panics."
+                .to_owned(),
+        ]),
+        comments: Vec::new(),
+    };
+    out.push_str(&render_rust_interface_fn(&create_fn)?);
+    out.push('\n');
 
-    out.push_str(&format!(
-        "/// Destroy an instance created by `{prefix_upper}_create_instance`.\n\
-         unsafe extern \"C\" fn {prefix_upper}_destroy_instance(\n\
-         \x20   _loader_data: polyplug_abi::dispatch::VmLoaderData,\n\
-         \x20   _host: *const HostApi,\n\
-         \x20   instance: GuestContractInstance,\n\
-         ) {{\n\
-         \x20   if instance.data.is_null() {{\n\
-         \x20       return;\n\
-         \x20   }}\n\
-         \x20   // SAFETY: instance.data was produced by `{prefix_upper}_create_instance` via\n\
-         \x20   // Box::into_raw and is dropped exactly once here — the host calls\n\
-         \x20   // destroy_instance exactly once per created instance.\n\
-         \x20   drop(unsafe {{ Box::from_raw(instance.data as *mut {state_struct}) }});\n\
-         }}\n\n"
-    ));
+    let destroy_body: String = format!(
+        "if instance.data.is_null() {{\n\
+         return;\n\
+         }}\n\
+         // SAFETY: instance.data was produced by `{prefix_upper}_create_instance` via\n\
+         // Box::into_raw and is dropped exactly once here — the host calls\n\
+         // destroy_instance exactly once per created instance.\n\
+         drop(unsafe {{ Box::from_raw(instance.data as *mut {state_struct}) }});"
+    );
+    let destroy_fn: RustFunction = RustFunction {
+        name: format!("{prefix_upper}_destroy_instance"),
+        visibility: RustVisibility::Private,
+        self_kind: RustSelfKind::None,
+        parameters: vec![
+            RustParameter {
+                name: "_loader_data".to_owned(),
+                param_type: "polyplug_abi::dispatch::VmLoaderData".to_owned(),
+            },
+            RustParameter {
+                name: "_host".to_owned(),
+                param_type: "*const HostApi".to_owned(),
+            },
+            RustParameter {
+                name: "instance".to_owned(),
+                param_type: "GuestContractInstance".to_owned(),
+            },
+        ],
+        generic_args: Vec::new(),
+        return_type: None,
+        is_unsafe: true,
+        is_async: false,
+        is_const: false,
+        abi: Some("C".to_owned()),
+        body: Some(vec![destroy_body]),
+        attributes: Vec::new(),
+        docs: Some(vec![format!(
+            "Destroy an instance created by `{prefix_upper}_create_instance`."
+        )]),
+        comments: Vec::new(),
+    };
+    out.push_str(&render_rust_interface_fn(&destroy_fn)?);
+    out.push('\n');
     Ok(())
 }
 
