@@ -29,7 +29,8 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use langprint::backends::rust_backend::{
-    RustBackend, RustFunction, RustParameter, RustSelfKind, RustTrait, RustVisibility,
+    RustBackend, RustExternBlock, RustFunction, RustParameter, RustSelfKind, RustTrait,
+    RustVisibility,
 };
 use polyplug_codegen::PolyplugcError;
 use std::io;
@@ -694,7 +695,7 @@ fn generate_guest_contract_interface(
         &trait_name,
         &state_struct,
         &format!("{upper}_CONTRACT_ID"),
-    );
+    )?;
 
     // ABI wrapper functions
     for func in &contract.functions {
@@ -789,7 +790,7 @@ fn generate_guest_plugin_interface(
         &trait_name,
         &state_struct,
         &format!("{plugin_upper}_CONTRACT_ID"),
-    );
+    )?;
 
     for func in &contract.functions {
         generate_guest_abi_wrapper(
@@ -866,19 +867,48 @@ fn emit_guest_instance_machinery(
     trait_name: &str,
     state_struct: &str,
     contract_id_const: &str,
-) {
+) -> Result<(), PolyplugcError> {
     let factory_name: String = format!("polyplug_create_{lower}");
 
-    out.push_str("unsafe extern \"Rust\" {\n");
-    out.push_str(&format!(
-        "    /// Author-provided factory — define it in the plugin crate as:\n\
-         \x20   /// `#[unsafe(no_mangle)]`\n\
-         \x20   /// `pub fn {factory_name}(host: HostContext) -> Box<dyn {trait_name}> {{ ... }}`\n"
-    ));
-    out.push_str(&format!(
-        "    fn {factory_name}(host: HostContext) -> Box<dyn {trait_name}>;\n"
-    ));
-    out.push_str("}\n\n");
+    let extern_block: RustExternBlock = RustExternBlock {
+        abi: "Rust".to_owned(),
+        is_unsafe: true,
+        items: vec![RustFunction {
+            name: factory_name.clone(),
+            visibility: RustVisibility::Private,
+            self_kind: RustSelfKind::None,
+            parameters: vec![RustParameter {
+                name: "host".to_owned(),
+                param_type: "HostContext".to_owned(),
+            }],
+            generic_args: Vec::new(),
+            return_type: Some(format!("Box<dyn {trait_name}>")),
+            is_unsafe: false,
+            is_async: false,
+            is_const: false,
+            abi: None,
+            body: None,
+            attributes: Vec::new(),
+            docs: Some(vec![
+                "Author-provided factory — define it in the plugin crate as:".to_owned(),
+                "`#[unsafe(no_mangle)]`".to_owned(),
+                format!(
+                    "`pub fn {factory_name}(host: HostContext) -> Box<dyn {trait_name}> {{ ... }}`"
+                ),
+            ]),
+            comments: Vec::new(),
+        }],
+        docs: None,
+    };
+    let mut indent_level: i32 = 0;
+    let rendered: String = RustBackend::default()
+        .render_extern_block(&extern_block, None, &mut indent_level)
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/interfaces.rs".to_owned(),
+            source,
+        })?;
+    out.push_str(&rendered);
+    out.push('\n');
 
     out.push_str(&format!(
         "/// Per-instance payload carried in `GuestContractInstance.data`.\n\
@@ -955,6 +985,7 @@ fn emit_guest_instance_machinery(
          \x20   drop(unsafe {{ Box::from_raw(instance.data as *mut {state_struct}) }});\n\
          }}\n\n"
     ));
+    Ok(())
 }
 
 /// Convert a lowercase snake identifier to PascalCase, e.g. "my_plugin" -> "MyPlugin".
