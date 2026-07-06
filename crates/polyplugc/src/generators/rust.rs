@@ -32,6 +32,7 @@ use langprint::backends::rust_backend::{
     RustBackend, RustExternBlock, RustFunction, RustParameter, RustSelfKind, RustTrait,
     RustVisibility,
 };
+use langprint::renderers::FunctionRenderer;
 use polyplug_codegen::PolyplugcError;
 use std::io;
 
@@ -1014,50 +1015,42 @@ fn generate_guest_abi_wrapper(
 ) -> Result<(), PolyplugcError> {
     let wrapper_name: String = format!("{contract_lower}_{}_abi", func.name);
     let has_return: bool = func.returns.is_some();
-    let out_param: &str = if has_return {
-        "out: *mut ()"
-    } else {
-        "_out: *mut ()"
-    };
+    let out_param_name: &str = if has_return { "out" } else { "_out" };
 
-    out.push_str(&format!(
-        "/// ABI wrapper for {} (function_id = {}).\n",
-        func.name, func.function_id
-    ));
-    out.push_str("// SAFETY: args and out pointers are validated at entry before dereferencing.\n");
-    out.push_str("#[allow(clippy::unnecessary_cast)]\n");
-    out.push_str(&format!(
-        "extern \"C\" fn {wrapper_name}(instance: GuestContractInstance, args: *const (), {out_param}, out_err: *mut AbiError) {{\n"
-    ));
+    // ---- LOGIC (the single body slot): the dispatch statements. FORM around them
+    // (doc, SAFETY comment, `#[allow]`, `extern "C"` signature) is delegated to
+    // langprint's `render_function` below. Body indentation is free — the whole
+    // file is canonicalized by rustfmt on write (`format_for_disk`). ----
+    let mut body: String = String::new();
     // The body computes the AbiError result via an inner closure, then writes it
-    // through `out_err` (the new out-param ABI). Early-exit paths write through
+    // through `out_err` (the out-param ABI). Early-exit paths write through
     // `out_err` and return rather than returning the value.
-    out.push_str("    let __result_err: AbiError = (|| {\n");
-    out.push_str("    if instance.data.is_null() {\n");
-    out.push_str("        return AbiError { code: AbiErrorCode::InvalidPointer as u32, message: string_view_from_static(b\"instance is null\") };\n");
-    out.push_str("    }\n");
-    out.push_str(&format!(
+    body.push_str("let __result_err: AbiError = (|| {\n");
+    body.push_str("    if instance.data.is_null() {\n");
+    body.push_str("        return AbiError { code: AbiErrorCode::InvalidPointer as u32, message: string_view_from_static(b\"instance is null\") };\n");
+    body.push_str("    }\n");
+    body.push_str(&format!(
         "    // SAFETY: instance.data was produced by create_instance via Box::into_raw\n\
          \x20   // and stays valid until destroy_instance; the host never mutates it.\n\
          \x20   let state: &{state_struct} = unsafe {{ &*(instance.data as *const {state_struct}) }};\n"
     ));
-    out.push_str("    match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {\n");
-    out.push_str(&format!(
+    body.push_str("    match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {\n");
+    body.push_str(&format!(
         "        let impl_ref: &dyn {trait_name} = state.implementation.as_ref();\n"
     ));
 
     if !func.params.is_empty() {
-        out.push_str("        if args.is_null() {\n");
-        out.push_str("            return AbiError { code: AbiErrorCode::InvalidPointer as u32, message: string_view_from_static(b\"args pointer is null\") };\n");
-        out.push_str("        }\n");
+        body.push_str("        if args.is_null() {\n");
+        body.push_str("            return AbiError { code: AbiErrorCode::InvalidPointer as u32, message: string_view_from_static(b\"args pointer is null\") };\n");
+        body.push_str("        }\n");
     }
     if has_return {
-        out.push_str("        if out.is_null() {\n");
-        out.push_str("            return AbiError { code: AbiErrorCode::InvalidPointer as u32, message: string_view_from_static(b\"out pointer is null\") };\n");
-        out.push_str("        }\n");
+        body.push_str("        if out.is_null() {\n");
+        body.push_str("            return AbiError { code: AbiErrorCode::InvalidPointer as u32, message: string_view_from_static(b\"out pointer is null\") };\n");
+        body.push_str("        }\n");
     }
 
-    emit_guest_wrapper_call(out, func, contract_struct);
+    emit_guest_wrapper_call(&mut body, func, contract_struct);
 
     // Match on result
     if has_return {
@@ -1065,37 +1058,92 @@ fn generate_guest_abi_wrapper(
             Some(ty) => rust_type_name(ty),
             None => String::new(),
         };
-        out.push_str("        match result {\n");
-        out.push_str("            Ok(val) => {\n");
-        out.push_str(&format!(
+        body.push_str("        match result {\n");
+        body.push_str("            Ok(val) => {\n");
+        body.push_str(&format!(
             "                // SAFETY: out is a valid *mut {ret_ty} per ABI contract.\n"
         ));
-        out.push_str(&format!(
+        body.push_str(&format!(
             "                unsafe {{ core::ptr::write(out as *mut {ret_ty}, val); }}\n"
         ));
-        out.push_str("                abi_error_ok()\n");
-        out.push_str("            }\n");
-        out.push_str("            Err(e) => plugin_error_to_abi_error(state.host, e),\n");
-        out.push_str("        }\n");
+        body.push_str("                abi_error_ok()\n");
+        body.push_str("            }\n");
+        body.push_str("            Err(e) => plugin_error_to_abi_error(state.host, e),\n");
+        body.push_str("        }\n");
     } else {
-        out.push_str("        match result {\n");
-        out.push_str("            Ok(()) => abi_error_ok(),\n");
-        out.push_str("            Err(e) => plugin_error_to_abi_error(state.host, e),\n");
-        out.push_str("        }\n");
+        body.push_str("        match result {\n");
+        body.push_str("            Ok(()) => abi_error_ok(),\n");
+        body.push_str("            Err(e) => plugin_error_to_abi_error(state.host, e),\n");
+        body.push_str("        }\n");
     }
 
-    out.push_str("    })) {\n");
-    out.push_str("        Ok(err) => err,\n");
-    out.push_str("        Err(_) => AbiError::panic_caught(),\n");
-    out.push_str("    }\n");
-    out.push_str("    })();\n");
-    out.push_str("    if !out_err.is_null() {\n");
-    out.push_str(
+    body.push_str("    })) {\n");
+    body.push_str("        Ok(err) => err,\n");
+    body.push_str("        Err(_) => AbiError::panic_caught(),\n");
+    body.push_str("    }\n");
+    body.push_str("    })();\n");
+    body.push_str("    if !out_err.is_null() {\n");
+    body.push_str(
         "        // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.\n",
     );
-    out.push_str("        unsafe { out_err.write(__result_err); }\n");
-    out.push_str("    }\n");
-    out.push_str("}\n\n");
+    body.push_str("        unsafe { out_err.write(__result_err); }\n");
+    body.push_str("    }");
+
+    // ---- FORM: langprint renders the wrapper shell around the body slot. ----
+    let wrapper: RustFunction = RustFunction {
+        name: wrapper_name,
+        visibility: RustVisibility::Private,
+        self_kind: RustSelfKind::None,
+        parameters: vec![
+            RustParameter {
+                name: "instance".to_owned(),
+                param_type: "GuestContractInstance".to_owned(),
+            },
+            RustParameter {
+                name: "args".to_owned(),
+                param_type: "*const ()".to_owned(),
+            },
+            RustParameter {
+                name: out_param_name.to_owned(),
+                param_type: "*mut ()".to_owned(),
+            },
+            RustParameter {
+                name: "out_err".to_owned(),
+                param_type: "*mut AbiError".to_owned(),
+            },
+        ],
+        generic_args: Vec::new(),
+        return_type: None,
+        is_unsafe: false,
+        is_async: false,
+        is_const: false,
+        abi: Some("C".to_owned()),
+        body: Some(vec![body]),
+        attributes: vec!["allow(clippy::unnecessary_cast)".to_owned()],
+        docs: Some(vec![format!(
+            "ABI wrapper for {} (function_id = {}).",
+            func.name, func.function_id
+        )]),
+        comments: vec![
+            "SAFETY: args and out pointers are validated at entry before dereferencing.".to_owned(),
+        ],
+    };
+    let backend: RustBackend = RustBackend::default();
+    let mut indent_level: i32 = 0;
+    let rendered: String = backend
+        .render_function(
+            &wrapper,
+            None::<&str>,
+            None::<&str>,
+            None,
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/interfaces.rs".to_owned(),
+            source,
+        })?;
+    out.push_str(&rendered);
+    out.push('\n');
 
     Ok(())
 }
