@@ -27,7 +27,12 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use langprint::backends::js_backend::{
+    JsBackend, JsFunction, JsFunctionRenderOptions, JsParameter,
+};
+use langprint::renderers::FunctionRenderer;
 use polyplug_codegen::PolyplugcError;
+use std::io;
 
 /// Generator for js-quickjs plugin bundles.
 ///
@@ -538,29 +543,76 @@ fn render_plugin_interface_quickjs(
         .collect();
     let impl_shape: String = format!("{{ {} }}", impl_members.join("; "));
 
-    out.push_str(&format!(
-        "\nexport function {set_factory_name}(factory: (bridge: any, hostLo: number, hostHi: number) => {impl_shape}): void {{\n"
-    ));
-
-    out.push_str("    ");
-    out.push_str(&plugin_var);
-    out.push_str("_INTERFACE.factory = factory;\n");
-
-    // Store ABI wrappers in interface
-    out.push_str("    ");
-    out.push_str(&plugin_var);
-    out.push_str("_INTERFACE.functions = [");
-    out.push_str(
-        &abi_wrappers
-            .iter()
-            .map(|w| w.as_str())
-            .collect::<Vec<_>>()
-            .join(", "),
-    );
-    out.push_str("];\n");
-    out.push_str("}\n");
+    // The exported `setXFactory` TypeScript signature is FORM — langprint's JS
+    // backend renders it in TypeScript mode (inline param/return types); the two
+    // assignment lines are the LOGIC body slot. `export` rides the render `before`
+    // slot. polyplugc still owns the type STRINGS (the factory arrow type, the
+    // impl-shape) — langprint owns the structure.
+    let functions_list: String = abi_wrappers
+        .iter()
+        .map(|w| w.as_str())
+        .collect::<Vec<&str>>()
+        .join(", ");
+    out.push('\n');
+    out.push_str(&render_js_set_factory(
+        &set_factory_name,
+        &plugin_var,
+        &impl_shape,
+        &functions_list,
+    )?);
 
     Ok(())
+}
+
+/// Render an exported `setXFactory` function via langprint's JS TypeScript mode.
+/// polyplugc supplies the type strings (factory arrow type, interface variable);
+/// langprint emits the typed signature + body. Byte-identical to the former
+/// hand-written form (QuickJS output has no formatter).
+fn render_js_set_factory(
+    set_factory_name: &str,
+    plugin_var: &str,
+    impl_shape: &str,
+    functions_list: &str,
+) -> Result<String, PolyplugcError> {
+    let factory_type: String =
+        format!("(bridge: any, hostLo: number, hostHi: number) => {impl_shape}");
+    let function: JsFunction = JsFunction {
+        name: set_factory_name.to_owned(),
+        parameters: vec![JsParameter {
+            name: "factory".to_owned(),
+            default: None,
+            type_doc: Some(factory_type),
+        }],
+        return_type: Some("void".to_owned()),
+        doc: None,
+        is_static: false,
+        body: Some(vec![
+            format!("{plugin_var}_INTERFACE.factory = factory;"),
+            format!("{plugin_var}_INTERFACE.functions = [{functions_list}];"),
+        ]),
+    };
+    // polyplugc's QuickJS output indents 4, not the JS-idiomatic 2.
+    let backend: JsBackend = JsBackend {
+        indent_size: 4,
+        ..JsBackend::default()
+    };
+    let options: JsFunctionRenderOptions = JsFunctionRenderOptions {
+        render_jsdoc: false,
+        typescript: true,
+    };
+    let mut indent_level: i32 = 0;
+    backend
+        .render_function(
+            &function,
+            Some("export "),
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/contracts.ts".to_owned(),
+            source,
+        })
 }
 
 fn generate_interface_ts(ir: &ValidatedIr) -> String {
