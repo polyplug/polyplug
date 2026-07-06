@@ -19,8 +19,8 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
-use langprint::backends::lua_backend::{LuaBackend, LuaFunction};
-use langprint::renderers::FunctionRenderer;
+use langprint::backends::lua_backend::{LuaBackend, LuaEnum, LuaEnumMember, LuaFunction};
+use langprint::renderers::{EnumRenderer, FunctionRenderer};
 use polyplug_codegen::PolyplugcError;
 use std::io;
 
@@ -32,7 +32,7 @@ impl CodeGenerator for LuaGenerator {
         ir: &ValidatedIr,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
-        let types_lua: String = generate_lua_types_file(ir);
+        let types_lua: String = generate_lua_types_file(ir)?;
         let callers_lua: String = generate_host_callers_file(ir);
 
         files.files.push(GeneratedFile {
@@ -71,7 +71,7 @@ impl CodeGenerator for LuaGenerator {
         ir: &ValidatedIr,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
-        let types_lua: String = generate_lua_types_file(ir);
+        let types_lua: String = generate_lua_types_file(ir)?;
         let contracts_lua: String = generate_guest_contracts_file(ir)?;
 
         files.files.push(GeneratedFile {
@@ -200,7 +200,7 @@ fn generate_bundle_manifest_lua(ir: &ValidatedIr) -> String {
     )
 }
 
-fn generate_lua_types_file(ir: &ValidatedIr) -> String {
+fn generate_lua_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(file_header());
     // Conditionally require the bit library for bitwise enum support
@@ -226,13 +226,13 @@ fn generate_lua_types_file(ir: &ValidatedIr) -> String {
     out.push_str("]]) \n");
     // Emit enum tables (outside cdef — Lua tables, not C structs)
     for e in &ir.enums {
-        generate_lua_enum(&mut out, e);
+        generate_lua_enum(&mut out, e)?;
         out.push('\n');
     }
     for ty in &ir.types {
         out.push_str(&format!("ffi.metatype(\"{}\", {{}})\n", ty.name));
     }
-    out
+    Ok(out)
 }
 
 fn generate_host_callers_file(ir: &ValidatedIr) -> String {
@@ -1432,19 +1432,47 @@ fn split_on_top_level_two_char(expr: &str, op1: char, op2: char) -> Option<Vec<&
     Some(vec![&expr[..pos], &expr[pos + 2..]])
 }
 
-fn generate_lua_enum(out: &mut String, e: &EnumDef) {
-    if e.bitflag {
-        out.push_str(&format!("--- Bitflag enum {}\n", e.name));
+fn generate_lua_enum(out: &mut String, e: &EnumDef) -> Result<(), PolyplugcError> {
+    let doc: String = if e.bitflag {
+        format!("Bitflag enum {}", e.name)
     } else {
-        out.push_str(&format!("--- Enum {}\n", e.name));
-    }
-    out.push_str(&format!("local {} = {{\n", e.name));
-    for variant in &e.variants {
-        let subst_value: String = substitute_variant_refs_lua(&e.variants, &variant.value);
-        let final_value: String = lua_transform_value_expr(&subst_value);
-        out.push_str(&format!("    {} = {},\n", variant.name, final_value));
-    }
-    out.push_str("}\n");
+        format!("Enum {}", e.name)
+    };
+    let lua_enum: LuaEnum = LuaEnum {
+        name: e.name.clone(),
+        members: e
+            .variants
+            .iter()
+            .map(|variant| {
+                let subst_value: String = substitute_variant_refs_lua(&e.variants, &variant.value);
+                LuaEnumMember {
+                    name: variant.name.clone(),
+                    value: lua_transform_value_expr(&subst_value),
+                }
+            })
+            .collect(),
+        doc: Some(doc),
+    };
+    // polyplug Lua output is 4-space indented, not the langprint default of 2.
+    let backend: LuaBackend = LuaBackend {
+        indent_size: 4,
+        ..LuaBackend::default()
+    };
+    let mut indent_level: i32 = 0;
+    let rendered: String = backend
+        .render_enum(
+            &lua_enum,
+            None::<&str>,
+            None::<&str>,
+            None,
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "types.lua".to_owned(),
+            source,
+        })?;
+    out.push_str(&rendered);
+    Ok(())
 }
 
 // ─── Host Contract Metatable Generation ────────────────────────────────────────
@@ -2746,7 +2774,7 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_lua_enum(&mut out, &e);
+        generate_lua_enum(&mut out, &e).expect("render enum");
         assert!(
             out.contains("local PixelFormat = {"),
             "missing table def: {out}"
@@ -2780,7 +2808,7 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_lua_enum(&mut out, &e);
+        generate_lua_enum(&mut out, &e).expect("render enum");
         assert!(
             out.contains("local ImageFlags = {"),
             "missing table def: {out}"
