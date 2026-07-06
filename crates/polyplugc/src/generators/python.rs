@@ -22,8 +22,10 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
-use langprint::backends::python_backend::{PythonBackend, PythonFunction, PythonParameter};
-use langprint::renderers::FunctionRenderer;
+use langprint::backends::python_backend::{
+    PythonBackend, PythonEnum, PythonEnumMember, PythonFunction, PythonParameter,
+};
+use langprint::renderers::{EnumRenderer, FunctionRenderer};
 use polyplug_codegen::PolyplugcError;
 use std::io;
 
@@ -39,8 +41,8 @@ impl CodeGenerator for PythonGenerator {
         ir: &ValidatedIr,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
-        let types_py: String = generate_host_types_file(ir);
-        let types_pyi: String = generate_host_types_stub(ir);
+        let types_py: String = generate_host_types_file(ir)?;
+        let types_pyi: String = generate_host_types_stub(ir)?;
         let callers_py: String = generate_host_callers_file(ir);
         let callers_pyi: String = generate_host_callers_stub(ir);
 
@@ -96,8 +98,8 @@ impl CodeGenerator for PythonGenerator {
         ir: &ValidatedIr,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
-        let types_py: String = generate_python_types_file(ir);
-        let types_pyi: String = generate_python_types_stub(ir);
+        let types_py: String = generate_python_types_file(ir)?;
+        let types_pyi: String = generate_python_types_stub(ir)?;
         let contracts_py: String = generate_guest_contracts_file(ir)?;
         let contracts_pyi: String = generate_guest_contracts_stub(ir);
 
@@ -174,7 +176,7 @@ impl CodeGenerator for PythonGenerator {
     }
 }
 
-fn generate_python_types_file(ir: &ValidatedIr) -> String {
+fn generate_python_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
@@ -187,7 +189,7 @@ fn generate_python_types_file(ir: &ValidatedIr) -> String {
 
     // Guest types file - no contract IDs here
     for e in &ir.enums {
-        generate_python_enum(&mut out, e);
+        generate_python_enum(&mut out, e)?;
         out.push('\n');
     }
 
@@ -206,10 +208,10 @@ fn generate_python_types_file(ir: &ValidatedIr) -> String {
         }
     }
 
-    out
+    Ok(out)
 }
 
-fn generate_python_types_stub(ir: &ValidatedIr) -> String {
+fn generate_python_types_stub(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
@@ -220,7 +222,7 @@ fn generate_python_types_stub(ir: &ValidatedIr) -> String {
         out.push_str("import enum\n\n");
     }
     for e in &ir.enums {
-        generate_python_enum(&mut out, e);
+        generate_python_enum(&mut out, e)?;
         out.push('\n');
     }
 
@@ -239,10 +241,10 @@ fn generate_python_types_stub(ir: &ValidatedIr) -> String {
         }
     }
 
-    out
+    Ok(out)
 }
 
-fn generate_host_types_file(ir: &ValidatedIr) -> String {
+fn generate_host_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
@@ -253,7 +255,7 @@ fn generate_host_types_file(ir: &ValidatedIr) -> String {
         out.push_str("import enum\n\n");
     }
     for e in &ir.enums {
-        generate_python_enum(&mut out, e);
+        generate_python_enum(&mut out, e)?;
         out.push('\n');
     }
 
@@ -272,10 +274,10 @@ fn generate_host_types_file(ir: &ValidatedIr) -> String {
         }
     }
 
-    out
+    Ok(out)
 }
 
-fn generate_host_types_stub(ir: &ValidatedIr) -> String {
+fn generate_host_types_stub(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
@@ -286,7 +288,7 @@ fn generate_host_types_stub(ir: &ValidatedIr) -> String {
         out.push_str("import enum\n\n");
     }
     for e in &ir.enums {
-        generate_python_enum(&mut out, e);
+        generate_python_enum(&mut out, e)?;
         out.push('\n');
     }
 
@@ -305,7 +307,7 @@ fn generate_host_types_stub(ir: &ValidatedIr) -> String {
         }
     }
 
-    out
+    Ok(out)
 }
 
 fn generate_host_callers_file(ir: &ValidatedIr) -> String {
@@ -2803,18 +2805,40 @@ fn substitute_variant_refs_python(declared_variants: &[EnumVariant], expr: &str)
     result
 }
 
-fn generate_python_enum(out: &mut String, e: &EnumDef) {
+fn generate_python_enum(out: &mut String, e: &EnumDef) -> Result<(), PolyplugcError> {
     let base_class: &str = if e.bitflag {
         "enum.IntFlag"
     } else {
         "enum.IntEnum"
     };
-    out.push_str(&format!("class {}({}):\n", e.name, base_class));
-    for variant in &e.variants {
-        let upper_name: String = to_upper_snake_case(&variant.name);
-        let subst_value: String = substitute_variant_refs_python(&e.variants, &variant.value);
-        out.push_str(&format!("    {} = {}\n", upper_name, subst_value));
-    }
+    let py_enum: PythonEnum = PythonEnum {
+        name: e.name.clone(),
+        base_class: base_class.to_owned(),
+        members: e
+            .variants
+            .iter()
+            .map(|variant| PythonEnumMember {
+                name: to_upper_snake_case(&variant.name),
+                value: substitute_variant_refs_python(&e.variants, &variant.value),
+            })
+            .collect(),
+        docstring: None,
+    };
+    let mut indent_level: i32 = 0;
+    let rendered: String = PythonBackend::default()
+        .render_enum(
+            &py_enum,
+            None::<&str>,
+            None::<&str>,
+            None,
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "types.py".to_owned(),
+            source,
+        })?;
+    out.push_str(&rendered);
+    Ok(())
 }
 
 // ─── Host Interface Factories Generation ─────────────────────────────────────────
@@ -3731,7 +3755,7 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_python_enum(&mut out, &e);
+        generate_python_enum(&mut out, &e).expect("render enum");
         assert!(
             out.contains("class PixelFormat(enum.IntEnum)"),
             "missing class def: {out}"
@@ -3758,7 +3782,7 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_python_enum(&mut out, &e);
+        generate_python_enum(&mut out, &e).expect("render enum");
         assert!(
             out.contains("class ImageFlags(enum.IntFlag)"),
             "missing class def: {out}"
