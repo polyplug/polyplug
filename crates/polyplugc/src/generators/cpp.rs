@@ -1122,6 +1122,7 @@ fn render_cpp_enum_decl(e: &EnumDef, repr_cpp: &str) -> Result<String, Polyplugc
     };
     let backend: CppBackend = CppBackend {
         docs_style: DocsStyle::TripleSlash,
+        space_before_enum_base: true,
         ..CppBackend::default()
     };
     let mut indent_level: i32 = 0;
