@@ -20,7 +20,7 @@ than abandon it.
 | Rank | Item | Summary |
 |---|---|---|
 | ~~G1~~ ✅ | ~~Bundle signing + verification~~ **Done** | Shipped: detached Ed25519 `bundle.sig` over a canonical digest, enforced at load via `SignaturePolicy` (`Off`/`WarnOnly`/`Required`); freedom-preserving TOFU. See `TRUST_MODEL.md` § Bundle Signing and the `polyplug_signing` crate. |
-| ~~G4~~ ✅ | ~~Published SDKs per registry~~ **Done** | All six registries publish from `release.yml`: crates.io, PyPI, NuGet, npm, JSR, LuaRocks. Latest release 0.1.1; see [Installation](../README.md#installation). |
+| ~~G4~~ ✅ | ~~Published SDKs per registry~~ **Done** | All six registries publish from `release.yml`: crates.io, PyPI, NuGet, npm, JSR, LuaRocks. Latest release 0.1.3; see the [Quick Start](QUICKSTART.md). |
 | ~~G5~~ ✅ | ~~Docs website + native-crash debugging guide~~ **Done** | Shipped: an mdBook site over the `docs/` tree plus the workspace rustdoc API reference, deployed to GitHub Pages by `docs.yml`, and a new [Debugging Native Crashes](DEBUGGING_NATIVE_CRASHES.md) guide (symbols, core dumps, sanitizers) for trusted-plugin deployments. |
 | G2 ⏸ | Optional process-isolation mode | Opt-in, per-plugin out-of-process execution — the credible answer to "I sometimes need isolation" while keeping the native fast path the default. **Deferred** (owner: not now); needs a design/scoping decision before building. |
 | ~~G3~~ ❌ | ~~Resource limits / runaway-plugin watchdog~~ **Non-goal** | A per-call wall-clock watchdog cannot be built without hot-path overhead: knowing a call ran too long requires recording when it started (a clock read ~15–30 ns, or ≥2 atomic stores/call). That violates the ~0.5 ns zero-overhead dispatch invariant, which is sacred. **Per-call timeouts are a host-side concern** — run the call on a worker thread you control and enforce your own deadline, outside polyplug (same pattern as tracing-via-host-contract). |
@@ -44,7 +44,7 @@ than abandon it.
 | **TSAN for the resolve→dispatch race** | ✅ Done (nightly, concurrent unload stress test) |
 | **Supply-chain gate (cargo-deny)** | ✅ Done (nightly) |
 | **Cross-language differential parity tests** | ✅ Done (`examples/hosts/parity`, 6 langs × 5 contracts byte-identical) |
-| **Published SDK packages (crates.io / PyPI / NuGet / npm / JSR / luarocks)** | ✅ Done — all six registries publish from `release.yml`; latest release 0.1.1 |
+| **Published SDK packages (crates.io / PyPI / NuGet / npm / JSR / luarocks)** | ✅ Done — all six registries publish from `release.yml`; latest release 0.1.3 |
 | **Quickstart + example gallery** | ✅ Done (B2, #74 — `docs/QUICKSTART.md` guided path + `docs/EXAMPLES.md` gallery) |
 | **polyplugc diagnostics (source spans + suggestions)** | ✅ Done (B3, #73 — `file:line:col` + did-you-mean on parse/validate errors) |
 | **Guest→guest peer callers + runtime tests** | ✅ Done (#69–#72, #75; direct-dispatch upgrade #104–#107) — peer callers in all 6 generators; runtime execution tests green for **all 6** languages (rust/lua/js/cpp/csharp/python). Native-dispatch languages (rust/cpp/csharp/python/lua) now dispatch **directly through the cached interface** (no `call_guest_method` round-trip, no per-call resolve, no epoch pin); JS stays bridge-mediated (QuickJS cannot deref raw pointers) |
@@ -115,8 +115,8 @@ owner is currently budget-constrained.
 - **B1. Publish SDK packages. ✅ Done.** All six registries publish from
   `release.yml`: `cargo add polyplug` (crates.io), `pip install` (PyPI),
   `dotnet add package` (NuGet), `npm i` / JSR, and `luarocks install`. Latest
-  release 0.1.3. See
-  [Installation](../README.md#installation).
+  release 0.1.3. See the
+  [Quick Start](QUICKSTART.md).
 - **B2. Quickstart + example gallery. ✅ Done (#74).** `docs/QUICKSTART.md` is a
   guided "write your first plugin in language X" path; `docs/EXAMPLES.md` is a
   gallery of the reference plugins. (Shipped independently of B1's publish gate.)
