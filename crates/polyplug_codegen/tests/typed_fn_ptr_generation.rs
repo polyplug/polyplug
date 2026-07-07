@@ -121,7 +121,9 @@ fn python_fn_ptr_field_produces_cfunctype() {
         r#"unsafeextern"C"fn(*constu8,usize)->u32"#,
     );
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     // Python should produce CFUNCTYPE instead of c_void_p for fn ptr fields.
     assert!(
@@ -136,7 +138,9 @@ fn python_fn_ptr_typedef_before_struct() {
     let ctx = GenerationContext::new();
     let item = make_host_api_struct();
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     // The CFUNCTYPE typedef should appear before the class definition.
     let cfunctype_pos = output.find("CFUNCTYPE").expect("Should contain CFUNCTYPE");
@@ -155,7 +159,9 @@ fn python_multiple_fn_ptrs_all_get_cfunctype() {
     let ctx = GenerationContext::new();
     let item = make_host_api_struct();
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     // HostApi has 3 fn ptr fields; all should have CFUNCTYPE.
     let cfunctype_count = output.matches("CFUNCTYPE").count();
@@ -171,7 +177,9 @@ fn python_array_field_generates_void_ptr_and_size_t() {
     let ctx = GenerationContext::new();
     let item = make_array_struct();
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     // Array<T> should generate as void* items + size_t len + size_t align.
     assert!(
@@ -192,7 +200,9 @@ fn csharp_fn_ptr_field_produces_intptr() {
         r#"unsafeextern"C"fn(*constu8,usize)->u32"#,
     );
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     assert!(
         output.contains("public IntPtr Callback;"),
@@ -210,7 +220,9 @@ fn csharp_fn_ptr_field_emits_no_managed_delegate() {
         r#"unsafeextern"C"fn(*constu8,usize)->u32"#,
     );
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     // No managed delegate in the ABI struct keeps it blittable so ABI unions
     // stay overlappable in .NET (TypeLoadException otherwise).
@@ -226,7 +238,9 @@ fn csharp_all_fn_ptr_fields_become_intptr() {
     let ctx = GenerationContext::new();
     let item = make_host_api_struct();
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     assert!(
         output.contains("public IntPtr RegisterGuestContract;")
@@ -246,7 +260,9 @@ fn csharp_array_field_generates_intptr_and_nuint() {
     let ctx = GenerationContext::new();
     let item = make_array_struct();
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     // Array<T> in C# should have IntPtr items + nuint len + nuint align.
     assert!(
@@ -267,7 +283,9 @@ fn lua_fn_ptr_field_produces_typed_typedef() {
         r#"unsafeextern"C"fn(*constu8,usize)->u32"#,
     );
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     // Lua should produce a valid, named C function-pointer typedef, not void*.
     assert!(
@@ -282,7 +300,9 @@ fn lua_array_field_generates_void_and_size_t() {
     let ctx = GenerationContext::new();
     let item = make_array_struct();
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     // Array<T> in Lua should have void* + size_t + size_t.
     assert!(
@@ -303,7 +323,9 @@ fn js_fn_ptr_field_produces_number_type() {
         r#"unsafeextern"C"fn(*constu8,usize)->u32"#,
     );
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     // JS should produce typed interfaces with fn ptr fields as number.
     assert!(
@@ -318,7 +340,9 @@ fn js_struct_produces_interface() {
     let ctx = GenerationContext::new();
     let item = make_host_api_struct();
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     assert!(
         output.contains("export interface"),
@@ -332,7 +356,9 @@ fn js_array_field_generates_generic_struct() {
     let ctx = GenerationContext::new();
     let item = make_array_struct();
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     // Array<T> should have the field name and offset constants for len/align.
     assert!(
@@ -361,7 +387,9 @@ fn cpp_fn_ptr_field_produces_typed_ptr() {
         r#"unsafeextern"C"fn(*constu8,usize)->uint32_t"#,
     );
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     // C++ should produce typed fn pointer in struct.
     assert!(
@@ -376,7 +404,9 @@ fn cpp_array_field_generates_void_and_size_t() {
     let ctx = GenerationContext::new();
     let item = make_array_struct();
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     assert!(
         output.contains("void*") && output.contains("size_t"),
@@ -392,7 +422,9 @@ fn python_optional_fn_ptr_generates_cfunctype() {
     let ctx = GenerationContext::new();
     let item = make_optional_fn_ptr_struct();
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     // Option<fn ptr> should still produce CFUNCTYPE (nullable via ctypes).
     assert!(
@@ -407,7 +439,9 @@ fn csharp_optional_fn_ptr_becomes_intptr() {
     let ctx = GenerationContext::new();
     let item = make_optional_fn_ptr_struct();
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     assert!(
         output.contains("public IntPtr OnReload;"),
@@ -427,7 +461,9 @@ fn python_no_void_p_for_fn_ptr_fields() {
     let ctx = GenerationContext::new();
     let item = make_host_api_struct();
 
-    let output = generator.generate_struct(&item, &ctx);
+    let output = generator
+        .generate_struct(&item, &ctx)
+        .expect("generate_struct");
 
     // After the fix, fn ptr fields should reference CFUNCTYPE typedef names in _fields_.
     // The `runtime` field is a raw pointer (*mut c_void) and correctly uses c_void_p.

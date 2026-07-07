@@ -4,6 +4,7 @@
 //! representations, and snake_case naming per D-35.
 
 use crate::data::{ConstInfo, EnumInfo, FunctionInfo, StructInfo, UnionInfo};
+use crate::error::PolyplugcError;
 use crate::languages::{CodeGenerator, GenerationContext};
 
 /// Lua/LuaJIT ABI code generator.
@@ -317,7 +318,11 @@ impl LuaGenerator {
 }
 
 impl CodeGenerator for LuaGenerator {
-    fn generate_const(&self, item: &ConstInfo, _ctx: &GenerationContext) -> String {
+    fn generate_const(
+        &self,
+        item: &ConstInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let c_type: &str = match item.rust_type.as_str() {
             "u64" => "uint64_t",
             "u32" => "uint32_t",
@@ -325,13 +330,17 @@ impl CodeGenerator for LuaGenerator {
             "i32" => "int32_t",
             _ => &item.rust_type,
         };
-        format!(
+        Ok(format!(
             "M.{} = ffi.cast(\"{}\", {})\n",
             item.name, c_type, item.value
-        )
+        ))
     }
 
-    fn generate_struct(&self, item: &StructInfo, _ctx: &GenerationContext) -> String {
+    fn generate_struct(
+        &self,
+        item: &StructInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let mut output = String::new();
         let mut typedefs = String::new();
 
@@ -396,10 +405,14 @@ impl CodeGenerator for LuaGenerator {
         // Prepend typedefs before the struct.
         let mut result = typedefs;
         result.push_str(&output);
-        result
+        Ok(result)
     }
 
-    fn generate_enum(&self, item: &EnumInfo, _ctx: &GenerationContext) -> String {
+    fn generate_enum(
+        &self,
+        item: &EnumInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -426,10 +439,14 @@ impl CodeGenerator for LuaGenerator {
         }
 
         output.push_str(&format!("    }} {};\n\n", item.name));
-        output
+        Ok(output)
     }
 
-    fn generate_union(&self, item: &UnionInfo, _ctx: &GenerationContext) -> String {
+    fn generate_union(
+        &self,
+        item: &UnionInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -444,10 +461,14 @@ impl CodeGenerator for LuaGenerator {
         }
 
         output.push_str(&format!("    }} {};\n\n", item.name));
-        output
+        Ok(output)
     }
 
-    fn generate_function(&self, item: &FunctionInfo, _ctx: &GenerationContext) -> String {
+    fn generate_function(
+        &self,
+        item: &FunctionInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let _ret_type: String = item
             .return_type
             .as_ref()
@@ -462,9 +483,9 @@ impl CodeGenerator for LuaGenerator {
             .join(", ");
 
         if params.is_empty() {
-            format!("local function {}() end\n\n", item.name)
+            Ok(format!("local function {}() end\n\n", item.name))
         } else {
-            format!("local function {}({}) end\n\n", item.name, params)
+            Ok(format!("local function {}({}) end\n\n", item.name, params))
         }
     }
 
@@ -476,15 +497,15 @@ impl CodeGenerator for LuaGenerator {
         "lua"
     }
 
-    fn generate_header(&self, _ctx: &GenerationContext) -> String {
-        "local ffi = require(\"ffi\")\nlocal M = {}\n\nffi.cdef[[\n".to_string()
+    fn generate_header(&self, _ctx: &GenerationContext) -> Result<String, PolyplugcError> {
+        Ok("local ffi = require(\"ffi\")\nlocal M = {}\n\nffi.cdef[[\n".to_string())
     }
 
-    fn generate_footer(&self, _ctx: &GenerationContext) -> String {
+    fn generate_footer(&self, _ctx: &GenerationContext) -> Result<String, PolyplugcError> {
         // The `ffi.cdef[[ ... ]]` block is opened by `generate_header` and
         // closed by the orchestrator before emitting Lua-statement constants,
         // so the footer only returns the module table.
-        "return M\n".to_string()
+        Ok("return M\n".to_string())
     }
 }
 
@@ -579,7 +600,7 @@ mod tests {
             size_hint: Some(32),
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("uint8_t bytes[32];"),
             "fixed byte array should emit C array field: {}",
@@ -609,7 +630,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("void* data;"),
             "Array items should be void*: {}",

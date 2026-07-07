@@ -4,6 +4,7 @@
 //! correct Array<T> representations, and idiomatic Python naming.
 
 use crate::data::{ConstInfo, EnumInfo, FunctionInfo, StructInfo, UnionInfo};
+use crate::error::PolyplugcError;
 use crate::languages::{CodeGenerator, GenerationContext};
 
 /// Python ABI code generator.
@@ -383,11 +384,19 @@ fn to_snake_case(s: &str) -> String {
 }
 
 impl CodeGenerator for PythonGenerator {
-    fn generate_const(&self, item: &ConstInfo, _ctx: &GenerationContext) -> String {
-        format!("{}: int = {}\n", item.name, item.value)
+    fn generate_const(
+        &self,
+        item: &ConstInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
+        Ok(format!("{}: int = {}\n", item.name, item.value))
     }
 
-    fn generate_struct(&self, item: &StructInfo, ctx: &GenerationContext) -> String {
+    fn generate_struct(
+        &self,
+        item: &StructInfo,
+        ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let mut output = String::new();
         let mut typedefs = String::new();
 
@@ -452,10 +461,14 @@ impl CodeGenerator for PythonGenerator {
             ));
         }
 
-        output
+        Ok(output)
     }
 
-    fn generate_enum(&self, item: &EnumInfo, _ctx: &GenerationContext) -> String {
+    fn generate_enum(
+        &self,
+        item: &EnumInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let mut output = String::new();
 
         output.push_str("\n\nclass ");
@@ -478,10 +491,14 @@ impl CodeGenerator for PythonGenerator {
             }
         }
 
-        output
+        Ok(output)
     }
 
-    fn generate_union(&self, item: &UnionInfo, ctx: &GenerationContext) -> String {
+    fn generate_union(
+        &self,
+        item: &UnionInfo,
+        ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let mut output = String::new();
 
         output.push_str("\n\nclass ");
@@ -501,10 +518,14 @@ impl CodeGenerator for PythonGenerator {
         }
         output.push_str("    ]\n");
 
-        output
+        Ok(output)
     }
 
-    fn generate_function(&self, item: &FunctionInfo, _ctx: &GenerationContext) -> String {
+    fn generate_function(
+        &self,
+        item: &FunctionInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let ret_type: String = item
             .return_type
             .as_ref()
@@ -518,10 +539,10 @@ impl CodeGenerator for PythonGenerator {
             .collect::<Vec<_>>()
             .join(", ");
 
-        format!(
+        Ok(format!(
             "def {}({}) -> {}:\n    pass\n\n",
             item.name, params, ret_type
-        )
+        ))
     }
 
     fn file_extension(&self) -> &'static str {
@@ -532,8 +553,8 @@ impl CodeGenerator for PythonGenerator {
         "python"
     }
 
-    fn generate_header(&self, _ctx: &GenerationContext) -> String {
-        "from __future__ import annotations\n\nimport ctypes\nimport enum\nfrom typing import ClassVar\n\n".to_string()
+    fn generate_header(&self, _ctx: &GenerationContext) -> Result<String, PolyplugcError> {
+        Ok("from __future__ import annotations\n\nimport ctypes\nimport enum\nfrom typing import ClassVar\n\n".to_string())
     }
 }
 
@@ -618,7 +639,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("CFUNCTYPE"),
             "struct with fn ptr should emit CFUNCTYPE: {}",
@@ -648,7 +669,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains(r#"("items", ctypes.c_void_p)"#),
             "Array items should be c_void_p: {}",
@@ -683,7 +704,7 @@ mod tests {
             size_hint: Some(32),
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains(r#"("bytes", ctypes.c_uint8 * 32)"#),
             "fixed byte array should emit ctypes array field: {}",

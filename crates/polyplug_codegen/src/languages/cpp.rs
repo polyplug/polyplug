@@ -4,6 +4,7 @@
 //! and snake_case naming in the `polyplug` namespace per D-35.
 
 use crate::data::{ConstInfo, EnumInfo, FunctionInfo, StructInfo, UnionInfo};
+use crate::error::PolyplugcError;
 use crate::languages::{CodeGenerator, GenerationContext};
 
 /// C++ ABI code generator.
@@ -343,12 +344,20 @@ pub enum ForwardKind {
 }
 
 impl CodeGenerator for CppGenerator {
-    fn generate_const(&self, item: &ConstInfo, _ctx: &GenerationContext) -> String {
+    fn generate_const(
+        &self,
+        item: &ConstInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let value: String = Self::format_constant_value(&item.value, &item.rust_type);
-        format!("#define {} {}\n", item.name, value)
+        Ok(format!("#define {} {}\n", item.name, value))
     }
 
-    fn generate_struct(&self, item: &StructInfo, _ctx: &GenerationContext) -> String {
+    fn generate_struct(
+        &self,
+        item: &StructInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let mut output = String::new();
         let mut typedefs = String::new();
 
@@ -418,10 +427,14 @@ impl CodeGenerator for CppGenerator {
             output.push('\n');
         }
 
-        output
+        Ok(output)
     }
 
-    fn generate_enum(&self, item: &EnumInfo, _ctx: &GenerationContext) -> String {
+    fn generate_enum(
+        &self,
+        item: &EnumInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -444,10 +457,14 @@ impl CodeGenerator for CppGenerator {
             }
         }
         output.push_str("};\n\n");
-        output
+        Ok(output)
     }
 
-    fn generate_union(&self, item: &UnionInfo, _ctx: &GenerationContext) -> String {
+    fn generate_union(
+        &self,
+        item: &UnionInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -460,10 +477,14 @@ impl CodeGenerator for CppGenerator {
             output.push_str(&format!("    {} {};\n", cpp_type, variant.name));
         }
         output.push_str("};\n\n");
-        output
+        Ok(output)
     }
 
-    fn generate_function(&self, item: &FunctionInfo, _ctx: &GenerationContext) -> String {
+    fn generate_function(
+        &self,
+        item: &FunctionInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let ret_type: String = item
             .return_type
             .as_ref()
@@ -478,12 +499,12 @@ impl CodeGenerator for CppGenerator {
             .join(", ");
 
         if item.is_constexpr {
-            format!(
+            Ok(format!(
                 "constexpr {} {}({}) {{ /* implementation */ }}\n\n",
                 ret_type, item.name, params
-            )
+            ))
         } else {
-            format!("{} {}({});\n\n", ret_type, item.name, params)
+            Ok(format!("{} {}({});\n\n", ret_type, item.name, params))
         }
     }
 
@@ -495,7 +516,7 @@ impl CodeGenerator for CppGenerator {
         "cpp"
     }
 
-    fn generate_header(&self, _ctx: &GenerationContext) -> String {
+    fn generate_header(&self, _ctx: &GenerationContext) -> Result<String, PolyplugcError> {
         let mut header: String = String::from("#pragma once\n");
         header.push_str("#include <cstdint>\n");
         header.push_str("#include <cstddef>\n");
@@ -508,7 +529,7 @@ impl CodeGenerator for CppGenerator {
         // link-time dependency on the host. Cross-boundary allocation lives in the
         // guest SDK (polyplug::alloc_string), which routes through the stored
         // HostApi function pointers.
-        header
+        Ok(header)
     }
 }
 
@@ -565,7 +586,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("void* data;"),
             "Array items should be void*: {}",
@@ -642,7 +663,7 @@ mod tests {
             size_hint: Some(32),
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("uint8_t bytes[32];"),
             "fixed byte array should emit C array field: {}",

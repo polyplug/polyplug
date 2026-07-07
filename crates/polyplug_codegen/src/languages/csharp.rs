@@ -5,6 +5,7 @@
 //! PascalCase naming per D-35.
 
 use crate::data::{ConstInfo, EnumInfo, FunctionInfo, StructInfo, UnionInfo};
+use crate::error::PolyplugcError;
 use crate::languages::{CodeGenerator, GenerationContext};
 
 /// C# ABI code generator.
@@ -173,13 +174,21 @@ impl CSharpGenerator {
 }
 
 impl CodeGenerator for CSharpGenerator {
-    fn generate_const(&self, _item: &ConstInfo, _ctx: &GenerationContext) -> String {
+    fn generate_const(
+        &self,
+        _item: &ConstInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         // C# ABI bindings don't include constants at namespace level.
         // Constants are provided by the AbiConstants static class in the host/guest SDKs.
-        String::new()
+        Ok(String::new())
     }
 
-    fn generate_struct(&self, item: &StructInfo, _ctx: &GenerationContext) -> String {
+    fn generate_struct(
+        &self,
+        item: &StructInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -257,10 +266,14 @@ impl CodeGenerator for CSharpGenerator {
         }
 
         output.push('\n');
-        output
+        Ok(output)
     }
 
-    fn generate_enum(&self, item: &EnumInfo, _ctx: &GenerationContext) -> String {
+    fn generate_enum(
+        &self,
+        item: &EnumInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -287,10 +300,14 @@ impl CodeGenerator for CSharpGenerator {
         }
 
         output.push_str("}\n\n");
-        output
+        Ok(output)
     }
 
-    fn generate_union(&self, item: &UnionInfo, _ctx: &GenerationContext) -> String {
+    fn generate_union(
+        &self,
+        item: &UnionInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -310,12 +327,16 @@ impl CodeGenerator for CSharpGenerator {
         }
 
         output.push_str("}\n\n");
-        output
+        Ok(output)
     }
 
-    fn generate_function(&self, _item: &FunctionInfo, _ctx: &GenerationContext) -> String {
+    fn generate_function(
+        &self,
+        _item: &FunctionInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         // C# ABI bindings don't include functions - only structs, enums, and constants.
-        String::new()
+        Ok(String::new())
     }
 
     fn file_extension(&self) -> &'static str {
@@ -326,13 +347,15 @@ impl CodeGenerator for CSharpGenerator {
         "csharp"
     }
 
-    fn generate_header(&self, _ctx: &GenerationContext) -> String {
-        "using System.Runtime.InteropServices;\nusing System.Text;\n\nnamespace Polyplug.Abi {\n\n"
-            .to_string()
+    fn generate_header(&self, _ctx: &GenerationContext) -> Result<String, PolyplugcError> {
+        Ok(
+            "using System.Runtime.InteropServices;\nusing System.Text;\n\nnamespace Polyplug.Abi {\n\n"
+                .to_string(),
+        )
     }
 
-    fn generate_footer(&self, _ctx: &GenerationContext) -> String {
-        r#"
+    fn generate_footer(&self, _ctx: &GenerationContext) -> Result<String, PolyplugcError> {
+        Ok(r#"
 /// ABI constants for polyplug.
 public static class AbiConstants
 {
@@ -340,7 +363,7 @@ public static class AbiConstants
 }
 }
 "#
-        .to_string()
+        .to_string())
     }
 }
 
@@ -380,7 +403,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("public IntPtr Callback;"),
             "fn ptr field should be IntPtr: {}",
@@ -416,7 +439,7 @@ mod tests {
             size_hint: Some(32),
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("public unsafe struct Ed25519PublicKey"),
             "struct with fixed buffer must be declared unsafe: {}",
@@ -451,7 +474,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("public IntPtr Data;"),
             "Array items should be IntPtr with PascalCase: {}",

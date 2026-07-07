@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use crate::mapper::map_all_abi_types;
 use crate::types::AbiTypes;
 use polyplug_codegen::data::Item;
+use polyplug_codegen::error::PolyplugcError;
 use polyplug_codegen::languages::{
     CSharpGenerator, CodeGenerator, CppGenerator, ForwardKind, GenerationContext, JsGenerator,
     LuaGenerator, PythonGenerator,
@@ -980,7 +981,10 @@ fn generate_auto_header(lang: TargetLang) -> String {
 ///
 /// # Returns
 /// Generated SDK code as a string.
-pub fn generate_language_sdk(lang: TargetLang, abi_types: &AbiTypes) -> String {
+pub fn generate_language_sdk(
+    lang: TargetLang,
+    abi_types: &AbiTypes,
+) -> Result<String, PolyplugcError> {
     let all_items: Vec<Item> = map_all_abi_types(&abi_types.types());
 
     let generator: Box<dyn CodeGenerator> = match lang {
@@ -1006,7 +1010,7 @@ pub fn generate_language_sdk(lang: TargetLang, abi_types: &AbiTypes) -> String {
 
     // Prepend auto-generated header before the codegen header.
     output.push_str(&generate_auto_header(lang));
-    output.push_str(&generator.generate_header(&ctx));
+    output.push_str(&generator.generate_header(&ctx)?);
 
     // Languages whose bindings reference types eagerly at definition time
     // (C++ by-value fields, Python ctypes CFUNCTYPE/Structure references)
@@ -1046,10 +1050,10 @@ pub fn generate_language_sdk(lang: TargetLang, abi_types: &AbiTypes) -> String {
             continue;
         }
         let code: String = match item {
-            Item::Const(c) => generator.generate_const(c, &ctx),
-            Item::Struct(s) => generator.generate_struct(s, &ctx),
-            Item::Enum(e) => generator.generate_enum(e, &ctx),
-            Item::Union(u) => generator.generate_union(u, &ctx),
+            Item::Const(c) => generator.generate_const(c, &ctx)?,
+            Item::Struct(s) => generator.generate_struct(s, &ctx)?,
+            Item::Enum(e) => generator.generate_enum(e, &ctx)?,
+            Item::Union(u) => generator.generate_union(u, &ctx)?,
             // Function items are no longer generated from ABI extraction.
             // The Function variant remains in codegen for use by polyplugc CLI.
             Item::Function(_) => String::new(),
@@ -1063,14 +1067,14 @@ pub fn generate_language_sdk(lang: TargetLang, abi_types: &AbiTypes) -> String {
         output.push_str("]]\n\n");
         for item in lua_consts.iter() {
             if let Item::Const(c) = item {
-                output.push_str(&generator.generate_const(c, &ctx));
+                output.push_str(&generator.generate_const(c, &ctx)?);
             }
         }
         output.push('\n');
     }
 
-    output.push_str(&generator.generate_footer(&ctx));
-    output
+    output.push_str(&generator.generate_footer(&ctx)?);
+    Ok(output)
 }
 
 /// Emit C++ forward declarations for every struct, union, and enum item.
@@ -1817,7 +1821,7 @@ pub fn generate_all_sdks(
         delete_old_generated_files(lang, &abi_dir);
 
         // ── Step 3: Generate fresh code ──
-        let mut sdk: String = generate_language_sdk(lang, abi_types);
+        let mut sdk: String = generate_language_sdk(lang, abi_types)?;
 
         // ── Step 4: Merge helper methods into generated output (D-12) ──
         sdk = merge_helpers_into_generated(lang, &sdk, &helpers);
@@ -2111,7 +2115,8 @@ mod tests {
             doc: Some(String::from("Test constant.")),
         });
 
-        let sdk: String = generate_language_sdk(TargetLang::Cpp, &abi_types);
+        let sdk: String =
+            generate_language_sdk(TargetLang::Cpp, &abi_types).expect("generate_language_sdk");
 
         assert!(sdk.contains("#pragma once"));
         assert!(sdk.contains("#include <cstdint>"));
@@ -2128,7 +2133,8 @@ mod tests {
             doc: Some(String::from("Test constant.")),
         });
 
-        let sdk: String = generate_language_sdk(TargetLang::Python, &abi_types);
+        let sdk: String =
+            generate_language_sdk(TargetLang::Python, &abi_types).expect("generate_language_sdk");
 
         assert!(sdk.contains("import ctypes"));
         assert!(sdk.contains("TEST_CONST"));
@@ -2194,7 +2200,8 @@ mod tests {
             size_hint: Some(16),
         });
 
-        let sdk: String = generate_language_sdk(TargetLang::Cpp, &abi_types);
+        let sdk: String =
+            generate_language_sdk(TargetLang::Cpp, &abi_types).expect("generate_language_sdk");
         assert!(
             sdk.contains("static_assert(sizeof(RuntimeConfig) == 16"),
             "C++ should contain static_assert for RuntimeConfig: {}",
@@ -2218,7 +2225,8 @@ mod tests {
             size_hint: Some(16),
         });
 
-        let sdk: String = generate_language_sdk(TargetLang::Python, &abi_types);
+        let sdk: String =
+            generate_language_sdk(TargetLang::Python, &abi_types).expect("generate_language_sdk");
         assert!(
             sdk.contains("assert ctypes.sizeof(RuntimeConfig) == 16"),
             "Python should contain ctypes.sizeof assertion for RuntimeConfig: {}",

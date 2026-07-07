@@ -4,6 +4,7 @@
 //! for DataView/UnsafePointerView access. Targets Deno host per D-34.
 
 use crate::data::{ConstInfo, EnumInfo, FunctionInfo, StructInfo, UnionInfo};
+use crate::error::PolyplugcError;
 use crate::languages::{CodeGenerator, GenerationContext};
 
 /// JavaScript/TypeScript ABI code generator.
@@ -228,7 +229,11 @@ impl JsGenerator {
 }
 
 impl CodeGenerator for JsGenerator {
-    fn generate_const(&self, item: &ConstInfo, _ctx: &GenerationContext) -> String {
+    fn generate_const(
+        &self,
+        item: &ConstInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let ts_type: String = Self::rust_type_to_ts(&item.rust_type);
         let formatted_value: String = if ts_type == "bigint" {
             format!("{}n", item.value)
@@ -236,13 +241,17 @@ impl CodeGenerator for JsGenerator {
             item.value.clone()
         };
 
-        format!(
+        Ok(format!(
             "export const {}: {} = {};\n\n",
             item.name, ts_type, formatted_value
-        )
+        ))
     }
 
-    fn generate_struct(&self, item: &StructInfo, ctx: &GenerationContext) -> String {
+    fn generate_struct(
+        &self,
+        item: &StructInfo,
+        ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -327,10 +336,14 @@ impl CodeGenerator for JsGenerator {
         ));
 
         output.push_str(&offset_constants);
-        output
+        Ok(output)
     }
 
-    fn generate_enum(&self, item: &EnumInfo, _ctx: &GenerationContext) -> String {
+    fn generate_enum(
+        &self,
+        item: &EnumInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -354,10 +367,14 @@ impl CodeGenerator for JsGenerator {
         }
 
         output.push_str("}\n\n");
-        output
+        Ok(output)
     }
 
-    fn generate_union(&self, item: &UnionInfo, _ctx: &GenerationContext) -> String {
+    fn generate_union(
+        &self,
+        item: &UnionInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -372,10 +389,14 @@ impl CodeGenerator for JsGenerator {
         }
 
         output.push_str(";\n\n");
-        output
+        Ok(output)
     }
 
-    fn generate_function(&self, item: &FunctionInfo, _ctx: &GenerationContext) -> String {
+    fn generate_function(
+        &self,
+        item: &FunctionInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let ret_type: String = item
             .return_type
             .as_ref()
@@ -389,10 +410,10 @@ impl CodeGenerator for JsGenerator {
             .collect::<Vec<_>>()
             .join(", ");
 
-        format!(
+        Ok(format!(
             "export function {}({}): {} {{}}\n\n",
             item.name, params, ret_type
-        )
+        ))
     }
 
     fn file_extension(&self) -> &'static str {
@@ -403,8 +424,8 @@ impl CodeGenerator for JsGenerator {
         "js"
     }
 
-    fn generate_header(&self, _ctx: &GenerationContext) -> String {
-        String::new()
+    fn generate_header(&self, _ctx: &GenerationContext) -> Result<String, PolyplugcError> {
+        Ok(String::new())
     }
 }
 
@@ -461,7 +482,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("export interface TestStruct"),
             "should emit TypeScript interface: {}",
@@ -501,7 +522,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         // In the interface, fn ptr fields should be typed as number.
         assert!(
             output.contains("callback: number;"),
@@ -532,7 +553,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("items: number;"),
             "Array items should be number in interface: {}",
@@ -568,7 +589,7 @@ mod tests {
             size_hint: Some(32),
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("bytes: number[];"),
             "fixed byte array should emit number[] interface field: {}",
@@ -623,7 +644,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("export const POLICY_HOLDER_POLICY_OFFSET: number = 4;"),
             "repr(u32) enum field must sit at offset 4, got: {output}"
