@@ -5,10 +5,15 @@
 
 use std::io;
 
-use langprint::backends::cpp_backend::{CppBackend, CppEnum, CppEnumVariant, DocsStyle};
-use langprint::renderers::EnumRenderer;
+use langprint::backends::cpp_backend::{
+    CppBackend, CppDefinition, CppEnum, CppEnumVariant, CppField, CppStruct, CppStructKind,
+    CppStructRenderOptions, CppVisibility, DocsStyle,
+};
+use langprint::renderers::{DefinitionRenderer, EnumRenderer, StructRenderer};
 
-use crate::data::{ConstInfo, EnumInfo, EnumVariant, FunctionInfo, StructInfo, UnionInfo};
+use crate::data::{
+    ConstInfo, EnumInfo, EnumVariant, FunctionInfo, StructInfo, UnionInfo, UnionVariant,
+};
 use crate::error::PolyplugcError;
 use crate::languages::{CodeGenerator, GenerationContext};
 
@@ -287,6 +292,26 @@ impl CppGenerator {
         doc.lines().map(String::from).collect::<Vec<String>>()
     }
 
+    /// Build a langprint `CppField` with the ABI-mirror defaults: default
+    /// (public) visibility, no bit-field / over-alignment / initializer. The
+    /// caller sets `array_size` after the fact for fixed-size array fields.
+    fn cpp_field(field_type: &str, name: &str, docs: Option<Vec<String>>) -> CppField {
+        CppField {
+            name: String::from(name),
+            field_type: String::from(field_type),
+            visibility: CppVisibility::Default,
+            array_size: None,
+            bit_field_size: None,
+            alignment: None,
+            is_static: false,
+            is_const: false,
+            is_inline: false,
+            initialization_value: None,
+            inline_comment: None,
+            docs,
+        }
+    }
+
     /// Generate a typedef for a function pointer type.
     ///
     /// Returns (typedef_line, type_name_to_use_in_struct).
@@ -363,8 +388,26 @@ impl CodeGenerator for CppGenerator {
         item: &ConstInfo,
         _ctx: &GenerationContext,
     ) -> Result<String, PolyplugcError> {
+        // langprint renders the `#define {name} {value}` FORM; polyplug_codegen
+        // keeps the value-suffix LOGIC. The mirror carries no doc on its define,
+        // so docs are left off to match byte-for-byte. langprint ends the
+        // directive without a newline; the mirror separates items with one.
         let value: String = Self::format_constant_value(&item.value, &item.rust_type);
-        Ok(format!("#define {} {}\n", item.name, value))
+        let define: CppDefinition = CppDefinition {
+            name: item.name.clone(),
+            value: Some(value),
+            docs: None,
+        };
+        let backend: CppBackend = CppBackend::default();
+        let mut indent_level: i32 = 0;
+        let mut rendered: String = backend
+            .render_definition::<&str>(&define, None, None, None, &mut indent_level)
+            .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+                path: String::from("sdks/cpp/abi/polyplug/abi.hpp"),
+                source,
+            })?;
+        rendered.push('\n');
+        Ok(rendered)
     }
 
     fn generate_struct(
@@ -372,66 +415,102 @@ impl CodeGenerator for CppGenerator {
         item: &StructInfo,
         _ctx: &GenerationContext,
     ) -> Result<String, PolyplugcError> {
-        let mut output = String::new();
-        let mut typedefs = String::new();
-
-        // Pre-scan fields for function pointer types — collect typedefs.
-        for field in &item.fields {
-            if field.rust_type.contains("extern\"C\"fn") || field.rust_type.contains("extern\"C\"")
-            {
-                let (typedef, _type_name) =
-                    Self::generate_fn_ptr_typedef(&item.name, &field.name, &field.rust_type);
-                typedefs.push_str(&typedef);
-            }
-        }
+        // langprint renders the `struct Name { … };` FORM; polyplug_codegen keeps
+        // the field type-string LOGIC and two pieces of surrounding WIRING that
+        // langprint cannot express: the struct-level doc and the fn-pointer
+        // typedefs must sit BEFORE the `struct` keyword, but langprint's struct
+        // renderer writes docs immediately before it — so the doc and the
+        // typedefs are hand-emitted here, and the struct is rendered with no doc.
+        let mut output: String = String::new();
 
         if let Some(doc) = &item.doc {
             output.push_str(&Self::format_doc_comment(doc, 0));
         }
 
-        // Emit typedefs before the struct.
-        output.push_str(&typedefs);
-
-        output.push_str("struct ");
-        output.push_str(&item.name);
-        output.push_str(" {\n");
-
+        // Function-pointer typedefs emitted before the struct (WIRING).
         for field in &item.fields {
-            if let Some(doc) = &field.doc {
-                output.push_str(&Self::format_doc_comment(doc, 4));
-            }
-
-            // Handle Array<T> — expand into 3 sub-fields per D-21.
-            if Self::is_array(&field.rust_type) {
-                output.push_str(&format!("    void* {};\n", field.name));
-                output.push_str(&format!("    size_t {}_len;\n", field.name));
-                output.push_str(&format!("    size_t {}__align;\n", field.name));
-                continue;
-            }
-
-            // Handle function pointer fields — use the typedef name.
             if field.rust_type.contains("extern\"C\"fn") || field.rust_type.contains("extern\"C\"")
             {
-                let (_, typedef_name) =
+                let (typedef, _type_name): (String, String) =
                     Self::generate_fn_ptr_typedef(&item.name, &field.name, &field.rust_type);
-                output.push_str(&format!("    {} {};\n", typedef_name, field.name));
+                output.push_str(&typedef);
+            }
+        }
+
+        // Map each ABI field to one or more langprint fields (the LOGIC).
+        let mut fields: Vec<CppField> = Vec::new();
+        for field in &item.fields {
+            let docs: Option<Vec<String>> = field.doc.as_deref().map(Self::doc_lines);
+
+            // Array<T> — expand into 3 sub-fields per D-21; the field doc rides
+            // the first sub-field only.
+            if Self::is_array(&field.rust_type) {
+                fields.push(Self::cpp_field("void*", &field.name, docs));
+                fields.push(Self::cpp_field(
+                    "size_t",
+                    &format!("{}_len", field.name),
+                    None,
+                ));
+                fields.push(Self::cpp_field(
+                    "size_t",
+                    &format!("{}__align", field.name),
+                    None,
+                ));
                 continue;
             }
 
-            // Handle fixed-size primitive arrays, e.g. `[u8;32]` from `quote!()`.
-            // In C the array dimension follows the identifier: `uint8_t bytes[32];`.
+            // Function pointer field — use the typedef name emitted above.
+            if field.rust_type.contains("extern\"C\"fn") || field.rust_type.contains("extern\"C\"")
+            {
+                let (_, typedef_name): (String, String) =
+                    Self::generate_fn_ptr_typedef(&item.name, &field.name, &field.rust_type);
+                fields.push(Self::cpp_field(&typedef_name, &field.name, docs));
+                continue;
+            }
+
+            // Fixed-size primitive array, e.g. `[u8;32]` — the C array dimension
+            // follows the identifier: `uint8_t bytes[32];`.
             if let Some((c_elem, count)) = Self::parse_fixed_array(&field.rust_type) {
-                output.push_str(&format!("    {} {}[{}];\n", c_elem, field.name, count));
+                let mut fixed_field: CppField = Self::cpp_field(c_elem, &field.name, docs);
+                fixed_field.array_size = Some(count.to_string());
+                fields.push(fixed_field);
                 continue;
             }
 
             let cpp_type: String = Self::rust_type_to_cpp(&field.rust_type);
-            output.push_str(&format!("    {} {};\n", cpp_type, field.name));
+            fields.push(Self::cpp_field(&cpp_type, &field.name, docs));
         }
 
-        output.push_str("};\n");
+        let cpp_struct: CppStruct = CppStruct {
+            struct_kind: CppStructKind::Struct,
+            is_final: false,
+            alignment: None,
+            is_packed: false,
+            name: item.name.clone(),
+            template_params: Vec::new(),
+            bases: Vec::new(),
+            fields,
+            methods: Vec::new(),
+            docs: None,
+        };
+        let backend: CppBackend = CppBackend {
+            docs_style: DocsStyle::TripleSlash,
+            ..CppBackend::default()
+        };
+        let options: CppStructRenderOptions = CppStructRenderOptions {
+            render_default_visibility: false,
+            ..CppStructRenderOptions::default()
+        };
+        let mut indent_level: i32 = 0;
+        let rendered: String = backend
+            .render_struct::<&str>(&cpp_struct, None, None, Some(&options), &mut indent_level)
+            .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+                path: String::from("sdks/cpp/abi/polyplug/abi.hpp"),
+                source,
+            })?;
+        output.push_str(&rendered);
 
-        // Emit static_assert for size validation if known.
+        // Emit static_assert for size validation if known (WIRING).
         if let Some(size) = item.size_hint {
             output.push_str(&format!(
                 "static_assert(sizeof({}) == {}, \"{} size mismatch\");\n\n",
@@ -508,19 +587,48 @@ impl CodeGenerator for CppGenerator {
         item: &UnionInfo,
         _ctx: &GenerationContext,
     ) -> Result<String, PolyplugcError> {
-        let mut output = String::new();
+        // langprint renders the `union Name { … };` FORM (kind = Union); union
+        // variants carry no docs, and the union-level doc sits directly before
+        // the `union` keyword (no typedefs between), so it is passed through to
+        // langprint. The mirror separates unions with a trailing blank line.
+        let fields: Vec<CppField> = item
+            .variants
+            .iter()
+            .map(|variant: &UnionVariant| {
+                let cpp_type: String = Self::rust_type_to_cpp(&variant.type_name);
+                Self::cpp_field(&cpp_type, &variant.name, None)
+            })
+            .collect::<Vec<CppField>>();
 
-        if let Some(doc) = &item.doc {
-            output.push_str(&Self::format_doc_comment(doc, 0));
-        }
-
-        output.push_str(&format!("union {} {{\n", item.name));
-        for variant in &item.variants {
-            let cpp_type: String = Self::rust_type_to_cpp(&variant.type_name);
-            output.push_str(&format!("    {} {};\n", cpp_type, variant.name));
-        }
-        output.push_str("};\n\n");
-        Ok(output)
+        let cpp_union: CppStruct = CppStruct {
+            struct_kind: CppStructKind::Union,
+            is_final: false,
+            alignment: None,
+            is_packed: false,
+            name: item.name.clone(),
+            template_params: Vec::new(),
+            bases: Vec::new(),
+            fields,
+            methods: Vec::new(),
+            docs: item.doc.as_deref().map(Self::doc_lines),
+        };
+        let backend: CppBackend = CppBackend {
+            docs_style: DocsStyle::TripleSlash,
+            ..CppBackend::default()
+        };
+        let options: CppStructRenderOptions = CppStructRenderOptions {
+            render_default_visibility: false,
+            ..CppStructRenderOptions::default()
+        };
+        let mut indent_level: i32 = 0;
+        let mut rendered: String = backend
+            .render_struct::<&str>(&cpp_union, None, None, Some(&options), &mut indent_level)
+            .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+                path: String::from("sdks/cpp/abi/polyplug/abi.hpp"),
+                source,
+            })?;
+        rendered.push('\n');
+        Ok(rendered)
     }
 
     fn generate_function(
