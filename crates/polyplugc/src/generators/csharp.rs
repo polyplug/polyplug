@@ -21,8 +21,8 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use langprint::backends::csharp_backend::{
-    CSharpBackend, CSharpEnum, CSharpEnumMember, CSharpField, CSharpMethod, CSharpParameter,
-    CSharpType, CSharpTypeKind, CSharpVisibility,
+    CSharpBackend, CSharpEnum, CSharpEnumMember, CSharpField, CSharpMethod,
+    CSharpMethodRenderOptions, CSharpParameter, CSharpType, CSharpTypeKind, CSharpVisibility,
 };
 use langprint::renderers::{EnumRenderer, FunctionRenderer, StructRenderer};
 use polyplug_codegen::PolyplugcError;
@@ -506,8 +506,102 @@ fn cs_render_interface_method(func: &ResolvedFunction) -> Result<String, Polyplu
         })
 }
 
+/// The `[UnmanagedCallersOnly]` attribute (without the leading `[`) carried by
+/// every C# guest ABI thunk — the Cdecl calling convention the dotnet loader
+/// invokes them through.
+const CS_UNMANAGED_CDECL: &str =
+    "UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })";
+
+/// Render a `private static [unsafe] void` guest-machinery method DEFINITION via
+/// langprint. langprint owns the FORM — attribute, `private static unsafe` modifiers,
+/// `void` return, name, parameters, and braces; polyplugc owns the body. The body
+/// is emitted verbatim (exact whitespace baked in, no trailing newline) because C#
+/// has no post-hoc formatter and the hand-baked try/catch indentation cannot be
+/// reproduced by the re-indenting body renderer.
+fn render_cs_defn_method(
+    name: String,
+    parameters: Vec<CSharpParameter>,
+    is_unsafe: bool,
+    body: String,
+) -> Result<String, PolyplugcError> {
+    let method: CSharpMethod = CSharpMethod {
+        name,
+        visibility: CSharpVisibility::Private,
+        parameters,
+        generic_args: Vec::new(),
+        return_type: None,
+        is_static: true,
+        is_abstract: false,
+        is_virtual: false,
+        is_override: false,
+        is_sealed: false,
+        is_async: false,
+        is_unsafe,
+        body: Some(vec![body]),
+        attributes: vec![CS_UNMANAGED_CDECL.to_owned()],
+        docs: None,
+    };
+    let options: CSharpMethodRenderOptions = CSharpMethodRenderOptions {
+        verbatim_body: true,
+        ..CSharpMethodRenderOptions::default()
+    };
+    let mut indent_level: i32 = 1;
+    cs_backend()
+        .render_function(
+            &method,
+            None::<&str>,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/Interfaces.cs".to_owned(),
+            source,
+        })
+}
+
+/// Build a `CSharpParameter` list from `(type, name)` pairs. langprint models a
+/// parameter as a type string plus a name; pointer sigils (`*`) live in the type.
+fn cs_params(pairs: &[(&str, &str)]) -> Vec<CSharpParameter> {
+    pairs
+        .iter()
+        .map(|(param_type, name): &(&str, &str)| CSharpParameter {
+            name: (*name).to_owned(),
+            param_type: (*param_type).to_owned(),
+            default_value: None,
+        })
+        .collect::<Vec<CSharpParameter>>()
+}
+
+/// Render a per-function guest ABI thunk DEFINITION via langprint. langprint owns
+/// the FORM (`[UnmanagedCallersOnly]` + `private static unsafe void name(...)`);
+/// the dispatch body — built by `emit_cs_guest_dispatch_body` — is the verbatim slot.
+fn render_cs_abi_wrapper(
+    abi_method: &str,
+    state_class: &str,
+    contract_struct: &str,
+    func: &ResolvedFunction,
+) -> Result<String, PolyplugcError> {
+    let mut body: String = String::new();
+    emit_cs_guest_dispatch_body(&mut body, state_class, contract_struct, func);
+    if body.ends_with('\n') {
+        body.pop();
+    }
+    render_cs_defn_method(
+        abi_method.to_owned(),
+        cs_params(&[
+            ("GuestContractInstance", "instance"),
+            ("IntPtr", "argsPtr"),
+            ("IntPtr", "outPtr"),
+            ("AbiError*", "outErr"),
+        ]),
+        true,
+        body,
+    )
+}
+
 /// Generate `guest/Interfaces.cs` — [UnmanagedCallersOnly] ABI methods + interface construction.
-fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
+fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
     out.push_str("using System.Runtime.CompilerServices;\n");
@@ -523,7 +617,7 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
-                    generate_cs_guest_plugin_interface(&mut out, &plugin.name, contract);
+                    generate_cs_guest_plugin_interface(&mut out, &plugin.name, contract)?;
                 }
             }
         }
@@ -546,22 +640,20 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
             out.push_str(&format!(
                 "    public const ulong {upper}_CONTRACT_ID = 0x{contract_id:016X}UL;\n"
             ));
-            emit_cs_guest_instance_machinery(&mut out, &upper, &lower, &class_name, &iface_name);
+            emit_cs_guest_instance_machinery(&mut out, &upper, &lower, &class_name, &iface_name)?;
 
             // [UnmanagedCallersOnly] ABI methods
             let state_class: String = format!("{class_name}InstanceState");
             for func in &contract.functions {
                 let fn_name: String = func.name.replace('-', "_");
                 let abi_method: String = format!("{lower}_{fn_name}_abi");
-                out.push_str(
-                    "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
-                );
-                out.push_str(&format!(
-                    "    private static unsafe void {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {{\n",
-                    abi_method
-                ));
-                emit_cs_guest_dispatch_body(&mut out, &state_class, &class_name, func);
-                out.push_str("    }\n\n");
+                out.push_str(&render_cs_abi_wrapper(
+                    &abi_method,
+                    &state_class,
+                    &class_name,
+                    func,
+                )?);
+                out.push('\n');
             }
 
             // Function pointer array
@@ -624,14 +716,14 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
             out.push_str("}\n\n");
         }
     }
-    out
+    Ok(out)
 }
 
 fn generate_cs_guest_plugin_interface(
     out: &mut String,
     plugin_name: &str,
     contract: &ResolvedContract,
-) {
+) -> Result<(), PolyplugcError> {
     let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
     let iface_name: String = contract_name_to_cs_interface(&contract.name);
@@ -668,7 +760,7 @@ fn generate_cs_guest_plugin_interface(
         &plugin_lower,
         &class_name_pascal,
         &iface_name,
-    );
+    )?;
 
     // [UnmanagedCallersOnly] ABI methods
     let state_class: String = format!("{class_name_pascal}InstanceState");
@@ -676,13 +768,13 @@ fn generate_cs_guest_plugin_interface(
     for func in &contract.functions {
         let fn_name: String = func.name.replace('-', "_");
         let abi_method: String = format!("{lower}_{fn_name}_abi", lower = plugin_lower);
-        out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
-        out.push_str(&format!(
-            "    private static unsafe void {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {{\n",
-            abi_method
-        ));
-        emit_cs_guest_dispatch_body(out, &state_class, &arg_pack_prefix, func);
-        out.push_str("    }\n\n");
+        out.push_str(&render_cs_abi_wrapper(
+            &abi_method,
+            &state_class,
+            &arg_pack_prefix,
+            func,
+        )?);
+        out.push('\n');
     }
 
     // Function pointer array
@@ -766,6 +858,7 @@ fn generate_cs_guest_plugin_interface(
     out.push_str("        }\n");
     out.push_str("    }\n");
     out.push_str("}\n\n");
+    Ok(())
 }
 
 /// Emit the per-plugin instance machinery: the author-factory slot (set once at
@@ -783,7 +876,7 @@ fn emit_cs_guest_instance_machinery(
     lower: &str,
     class_pascal: &str,
     iface_name: &str,
-) {
+) -> Result<(), PolyplugcError> {
     out.push_str(&format!(
         "    private static Func<IntPtr, {iface_name}>? _factory_{lower};\n"
     ));
@@ -814,69 +907,92 @@ fn emit_cs_guest_instance_machinery(
     out.push_str(&format!("        public {iface_name} Impl = null!;\n"));
     out.push_str("    }\n\n");
 
-    out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
-    out.push_str(&format!(
-        "    private static unsafe void {upper}_CreateInstance(VmLoaderData loaderData, IntPtr host, IntPtr args, GuestContractInstance* outInstance) {{\n"
-    ));
-    out.push_str(
+    // CreateInstance / DestroyInstance are ABI thunks: langprint renders the FORM
+    // (the [UnmanagedCallersOnly] attribute, `private static [unsafe] void`
+    // signature, and braces); polyplugc owns the body bytes below, passed verbatim.
+    let mut create_body: String = String::new();
+    create_body.push_str(
         "        _ = loaderData;  // Native-dispatch contracts ignore the VM loader handle.\n",
     );
-    out.push_str(
+    create_body.push_str(
         "        // Calls the author factory and carries the payload in instance.Data as a\n",
     );
-    out.push_str("        // normal (non-pinned) GCHandle — an opaque token the host never\n");
-    out.push_str("        // dereferences. Writes a null handle when host is null, the factory\n");
-    out.push_str("        // was not registered, or it throws.\n");
-    out.push_str("        if (outInstance == null) return;\n");
-    out.push_str("        try {\n");
-    out.push_str(&format!("            var factory = _factory_{lower};\n"));
-    out.push_str("            if (host == IntPtr.Zero || factory is null) {\n");
-    out.push_str(
+    create_body
+        .push_str("        // normal (non-pinned) GCHandle — an opaque token the host never\n");
+    create_body
+        .push_str("        // dereferences. Writes a null handle when host is null, the factory\n");
+    create_body.push_str("        // was not registered, or it throws.\n");
+    create_body.push_str("        if (outInstance == null) return;\n");
+    create_body.push_str("        try {\n");
+    create_body.push_str(&format!("            var factory = _factory_{lower};\n"));
+    create_body.push_str("            if (host == IntPtr.Zero || factory is null) {\n");
+    create_body.push_str(
         "                *outInstance = new GuestContractInstance { Data = IntPtr.Zero };\n",
     );
-    out.push_str("                return;\n");
-    out.push_str("            }\n");
-    out.push_str(&format!(
+    create_body.push_str("                return;\n");
+    create_body.push_str("            }\n");
+    create_body.push_str(&format!(
         "            var state = new {class_pascal}InstanceState {{ Host = host, Impl = factory(host) }};\n"
     ));
-    out.push_str(
+    create_body.push_str(
         "            var handle = System.Runtime.InteropServices.GCHandle.Alloc(state);\n",
     );
-    out.push_str("            *outInstance = new GuestContractInstance {\n");
-    out.push_str(
+    create_body.push_str("            *outInstance = new GuestContractInstance {\n");
+    create_body.push_str(
         "                Data = System.Runtime.InteropServices.GCHandle.ToIntPtr(handle),\n",
     );
-    out.push_str(&format!(
+    create_body.push_str(&format!(
         "                ContractId = {upper}_CONTRACT_ID,\n"
     ));
-    out.push_str("            };\n");
-    out.push_str("        } catch {\n");
-    out.push_str("            *outInstance = new GuestContractInstance { Data = IntPtr.Zero };\n");
-    out.push_str("        }\n");
-    out.push_str("    }\n\n");
+    create_body.push_str("            };\n");
+    create_body.push_str("        } catch {\n");
+    create_body
+        .push_str("            *outInstance = new GuestContractInstance { Data = IntPtr.Zero };\n");
+    create_body.push_str("        }");
+    out.push_str(&render_cs_defn_method(
+        format!("{upper}_CreateInstance"),
+        cs_params(&[
+            ("VmLoaderData", "loaderData"),
+            ("IntPtr", "host"),
+            ("IntPtr", "args"),
+            ("GuestContractInstance*", "outInstance"),
+        ]),
+        true,
+        create_body,
+    )?);
+    out.push('\n');
 
-    out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
-    out.push_str(&format!(
-        "    private static void {upper}_DestroyInstance(VmLoaderData loaderData, IntPtr host, GuestContractInstance instance) {{\n"
-    ));
-    out.push_str(
+    let mut destroy_body: String = String::new();
+    destroy_body.push_str(
         "        _ = loaderData;  // Native-dispatch contracts ignore the VM loader handle.\n",
     );
-    out.push_str(
+    destroy_body.push_str(
         "        // Frees the GCHandle allocated by CreateInstance; the payload becomes\n",
     );
-    out.push_str("        // collectible. The host calls destroy exactly once per instance.\n");
-    out.push_str("        if (instance.Data == IntPtr.Zero) return;\n");
-    out.push_str("        try {\n");
-    out.push_str(
+    destroy_body
+        .push_str("        // collectible. The host calls destroy exactly once per instance.\n");
+    destroy_body.push_str("        if (instance.Data == IntPtr.Zero) return;\n");
+    destroy_body.push_str("        try {\n");
+    destroy_body.push_str(
         "            System.Runtime.InteropServices.GCHandle.FromIntPtr(instance.Data).Free();\n",
     );
-    out.push_str("        } catch {\n");
-    out.push_str(
+    destroy_body.push_str("        } catch {\n");
+    destroy_body.push_str(
         "            // Foreign or double-freed handle: nothing safe to do in a native callback.\n",
     );
-    out.push_str("        }\n");
-    out.push_str("    }\n\n");
+    destroy_body.push_str("        }");
+    out.push_str(&render_cs_defn_method(
+        format!("{upper}_DestroyInstance"),
+        cs_params(&[
+            ("VmLoaderData", "loaderData"),
+            ("IntPtr", "host"),
+            ("GuestContractInstance", "instance"),
+        ]),
+        false,
+        destroy_body,
+    )?);
+    out.push('\n');
+    Ok(())
 }
 
 /// Emit the body of a guest contract ABI thunk: validate pointers, recover the
@@ -3401,7 +3517,7 @@ impl CodeGenerator for CSharpGenerator {
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/Interfaces.cs"),
-            content: generate_cs_guest_interfaces(ir),
+            content: generate_cs_guest_interfaces(ir)?,
             force_regenerate: false,
         });
         files.files.push(GeneratedFile {
@@ -3559,7 +3675,8 @@ mod tests {
             enums: vec![],
             bundle: None,
         };
-        let out: String = generate_cs_guest_interfaces(&ir);
+        let out: String =
+            generate_cs_guest_interfaces(&ir).expect("Interfaces.cs generation must succeed");
         assert!(
             !out.contains("unsafe struct"),
             "Interfaces.cs must not contain 'unsafe struct': {out}"
