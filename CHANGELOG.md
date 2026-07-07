@@ -12,41 +12,12 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
 
 ## [Unreleased]
 
-### Security
+## [0.1.3] - 2026-07-07
 
-- **Bundle-signing hardening.** The canonical digest now **rejects symlinks and
-  irregular files** (fifo/socket/device) and an **empty bundle**, closing a
-  signature-bypass hole where a symlinked artifact was excluded from the digest
-  yet still `dlopen`ed. Path relativization is now a hard error (`PathOutsideBundle`)
-  instead of a silent absolute-path fallback that could yield a non-reproducible,
-  machine-specific digest. The signed message gains a **domain-separation prefix**:
-  the fixed tag `polyplug-bundle-sig\0`, a 1-byte algorithm version (`0x01`), and
-  the file count (`u64` little-endian) before the per-file entries (pre-release
-  format change). The native loader now **confines the artifact path** to the
-  bundle directory — a `manifest.file` that is a symlink or canonicalizes outside
-  the bundle root (`../../evil.so`, an absolute path) is rejected with
-  `LoaderError::ArtifactPathEscape`. `save_signing_key` now creates the private key
-  file with `0o600` from the start (and tightens a pre-existing `0o644` file before
-  writing any secret bytes), eliminating the brief world-readable window.
-
-- **Bundle-signing key pinning (opt-in authenticity).** `RuntimeConfig` gains a
-  `trusted_keys: Array<Ed25519PublicKey>` field. Empty (the default) keeps today's
-  Trust-On-First-Use behaviour — verification proves *integrity* only. When the
-  host configures one or more keys (via `RuntimeBuilder::trusted_keys(&[VerifyingKey])`),
-  the runtime additionally requires each bundle's embedded `bundle.sig` key to be a
-  member of the allowlist, so a bundle re-signed with an attacker key is rejected
-  (`LoaderError::UntrustedSigningKey` under `Required`, logged under `WarnOnly`).
-  Only public verifying keys are pinned; the private key stays offline. A malformed
-  host key fails the load with `LoaderError::MalformedTrustedKey`. New
-  `polyplug_signing` surface: `PinnedKeyVerifier`, `verifying_key_from_bytes`, and
-  `SigError::UntrustedKey`.
-
-  - **ABI change (pre-1.0, owner-approved).** A new `#[repr(C)]` 32-byte
-    `Ed25519PublicKey` type is added, and `RuntimeConfig` grows from **48 to 72
-    bytes** (align 8): `trusted_keys` lands at offset `0x30`, immediately after
-    `signature_policy`. Every pre-existing field offset is unchanged; all six host
-    SDK abi mirrors carry the new type and field and default `trusted_keys` to an
-    empty `Array`, so zero-initialized hosts get TOFU and are unaffected.
+Publishes the `polyplugc` CLI to npm, PyPI, and NuGet (first registry
+availability) and routes both code-generation pipelines through langprint for
+declaration FORM. Generated output and the ABI are **byte-identical to 0.1.2** —
+no runtime, API, or ABI change.
 
 ### Added
 
@@ -59,15 +30,14 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
   NuGet (`dotnet tool install -g`, all three RIDs bundled). `cargo install
   polyplugc` and the prebuilt-binary installer remain. Supported platforms:
   linux-x64, macos-arm64, windows-x64.
-- **JS SDK runs on Node.js (koffi) and Bun (bun:ffi) in addition to Deno**,
-  behind one runtime-detected FFI seam (`sdks/js/abi/ffi/`). `getBackend()` picks
-  the backend per runtime — `Deno.dlopen` under Deno, the `koffi` C-FFI module
-  under Node (an auto-installed **optional** dependency), and the built-in
-  `bun:ffi` under Bun — so the same published `@polyplug/host` /
-  `@polyplug/loaders-native` packages work on all three. The host-SDK test suite
-  runs identically on every runtime, and the install-smoke
-  (`examples/smoke/js_install_smoke.sh`) loads the embedded native through the
-  Deno, Node, and Bun FFI backends from the published tarballs.
+
+### Changed
+
+- **Code generation emits all declaration FORM via langprint 0.2.2** across both
+  code-generation pipelines — the `polyplugc` contract generators and the
+  `polyplug_codegen` ABI-SDK mirrors (`sdks/*/abi`). Type-mapping LOGIC stays in
+  polyplug; the emitted output is byte-identical to 0.1.2, so this is an internal
+  refactor with no user-visible change.
 
 ## [0.1.2] - 2026-06-22
 
@@ -89,13 +59,37 @@ and ships bundle signing. A single coherent version across all six registries.
   signing a bundle directory, and verifying one.
 - `RuntimeBuilder::signature_policy(..)` (Rust) and the equivalent option in the
   C++, C#, Python, Lua, and JS host SDKs.
+- **Bundle-signing key pinning (opt-in authenticity).** `RuntimeConfig` gains a
+  `trusted_keys: Array<Ed25519PublicKey>` field. Empty (the default) keeps the
+  Trust-On-First-Use behaviour — verification proves *integrity* only. When the
+  host configures one or more keys (via `RuntimeBuilder::trusted_keys(&[VerifyingKey])`),
+  the runtime additionally requires each bundle's embedded `bundle.sig` key to be a
+  member of the allowlist, so a bundle re-signed with an attacker key is rejected
+  (`LoaderError::UntrustedSigningKey` under `Required`, logged under `WarnOnly`).
+  Only public verifying keys are pinned; the private key stays offline. A malformed
+  host key fails the load with `LoaderError::MalformedTrustedKey`. New
+  `polyplug_signing` surface: `PinnedKeyVerifier`, `verifying_key_from_bytes`, and
+  `SigError::UntrustedKey`.
+- **JS SDK runs on Node.js (koffi) and Bun (bun:ffi) in addition to Deno**,
+  behind one runtime-detected FFI seam (`sdks/js/abi/ffi/`). `getBackend()` picks
+  the backend per runtime — `Deno.dlopen` under Deno, the `koffi` C-FFI module
+  under Node (an auto-installed **optional** dependency), and the built-in
+  `bun:ffi` under Bun — so the same published `@polyplug/host` /
+  `@polyplug/loaders-native` packages work on all three. The host-SDK test suite
+  runs identically on every runtime, and the install-smoke
+  (`examples/smoke/js_install_smoke.sh`) loads the embedded native through the
+  Deno, Node, and Bun FFI backends from the published tarballs.
 
 ### Changed (ABI, pre-1.0)
 
 - `RuntimeConfig` gained a `signature_policy` field (`SignaturePolicy`, `repr(u32)`)
-  at offset `0x2C`, filling the former tail padding after `log_max_level`. The
-  struct size is unchanged (48 bytes, align 8); hosts that zero-initialize the
-  config keep the previous behavior (`Off`). Owner-approved pre-1.0 ABI change.
+  at offset `0x2C`, filling the former tail padding after `log_max_level`, and a
+  `trusted_keys: Array<Ed25519PublicKey>` field at offset `0x30` (a new `#[repr(C)]`
+  32-byte `Ed25519PublicKey` type). The struct grows from 48 to **72 bytes**
+  (align 8); every pre-existing field offset is unchanged and all six host SDK abi
+  mirrors carry the new type and field. Hosts that zero-initialize the config keep
+  the previous behavior (`Off` policy, empty `trusted_keys` = TOFU). Owner-approved
+  pre-1.0 ABI change.
 
 ### Fixed
 
@@ -114,6 +108,20 @@ and ships bundle signing. A single coherent version across all six registries.
   transitive dependency: an out-of-bounds read in `PyList`/`PyTuple` iterator
   `nth`/`nth_back` (GHSA-36hh-v3qg-5jq4, high) and a missing `Sync` bound on
   `PyCFunction::new_closure` (GHSA-chgr-c6px-7xpp, moderate).
+- **Bundle-signing hardening.** The canonical digest now **rejects symlinks and
+  irregular files** (fifo/socket/device) and an **empty bundle**, closing a
+  signature-bypass hole where a symlinked artifact was excluded from the digest
+  yet still `dlopen`ed. Path relativization is now a hard error (`PathOutsideBundle`)
+  instead of a silent absolute-path fallback that could yield a non-reproducible,
+  machine-specific digest. The signed message gains a **domain-separation prefix**:
+  the fixed tag `polyplug-bundle-sig\0`, a 1-byte algorithm version (`0x01`), and
+  the file count (`u64` little-endian) before the per-file entries. The native
+  loader now **confines the artifact path** to the bundle directory — a
+  `manifest.file` that is a symlink or canonicalizes outside the bundle root
+  (`../../evil.so`, an absolute path) is rejected with
+  `LoaderError::ArtifactPathEscape`. `save_signing_key` now creates the private key
+  file with `0o600` from the start (and tightens a pre-existing `0o644` file before
+  writing any secret bytes), eliminating the brief world-readable window.
 
 ## [0.1.1] - 2026-06-21
 
@@ -201,7 +209,8 @@ glue is produced from a single `.toml` contract by the `polyplugc` CLI.
   same host loop (see [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)).
 - Nightly hardening lane (Miri / ASAN / TSAN / fuzz) and a criterion regression gate.
 
-[Unreleased]: https://github.com/polyplug/polyplug/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/polyplug/polyplug/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/polyplug/polyplug/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/polyplug/polyplug/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/polyplug/polyplug/releases/tag/v0.1.1
 [0.1.0]: https://github.com/polyplug/polyplug/releases/tag/v0.1.0

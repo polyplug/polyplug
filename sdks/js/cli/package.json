@@ -1,6 +1,6 @@
 {
   "name": "@polyplug/cli",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "polyplugc — the polyplug code-generator CLI (prebuilt binary, fully offline)",
   "type": "module",
   "bin": {
@@ -12,9 +12,9 @@
     "README.md"
   ],
   "optionalDependencies": {
-    "@polyplug/cli-linux-x64": "0.1.2",
-    "@polyplug/cli-darwin-arm64": "0.1.2",
-    "@polyplug/cli-win32-x64": "0.1.2"
+    "@polyplug/cli-linux-x64": "0.1.3",
+    "@polyplug/cli-darwin-arm64": "0.1.3",
+    "@polyplug/cli-win32-x64": "0.1.3"
   },
   "engines": {
     "node": ">=18"

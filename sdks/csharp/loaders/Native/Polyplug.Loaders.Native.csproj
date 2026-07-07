@@ -4,7 +4,7 @@
     <RootNamespace>Polyplug.Loaders.Native</RootNamespace>
     <IsPackable>true</IsPackable>
     <PackageId>Polyplug.Loaders.Native</PackageId>
-    <Version>0.1.2</Version>
+    <Version>0.1.3</Version>
     <Description>Polyplug native library loader for loading native (C ABI) plugins. Native libraries for Linux, macOS, and Windows are embedded.</Description>
     <PackageTags>polyplug;plugin;runtime;ffi;native;loader</PackageTags>
   </PropertyGroup>

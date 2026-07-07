@@ -1,9 +1,9 @@
 package = "polyplug-loader-python"
-version = "0.1.2-1"
+version = "0.1.3-1"
 
 source = {
-   url = "https://github.com/polyplug/polyplug/releases/download/v0.1.2/polyplug-lua-0.1.2.tar.gz",
-   dir = "polyplug-lua-0.1.2",
+   url = "https://github.com/polyplug/polyplug/releases/download/v0.1.3/polyplug-lua-0.1.3.tar.gz",
+   dir = "polyplug-lua-0.1.3",
 }
 
 description = {

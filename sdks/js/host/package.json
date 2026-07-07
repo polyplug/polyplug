@@ -1,6 +1,6 @@
 {
   "name": "@polyplug/host",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "polyplug host runtime for JavaScript/TypeScript (runs on Deno, Node.js, and Bun via a runtime-detected FFI seam)",
   "type": "module",
   "main": "./dist/mod.js",
@@ -18,5 +18,5 @@
   "author": "polyplug",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/polyplug/polyplug.git", "directory": "sdks/js/host" },
-  "dependencies": { "@polyplug/abi": "0.1.2" }
+  "dependencies": { "@polyplug/abi": "0.1.3" }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@polyplug/cli-linux-x64",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "polyplugc prebuilt binary for Linux x64",
   "os": ["linux"],
   "cpu": ["x64"],

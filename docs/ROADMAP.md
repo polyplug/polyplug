@@ -115,7 +115,7 @@ owner is currently budget-constrained.
 - **B1. Publish SDK packages. ✅ Done.** All six registries publish from
   `release.yml`: `cargo add polyplug` (crates.io), `pip install` (PyPI),
   `dotnet add package` (NuGet), `npm i` / JSR, and `luarocks install`. Latest
-  release 0.1.1 (0.1.2 prepared, release-on-demand). See
+  release 0.1.3. See
   [Installation](../README.md#installation).
 - **B2. Quickstart + example gallery. ✅ Done (#74).** `docs/QUICKSTART.md` is a
   guided "write your first plugin in language X" path; `docs/EXAMPLES.md` is a

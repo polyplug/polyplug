@@ -28,7 +28,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -39,17 +39,17 @@ keywords = ["plugin", "runtime", "ffi", "cross-language", "abi"]
 categories = ["development-tools", "api-bindings"]
 
 [workspace.dependencies]
-polyplug_utils = { version = "0.1.2", path = "crates/polyplug_utils" }
-polyplug_abi = { version = "0.1.2", path = "crates/polyplug_abi" }
-polyplug = { version = "0.1.2", path = "crates/polyplug" }
-polyplug_codegen = { version = "0.1.2", path = "crates/polyplug_codegen" }
-polyplug_dotnet = { version = "0.1.2", path = "crates/polyplug_dotnet" }
-polyplug_js = { version = "0.1.2", path = "crates/polyplug_js" }
-polyplug_lua = { version = "0.1.2", path = "crates/polyplug_lua" }
-polyplug_python = { version = "0.1.2", path = "crates/polyplug_python" }
-polyplug_native = { version = "0.1.2", path = "crates/polyplug_native" }
-polyplugc = { version = "0.1.2", path = "crates/polyplugc" }
-polyplug_guest = { version = "0.1.2", path = "sdks/rust/guest" }
+polyplug_utils = { version = "0.1.3", path = "crates/polyplug_utils" }
+polyplug_abi = { version = "0.1.3", path = "crates/polyplug_abi" }
+polyplug = { version = "0.1.3", path = "crates/polyplug" }
+polyplug_codegen = { version = "0.1.3", path = "crates/polyplug_codegen" }
+polyplug_dotnet = { version = "0.1.3", path = "crates/polyplug_dotnet" }
+polyplug_js = { version = "0.1.3", path = "crates/polyplug_js" }
+polyplug_lua = { version = "0.1.3", path = "crates/polyplug_lua" }
+polyplug_python = { version = "0.1.3", path = "crates/polyplug_python" }
+polyplug_native = { version = "0.1.3", path = "crates/polyplug_native" }
+polyplugc = { version = "0.1.3", path = "crates/polyplugc" }
+polyplug_guest = { version = "0.1.3", path = "sdks/rust/guest" }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -98,7 +98,7 @@ tempfile = { version = "3.27" }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 sha2 = { version = "0.10" }
 rand_core = { version = "0.6", features = ["getrandom"] }
-polyplug_signing = { version = "0.1.2", path = "crates/polyplug_signing" }
+polyplug_signing = { version = "0.1.3", path = "crates/polyplug_signing" }
 
 # .NET hosting
 netcorehost = { version = "0.20" }

@@ -48,7 +48,7 @@ chmod +x sdks/python/cli/polyplugc/_bin/polyplugc
 # Build wheel with explicit manylinux platform tag
 cd sdks/python/cli
 python setup.py bdist_wheel --plat-name manylinux2014_x86_64
-# Wheel: dist/polyplugc-0.1.2-cp3XX-cp3XX-manylinux2014_x86_64.whl
+# Wheel: dist/polyplugc-0.1.3-cp3XX-cp3XX-manylinux2014_x86_64.whl
 ```
 
 ### macOS Apple Silicon (arm64)
@@ -59,7 +59,7 @@ chmod +x sdks/python/cli/polyplugc/_bin/polyplugc
 
 cd sdks/python/cli
 python setup.py bdist_wheel --plat-name macosx_11_0_arm64
-# Wheel: dist/polyplugc-0.1.2-cp3XX-cp3XX-macosx_11_0_arm64.whl
+# Wheel: dist/polyplugc-0.1.3-cp3XX-cp3XX-macosx_11_0_arm64.whl
 ```
 
 ### Windows x86-64
@@ -69,7 +69,7 @@ copy path\to\windows-x64\polyplugc.exe sdks\python\cli\polyplugc\_bin\polyplugc.
 
 cd sdks\python\cli
 python setup.py bdist_wheel --plat-name win_amd64
-REM Wheel: dist/polyplugc-0.1.2-cp3XX-cp3XX-win_amd64.whl
+REM Wheel: dist/polyplugc-0.1.3-cp3XX-cp3XX-win_amd64.whl
 ```
 
 ### Why `python setup.py bdist_wheel --plat-name` instead of `python -m build`?
