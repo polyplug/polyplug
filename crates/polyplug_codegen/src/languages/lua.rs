@@ -323,6 +323,12 @@ impl CodeGenerator for LuaGenerator {
         item: &ConstInfo,
         _ctx: &GenerationContext,
     ) -> Result<String, PolyplugcError> {
+        // Stays hand-emitted WIRING (like struct/enum/union/header below). The
+        // const is the ONE Lua-native declaration in this mirror — a plain module
+        // field assignment (`M.NAME = ffi.cast(...)`) OUTSIDE the `ffi.cdef[[ ]]`
+        // block. Both the `M.` prefix and the whole `ffi.cast(...)` value are built
+        // here (LOGIC); a langprint field renderer would contribute only the ` = `
+        // and newline, so there is no FORM worth delegating for a single line.
         let c_type: &str = match item.rust_type.as_str() {
             "u64" => "uint64_t",
             "u32" => "uint32_t",
@@ -341,6 +347,13 @@ impl CodeGenerator for LuaGenerator {
         item: &StructInfo,
         _ctx: &GenerationContext,
     ) -> Result<String, PolyplugcError> {
+        // Stays hand-emitted WIRING: this whole block is literal C text inside
+        // the `ffi.cdef[[ ... ]]` LuaJIT surface — the ONE place CLAUDE.md Rule 10
+        // sanctions a literal ABI C signature. langprint's Lua backend models
+        // idiomatic Lua declarations (Lua-table enums, module fields, functions),
+        // not C `typedef struct` blocks, so there is no FORM to delegate to; the
+        // field type-string mapping, Array<T> expansion, and fn-pointer typedefs
+        // are the LOGIC, emitted directly as C.
         let mut output = String::new();
         let mut typedefs = String::new();
 
@@ -413,6 +426,11 @@ impl CodeGenerator for LuaGenerator {
         item: &EnumInfo,
         _ctx: &GenerationContext,
     ) -> Result<String, PolyplugcError> {
+        // Stays hand-emitted WIRING (see `generate_struct`): a C `typedef enum`
+        // block inside `ffi.cdef`. langprint's Lua `render_enum` produces a Lua
+        // constant table (`local Name = { A = 0 }`) — a different artifact from
+        // the mirror's C enum, and not valid inside a cdef — so it cannot be
+        // delegated. The explicit-value LOGIC is emitted directly as C.
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -447,6 +465,10 @@ impl CodeGenerator for LuaGenerator {
         item: &UnionInfo,
         _ctx: &GenerationContext,
     ) -> Result<String, PolyplugcError> {
+        // Stays hand-emitted WIRING (see `generate_struct`): a C `typedef union`
+        // block inside `ffi.cdef`. langprint's Lua backend has no union FORM at
+        // all (unions are meaningless in Lua), so there is nothing to delegate;
+        // the variant type-string mapping is the LOGIC, emitted directly as C.
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -498,6 +520,12 @@ impl CodeGenerator for LuaGenerator {
     }
 
     fn generate_header(&self, _ctx: &GenerationContext) -> Result<String, PolyplugcError> {
+        // Stays hand-emitted WIRING: the `require("ffi")` line and the `ffi.cdef[[`
+        // opener have no langprint model, and the `local M = {}` module scaffold is
+        // only produced by langprint's whole-module `render_module` (which also
+        // emits the fields and the `return M` in one pass). This mirror splits the
+        // module across header / cdef body / footer, so the scaffold is emitted by
+        // hand here and closed by `generate_footer`.
         Ok("local ffi = require(\"ffi\")\nlocal M = {}\n\nffi.cdef[[\n".to_string())
     }
 
