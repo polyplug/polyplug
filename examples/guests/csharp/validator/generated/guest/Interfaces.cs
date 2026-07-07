@@ -8,7 +8,7 @@ using System.Runtime.InteropServices;
 
 // Plugin: validator
 public static class ValidatorInterfaces {
-    public const ulong VALIDATOR_CONTRACT_ID = 0x45173A959EEC57C5UL;
+    public const ulong PIPELINE_VALIDATOR_CONTRACT_ID = 0x45173A959EEC57C5UL;
     private static Func<IntPtr, IPipelineValidatorGuestContract>? _factory_validator;
     /// <summary>
     /// Register the author factory; call once at module initialization
@@ -45,7 +45,7 @@ public static class ValidatorInterfaces {
             var handle = System.Runtime.InteropServices.GCHandle.Alloc(state);
             *outInstance = new GuestContractInstance {
                 Data = System.Runtime.InteropServices.GCHandle.ToIntPtr(handle),
-                ContractId = VALIDATOR_CONTRACT_ID,
+                ContractId = PIPELINE_VALIDATOR_CONTRACT_ID,
             };
         } catch {
             *outInstance = new GuestContractInstance { Data = IntPtr.Zero };
@@ -112,7 +112,7 @@ public static class ValidatorInterfaces {
             };
             _VALIDATOR_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(VALIDATOR_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
             VALIDATOR_INTERFACE = new GuestContractInterface {
-                ContractId = VALIDATOR_CONTRACT_ID,
+                ContractId = PIPELINE_VALIDATOR_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
                 DispatchType = DispatchType.Native,
                 CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, IntPtr, GuestContractInstance*, void>)&VALIDATOR_CreateInstance,

@@ -688,7 +688,14 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> Result<String, PolyplugcErr
             out.push_str(&format!(
                 "    public const ulong {upper}_CONTRACT_ID = 0x{contract_id:016X}UL;\n"
             ));
-            emit_cs_guest_instance_machinery(&mut out, &upper, &lower, &class_name, &iface_name)?;
+            emit_cs_guest_instance_machinery(
+                &mut out,
+                &upper,
+                &lower,
+                &class_name,
+                &iface_name,
+                &upper,
+            )?;
 
             // [UnmanagedCallersOnly] ABI methods
             let state_class: String = format!("{class_name}InstanceState");
@@ -774,6 +781,11 @@ fn generate_cs_guest_plugin_interface(
 ) -> Result<(), PolyplugcError> {
     let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
+    // Contract-named id const, unified with the host types file and non-bundle guest
+    // (one value, one name everywhere). The interface/fns/instance thunks stay
+    // plugin-named. ponytail: two plugins implementing the same contract in one bundle
+    // would redefine this const — hoist + dedup by contract if that shape is supported.
+    let contract_upper: String = contract_name_to_upper_snake(&contract.name);
     let iface_name: String = contract_name_to_cs_interface(&contract.name);
     let contract_id: u64 = contract.contract_id;
     let fn_count: usize = contract.functions.len();
@@ -800,7 +812,7 @@ fn generate_cs_guest_plugin_interface(
     ));
     out.push_str(&format!(
         "    public const ulong {upper}_CONTRACT_ID = 0x{contract_id:016X}UL;\n",
-        upper = plugin_upper
+        upper = contract_upper
     ));
     emit_cs_guest_instance_machinery(
         out,
@@ -808,6 +820,7 @@ fn generate_cs_guest_plugin_interface(
         &plugin_lower,
         &class_name_pascal,
         &iface_name,
+        &contract_upper,
     )?;
 
     // [UnmanagedCallersOnly] ABI methods
@@ -869,7 +882,7 @@ fn generate_cs_guest_plugin_interface(
     ));
     out.push_str(&format!(
         "                ContractId = {upper}_CONTRACT_ID,\n",
-        upper = plugin_upper
+        upper = contract_upper
     ));
     out.push_str(&format!(
         "                ContractVersion = new Polyplug.Abi.Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"
@@ -924,6 +937,11 @@ fn emit_cs_guest_instance_machinery(
     lower: &str,
     class_pascal: &str,
     iface_name: &str,
+    // Contract-derived id const name. Distinct from `upper` (the plugin-named symbol
+    // prefix) so the bundle path can name the id after its contract while keeping the
+    // CreateInstance/DestroyInstance thunks plugin-named. Non-bundle callers pass
+    // their own `upper`, which is already contract-derived.
+    contract_id_const: &str,
 ) -> Result<(), PolyplugcError> {
     out.push_str(&format!(
         "    private static Func<IntPtr, {iface_name}>? _factory_{lower};\n"
@@ -990,7 +1008,7 @@ fn emit_cs_guest_instance_machinery(
         "                Data = System.Runtime.InteropServices.GCHandle.ToIntPtr(handle),\n",
     );
     create_body.push_str(&format!(
-        "                ContractId = {upper}_CONTRACT_ID,\n"
+        "                ContractId = {contract_id_const}_CONTRACT_ID,\n"
     ));
     create_body.push_str("            };\n");
     create_body.push_str("        } catch {\n");

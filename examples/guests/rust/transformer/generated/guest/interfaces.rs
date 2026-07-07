@@ -53,7 +53,7 @@ unsafe impl Sync for FnPtr {}
 
 /// Plugin: transformer
 /// Contract ID constant -- pre-computed FNV-1a of "data.Transformer@1".
-pub const TRANSFORMER_CONTRACT_ID: u64 = 0x4775991362CD68EE;
+pub const DATA_TRANSFORMER_CONTRACT_ID: u64 = 0x4775991362CD68EE;
 
 unsafe extern "Rust" {
     /// Author-provided factory — define it in the plugin crate as:
@@ -116,7 +116,7 @@ unsafe extern "C" fn TRANSFORMER_create_instance(
     unsafe {
         out_instance.write(GuestContractInstance {
             data: Box::into_raw(state) as *mut c_void,
-            contract_id: GuestContractId::from_u64(TRANSFORMER_CONTRACT_ID),
+            contract_id: GuestContractId::from_u64(DATA_TRANSFORMER_CONTRACT_ID),
         });
     }
 }
@@ -198,7 +198,7 @@ extern "C" fn transformer_transform_abi(
 static TRANSFORMER_FNS: [FnPtr; 1_usize] = [FnPtr(transformer_transform_abi as *const ())];
 
 pub static TRANSFORMER_INTERFACE: GuestContractInterface = GuestContractInterface {
-    contract_id: GuestContractId::from_u64(TRANSFORMER_CONTRACT_ID),
+    contract_id: GuestContractId::from_u64(DATA_TRANSFORMER_CONTRACT_ID),
     contract_version: Version {
         major: 1,
         minor: 0,

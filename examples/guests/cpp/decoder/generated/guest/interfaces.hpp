@@ -10,7 +10,7 @@
 namespace polyplug_plugin {
 
 // Plugin: decoder
-constexpr uint64_t DECODER_CONTRACT_ID = 0xE1D7DE773BE6E7F7ULL;
+constexpr uint64_t PIPELINE_DECODER_CONTRACT_ID = 0xE1D7DE773BE6E7F7ULL;
 
 // Author-provided factory — implement this in your plugin .cpp. Called once
 // per host-created instance; ownership of the returned object transfers to
@@ -44,7 +44,7 @@ static void DECODER_create_instance(VmLoaderData loader_data, const HostApi* hos
             return;
         }
         auto* state = new DecoderInstanceState{host, impl};
-        *out_instance = GuestContractInstance{state, DECODER_CONTRACT_ID};
+        *out_instance = GuestContractInstance{state, PIPELINE_DECODER_CONTRACT_ID};
     } catch (...) {
         *out_instance = GuestContractInstance{nullptr, 0U};
     }
@@ -111,7 +111,7 @@ static void* const DECODER_FNS[] = {
 };
 
 static GuestContractInterface DECODER_INTERFACE = {
-    DECODER_CONTRACT_ID,
+    PIPELINE_DECODER_CONTRACT_ID,
     Version{ 1U, 0U, 0U },  // contract_version
     DispatchType::Native,
     DECODER_create_instance,

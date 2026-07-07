@@ -53,7 +53,7 @@ unsafe impl Sync for FnPtr {}
 
 /// Plugin: reporter
 /// Contract ID constant -- pre-computed FNV-1a of "data.Reporter@1".
-pub const REPORTER_CONTRACT_ID: u64 = 0x76BB4643A9F5AD68;
+pub const DATA_REPORTER_CONTRACT_ID: u64 = 0x76BB4643A9F5AD68;
 
 unsafe extern "Rust" {
     /// Author-provided factory — define it in the plugin crate as:
@@ -116,7 +116,7 @@ unsafe extern "C" fn REPORTER_create_instance(
     unsafe {
         out_instance.write(GuestContractInstance {
             data: Box::into_raw(state) as *mut c_void,
-            contract_id: GuestContractId::from_u64(REPORTER_CONTRACT_ID),
+            contract_id: GuestContractId::from_u64(DATA_REPORTER_CONTRACT_ID),
         });
     }
 }
@@ -198,7 +198,7 @@ extern "C" fn reporter_report_abi(
 static REPORTER_FNS: [FnPtr; 1_usize] = [FnPtr(reporter_report_abi as *const ())];
 
 pub static REPORTER_INTERFACE: GuestContractInterface = GuestContractInterface {
-    contract_id: GuestContractId::from_u64(REPORTER_CONTRACT_ID),
+    contract_id: GuestContractId::from_u64(DATA_REPORTER_CONTRACT_ID),
     contract_version: Version {
         major: 1,
         minor: 0,

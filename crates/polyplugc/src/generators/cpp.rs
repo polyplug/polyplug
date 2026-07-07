@@ -353,6 +353,11 @@ fn generate_cpp_guest_plugin_interface(
 ) -> Result<(), PolyplugcError> {
     let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
+    // Contract-named id const, unified with the host types file and non-bundle guest
+    // (one value, one name everywhere). The interface/fns/instance symbols below stay
+    // plugin-named. ponytail: two plugins implementing the same contract in one bundle
+    // would redefine this const — hoist + dedup by contract if that shape is supported.
+    let contract_upper: String = contract_name_to_upper_snake(&contract.name);
     let class_name: String = contract_name_to_guest_contract_class(&contract.name);
     let fn_count: usize = contract.functions.len();
 
@@ -361,7 +366,7 @@ fn generate_cpp_guest_plugin_interface(
     out.push_str(&format!("// Plugin: {}\n", plugin_name));
     out.push_str(&format!(
         "constexpr uint64_t {}_CONTRACT_ID = 0x{:016X}ULL;\n\n",
-        plugin_upper, contract.contract_id
+        contract_upper, contract.contract_id
     ));
 
     emit_cpp_guest_instance_machinery(
@@ -370,6 +375,7 @@ fn generate_cpp_guest_plugin_interface(
         &plugin_lower,
         &class_name,
         &state_struct,
+        &contract_upper,
     )?;
 
     for func in &contract.functions {
@@ -389,7 +395,7 @@ fn generate_cpp_guest_plugin_interface(
         "static GuestContractInterface {}_INTERFACE = {{\n",
         plugin_upper
     ));
-    out.push_str(&format!("    {}_CONTRACT_ID,\n", plugin_upper));
+    out.push_str(&format!("    {}_CONTRACT_ID,\n", contract_upper));
     out.push_str(&format!(
         "    Version{{ {}U, {}U, {}U }},  // contract_version\n",
         contract.version.major, contract.version.minor, contract.version.patch
@@ -429,7 +435,7 @@ fn generate_cpp_guest_contract_interface(
         upper, contract.contract_id
     ));
 
-    emit_cpp_guest_instance_machinery(out, &upper, &lower, &class_name, &state_struct)?;
+    emit_cpp_guest_instance_machinery(out, &upper, &lower, &class_name, &state_struct, &upper)?;
 
     // ABI wrapper functions — one per function
     for func in &contract.functions {
@@ -627,6 +633,11 @@ fn emit_cpp_guest_instance_machinery(
     lower: &str,
     class_name: &str,
     state_struct: &str,
+    // Contract-derived id const name. Distinct from `prefix_upper` (the plugin-named
+    // symbol prefix) so the bundle path names the id after its contract while the
+    // create/destroy thunks stay plugin-named. Non-bundle callers pass their own
+    // `upper`, which is already contract-derived.
+    contract_id_const: &str,
 ) -> Result<(), PolyplugcError> {
     // Author factory forward declaration (no body → declaration mode).
     let factory_decl: CppFunction = CppFunction {
@@ -705,7 +716,7 @@ fn emit_cpp_guest_instance_machinery(
          \x20           return;\n\
          \x20       }}\n\
          \x20       auto* state = new {state_struct}{{host, impl}};\n\
-         \x20       *out_instance = GuestContractInstance{{state, {prefix_upper}_CONTRACT_ID}};\n\
+         \x20       *out_instance = GuestContractInstance{{state, {contract_id_const}_CONTRACT_ID}};\n\
          \x20   }} catch (...) {{\n\
          \x20       *out_instance = GuestContractInstance{{nullptr, 0U}};\n\
          \x20   }}"

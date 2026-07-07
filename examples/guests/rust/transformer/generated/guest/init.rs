@@ -6,7 +6,7 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use super::interfaces::TRANSFORMER_CONTRACT_ID;
+use super::interfaces::DATA_TRANSFORMER_CONTRACT_ID;
 use super::interfaces::TRANSFORMER_INTERFACE;
 use core::ffi::c_void;
 use polyplug_abi::AbiError;

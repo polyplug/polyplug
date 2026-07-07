@@ -33,17 +33,21 @@ Three derivations recur across languages:
 
 ### Contract-ID constant
 
-The runtime identifies a contract by a 64-bit id. `generate` emits that id under
-**two differently-named constants of the same value**, in different files:
+The runtime identifies a contract by a 64-bit id. `generate` names that id
+constant after the **contract** — `{NS_TYPE}_CONTRACT_ID`,
+`PIPELINE_DECODER_CONTRACT_ID` — everywhere it appears, so one value has one
+name:
 
-- **Host / types files (every language)** — `{NS_TYPE}_CONTRACT_ID`, from the
-  contract name: `PIPELINE_DECODER_CONTRACT_ID`. This is the constant a **host**
-  author uses to resolve a contract (e.g. `find_guest_contract`).
-- **Guest interfaces file (Rust, C++, C# only)** — `{PLUGIN}_CONTRACT_ID`, from
-  the `[[plugin]] name`: `DECODER_CONTRACT_ID`.
+- **Host / types files (every language)** — the constant a **host** author uses
+  to resolve a contract (e.g. `find_guest_contract`).
+- **Guest interfaces file (Rust, C++, C# only)** — the same
+  `{NS_TYPE}_CONTRACT_ID` name, referenced internally by the generated interface;
+  the per-implementation symbols beside it (interface, function table, instance
+  thunks) are `{PLUGIN}`-named because they belong to the plugin, but the id
+  belongs to the contract.
 
-Python, Lua, and JS guests emit **no** plugin-form constant — they wire the id
-through the generated class, factory setter, or descriptor instead.
+Python, Lua, and JS guests emit **no** id constant — they wire the id through the
+generated class, factory setter, or descriptor instead.
 
 ## Rust (`--lang rust`)
 
@@ -52,7 +56,7 @@ through the generated class, factory setter, or descriptor instead.
 | Guest trait (you implement) | `{Ns}{Type}GuestContract` | `PipelineDecoderGuestContract` |
 | Trait method | api method name (snake_case) | `decode` |
 | Factory export (you write) | `polyplug_create_{plugin}` | `polyplug_create_decoder` |
-| Guest contract-ID constant | `{PLUGIN}_CONTRACT_ID` | `DECODER_CONTRACT_ID` |
+| Guest contract-ID constant | `{NS_TYPE}_CONTRACT_ID` | `PIPELINE_DECODER_CONTRACT_ID` |
 | Host caller (from `--api`) | `{Ns}{Type}Contract` | `PipelineDecoderContract` |
 | Guest→host caller | `Host{Name}Caller` | `HostLoggerCaller` |
 

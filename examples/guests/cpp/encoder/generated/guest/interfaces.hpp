@@ -10,7 +10,7 @@
 namespace polyplug_plugin {
 
 // Plugin: encoder
-constexpr uint64_t ENCODER_CONTRACT_ID = 0xFC50F9D1D3DB629FULL;
+constexpr uint64_t PIPELINE_ENCODER_CONTRACT_ID = 0xFC50F9D1D3DB629FULL;
 
 // Author-provided factory — implement this in your plugin .cpp. Called once
 // per host-created instance; ownership of the returned object transfers to
@@ -44,7 +44,7 @@ static void ENCODER_create_instance(VmLoaderData loader_data, const HostApi* hos
             return;
         }
         auto* state = new EncoderInstanceState{host, impl};
-        *out_instance = GuestContractInstance{state, ENCODER_CONTRACT_ID};
+        *out_instance = GuestContractInstance{state, PIPELINE_ENCODER_CONTRACT_ID};
     } catch (...) {
         *out_instance = GuestContractInstance{nullptr, 0U};
     }
@@ -111,7 +111,7 @@ static void* const ENCODER_FNS[] = {
 };
 
 static GuestContractInterface ENCODER_INTERFACE = {
-    ENCODER_CONTRACT_ID,
+    PIPELINE_ENCODER_CONTRACT_ID,
     Version{ 1U, 0U, 0U },  // contract_version
     DispatchType::Native,
     ENCODER_create_instance,

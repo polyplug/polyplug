@@ -8,7 +8,7 @@ using System.Runtime.InteropServices;
 
 // Plugin: decoder
 public static class DecoderInterfaces {
-    public const ulong DECODER_CONTRACT_ID = 0xE1D7DE773BE6E7F7UL;
+    public const ulong PIPELINE_DECODER_CONTRACT_ID = 0xE1D7DE773BE6E7F7UL;
     private static Func<IntPtr, IPipelineDecoderGuestContract>? _factory_decoder;
     /// <summary>
     /// Register the author factory; call once at module initialization
@@ -45,7 +45,7 @@ public static class DecoderInterfaces {
             var handle = System.Runtime.InteropServices.GCHandle.Alloc(state);
             *outInstance = new GuestContractInstance {
                 Data = System.Runtime.InteropServices.GCHandle.ToIntPtr(handle),
-                ContractId = DECODER_CONTRACT_ID,
+                ContractId = PIPELINE_DECODER_CONTRACT_ID,
             };
         } catch {
             *outInstance = new GuestContractInstance { Data = IntPtr.Zero };
@@ -112,7 +112,7 @@ public static class DecoderInterfaces {
             };
             _DECODER_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(DECODER_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
             DECODER_INTERFACE = new GuestContractInterface {
-                ContractId = DECODER_CONTRACT_ID,
+                ContractId = PIPELINE_DECODER_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
                 DispatchType = DispatchType.Native,
                 CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, IntPtr, GuestContractInstance*, void>)&DECODER_CreateInstance,

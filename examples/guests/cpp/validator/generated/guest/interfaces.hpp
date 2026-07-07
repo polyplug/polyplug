@@ -10,7 +10,7 @@
 namespace polyplug_plugin {
 
 // Plugin: validator
-constexpr uint64_t VALIDATOR_CONTRACT_ID = 0x45173A959EEC57C5ULL;
+constexpr uint64_t PIPELINE_VALIDATOR_CONTRACT_ID = 0x45173A959EEC57C5ULL;
 
 // Author-provided factory — implement this in your plugin .cpp. Called once
 // per host-created instance; ownership of the returned object transfers to
@@ -44,7 +44,7 @@ static void VALIDATOR_create_instance(VmLoaderData loader_data, const HostApi* h
             return;
         }
         auto* state = new ValidatorInstanceState{host, impl};
-        *out_instance = GuestContractInstance{state, VALIDATOR_CONTRACT_ID};
+        *out_instance = GuestContractInstance{state, PIPELINE_VALIDATOR_CONTRACT_ID};
     } catch (...) {
         *out_instance = GuestContractInstance{nullptr, 0U};
     }
@@ -111,7 +111,7 @@ static void* const VALIDATOR_FNS[] = {
 };
 
 static GuestContractInterface VALIDATOR_INTERFACE = {
-    VALIDATOR_CONTRACT_ID,
+    PIPELINE_VALIDATOR_CONTRACT_ID,
     Version{ 1U, 0U, 0U },  // contract_version
     DispatchType::Native,
     VALIDATOR_create_instance,

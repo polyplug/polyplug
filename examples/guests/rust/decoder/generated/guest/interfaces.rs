@@ -53,7 +53,7 @@ unsafe impl Sync for FnPtr {}
 
 /// Plugin: decoder
 /// Contract ID constant -- pre-computed FNV-1a of "pipeline.Decoder@1".
-pub const DECODER_CONTRACT_ID: u64 = 0xE1D7DE773BE6E7F7;
+pub const PIPELINE_DECODER_CONTRACT_ID: u64 = 0xE1D7DE773BE6E7F7;
 
 unsafe extern "Rust" {
     /// Author-provided factory — define it in the plugin crate as:
@@ -116,7 +116,7 @@ unsafe extern "C" fn DECODER_create_instance(
     unsafe {
         out_instance.write(GuestContractInstance {
             data: Box::into_raw(state) as *mut c_void,
-            contract_id: GuestContractId::from_u64(DECODER_CONTRACT_ID),
+            contract_id: GuestContractId::from_u64(PIPELINE_DECODER_CONTRACT_ID),
         });
     }
 }
@@ -197,7 +197,7 @@ extern "C" fn decoder_decode_abi(
 static DECODER_FNS: [FnPtr; 1_usize] = [FnPtr(decoder_decode_abi as *const ())];
 
 pub static DECODER_INTERFACE: GuestContractInterface = GuestContractInterface {
-    contract_id: GuestContractId::from_u64(DECODER_CONTRACT_ID),
+    contract_id: GuestContractId::from_u64(PIPELINE_DECODER_CONTRACT_ID),
     contract_version: Version {
         major: 1,
         minor: 0,

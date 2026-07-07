@@ -53,7 +53,7 @@ unsafe impl Sync for FnPtr {}
 
 /// Plugin: validator
 /// Contract ID constant -- pre-computed FNV-1a of "pipeline.Validator@1".
-pub const VALIDATOR_CONTRACT_ID: u64 = 0x45173A959EEC57C5;
+pub const PIPELINE_VALIDATOR_CONTRACT_ID: u64 = 0x45173A959EEC57C5;
 
 unsafe extern "Rust" {
     /// Author-provided factory — define it in the plugin crate as:
@@ -116,7 +116,7 @@ unsafe extern "C" fn VALIDATOR_create_instance(
     unsafe {
         out_instance.write(GuestContractInstance {
             data: Box::into_raw(state) as *mut c_void,
-            contract_id: GuestContractId::from_u64(VALIDATOR_CONTRACT_ID),
+            contract_id: GuestContractId::from_u64(PIPELINE_VALIDATOR_CONTRACT_ID),
         });
     }
 }
@@ -198,7 +198,7 @@ extern "C" fn validator_validate_abi(
 static VALIDATOR_FNS: [FnPtr; 1_usize] = [FnPtr(validator_validate_abi as *const ())];
 
 pub static VALIDATOR_INTERFACE: GuestContractInterface = GuestContractInterface {
-    contract_id: GuestContractId::from_u64(VALIDATOR_CONTRACT_ID),
+    contract_id: GuestContractId::from_u64(PIPELINE_VALIDATOR_CONTRACT_ID),
     contract_version: Version {
         major: 1,
         minor: 0,

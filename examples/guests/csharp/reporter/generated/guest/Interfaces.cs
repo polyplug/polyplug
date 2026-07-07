@@ -8,7 +8,7 @@ using System.Runtime.InteropServices;
 
 // Plugin: reporter
 public static class ReporterInterfaces {
-    public const ulong REPORTER_CONTRACT_ID = 0x76BB4643A9F5AD68UL;
+    public const ulong DATA_REPORTER_CONTRACT_ID = 0x76BB4643A9F5AD68UL;
     private static Func<IntPtr, IDataReporterGuestContract>? _factory_reporter;
     /// <summary>
     /// Register the author factory; call once at module initialization
@@ -45,7 +45,7 @@ public static class ReporterInterfaces {
             var handle = System.Runtime.InteropServices.GCHandle.Alloc(state);
             *outInstance = new GuestContractInstance {
                 Data = System.Runtime.InteropServices.GCHandle.ToIntPtr(handle),
-                ContractId = REPORTER_CONTRACT_ID,
+                ContractId = DATA_REPORTER_CONTRACT_ID,
             };
         } catch {
             *outInstance = new GuestContractInstance { Data = IntPtr.Zero };
@@ -112,7 +112,7 @@ public static class ReporterInterfaces {
             };
             _REPORTER_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(REPORTER_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
             REPORTER_INTERFACE = new GuestContractInterface {
-                ContractId = REPORTER_CONTRACT_ID,
+                ContractId = DATA_REPORTER_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
                 DispatchType = DispatchType.Native,
                 CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, IntPtr, GuestContractInstance*, void>)&REPORTER_CreateInstance,

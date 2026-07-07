@@ -772,6 +772,15 @@ fn generate_guest_plugin_interface(
 ) -> Result<(), PolyplugcError> {
     let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
+    // The contract-id constant is named after the CONTRACT, not the plugin, so the
+    // one 64-bit id has one name everywhere it appears — host types file, non-bundle
+    // guest, and this bundle guest all emit `{CONTRACT}_CONTRACT_ID`. Only the
+    // per-implementation symbols below (interface, fns, instance machinery) stay
+    // plugin-named. ponytail: two plugins implementing the same contract in one
+    // bundle would emit this const twice (a duplicate-definition error); hoist the
+    // const out of this per-plugin loop and dedup by contract if that bundle shape
+    // is ever supported.
+    let contract_upper: String = contract_name_to_upper_snake(&contract.name);
     let struct_name: String = contract_name_to_struct(&contract.name);
     let trait_name: String = contract_name_to_guest_trait(&contract.name);
     let fn_count: usize = contract.functions.len();
@@ -782,7 +791,7 @@ fn generate_guest_plugin_interface(
         contract.name, contract.version.major
     ));
     out.push_str(&format!(
-        "pub const {plugin_upper}_CONTRACT_ID: u64 = 0x{:016X};\n\n",
+        "pub const {contract_upper}_CONTRACT_ID: u64 = 0x{:016X};\n\n",
         contract.contract_id
     ));
 
@@ -794,7 +803,7 @@ fn generate_guest_plugin_interface(
         &plugin_lower,
         &trait_name,
         &state_struct,
-        &format!("{plugin_upper}_CONTRACT_ID"),
+        &format!("{contract_upper}_CONTRACT_ID"),
     )?;
 
     for func in &contract.functions {
@@ -827,7 +836,7 @@ fn generate_guest_plugin_interface(
         "pub static {plugin_upper}_INTERFACE: GuestContractInterface = GuestContractInterface {{\n"
     ));
     out.push_str(&format!(
-        "    contract_id: GuestContractId::from_u64({plugin_upper}_CONTRACT_ID),\n"
+        "    contract_id: GuestContractId::from_u64({contract_upper}_CONTRACT_ID),\n"
     ));
     out.push_str(&format!(
         "    contract_version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"
@@ -1355,8 +1364,16 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
             let plugin_upper: String = plugin.name.to_uppercase().replace('.', "_");
+            // The id const is contract-named (see generate_guest_plugin_interface);
+            // derive that name from the plugin's first implemented contract.
+            let contract_upper: String = plugin
+                .implements
+                .first()
+                .and_then(|impl_str: &String| impl_str.split('@').next())
+                .map(contract_name_to_upper_snake)
+                .unwrap_or_default();
             out.push_str(&format!(
-                "use super::interfaces::{plugin_upper}_CONTRACT_ID;\n"
+                "use super::interfaces::{contract_upper}_CONTRACT_ID;\n"
             ));
             out.push_str(&format!(
                 "use super::interfaces::{plugin_upper}_INTERFACE;\n"

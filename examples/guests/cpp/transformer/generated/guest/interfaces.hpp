@@ -10,7 +10,7 @@
 namespace polyplug_plugin {
 
 // Plugin: transformer
-constexpr uint64_t TRANSFORMER_CONTRACT_ID = 0x4775991362CD68EEULL;
+constexpr uint64_t DATA_TRANSFORMER_CONTRACT_ID = 0x4775991362CD68EEULL;
 
 // Author-provided factory — implement this in your plugin .cpp. Called once
 // per host-created instance; ownership of the returned object transfers to
@@ -44,7 +44,7 @@ static void TRANSFORMER_create_instance(VmLoaderData loader_data, const HostApi*
             return;
         }
         auto* state = new TransformerInstanceState{host, impl};
-        *out_instance = GuestContractInstance{state, TRANSFORMER_CONTRACT_ID};
+        *out_instance = GuestContractInstance{state, DATA_TRANSFORMER_CONTRACT_ID};
     } catch (...) {
         *out_instance = GuestContractInstance{nullptr, 0U};
     }
@@ -111,7 +111,7 @@ static void* const TRANSFORMER_FNS[] = {
 };
 
 static GuestContractInterface TRANSFORMER_INTERFACE = {
-    TRANSFORMER_CONTRACT_ID,
+    DATA_TRANSFORMER_CONTRACT_ID,
     Version{ 1U, 0U, 0U },  // contract_version
     DispatchType::Native,
     TRANSFORMER_create_instance,

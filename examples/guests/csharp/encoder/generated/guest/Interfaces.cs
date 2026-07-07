@@ -8,7 +8,7 @@ using System.Runtime.InteropServices;
 
 // Plugin: encoder
 public static class EncoderInterfaces {
-    public const ulong ENCODER_CONTRACT_ID = 0xFC50F9D1D3DB629FUL;
+    public const ulong PIPELINE_ENCODER_CONTRACT_ID = 0xFC50F9D1D3DB629FUL;
     private static Func<IntPtr, IPipelineEncoderGuestContract>? _factory_encoder;
     /// <summary>
     /// Register the author factory; call once at module initialization
@@ -45,7 +45,7 @@ public static class EncoderInterfaces {
             var handle = System.Runtime.InteropServices.GCHandle.Alloc(state);
             *outInstance = new GuestContractInstance {
                 Data = System.Runtime.InteropServices.GCHandle.ToIntPtr(handle),
-                ContractId = ENCODER_CONTRACT_ID,
+                ContractId = PIPELINE_ENCODER_CONTRACT_ID,
             };
         } catch {
             *outInstance = new GuestContractInstance { Data = IntPtr.Zero };
@@ -112,7 +112,7 @@ public static class EncoderInterfaces {
             };
             _ENCODER_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(ENCODER_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
             ENCODER_INTERFACE = new GuestContractInterface {
-                ContractId = ENCODER_CONTRACT_ID,
+                ContractId = PIPELINE_ENCODER_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
                 DispatchType = DispatchType.Native,
                 CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, IntPtr, GuestContractInstance*, void>)&ENCODER_CreateInstance,

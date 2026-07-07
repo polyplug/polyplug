@@ -6,8 +6,8 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use super::interfaces::DECODER_CONTRACT_ID;
 use super::interfaces::DECODER_INTERFACE;
+use super::interfaces::PIPELINE_DECODER_CONTRACT_ID;
 use core::ffi::c_void;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;

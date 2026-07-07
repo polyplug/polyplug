@@ -10,7 +10,7 @@
 namespace polyplug_plugin {
 
 // Plugin: reporter
-constexpr uint64_t REPORTER_CONTRACT_ID = 0x76BB4643A9F5AD68ULL;
+constexpr uint64_t DATA_REPORTER_CONTRACT_ID = 0x76BB4643A9F5AD68ULL;
 
 // Author-provided factory — implement this in your plugin .cpp. Called once
 // per host-created instance; ownership of the returned object transfers to
@@ -44,7 +44,7 @@ static void REPORTER_create_instance(VmLoaderData loader_data, const HostApi* ho
             return;
         }
         auto* state = new ReporterInstanceState{host, impl};
-        *out_instance = GuestContractInstance{state, REPORTER_CONTRACT_ID};
+        *out_instance = GuestContractInstance{state, DATA_REPORTER_CONTRACT_ID};
     } catch (...) {
         *out_instance = GuestContractInstance{nullptr, 0U};
     }
@@ -111,7 +111,7 @@ static void* const REPORTER_FNS[] = {
 };
 
 static GuestContractInterface REPORTER_INTERFACE = {
-    REPORTER_CONTRACT_ID,
+    DATA_REPORTER_CONTRACT_ID,
     Version{ 1U, 0U, 0U },  // contract_version
     DispatchType::Native,
     REPORTER_create_instance,

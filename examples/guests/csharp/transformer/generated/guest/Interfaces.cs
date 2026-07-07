@@ -8,7 +8,7 @@ using System.Runtime.InteropServices;
 
 // Plugin: transformer
 public static class TransformerInterfaces {
-    public const ulong TRANSFORMER_CONTRACT_ID = 0x4775991362CD68EEUL;
+    public const ulong DATA_TRANSFORMER_CONTRACT_ID = 0x4775991362CD68EEUL;
     private static Func<IntPtr, IDataTransformerGuestContract>? _factory_transformer;
     /// <summary>
     /// Register the author factory; call once at module initialization
@@ -45,7 +45,7 @@ public static class TransformerInterfaces {
             var handle = System.Runtime.InteropServices.GCHandle.Alloc(state);
             *outInstance = new GuestContractInstance {
                 Data = System.Runtime.InteropServices.GCHandle.ToIntPtr(handle),
-                ContractId = TRANSFORMER_CONTRACT_ID,
+                ContractId = DATA_TRANSFORMER_CONTRACT_ID,
             };
         } catch {
             *outInstance = new GuestContractInstance { Data = IntPtr.Zero };
@@ -112,7 +112,7 @@ public static class TransformerInterfaces {
             };
             _TRANSFORMER_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(TRANSFORMER_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
             TRANSFORMER_INTERFACE = new GuestContractInterface {
-                ContractId = TRANSFORMER_CONTRACT_ID,
+                ContractId = DATA_TRANSFORMER_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
                 DispatchType = DispatchType.Native,
                 CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, IntPtr, GuestContractInstance*, void>)&TRANSFORMER_CreateInstance,
