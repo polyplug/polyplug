@@ -19,7 +19,9 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
-use langprint::backends::lua_backend::{LuaBackend, LuaEnum, LuaEnumMember, LuaFunction};
+use langprint::backends::lua_backend::{
+    LuaBackend, LuaEnum, LuaEnumMember, LuaFunction, LuaFunctionRenderOptions,
+};
 use langprint::renderers::{EnumRenderer, FunctionRenderer};
 use polyplug_codegen::PolyplugcError;
 use std::io;
@@ -363,26 +365,33 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
     );
     out.push_str("-- return values. The host pointer threads to each author factory; no host\n");
     out.push_str("-- pointer or handler table is stored in this module.\n");
-    out.push_str("function polyplug_init(host_ptr, ctx_ptr)\n");
-    out.push_str("    if host_ptr == nil or ctx_ptr == nil then\n");
-    out.push_str("        return {}, { code = polyplug_guest.AbiErrorCode.Generic, message = \"null host or ctx pointer in polyplug_init\" }\n");
-    out.push_str("    end\n");
-    out.push_str("    local registrations = {}\n");
+    // langprint renders the `function polyplug_init(host_ptr, ctx_ptr) … end` FORM;
+    // the registration body below is built into `body` and handed back verbatim.
+    let mut body: String = String::new();
+    body.push_str("    if host_ptr == nil or ctx_ptr == nil then\n");
+    body.push_str("        return {}, { code = polyplug_guest.AbiErrorCode.Generic, message = \"null host or ctx pointer in polyplug_init\" }\n");
+    body.push_str("    end\n");
+    body.push_str("    local registrations = {}\n");
     for (plugin_name, _contract) in &registrations {
         let plugin_var: String = plugin_name.to_uppercase().replace(['.', '-'], "_");
         let plugin_lower: String = plugin_name.to_lowercase().replace(['.', '-'], "_");
         // The author factory must have been registered at import time. Mirror
         // python: surface a Generic AbiError (not a raise) so the loader fails the
         // load cleanly through the return channel.
-        out.push_str(&format!("    if {plugin_var}_FACTORY == nil then\n"));
-        out.push_str(&format!(
+        body.push_str(&format!("    if {plugin_var}_FACTORY == nil then\n"));
+        body.push_str(&format!(
             "        return {{}}, {{ code = polyplug_guest.AbiErrorCode.Generic, message = \"set_{plugin_lower}_factory(...) was not called at import time\" }}\n"
         ));
-        out.push_str("    end\n");
-        out.push_str(&format!("    M._register_{plugin_var}(registrations)\n"));
+        body.push_str("    end\n");
+        body.push_str(&format!("    M._register_{plugin_var}(registrations)\n"));
     }
-    out.push_str("    return registrations, { code = polyplug_guest.AbiErrorCode.Ok }\n");
-    out.push_str("end\n\n");
+    body.push_str("    return registrations, { code = polyplug_guest.AbiErrorCode.Ok }");
+    out.push_str(&render_lua_defn_fn(
+        "polyplug_init",
+        vec!["host_ptr".to_owned(), "ctx_ptr".to_owned()],
+        body,
+    )?);
+    out.push('\n');
 
     out.push_str("return M\n");
     Ok(out)
@@ -701,6 +710,45 @@ fn render_lua_set_factory(
         })
 }
 
+/// Render a Lua function DEFINITION via langprint with a verbatim body: langprint
+/// owns the `function name(params) … end` FORM; polyplugc owns the body, passed
+/// as one verbatim String (exact whitespace + nested blocks baked in, no trailing
+/// newline). Lua output has no formatter, so the body is emitted byte-for-byte.
+fn render_lua_defn_fn(
+    name: &str,
+    parameters: Vec<String>,
+    body: String,
+) -> Result<String, PolyplugcError> {
+    let function: LuaFunction = LuaFunction {
+        name: name.to_owned(),
+        parameters,
+        doc: None,
+        body: Some(vec![body]),
+    };
+    // polyplugc's Lua output indents 4, not the Lua-idiomatic 2.
+    let backend: LuaBackend = LuaBackend {
+        indent_size: 4,
+        ..LuaBackend::default()
+    };
+    let options: LuaFunctionRenderOptions = LuaFunctionRenderOptions {
+        render_doc: false,
+        verbatim_body: true,
+    };
+    let mut indent_level: i32 = 0;
+    backend
+        .render_function(
+            &function,
+            None::<&str>,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/contracts.lua".to_owned(),
+            source,
+        })
+}
+
 fn generate_guest_plugin_interface(
     out: &mut String,
     plugin_name: &str,
@@ -756,27 +804,32 @@ fn generate_guest_plugin_interface(
     // the loader-supplied arena allocator. The handler marshals inputs, invokes the
     // contract method ON the instance, and writes the result to out_ptr. The handler
     // entry also carries the author factory the loader calls to build each impl.
-    out.push_str(&format!(
-        "function M._register_{plugin_var}(registrations)\n"
-    ));
-    out.push_str("    local functions = {}\n");
+    // langprint renders the `function M._register_<plugin>(registrations) … end`
+    // FORM; the handler-table body below is built into `body` and handed back verbatim.
+    let mut body: String = String::new();
+    body.push_str("    local functions = {}\n");
     for (idx, func) in contract.functions.iter().enumerate() {
-        out.push_str(&format!(
+        body.push_str(&format!(
             "    functions[{idx}] = function(instance, args_ptr, out_ptr, arena_ptr, arena_alloc)\n"
         ));
-        emit_lua_guest_handler_body(out, func, enums, &contract.name);
-        out.push_str("    end\n");
+        emit_lua_guest_handler_body(&mut body, func, enums, &contract.name);
+        body.push_str("    end\n");
     }
-    out.push_str(&format!("    registrations[\"{}\"] = {{\n", contract.name));
-    out.push_str(&format!(
+    body.push_str(&format!("    registrations[\"{}\"] = {{\n", contract.name));
+    body.push_str(&format!(
         "        contract_version = {},\n",
         contract.version.major
     ));
-    out.push_str(&format!("        plugin_name = \"{plugin_name}\",\n"));
-    out.push_str(&format!("        factory = {plugin_var}_FACTORY,\n"));
-    out.push_str("        functions = functions,\n");
-    out.push_str("    }\n");
-    out.push_str("end\n\n");
+    body.push_str(&format!("        plugin_name = \"{plugin_name}\",\n"));
+    body.push_str(&format!("        factory = {plugin_var}_FACTORY,\n"));
+    body.push_str("        functions = functions,\n");
+    body.push_str("    }");
+    out.push_str(&render_lua_defn_fn(
+        &format!("M._register_{plugin_var}"),
+        vec!["registrations".to_owned()],
+        body,
+    )?);
+    out.push('\n');
 
     Ok(())
 }
