@@ -33,6 +33,7 @@ use langprint::backends::js_backend::{
 use langprint::renderers::{EnumRenderer, FunctionRenderer};
 use polyplug_codegen::PolyplugcError;
 use std::io;
+use std::string::FromUtf8Error;
 
 /// Generator for js-quickjs plugin bundles.
 ///
@@ -696,6 +697,58 @@ fn render_js_defn_fn(
             path: "guest/contracts.ts".to_owned(),
             source,
         })
+}
+
+/// Render a class-member method DEFINITION (indent level 1, inside a hand-emitted
+/// `class { … }`) via langprint's TypeScript method mode with a verbatim body.
+/// langprint owns the FORM (`[static] name(params): ret`); polyplugc owns the body
+/// and the single-line JSDoc (baked into `jsdoc`, emitted before the method).
+fn render_js_method(
+    name: &str,
+    is_static: bool,
+    parameters: Vec<JsParameter>,
+    return_type: Option<String>,
+    jsdoc: &str,
+    body: String,
+) -> Result<String, PolyplugcError> {
+    let function: JsFunction = JsFunction {
+        name: name.to_owned(),
+        parameters,
+        return_type,
+        doc: None,
+        is_static,
+        body: Some(vec![body]),
+    };
+    // polyplugc's QuickJS output indents 4, not the JS-idiomatic 2.
+    let backend: JsBackend = JsBackend {
+        indent_size: 4,
+        ..JsBackend::default()
+    };
+    let options: JsFunctionRenderOptions = JsFunctionRenderOptions {
+        render_jsdoc: false,
+        typescript: true,
+        verbatim_body: true,
+    };
+    let before: String = format!("    {jsdoc}\n");
+    let mut indent_level: i32 = 1;
+    let mut buf: Vec<u8> = Vec::new();
+    backend
+        .render_method_to(
+            &function,
+            Some(before.as_str()),
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+            &mut buf,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/host_contracts.ts".to_owned(),
+            source,
+        })?;
+    String::from_utf8(buf).map_err(|source: FromUtf8Error| PolyplugcError::WriteFailed {
+        path: "guest/host_contracts.ts".to_owned(),
+        source: io::Error::new(io::ErrorKind::InvalidData, source),
+    })
 }
 
 /// Build a `JsParameter` list from `(name, ts_type)` pairs (TypeScript mode reads
@@ -2018,24 +2071,50 @@ fn generate_ts_guest_host_contract_caller(
     out.push_str("        this._minVersion = minVersion;\n");
     out.push_str("    }\n\n");
 
-    out.push_str("    /** Factory method - creates caller instance or null if the bridge is unavailable. */\n");
-    out.push_str(&format!(
-        "    static fromHost(bridge: any, hostPtr: {{ lo: number; hi: number }}, minVersion: number = 0): {} | null {{\n",
+    // langprint renders each method's FORM (indent-1 class member); bodies are verbatim.
+    let mut from_host_body: String = String::new();
+    from_host_body.push_str("        if (!bridge || !bridge.callHostContract) {\n");
+    from_host_body.push_str("            return null;\n");
+    from_host_body.push_str("        }\n");
+    from_host_body.push_str(&format!(
+        "        return new {}(bridge, hostPtr, minVersion);",
         class_name
     ));
-    out.push_str("        if (!bridge || !bridge.callHostContract) {\n");
-    out.push_str("            return null;\n");
-    out.push_str("        }\n");
-    out.push_str(&format!(
-        "        return new {}(bridge, hostPtr, minVersion);\n",
-        class_name
-    ));
-    out.push_str("    }\n\n");
+    out.push_str(&render_js_method(
+        "fromHost",
+        true,
+        vec![
+            JsParameter {
+                name: "bridge".to_owned(),
+                default: None,
+                type_doc: Some("any".to_owned()),
+            },
+            JsParameter {
+                name: "hostPtr".to_owned(),
+                default: None,
+                type_doc: Some("{ lo: number; hi: number }".to_owned()),
+            },
+            JsParameter {
+                name: "minVersion".to_owned(),
+                default: Some("0".to_owned()),
+                type_doc: Some("number".to_owned()),
+            },
+        ],
+        Some(format!("{class_name} | null")),
+        "/** Factory method - creates caller instance or null if the bridge is unavailable. */",
+        from_host_body,
+    )?);
+    out.push('\n');
 
-    out.push_str("    /** Check if the bridge is available. */\n");
-    out.push_str("    isValid(): boolean {\n");
-    out.push_str("        return !!(this._bridge && this._bridge.callHostContract);\n");
-    out.push_str("    }\n\n");
+    out.push_str(&render_js_method(
+        "isValid",
+        false,
+        Vec::new(),
+        Some("boolean".to_owned()),
+        "/** Check if the bridge is available. */",
+        "        return !!(this._bridge && this._bridge.callHostContract);".to_owned(),
+    )?);
+    out.push('\n');
 
     for func in &contract.functions {
         generate_ts_guest_host_contract_method(out, func, contract_id_lo, contract_id_hi, ir)?;
@@ -2047,7 +2126,7 @@ fn generate_ts_guest_host_contract_caller(
 
 /// Generate one method for a guest-side host contract caller.
 fn generate_ts_guest_host_contract_method(
-    out: &mut String,
+    dst: &mut String,
     func: &ResolvedFunction,
     contract_id_lo: u32,
     contract_id_hi: u32,
@@ -2063,24 +2142,22 @@ fn generate_ts_guest_host_contract_method(
     };
     let has_return: bool = func.returns.is_some();
 
-    let params_str: String = if func.params.is_empty() {
-        String::new()
-    } else {
-        func.params
-            .iter()
-            .map(|p: &ResolvedParam| {
-                let ts_ty: String = ts_guest_caller_param_type(&p.ty);
-                format!("{}: {}", p.name, ts_ty)
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+    // langprint renders the method FORM (indent-1 class member); the body is verbatim.
+    let parameters: Vec<JsParameter> = func
+        .params
+        .iter()
+        .map(|p: &ResolvedParam| JsParameter {
+            name: p.name.clone(),
+            default: None,
+            type_doc: Some(ts_guest_caller_param_type(&p.ty)),
+        })
+        .collect::<Vec<JsParameter>>();
+    let jsdoc: String = format!("/** Call `{}` */", func.name);
 
-    out.push_str(&format!("    /** Call `{}` */\n", func.name));
-    out.push_str(&format!(
-        "    {}({}): {} {{\n",
-        func.name, params_str, return_type
-    ));
+    // The body is accumulated into `body` (aliased as `out` so the existing
+    // push_str lines below are unchanged), then rendered as the verbatim slot.
+    let mut body: String = String::new();
+    let out: &mut String = &mut body;
 
     out.push_str("        const polyplug = this._bridge;\n");
     out.push_str("        if (!polyplug || !polyplug.callHostContract) {\n");
@@ -2115,7 +2192,18 @@ fn generate_ts_guest_host_contract_method(
     }
 
     emit_ts_caller_free_shim(out);
-    out.push_str("    }\n\n");
+    if body.ends_with('\n') {
+        body.pop();
+    }
+    dst.push_str(&render_js_method(
+        &func.name,
+        false,
+        parameters,
+        Some(return_type),
+        &jsdoc,
+        body,
+    )?);
+    dst.push('\n');
     Ok(())
 }
 
