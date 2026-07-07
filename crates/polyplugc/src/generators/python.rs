@@ -681,7 +681,7 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
-    out.push_str("from typing import Any\n");
+    out.push_str("from typing import Any, Callable\n");
     out.push_str("from polyplug_guest import AbiError\n\n");
 
     // Guest-impl traits use ergonomic `str`/`bytes` for StringView/Buffer, so the
@@ -694,17 +694,31 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
 
     out.push_str("POLYPLUG_ABI_VERSION: int\n\n");
 
-    for contract in &ir.contracts {
-        let trait_name: String = contract_name_to_guest_trait(&contract.name);
-        out.push_str(&format!("class {trait_name}:\n"));
-        for func in &contract.functions {
-            generate_guest_trait_stub_method(&mut out, func);
+    // Mirror generate_guest_contracts_file's bundle-vs-contract branch exactly so the
+    // stubbed class and `set_<var>_factory` names track the runtime .py. A divergence
+    // (the earlier `class <Contract>GuestContract` + `set_<UPPER>_impl` here vs the
+    // runtime `class <PLUGIN><Contract>Plugin` + `set_<plugin>_factory`) points
+    // type-checkers at symbols the .py never defines.
+    if let Some(bundle) = &ir.bundle {
+        for plugin in &bundle.plugins {
+            for contract_impl in &plugin.implements {
+                if let Some(contract) = ir.contracts.iter().find(|c: &&ResolvedContract| {
+                    let contract_full: String =
+                        format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
+                    contract_full == *contract_impl
+                }) {
+                    let class_name: String = plugin_guest_trait_name(&plugin.name, &contract.name);
+                    let var: String = plugin.name.to_lowercase().replace('.', "_");
+                    emit_guest_trait_stub_class(&mut out, &class_name, &var, contract);
+                }
+            }
         }
-        out.push('\n');
-        let upper: String = contract_name_to_upper_snake(&contract.name);
-        out.push_str(&format!(
-            "def set_{upper}_impl(impl: {trait_name}) -> None: ...\n\n"
-        ));
+    } else {
+        for contract in &ir.contracts {
+            let class_name: String = contract_name_to_guest_trait(&contract.name);
+            let var: String = contract_name_to_upper_snake(&contract.name);
+            emit_guest_trait_stub_class(&mut out, &class_name, &var, contract);
+        }
     }
 
     out.push_str("def polyplug_abi_version() -> int: ...\n");
@@ -1545,6 +1559,25 @@ fn generate_guest_trait_stub_method(out: &mut String, func: &ResolvedFunction) {
     out.push_str(&format!(
         "    def {}(self{}) -> {}: ...\n",
         func.name, sig_params, ret_type
+    ));
+}
+
+/// Emit one guest-impl trait class and its `set_<var>_factory` registration stub,
+/// matching the class and setter names `emit_python_factory_slot` / the plugin +
+/// contract trait emitters produce in the runtime `contracts.py`.
+fn emit_guest_trait_stub_class(
+    out: &mut String,
+    class_name: &str,
+    var: &str,
+    contract: &ResolvedContract,
+) {
+    out.push_str(&format!("class {class_name}:\n"));
+    for func in &contract.functions {
+        generate_guest_trait_stub_method(out, func);
+    }
+    out.push('\n');
+    out.push_str(&format!(
+        "def set_{var}_factory(factory: Callable[[int], {class_name}]) -> None: ...\n\n"
     ));
 }
 
@@ -4736,6 +4769,57 @@ mod tests {
                 returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
             }],
         }
+    }
+
+    #[test]
+    fn guest_contracts_stub_names_match_runtime_py() {
+        // PP-21 regression: the .pyi stub must declare the SAME trait class and
+        // factory-setter names as the runtime .py. In the bundle path both are
+        // plugin-derived (`{PLUGIN}{Ns}{Type}Plugin` + `set_<plugin>_factory`); the
+        // stub once emitted the non-bundle `{Ns}{Type}GuestContract` + `set_<UPPER>_impl`
+        // instead, pointing type-checkers at symbols the .py never defines.
+        let contract: ResolvedContract = make_validator_contract();
+        let bundle: ResolvedBundle = ResolvedBundle {
+            name: "validator".to_owned(),
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            loader: "python".to_owned(),
+            file: ResolvedBundleFile::Single("validator.py".to_owned()),
+            plugins: vec![ResolvedPlugin {
+                name: "validator".to_owned(),
+                implements: vec!["pipeline.Validator@1.0".to_owned()],
+                optional: vec![],
+            }],
+            bundle_id: 0,
+            dependencies: vec![],
+            needs_reinit_on_dep_reload: false,
+        };
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![contract],
+            host_contracts: vec![],
+            bundle: Some(bundle),
+        };
+
+        let py: String = generate_guest_contracts_file(&ir).expect("generate .py");
+        let pyi: String = generate_guest_contracts_stub(&ir);
+
+        for needle in [
+            "class VALIDATORPipelineValidatorPlugin:",
+            "set_validator_factory",
+        ] {
+            assert!(py.contains(needle), ".py must contain `{needle}`:\n{py}");
+            assert!(pyi.contains(needle), ".pyi must contain `{needle}`:\n{pyi}");
+        }
+        // The stale non-bundle stub names must never reappear in the bundle stub.
+        assert!(
+            !pyi.contains("set_VALIDATOR_impl") && !pyi.contains("GuestContract"),
+            ".pyi must not emit the stale non-bundle names:\n{pyi}"
+        );
     }
 
     fn make_bundle_with_dep(contract_id: u64) -> ResolvedBundle {
