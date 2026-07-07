@@ -96,7 +96,7 @@ impl CodeGenerator for LuaGenerator {
         }
 
         if !ir.host_contracts.is_empty() {
-            let host_contracts_lua: String = generate_guest_host_contracts_file(ir);
+            let host_contracts_lua: String = generate_guest_host_contracts_file(ir)?;
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/host_contracts.lua"),
                 content: host_contracts_lua,
@@ -1694,7 +1694,7 @@ fn generate_lua_guest_host_contract_caller(
     out: &mut String,
     contract: &ResolvedHostContract,
     enums: &[EnumDef],
-) {
+) -> Result<(), PolyplugcError> {
     let class_name: String = host_contract_name_to_lua_caller(&contract.name);
 
     out.push_str(&format!(
@@ -1704,70 +1704,69 @@ fn generate_lua_guest_host_contract_caller(
     out.push_str(&format!("{} = {{}}\n", class_name));
     out.push_str(&format!("{}.__index = {}\n\n", class_name, class_name));
 
-    out.push_str(&format!(
-        "function {}:new(interface, instance)\n",
-        class_name
-    ));
-    out.push_str("    local obj = { _interface = interface, _instance = instance }\n");
-    out.push_str("    setmetatable(obj, self)\n");
-    out.push_str("    return obj\n");
-    out.push_str("end\n\n");
+    // langprint renders each `function Class:method(...) … end` FORM (the colon/dot
+    // is part of the name); the bodies are verbatim.
+    out.push_str(&render_lua_defn_fn(
+        &format!("{class_name}:new"),
+        vec!["interface".to_owned(), "instance".to_owned()],
+        "    local obj = { _interface = interface, _instance = instance }\n    setmetatable(obj, self)\n    return obj".to_owned(),
+    )?);
+    out.push('\n');
 
-    out.push_str(&format!(
-        "function {}.from_host(host_ptr, min_version)\n",
-        class_name
-    ));
-    out.push_str("    if min_version == nil then min_version = 0 end\n");
-    out.push_str("    if host_ptr == nil then\n");
-    out.push_str("        return nil\n");
-    out.push_str("    end\n");
     // `host_ptr` is the threaded host pointer (a plain Lua number), passed in by
-    // the caller — no per-VM global (Rule 12). Cast through uintptr_t
-    // first, exactly like the host-side caller path: a direct ffi.cast("HostApi*",
-    // number) yields a pointer LuaJIT then rejects as the first FFI argument
-    // ("bad argument #1"). Pass the typed `host` cdata to every HostApi call.
-    out.push_str("    local host = ffi.cast(\"HostApi*\", ffi.cast(\"uintptr_t\", host_ptr))\n");
-    // Resolve the contract vtable. This is the source of dispatch metadata
-    // (dispatch_type, function_count, functions) — NOT the instance. Mirrors the
-    // canonical Rust host-contract caller (resolve_host_contract_interface +
-    // get_host_contract).
-    out.push_str(&format!(
+    // the caller — no per-VM global (Rule 12). Cast through uintptr_t first, exactly
+    // like the host-side caller path; mirrors the canonical Rust host-contract caller.
+    let mut from_host_body: String = String::new();
+    from_host_body.push_str("    if min_version == nil then min_version = 0 end\n");
+    from_host_body.push_str("    if host_ptr == nil then\n");
+    from_host_body.push_str("        return nil\n");
+    from_host_body.push_str("    end\n");
+    from_host_body
+        .push_str("    local host = ffi.cast(\"HostApi*\", ffi.cast(\"uintptr_t\", host_ptr))\n");
+    from_host_body.push_str(&format!(
         "    local interface_ptr = host.resolve_host_contract_interface(host, 0x{:016X}ULL, min_version)\n",
         contract.contract_id
     ));
-    out.push_str("    if interface_ptr == nil then\n");
-    out.push_str("        return nil\n");
-    out.push_str("    end\n");
-    // The per-instance state: native dispatch thunks receive this as their `this`
-    // (first) argument.
-    out.push_str(&format!(
+    from_host_body.push_str("    if interface_ptr == nil then\n");
+    from_host_body.push_str("        return nil\n");
+    from_host_body.push_str("    end\n");
+    from_host_body.push_str(&format!(
         "    local instance = host.get_host_contract(host, 0x{:016X}ULL, min_version)\n",
         contract.contract_id
     ));
-    out.push_str(&format!(
-        "    return {}:new(interface_ptr, instance)\n",
+    from_host_body.push_str(&format!(
+        "    return {}:new(interface_ptr, instance)",
         class_name
     ));
-    out.push_str("end\n\n");
+    out.push_str(&render_lua_defn_fn(
+        &format!("{class_name}.from_host"),
+        vec!["host_ptr".to_owned(), "min_version".to_owned()],
+        from_host_body,
+    )?);
+    out.push('\n');
 
-    out.push_str(&format!("function {}:is_valid()\n", class_name));
-    out.push_str("    return self._interface ~= nil\n");
-    out.push_str("end\n\n");
+    out.push_str(&render_lua_defn_fn(
+        &format!("{class_name}:is_valid"),
+        Vec::new(),
+        "    return self._interface ~= nil".to_owned(),
+    )?);
+    out.push('\n');
 
     for func in &contract.functions {
-        generate_lua_guest_host_contract_method(out, func, &class_name, enums);
+        generate_lua_guest_host_contract_method(out, func, &class_name, enums)?;
     }
 
     out.push('\n');
+    Ok(())
 }
 
 /// Generate one method for a guest-side host contract caller.
 fn generate_lua_guest_host_contract_method(
-    out: &mut String,
+    dst: &mut String,
     func: &ResolvedFunction,
     class_name: &str,
     enums: &[EnumDef],
-) {
+) -> Result<(), PolyplugcError> {
     let fn_id: u32 = func.function_id;
     let has_return: bool = func.returns.is_some();
 
@@ -1775,18 +1774,19 @@ fn generate_lua_guest_host_contract_method(
     // parameter list must NOT re-declare it. Emitting `:method(self, ...)` shifts
     // every real argument by one (the caller's first arg lands in the redundant
     // `self` slot and the last real parameter becomes nil) — the bug that silently
-    // dropped the message a guest passed to host.logger:log().
-    let params_str: String = func
+    // dropped the message a guest passed to host.logger:log(). langprint renders the
+    // `function Class:method(params) … end` FORM (the colon+name is the name); the
+    // body is verbatim.
+    let parameters: Vec<String> = func
         .params
         .iter()
         .map(|p: &ResolvedParam| p.name.clone())
-        .collect::<Vec<String>>()
-        .join(", ");
+        .collect::<Vec<String>>();
 
-    out.push_str(&format!(
-        "function {}:{}({})\n",
-        class_name, func.name, params_str
-    ));
+    // The body is accumulated into `body` (aliased as `out` so the existing
+    // push_str lines below are unchanged), then rendered as the verbatim slot.
+    let mut body: String = String::new();
+    let out: &mut String = &mut body;
 
     out.push_str("    if self._interface == nil then\n");
     if has_return {
@@ -1866,7 +1866,16 @@ fn generate_lua_guest_host_contract_method(
             lua_return_expr(&func.returns, enums)
         ));
     }
-    out.push_str("end\n\n");
+    if body.ends_with('\n') {
+        body.pop();
+    }
+    dst.push_str(&render_lua_defn_fn(
+        &format!("{class_name}:{}", func.name),
+        parameters,
+        body,
+    )?);
+    dst.push('\n');
+    Ok(())
 }
 
 /// Emit the args_ptr setup for a Lua guest host contract method.
@@ -2377,7 +2386,7 @@ fn generate_lua_guest_peer_method(
 }
 
 /// Generate `guest/host_contracts.lua` — caller classes for guest-side host contract callers.
-fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
+fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(file_header());
     out.push_str("local ffi = require(\"ffi\")\n");
@@ -2415,7 +2424,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     );
 
     for contract in &ir.host_contracts {
-        generate_lua_guest_host_contract_caller(&mut out, contract, &ir.enums);
+        generate_lua_guest_host_contract_caller(&mut out, contract, &ir.enums)?;
     }
 
     out.push_str("-- Contract ID constants\n");
@@ -2437,7 +2446,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push('\n');
 
     out.push_str("return M\n");
-    out
+    Ok(out)
 }
 
 // ─── Host Interface Factories Generation ─────────────────────────────────────────
@@ -3119,7 +3128,8 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_lua_guest_host_contract_caller(&mut out, &contract, &[]);
+        generate_lua_guest_host_contract_caller(&mut out, &contract, &[])
+            .expect("caller generation must succeed");
         assert!(
             out.contains("HostLoggerContract = {}"),
             "missing class table: {out}"
@@ -3209,7 +3219,8 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_lua_guest_host_contract_caller(&mut out, &contract, &[]);
+        generate_lua_guest_host_contract_caller(&mut out, &contract, &[])
+            .expect("caller generation must succeed");
         assert!(
             out.contains("HostFsReaderContract = {}"),
             "missing class table: {out}"
@@ -3233,7 +3244,8 @@ mod tests {
             host_contracts: vec![],
             bundle: None,
         };
-        let result: String = generate_guest_host_contracts_file(&ir);
+        let result: String = generate_guest_host_contracts_file(&ir)
+            .expect("host contracts generation must succeed");
         assert!(result.contains("local ffi = require(\"ffi\")"));
         assert!(result.contains("local M = {}"));
         assert!(result.contains("return M"));
@@ -3265,7 +3277,8 @@ mod tests {
             host_contracts: vec![contract],
             bundle: None,
         };
-        let result: String = generate_guest_host_contracts_file(&ir);
+        let result: String = generate_guest_host_contracts_file(&ir)
+            .expect("host contracts generation must succeed");
         assert!(result.contains("HostLoggerContract = {}"));
         assert!(result.contains("M.HOSTLOGGERCONTRACT_ID = 0x123456789ABCDEF0ULL"));
         assert!(result.contains("M.HostLoggerContract = HostLoggerContract"));
@@ -3961,7 +3974,8 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_lua_guest_host_contract_caller(&mut out, &contract, &pixel_format_enums());
+        generate_lua_guest_host_contract_caller(&mut out, &contract, &pixel_format_enums())
+            .expect("caller generation must succeed");
         assert_enum_caller_marshalling(&out);
     }
 
