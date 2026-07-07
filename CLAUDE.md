@@ -795,7 +795,7 @@ polyplug/
 ├── README.md                        stays at root (GitHub convention)
 ├── CHANGELOG.md                      stays at root (GitHub convention)
 ├── docs/                            ALL other documentation (.md) lives here —
-│                                    incl. TRUST_MODEL.md, ROADMAP.md, ABI_ARCHITECTURE.md
+│                                    incl. TRUST_MODEL.md, ABI_ARCHITECTURE.md
 ├── crates/
 │   ├── polyplug/                    core runtime
 │   │   └── src/

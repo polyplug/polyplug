@@ -26,7 +26,7 @@ so the choice is mechanical — never guess:
 | Concepts | understand — the **only** home for internals | topic nouns |
 | Operations | run it — performance, profiling, crashes | topic nouns |
 | Security & Trust | trust boundaries, disclosure | topic nouns |
-| Project | meta — roadmap, workflow, examples | topic nouns |
+| Project | meta — workflow, examples | topic nouns |
 
 ## Headings
 

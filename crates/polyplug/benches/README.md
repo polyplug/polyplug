@@ -649,7 +649,7 @@ python3 scripts/gen_bench_charts.py --soak target/soak/soak_rss.txt \
 ## Future benchmark ideas (documented, not yet built)
 
 These are worth building, but each has a caveat that keeps it from being a clean
-"polyplug wins" headline — recorded here and in `docs/ROADMAP.md` (Lane C) so they
+"polyplug wins" headline — recorded here so they
 aren't lost. **Priority: benches for what we currently ship come first.**
 
 > **Already built** (kept off this list, documented in their own sections above):

@@ -353,7 +353,7 @@ its own VM. For full isolation with Python or .NET, use separate processes.
 | macOS (x86_64 / aarch64) | Full |
 | Windows (x86_64) | In progress — see below |
 
-Windows status (honest, per [`ROADMAP.md`](ROADMAP.md) Platform Support):
+Windows status (honest):
 
 - The workspace is **Windows-correct at the source level**. All shared-library
   naming uses the real cdylib convention per OS (`<name>.dll` with no `lib`
