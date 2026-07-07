@@ -340,7 +340,7 @@ fn generate_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("    Native: 0,\n");
     out.push_str("    VirtualMachine: 1,\n");
     out.push_str("} as const);\n\n");
-    emit_ts_utf8_encoder_helper(&mut out);
+    emit_ts_utf8_encoder_helper(&mut out)?;
 
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
@@ -462,28 +462,26 @@ fn render_plugin_interface_quickjs(
         //   bridge    — the host-capability bridge (NOT read from any global — Rule 12)
         // User-space addresses are < 2^48 < 2^53 (float64 mantissa), so the
         // usize→f64→usize round-trip is exact. readU32/writeU32 also accept f64.
-        out.push_str("\nfunction ");
-        out.push_str(&wrapper_name);
-        out.push_str(
-            "(impl: any, args_ptr: number, out_ptr: number, arena_ptr: number, bridge: any): number {\n",
-        );
-        out.push_str("    // SAFETY: args_ptr and out_ptr are valid addresses passed as f64\n");
-        out.push_str("    // by the loader. readU32/writeU32 accept f64 and convert to usize.\n");
-        out.push_str(
+        // langprint renders the wrapper's `function name(...): number` FORM; the
+        // dispatch body below is built into `body` and handed back verbatim.
+        let mut body: String = String::new();
+        body.push_str("    // SAFETY: args_ptr and out_ptr are valid addresses passed as f64\n");
+        body.push_str("    // by the loader. readU32/writeU32 accept f64 and convert to usize.\n");
+        body.push_str(
             "    // `impl` is the per-instance impl object the loader resolved for this\n",
         );
-        out.push_str(
+        body.push_str(
             "    // call (built by the factory); the loader passes it as the first argument.\n",
         );
-        out.push_str("    const polyplug = bridge;\n");
-        out.push_str("    if (!polyplug) return 1;\n");
-        out.push_str("    if (!impl) return 1;\n");
+        body.push_str("    const polyplug = bridge;\n");
+        body.push_str("    if (!polyplug) return 1;\n");
+        body.push_str("    if (!impl) return 1;\n");
 
         if has_params {
-            out.push_str("    if (!args_ptr) return 8;\n");
+            body.push_str("    if (!args_ptr) return 8;\n");
         }
         if has_return {
-            out.push_str("    if (!out_ptr) return 8;\n");
+            body.push_str("    if (!out_ptr) return 8;\n");
         }
 
         // Per-signature argument unpacking. The host-side caller passes a
@@ -497,7 +495,7 @@ fn render_plugin_interface_quickjs(
             // SAFETY (emitted reads): args_ptr is a valid host-allocated
             // buffer holding exactly one ABI value of the parameter type.
             let expr: String = js_read_expr(&param.ty, "args_ptr", 0, ir)?;
-            out.push_str(&format!("    var arg_{} = {};\n", param.name, expr));
+            body.push_str(&format!("    var arg_{} = {};\n", param.name, expr));
             arg_names.push(format!("arg_{}", param.name));
         } else if func.params.len() >= 2 {
             let mut offset: usize = 0;
@@ -508,7 +506,7 @@ fn render_plugin_interface_quickjs(
                 // arg-pack struct written by the host caller; each field is
                 // read at its natural-alignment offset.
                 let expr: String = js_read_expr(&param.ty, "args_ptr", offset, ir)?;
-                out.push_str(&format!("    var arg_{} = {};\n", param.name, expr));
+                body.push_str(&format!("    var arg_{} = {};\n", param.name, expr));
                 offset += js_c_size(&param.ty, ir)?;
                 arg_names.push(format!("arg_{}", param.name));
             }
@@ -516,12 +514,12 @@ fn render_plugin_interface_quickjs(
 
         // Call the implementation
         if has_return {
-            out.push_str(&format!(
+            body.push_str(&format!(
                 "    var result = impl.fn{idx}({});\n",
                 arg_names.join(", ")
             ));
         } else {
-            out.push_str(&format!("    impl.fn{idx}({});\n", arg_names.join(", ")));
+            body.push_str(&format!("    impl.fn{idx}({});\n", arg_names.join(", ")));
         }
 
         // Write the return value back through out_ptr per the contract's
@@ -530,10 +528,23 @@ fn render_plugin_interface_quickjs(
         if let Some(ret_ty) = &func.returns {
             // SAFETY (emitted writes): out_ptr is a valid host-allocated out
             // slot sized for the declared return type.
-            emit_js_guest_return_write(out, ret_ty, ir)?;
+            emit_js_guest_return_write(&mut body, ret_ty, ir)?;
         }
-        out.push_str("    return 0;\n");
-        out.push_str("}\n");
+        body.push_str("    return 0;");
+        out.push('\n');
+        out.push_str(&render_js_defn_fn(
+            &wrapper_name,
+            js_params(&[
+                ("impl", "any"),
+                ("args_ptr", "number"),
+                ("out_ptr", "number"),
+                ("arena_ptr", "number"),
+                ("bridge", "any"),
+            ]),
+            Some("number".to_owned()),
+            body,
+            false,
+        )?);
 
         abi_wrappers.push(wrapper_name);
     }
@@ -625,6 +636,7 @@ fn render_js_set_factory(
     let options: JsFunctionRenderOptions = JsFunctionRenderOptions {
         render_jsdoc: false,
         typescript: true,
+        verbatim_body: false,
     };
     let mut indent_level: i32 = 0;
     backend
@@ -639,6 +651,64 @@ fn render_js_set_factory(
             path: "guest/contracts.ts".to_owned(),
             source,
         })
+}
+
+/// Render a QuickJS guest function DEFINITION via langprint's TypeScript mode with
+/// a verbatim body. langprint owns the FORM (`[export ]function name(params): ret`);
+/// polyplugc owns the body, passed as one verbatim String (exact whitespace and
+/// nested indentation baked in, no trailing newline) — QuickJS output has no formatter.
+fn render_js_defn_fn(
+    name: &str,
+    parameters: Vec<JsParameter>,
+    return_type: Option<String>,
+    body: String,
+    export: bool,
+) -> Result<String, PolyplugcError> {
+    let function: JsFunction = JsFunction {
+        name: name.to_owned(),
+        parameters,
+        return_type,
+        doc: None,
+        is_static: false,
+        body: Some(vec![body]),
+    };
+    // polyplugc's QuickJS output indents 4, not the JS-idiomatic 2.
+    let backend: JsBackend = JsBackend {
+        indent_size: 4,
+        ..JsBackend::default()
+    };
+    let options: JsFunctionRenderOptions = JsFunctionRenderOptions {
+        render_jsdoc: false,
+        typescript: true,
+        verbatim_body: true,
+    };
+    let before: Option<&str> = if export { Some("export ") } else { None };
+    let mut indent_level: i32 = 0;
+    backend
+        .render_function(
+            &function,
+            before,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/contracts.ts".to_owned(),
+            source,
+        })
+}
+
+/// Build a `JsParameter` list from `(name, ts_type)` pairs (TypeScript mode reads
+/// each type from `type_doc`).
+fn js_params(pairs: &[(&str, &str)]) -> Vec<JsParameter> {
+    pairs
+        .iter()
+        .map(|(name, ty): &(&str, &str)| JsParameter {
+            name: (*name).to_owned(),
+            default: None,
+            type_doc: Some((*ty).to_owned()),
+        })
+        .collect::<Vec<JsParameter>>()
 }
 
 fn generate_interface_ts(ir: &ValidatedIr) -> String {
@@ -2528,28 +2598,38 @@ fn emit_js_write_value(
 /// call `new TextEncoder()` unconditionally. This emits a manual UTF-8 encoder
 /// (mirroring the SDK's `_encodeUtf8`) guarded by a `typeof TextEncoder` check,
 /// so emitted marshalling works in both QuickJS and TextEncoder-bearing runtimes.
-fn emit_ts_utf8_encoder_helper(out: &mut String) {
+fn emit_ts_utf8_encoder_helper(out: &mut String) -> Result<(), PolyplugcError> {
+    // langprint renders the `function _ppEncodeUtf8(str: string): Uint8Array` FORM;
+    // the encoder body (nested loop + branch indentation) is the verbatim slot.
     out.push_str("// UTF-8 encoder usable in QuickJS (where TextEncoder is absent).\n");
-    out.push_str("function _ppEncodeUtf8(str: string): Uint8Array {\n");
-    out.push_str(
+    let mut body: String = String::new();
+    body.push_str(
         "    if (typeof TextEncoder !== 'undefined') { return new TextEncoder().encode(str); }\n",
     );
-    out.push_str("    const out: number[] = [];\n");
-    out.push_str("    for (let i = 0; i < str.length; i++) {\n");
-    out.push_str("        let code = str.charCodeAt(i);\n");
-    out.push_str("        if (code >= 0xD800 && code <= 0xDBFF) {\n");
-    out.push_str("            const low = str.charCodeAt(++i);\n");
-    out.push_str("            code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);\n");
-    out.push_str("        }\n");
-    out.push_str("        if (code < 0x80) { out.push(code); }\n");
-    out.push_str(
+    body.push_str("    const out: number[] = [];\n");
+    body.push_str("    for (let i = 0; i < str.length; i++) {\n");
+    body.push_str("        let code = str.charCodeAt(i);\n");
+    body.push_str("        if (code >= 0xD800 && code <= 0xDBFF) {\n");
+    body.push_str("            const low = str.charCodeAt(++i);\n");
+    body.push_str("            code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);\n");
+    body.push_str("        }\n");
+    body.push_str("        if (code < 0x80) { out.push(code); }\n");
+    body.push_str(
         "        else if (code < 0x800) { out.push(0xC0 | (code >> 6), 0x80 | (code & 0x3F)); }\n",
     );
-    out.push_str("        else if (code < 0x10000) { out.push(0xE0 | (code >> 12), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F)); }\n");
-    out.push_str("        else { out.push(0xF0 | (code >> 18), 0x80 | ((code >> 12) & 0x3F), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F)); }\n");
-    out.push_str("    }\n");
-    out.push_str("    return new Uint8Array(out);\n");
-    out.push_str("}\n\n");
+    body.push_str("        else if (code < 0x10000) { out.push(0xE0 | (code >> 12), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F)); }\n");
+    body.push_str("        else { out.push(0xF0 | (code >> 18), 0x80 | ((code >> 12) & 0x3F), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F)); }\n");
+    body.push_str("    }\n");
+    body.push_str("    return new Uint8Array(out);");
+    out.push_str(&render_js_defn_fn(
+        "_ppEncodeUtf8",
+        js_params(&[("str", "string")]),
+        Some("Uint8Array".to_owned()),
+        body,
+        false,
+    )?);
+    out.push('\n');
+    Ok(())
 }
 
 /// Emit a StringView into `buf` at `offset` using `_callerAlloc` + writeU32/writeByte.
@@ -3264,7 +3344,7 @@ fn generate_guest_host_contracts_ts(ir: &ValidatedIr) -> Result<String, Polyplug
         let import_list: String = type_imports.into_iter().collect::<Vec<String>>().join(", ");
         out.push_str(&format!("import {{ {} }} from './types';\n\n", import_list));
     }
-    emit_ts_utf8_encoder_helper(&mut out);
+    emit_ts_utf8_encoder_helper(&mut out)?;
 
     for contract in &ir.host_contracts {
         generate_ts_guest_host_contract_caller(&mut out, contract, ir)?;
@@ -3521,7 +3601,7 @@ fn generate_guest_peer_callers_ts(
         let import_list: String = type_imports.into_iter().collect::<Vec<String>>().join(", ");
         out.push_str(&format!("import {{ {} }} from './types';\n\n", import_list));
     }
-    emit_ts_utf8_encoder_helper(&mut out);
+    emit_ts_utf8_encoder_helper(&mut out)?;
 
     for contract in peers {
         let min_ver: u32 = peer_min_version(ir, contract.contract_id);
