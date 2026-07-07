@@ -23,7 +23,8 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use langprint::backends::python_backend::{
-    PythonBackend, PythonEnum, PythonEnumMember, PythonFunction, PythonParameter,
+    PythonBackend, PythonEnum, PythonEnumMember, PythonFunction, PythonFunctionRenderOptions,
+    PythonParameter,
 };
 use langprint::renderers::{EnumRenderer, FunctionRenderer};
 use polyplug_codegen::PolyplugcError;
@@ -550,7 +551,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
                     &contract_full == contract_impl
                 }) {
                     generate_guest_plugin_trait(&mut out, &plugin.name, contract)?;
-                    generate_guest_plugin_interface(&mut out, &plugin.name, contract);
+                    generate_guest_plugin_interface(&mut out, &plugin.name, contract)?;
                     let plugin_lower: String = plugin.name.to_lowercase().replace('.', "_");
                     registrations.push((
                         plugin.name.clone(),
@@ -564,70 +565,85 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
     } else {
         for contract in &ir.contracts {
             generate_guest_contract_trait(&mut out, contract)?;
-            generate_guest_contract_interface(&mut out, contract);
+            generate_guest_contract_interface(&mut out, contract)?;
             let lower: String = contract.name.replace('.', "_");
             let upper: String = contract_name_to_upper_snake(&contract.name);
             registrations.push((contract.name.clone(), lower, upper, contract));
         }
     }
 
-    out.push_str("def polyplug_abi_version() -> int:\n");
-    out.push_str("    return 1\n\n");
-    out.push_str(
-        "def polyplug_init(host_ptr: int, ctx_ptr: int) -> tuple[list[dict[str, Any]], AbiError]:\n",
-    );
-    out.push_str(
+    // polyplug_abi_version + polyplug_init are module entry points: langprint owns
+    // the `def ... -> ...:` FORM, polyplugc bakes the verbatim bodies (docstring +
+    // registration logic) below.
+    out.push_str(&render_py_defn_fn(
+        "polyplug_abi_version".to_owned(),
+        Vec::new(),
+        Some("int".to_owned()),
+        "    return 1".to_owned(),
+    )?);
+    out.push('\n');
+
+    let mut init_body: String = String::new();
+    init_body.push_str(
         "    \"\"\"Build this bundle's contract registrations for the polyplug_python VM loader.\n",
     );
-    out.push('\n');
-    out.push_str(
+    init_body.push('\n');
+    init_body.push_str(
         "    Returns a `(registrations, abi_error)` tuple: the loader reads this return\n",
     );
-    out.push_str(
+    init_body.push_str(
         "    value (nothing is deposited into the module namespace) and, when `abi_error.code\n",
     );
-    out.push_str(
+    init_body.push_str(
         "    == AbiErrorCode.Ok`, registers each contract in `registrations` itself. A factory\n",
     );
-    out.push_str(
+    init_body.push_str(
         "    that was never set at import time yields `([], AbiError(code=AbiErrorCode.Generic))`.\n\n",
     );
-    out.push_str("    Args:\n");
-    out.push_str("        host_ptr: HostApi pointer — passed to each author factory so every\n");
-    out.push_str(
+    init_body.push_str("    Args:\n");
+    init_body
+        .push_str("        host_ptr: HostApi pointer — passed to each author factory so every\n");
+    init_body.push_str(
         "                  implementation is constructed with its owning runtime's host\n",
     );
-    out.push_str("                  (no host pointer is stored in the guest SDK).\n");
-    out.push_str("        ctx_ptr: BundleInitContext pointer (unused)\n\n");
-    out.push_str("    Returns:\n");
-    out.push_str("        (registrations, abi_error) — the loader consumes registrations only\n");
-    out.push_str("        when abi_error.code == AbiErrorCode.Ok.\n");
-    out.push_str("    \"\"\"\n");
+    init_body.push_str("                  (no host pointer is stored in the guest SDK).\n");
+    init_body.push_str("        ctx_ptr: BundleInitContext pointer (unused)\n\n");
+    init_body.push_str("    Returns:\n");
+    init_body
+        .push_str("        (registrations, abi_error) — the loader consumes registrations only\n");
+    init_body.push_str("        when abi_error.code == AbiErrorCode.Ok.\n");
+    init_body.push_str("    \"\"\"\n");
     // The loader owns per-instance state: it calls each contract's factory once
     // per create_instance with the runtime's host pointer. polyplug_init only
     // registers the factory and callables, so host_ptr is unused here.
-    out.push_str("    _ = host_ptr\n");
-    out.push_str("    _ = ctx_ptr\n");
-    out.push_str("    registrations: list[dict[str, Any]] = []\n");
+    init_body.push_str("    _ = host_ptr\n");
+    init_body.push_str("    _ = ctx_ptr\n");
+    init_body.push_str("    registrations: list[dict[str, Any]] = []\n");
     for (_, _, impl_var, _) in &registrations {
-        out.push_str(&format!("    if _{impl_var}_FACTORY is None:\n"));
-        out.push_str("        return [], AbiError(code=int(AbiErrorCode.Generic))\n");
+        init_body.push_str(&format!("    if _{impl_var}_FACTORY is None:\n"));
+        init_body.push_str("        return [], AbiError(code=int(AbiErrorCode.Generic))\n");
     }
     for (display_name, lower, impl_var, contract) in &registrations {
         let contract_str: String = format!("{}@{}", contract.name, contract.version.major);
-        out.push_str("    register_contract(\n");
-        out.push_str("        registrations,\n");
-        out.push_str(&format!("        contract=\"{contract_str}\",\n"));
-        out.push_str(&format!("        factory=_{impl_var}_FACTORY,\n"));
-        out.push_str("        functions=[\n");
+        init_body.push_str("    register_contract(\n");
+        init_body.push_str("        registrations,\n");
+        init_body.push_str(&format!("        contract=\"{contract_str}\",\n"));
+        init_body.push_str(&format!("        factory=_{impl_var}_FACTORY,\n"));
+        init_body.push_str("        functions=[\n");
         for func in &contract.functions {
-            out.push_str(&format!("            {lower}_{}_abi,\n", func.name));
+            init_body.push_str(&format!("            {lower}_{}_abi,\n", func.name));
         }
-        out.push_str("        ],\n");
-        out.push_str(&format!("        plugin_name=\"{display_name}\",\n"));
-        out.push_str("    )\n");
+        init_body.push_str("        ],\n");
+        init_body.push_str(&format!("        plugin_name=\"{display_name}\",\n"));
+        init_body.push_str("    )\n");
     }
-    out.push_str("    return registrations, AbiError(code=int(AbiErrorCode.Ok))\n");
+    init_body.push_str("    return registrations, AbiError(code=int(AbiErrorCode.Ok))");
+    out.push_str(&render_py_defn_fn(
+        "polyplug_init".to_owned(),
+        py_params(&[("host_ptr", "int"), ("ctx_ptr", "int")]),
+        Some("tuple[list[dict[str, Any]], AbiError]".to_owned()),
+        init_body,
+    )?);
     out.push('\n');
 
     Ok(out)
@@ -1338,7 +1354,7 @@ fn generate_guest_contract_trait(
         generate_guest_trait_method(out, func)?;
     }
     let upper: String = contract_name_to_upper_snake(&contract.name);
-    emit_python_factory_slot(out, &upper, &trait_name);
+    emit_python_factory_slot(out, &upper, &trait_name)?;
     Ok(())
 }
 
@@ -1350,20 +1366,33 @@ fn generate_guest_contract_trait(
 /// instance has its own state and no implementation object is stored at module
 /// scope. The factory slot itself is set-once registration config (not per-call
 /// runtime state), bounded by the documented CPython once-per-process limit.
-fn emit_python_factory_slot(out: &mut String, var: &str, class_name: &str) {
+fn emit_python_factory_slot(
+    out: &mut String,
+    var: &str,
+    class_name: &str,
+) -> Result<(), PolyplugcError> {
+    // The `_<VAR>_FACTORY = None` module var is a plain assignment (not a def), so
+    // it stays hand-emitted; the `set_<var>_factory` def is FORM rendered by
+    // langprint with the docstring + global assignment as its verbatim body.
     out.push_str(&format!(
         "\n_{var}_FACTORY: Callable[[int], {class_name}] | None = None\n"
     ));
-    out.push_str(&format!(
-        "def set_{var}_factory(factory: Callable[[int], {class_name}]) -> None:\n"
-    ));
-    out.push_str("    \"\"\"Register the author factory; call once at module import time.\n\n");
-    out.push_str("    The loader calls the factory with the HostApi pointer once per instance\n");
-    out.push_str("    (create_instance), so each implementation is constructed with its owning\n");
-    out.push_str("    runtime's host pointer and two live instances never share state.\n");
-    out.push_str("    \"\"\"\n");
-    out.push_str(&format!("    global _{var}_FACTORY\n"));
-    out.push_str(&format!("    _{var}_FACTORY = factory\n\n"));
+    let mut body: String = String::new();
+    body.push_str("    \"\"\"Register the author factory; call once at module import time.\n\n");
+    body.push_str("    The loader calls the factory with the HostApi pointer once per instance\n");
+    body.push_str("    (create_instance), so each implementation is constructed with its owning\n");
+    body.push_str("    runtime's host pointer and two live instances never share state.\n");
+    body.push_str("    \"\"\"\n");
+    body.push_str(&format!("    global _{var}_FACTORY\n"));
+    body.push_str(&format!("    _{var}_FACTORY = factory"));
+    out.push_str(&render_py_defn_fn(
+        format!("set_{var}_factory"),
+        py_params(&[("factory", &format!("Callable[[int], {class_name}]"))]),
+        Some("None".to_owned()),
+        body,
+    )?);
+    out.push('\n');
+    Ok(())
 }
 
 fn generate_guest_plugin_trait(
@@ -1377,7 +1406,7 @@ fn generate_guest_plugin_trait(
     for func in &contract.functions {
         generate_guest_trait_method(out, func)?;
     }
-    emit_python_factory_slot(out, &plugin_lower, &class_name);
+    emit_python_factory_slot(out, &plugin_lower, &class_name)?;
     Ok(())
 }
 
@@ -1420,6 +1449,59 @@ fn generate_guest_trait_method(
     Ok(())
 }
 
+/// Build a `PythonParameter` list from `(name, type_hint)` pairs. An empty hint
+/// string means no annotation (bare receiver-style parameter).
+fn py_params(pairs: &[(&str, &str)]) -> Vec<PythonParameter> {
+    pairs
+        .iter()
+        .map(|(name, hint): &(&str, &str)| PythonParameter {
+            name: (*name).to_owned(),
+            type_hint: if hint.is_empty() {
+                None
+            } else {
+                Some((*hint).to_owned())
+            },
+            default: None,
+        })
+        .collect::<Vec<PythonParameter>>()
+}
+
+/// Render a module-level Python function DEFINITION via langprint: langprint owns
+/// the `def name(params) -> ret:` FORM; polyplugc owns the body, passed verbatim
+/// (exact whitespace, nested blocks, and any docstring baked into the string).
+/// Python has no post-hoc formatter, so the body must be emitted byte-for-byte.
+fn render_py_defn_fn(
+    name: String,
+    parameters: Vec<PythonParameter>,
+    return_type: Option<String>,
+    body: String,
+) -> Result<String, PolyplugcError> {
+    let func: PythonFunction = PythonFunction {
+        name,
+        parameters,
+        return_type,
+        docstring: None,
+        body: Some(vec![body]),
+    };
+    let options: PythonFunctionRenderOptions = PythonFunctionRenderOptions {
+        verbatim_body: true,
+        ..PythonFunctionRenderOptions::default()
+    };
+    let mut indent_level: i32 = 0;
+    PythonBackend::default()
+        .render_function(
+            &func,
+            None::<&str>,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/contracts.py".to_owned(),
+            source,
+        })
+}
+
 fn generate_guest_trait_stub_method(out: &mut String, func: &ResolvedFunction) {
     let sig_params: String = build_python_guest_impl_sig_params(func);
     let ret_type: String = python_guest_impl_return_type(&func.returns);
@@ -1460,21 +1542,24 @@ fn python_guest_impl_return_type(returns: &Option<ResolvedTypeRef>) -> String {
     }
 }
 
-fn generate_guest_contract_interface(out: &mut String, contract: &ResolvedContract) {
+fn generate_guest_contract_interface(
+    out: &mut String,
+    contract: &ResolvedContract,
+) -> Result<(), PolyplugcError> {
     // Non-bundle path: factory registered under `_<UPPER_SNAKE>_FACTORY`, callables
     // named `<lower>_<fn>_abi` (see generate_guest_contract_trait). The instance
     // impl is passed to each callable by the loader, not stored at module scope.
     let lower: String = contract.name.replace('.', "_");
     let trait_name: String = contract_name_to_guest_trait(&contract.name);
     let struct_name: String = contract_name_to_struct(&contract.name);
-    emit_guest_function_callables(out, contract, &lower, &trait_name, &struct_name);
+    emit_guest_function_callables(out, contract, &lower, &trait_name, &struct_name)
 }
 
 fn generate_guest_plugin_interface(
     out: &mut String,
     plugin_name: &str,
     contract: &ResolvedContract,
-) {
+) -> Result<(), PolyplugcError> {
     // Bundle path: factory registered under `_<plugin_lower>_FACTORY`, callables
     // named `<plugin_lower>_<fn>_abi` (see generate_guest_plugin_trait). The
     // instance impl is passed to each callable by the loader, not stored at module
@@ -1482,7 +1567,7 @@ fn generate_guest_plugin_interface(
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
     let plugin_class: String = plugin_guest_trait_name(plugin_name, &contract.name);
     let struct_name: String = contract_name_to_struct(&contract.name);
-    emit_guest_function_callables(out, contract, &plugin_lower, &plugin_class, &struct_name);
+    emit_guest_function_callables(out, contract, &plugin_lower, &plugin_class, &struct_name)
 }
 
 /// Emit the per-function VM-dispatch callables for one contract.
@@ -1502,7 +1587,7 @@ fn emit_guest_function_callables(
     fn_prefix: &str,
     impl_class: &str,
     struct_name: &str,
-) {
+) -> Result<(), PolyplugcError> {
     for func in &contract.functions {
         emit_guest_struct_consts(out, func, fn_prefix, struct_name);
     }
@@ -1511,19 +1596,19 @@ fn emit_guest_function_callables(
         let abi_name: String = format!("{fn_prefix}_{}_abi", func.name);
         let has_return: bool = has_return_value(&func.returns);
         let has_params: bool = !func.params.is_empty();
-        out.push_str(&format!(
-            "def {abi_name}(impl: {impl_class}, args_ptr: int, out_ptr: int, arena_ptr: int, arena_alloc: Callable[[int, int], int]) -> None:\n"
-        ));
+        // langprint renders the loader's five-argument `def` FORM; the dispatch
+        // body below is built into `body` and handed back verbatim.
+        let mut body: String = String::new();
         if has_params {
-            out.push_str("    if not args_ptr:\n");
-            out.push_str("        raise RuntimeError(\"null args pointer\")\n");
+            body.push_str("    if not args_ptr:\n");
+            body.push_str("        raise RuntimeError(\"null args pointer\")\n");
         }
         if has_return {
-            out.push_str("    if not out_ptr:\n");
-            out.push_str("        raise RuntimeError(\"null out pointer\")\n");
+            body.push_str("    if not out_ptr:\n");
+            body.push_str("        raise RuntimeError(\"null out pointer\")\n");
         }
         if !has_params {
-            out.push_str("    _ = args_ptr\n");
+            body.push_str("    _ = args_ptr\n");
         }
         // `arena_ptr` and the loader-supplied `arena_alloc` are forwarded to
         // `alloc_string_arena` only for StringView returns; every other shape
@@ -1534,14 +1619,30 @@ fn emit_guest_function_callables(
             Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView))
         );
         if !uses_arena {
-            out.push_str("    _ = arena_ptr\n");
-            out.push_str("    _ = arena_alloc\n");
+            body.push_str("    _ = arena_ptr\n");
+            body.push_str("    _ = arena_alloc\n");
         }
-        emit_guest_abi_args_unpack(out, func, fn_prefix, struct_name);
-        emit_guest_abi_call(out, func);
-        emit_guest_abi_return(out, func, fn_prefix);
+        emit_guest_abi_args_unpack(&mut body, func, fn_prefix, struct_name);
+        emit_guest_abi_call(&mut body, func);
+        emit_guest_abi_return(&mut body, func, fn_prefix);
+        if body.ends_with('\n') {
+            body.pop();
+        }
+        out.push_str(&render_py_defn_fn(
+            abi_name,
+            py_params(&[
+                ("impl", impl_class),
+                ("args_ptr", "int"),
+                ("out_ptr", "int"),
+                ("arena_ptr", "int"),
+                ("arena_alloc", "Callable[[int, int], int]"),
+            ]),
+            Some("None".to_owned()),
+            body,
+        )?);
         out.push('\n');
     }
+    Ok(())
 }
 
 /// Module-level `struct.Struct` constants for one function's scalar args and
