@@ -146,7 +146,7 @@ impl CodeGenerator for CppGenerator {
 
         // ── File 5: host_contracts.hpp (guest-side callers) ─────────────────────
         if !ir.host_contracts.is_empty() {
-            let host_contracts_hpp: String = generate_cpp_guest_host_contracts_file(ir);
+            let host_contracts_hpp: String = generate_cpp_guest_host_contracts_file(ir)?;
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/host_contracts.hpp"),
                 content: host_contracts_hpp,
@@ -534,6 +534,63 @@ fn render_cpp_defn_fn(
         )
         .map_err(|source: io::Error| PolyplugcError::WriteFailed {
             path: "guest/interfaces.hpp".to_owned(),
+            source,
+        })
+}
+
+/// Render a `noexcept` class-member method DEFINITION (indent level 1, inside a
+/// hand-emitted `class { … };`) via langprint: langprint owns the FORM (docs,
+/// `[static] <ret> name(params) noexcept`, braces); polyplugc owns the verbatim
+/// body. Used for the guest host-caller methods whose bodies have hand-baked
+/// nested (switch/case) indentation the re-indenting renderer can't reproduce.
+fn render_cpp_host_method(
+    name: String,
+    parameters: Vec<CppParameter>,
+    return_type: String,
+    is_static: bool,
+    docs: Vec<String>,
+    body: String,
+) -> Result<String, PolyplugcError> {
+    let func: CppFunction = CppFunction {
+        name,
+        parent_name: None,
+        visibility: CppVisibility::Default,
+        parameters,
+        template_params: Vec::new(),
+        return_type: Some(return_type),
+        is_static,
+        is_const: false,
+        is_virtual: false,
+        is_pure_virtual: false,
+        is_inline: false,
+        is_noexcept: true,
+        is_override: false,
+        is_final: false,
+        is_extern_c: false,
+        is_friend: false,
+        is_deleted: false,
+        is_default: false,
+        body: Some(vec![body]),
+        docs: if docs.is_empty() { None } else { Some(docs) },
+    };
+    let options: CppFunctionRenderOptions = CppFunctionRenderOptions {
+        render_definition: true,
+        docs_on_definition: true,
+        verbatim_body: true,
+        ..CppFunctionRenderOptions::default()
+    };
+    let backend: CppBackend = CppBackend::default();
+    let mut indent_level: i32 = 1;
+    backend
+        .render_function(
+            &func,
+            None::<&str>,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/host_contracts.hpp".to_owned(),
             source,
         })
 }
@@ -2318,7 +2375,10 @@ fn cpp_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
 }
 
 /// Generate one guest-side host contract caller class.
-fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &ResolvedHostContract) {
+fn generate_cpp_guest_host_contract_caller(
+    out: &mut String,
+    contract: &ResolvedHostContract,
+) -> Result<(), PolyplugcError> {
     let class_name: String = host_contract_name_to_cpp_caller(&contract.name);
 
     out.push_str(&format!(
@@ -2328,48 +2388,61 @@ fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str("/// Plugins use this class to call host-provided functionality.\n");
     out.push_str(&format!("class {} {{\npublic:\n", class_name));
 
-    // Factory method - from_host
-    out.push_str("    /// Factory method - creates caller from HostApi or nullopt if not found.\n");
-    out.push_str(&format!(
-        "    static std::optional<{}> from_host(const HostApi* host, uint32_t min_version = 0) noexcept {{\n",
-        class_name
-    ));
-    out.push_str("        if (host == nullptr) {\n");
-    out.push_str("            return std::nullopt;\n");
-    out.push_str("        }\n");
-    // Get the instance first
-    out.push_str(&format!(
+    // Factory method - from_host. langprint renders the FORM; the body is verbatim.
+    let mut from_host_body: String = String::new();
+    from_host_body.push_str("        if (host == nullptr) {\n");
+    from_host_body.push_str("            return std::nullopt;\n");
+    from_host_body.push_str("        }\n");
+    from_host_body.push_str(&format!(
         "        HostContractInstance instance = host->get_host_contract(host, 0x{:016X}ULL, min_version);\n",
         contract.contract_id
     ));
-    out.push_str("        if (instance.data == nullptr) {\n");
-    out.push_str("            return std::nullopt;\n");
-    out.push_str("        }\n");
-    // Resolve the interface for dispatch metadata
-    out.push_str(&format!(
+    from_host_body.push_str("        if (instance.data == nullptr) {\n");
+    from_host_body.push_str("            return std::nullopt;\n");
+    from_host_body.push_str("        }\n");
+    from_host_body.push_str(&format!(
         "        const HostContractInterface* interface = host->resolve_host_contract_interface(host, 0x{:016X}ULL, min_version);\n",
         contract.contract_id
     ));
-    out.push_str("        if (interface == nullptr) {\n");
-    out.push_str("            return std::nullopt;\n");
-    out.push_str("        }\n");
-    out.push_str(&format!(
-        "        return {}(host, interface, instance);\n",
+    from_host_body.push_str("        if (interface == nullptr) {\n");
+    from_host_body.push_str("            return std::nullopt;\n");
+    from_host_body.push_str("        }\n");
+    from_host_body.push_str(&format!(
+        "        return {}(host, interface, instance);",
         class_name
     ));
-    out.push_str("    }\n\n");
+    out.push_str(&render_cpp_host_method(
+        "from_host".to_owned(),
+        vec![
+            CppParameter {
+                name: "host".to_owned(),
+                param_type: "const HostApi*".to_owned(),
+                default_value: None,
+            },
+            CppParameter {
+                name: "min_version".to_owned(),
+                param_type: "uint32_t".to_owned(),
+                default_value: Some("0".to_owned()),
+            },
+        ],
+        format!("std::optional<{class_name}>"),
+        true,
+        vec!["Factory method - creates caller from HostApi or nullopt if not found.".to_owned()],
+        from_host_body,
+    )?);
+    out.push('\n');
 
-    // is_valid method
+    // is_valid method — one-liner (langprint always breaks bodies to new lines), hand-emitted.
     out.push_str("    /// Check if caller is valid (interface and instance are non-null).\n");
     out.push_str("    bool is_valid() const noexcept { return interface_ != nullptr && instance_.data != nullptr; }\n\n");
 
-    // Explicit bool conversion
+    // Explicit bool conversion — one-liner + operator, hand-emitted.
     out.push_str("    /// Explicit bool conversion for validity check.\n");
     out.push_str("    explicit operator bool() const noexcept { return interface_ != nullptr && instance_.data != nullptr; }\n\n");
 
     // Methods for each function
     for func in &contract.functions {
-        generate_cpp_guest_host_contract_method(out, func, &class_name);
+        generate_cpp_guest_host_contract_method(out, func, &class_name)?;
     }
 
     // Private section
@@ -2385,6 +2458,7 @@ fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str("    const HostContractInterface* interface_;\n");
     out.push_str("    HostContractInstance instance_;\n");
     out.push_str("};\n\n");
+    Ok(())
 }
 
 /// Emit the shared `detail::log_call_failure` helper used by guest-side
@@ -2421,10 +2495,10 @@ fn emit_cpp_log_call_failure_helper(out: &mut String) {
 
 /// Generate one method for a guest-side host contract caller.
 fn generate_cpp_guest_host_contract_method(
-    out: &mut String,
+    dst: &mut String,
     func: &ResolvedFunction,
     class_name: &str,
-) {
+) -> Result<(), PolyplugcError> {
     let fn_id: u32 = func.function_id;
 
     let return_type: String = func
@@ -2433,22 +2507,26 @@ fn generate_cpp_guest_host_contract_method(
         .map(cpp_guest_caller_return_type_name)
         .unwrap_or_else(|| "void".to_owned());
 
-    // Build parameter list
-    let params: Vec<String> = func
+    // Build parameter list — langprint renders the method FORM; the body is verbatim.
+    let parameters: Vec<CppParameter> = func
         .params
         .iter()
-        .map(|p| format!("{} {}", cpp_guest_caller_param_type_name(&p.ty), p.name))
-        .collect();
-    let params_str: String = params.join(", ");
+        .map(|p| CppParameter {
+            name: p.name.clone(),
+            param_type: cpp_guest_caller_param_type_name(&p.ty),
+            default_value: None,
+        })
+        .collect::<Vec<CppParameter>>();
 
-    out.push_str(&format!(
-        "    /// Call host contract function `{}` (function_id={})\n",
+    let docs: Vec<String> = vec![format!(
+        "Call host contract function `{}` (function_id={})",
         func.name, fn_id
-    ));
-    out.push_str(&format!(
-        "    {} {}({}) noexcept {{\n",
-        return_type, func.name, params_str
-    ));
+    )];
+
+    // The body is accumulated into `body` (aliased as `out` so the existing
+    // push_str lines below are unchanged), then rendered as the verbatim slot.
+    let mut body: String = String::new();
+    let out: &mut String = &mut body;
 
     let what: String = format!("{}.{}", class_name, func.name);
     let default_return: String = if func.returns.is_some() {
@@ -2520,7 +2598,19 @@ fn generate_cpp_guest_host_contract_method(
         out.push_str(&format!("        return {};\n", expr));
     }
 
-    out.push_str("    }\n\n");
+    if body.ends_with('\n') {
+        body.pop();
+    }
+    dst.push_str(&render_cpp_host_method(
+        func.name.clone(),
+        parameters,
+        return_type,
+        false,
+        docs,
+        body,
+    )?);
+    dst.push('\n');
+    Ok(())
 }
 
 /// Emit the args_ptr setup for a C++ guest host contract method.
@@ -2652,7 +2742,7 @@ fn emit_cpp_guest_host_contract_out_setup(out: &mut String, returns: &Option<Res
 }
 
 /// Generate all guest-side host contract callers into a single file.
-fn generate_cpp_guest_host_contracts_file(ir: &ValidatedIr) -> String {
+fn generate_cpp_guest_host_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CPP_FILE_HEADER);
     out.push_str(
@@ -2672,7 +2762,7 @@ fn generate_cpp_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     emit_cpp_log_call_failure_helper(&mut out);
 
     for contract in &ir.host_contracts {
-        generate_cpp_guest_host_contract_caller(&mut out, contract);
+        generate_cpp_guest_host_contract_caller(&mut out, contract)?;
     }
 
     for contract in &ir.host_contracts {
@@ -2689,7 +2779,7 @@ fn generate_cpp_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     }
 
     out.push_str("}  // namespace polyplug_plugin\n");
-    out
+    Ok(out)
 }
 
 /// Generate one pure virtual method for a host contract function.
@@ -4305,7 +4395,8 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_cpp_guest_host_contract_caller(&mut out, &contract);
+        generate_cpp_guest_host_contract_caller(&mut out, &contract)
+            .expect("caller generation must succeed");
         assert!(
             out.contains("class HostLoggerContract"),
             "missing class: {out}"
@@ -4356,7 +4447,8 @@ mod tests {
             }],
             bundle: None,
         };
-        let out: String = generate_cpp_guest_host_contracts_file(&ir);
+        let out: String = generate_cpp_guest_host_contracts_file(&ir)
+            .expect("host contracts generation must succeed");
         assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
         assert!(
             out.contains("class HostLoggerContract"),
