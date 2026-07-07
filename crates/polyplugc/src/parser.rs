@@ -5,6 +5,7 @@
 
 use core::mem;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -898,6 +899,35 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
     })
 }
 
+/// Reject bundles where two `[[plugin]]` entries share a name.
+///
+/// Multiple plugins MAY implement the same contract in one bundle — that is a valid
+/// multi-provider bundle (e.g. several decoders behind one `pipeline.Decoder`
+/// contract, each fronting a different backend). The generators handle that by
+/// emitting the shared contract-id constant once and one plugin-named interface per
+/// provider. Plugin names, though, key every per-provider symbol
+/// (`{PLUGIN}_INTERFACE`, `{PLUGIN}_FNS`, `{PLUGIN}_create_instance`); two plugins
+/// with the same name would collide on all of them, and are indistinguishable to a
+/// reader anyway. Reject that here, before any code is generated.
+fn validate_bundle_plugin_uniqueness(
+    plugins: &[ResolvedPlugin],
+    bundle_name: &str,
+) -> Result<(), PolyplugcError> {
+    let mut seen_plugin: HashSet<&str> = HashSet::new();
+    for plugin in plugins {
+        if !seen_plugin.insert(plugin.name.as_str()) {
+            let symbol: String = plugin.name.to_uppercase().replace('.', "_");
+            return Err(PolyplugcError::ValidationFailed {
+                message: format!(
+                    "bundle `{bundle_name}`: two [[plugin]] entries are both named `{}` — plugin names must be unique within a bundle (generated symbols like {symbol}_INTERFACE would collide)",
+                    plugin.name,
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn lower_bundle(
     raw: RawBundleSchema,
     source: &str,
@@ -912,6 +942,7 @@ fn lower_bundle(
             optional: raw_plugin.optional.clone(),
         });
     }
+    validate_bundle_plugin_uniqueness(&plugins, &raw.bundle.name)?;
     let dep_bundle_id: u64 = bundle_id(&raw.bundle.name);
     let mut resolved_deps: Vec<ResolvedDependency> = Vec::new();
     for dep in &raw.dependencies {
@@ -1048,6 +1079,41 @@ mod tests {
         assert_eq!(bundle.name, "image-plugin");
         assert_eq!(bundle.plugins.len(), 1);
         assert_eq!(bundle.plugins[0].implements[0], "image.decode@1.0");
+    }
+
+    #[test]
+    fn bundle_accepts_two_plugins_implementing_same_contract() {
+        // Multiple providers of one contract is a valid bundle (e.g. two decoders
+        // behind pipeline.Decoder, each fronting a different backend). The api forbids
+        // two contracts of the same name, so both providers share the identical
+        // contract id — the generator emits that const once and one interface each.
+        let toml: &str = "[bundle]\nname = \"multi-bundle\"\nversion = \"1.0.0\"\nfile = \"test.so\"\n\n[[plugin]]\nname = \"decoder_a\"\nimplements = [\"pipeline.Decoder@1.0\"]\n\n[[plugin]]\nname = \"decoder_b\"\nimplements = [\"pipeline.Decoder@1.0\"]";
+        let ir: ValidatedIr =
+            parse_bundle_str(toml).expect("multiple providers of one contract must be accepted");
+        let bundle: &ResolvedBundle = ir.bundle.as_ref().expect("bundle");
+        assert_eq!(bundle.plugins.len(), 2, "both providers retained");
+        assert_eq!(bundle.plugins[0].implements, bundle.plugins[1].implements);
+    }
+
+    #[test]
+    fn bundle_rejects_duplicate_plugin_names() {
+        // Two plugins named `decoder` → DECODER_INTERFACE / DECODER_FNS would collide.
+        let toml: &str = "[bundle]\nname = \"dup-bundle\"\nversion = \"1.0.0\"\nfile = \"test.so\"\n\n[[plugin]]\nname = \"decoder\"\nimplements = [\"pipeline.Decoder@1.0\"]\n\n[[plugin]]\nname = \"decoder\"\nimplements = [\"pipeline.Encoder@1.0\"]";
+        let err: PolyplugcError =
+            parse_bundle_str(toml).expect_err("duplicate plugin names must be rejected");
+        let msg: String = format!("{err}");
+        assert!(
+            msg.contains("both named `decoder`") && msg.contains("DECODER_INTERFACE"),
+            "message must name the plugin and the colliding symbol: {msg}"
+        );
+    }
+
+    #[test]
+    fn bundle_allows_distinct_plugins_and_contracts() {
+        // Two plugins, two distinct contracts, distinct names → no collision.
+        let toml: &str = "[bundle]\nname = \"ok-bundle\"\nversion = \"1.0.0\"\nfile = \"test.so\"\n\n[[plugin]]\nname = \"decoder\"\nimplements = [\"pipeline.Decoder@1.0\"]\n\n[[plugin]]\nname = \"encoder\"\nimplements = [\"pipeline.Encoder@1.0\"]";
+        let ir: ValidatedIr = parse_bundle_str(toml).expect("distinct plugins must be accepted");
+        assert_eq!(ir.bundle.as_ref().expect("bundle").plugins.len(), 2);
     }
 
     #[test]

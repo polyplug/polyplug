@@ -782,9 +782,10 @@ fn generate_cs_guest_plugin_interface(
     let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
     // Contract-named id const, unified with the host types file and non-bundle guest
-    // (one value, one name everywhere). The interface/fns/instance thunks stay
-    // plugin-named. ponytail: two plugins implementing the same contract in one bundle
-    // would redefine this const — hoist + dedup by contract if that shape is supported.
+    // (one value, one name everywhere). Unlike Rust/C++, this const is a member of the
+    // per-plugin `{Plugin}Interfaces` class, so several plugins providing the same
+    // contract (a valid multi-provider bundle) each get their own class-scoped copy —
+    // no collision, no dedup needed. The interface/fns/instance thunks stay plugin-named.
     let contract_upper: String = contract_name_to_upper_snake(&contract.name);
     let iface_name: String = contract_name_to_cs_interface(&contract.name);
     let contract_id: u64 = contract.contract_id;
@@ -3659,6 +3660,7 @@ mod tests {
     use crate::ir::EnumVariant;
     use crate::ir::ReprType;
     use crate::ir::ResolvedDependency;
+    use crate::ir::ResolvedPlugin;
     use crate::ir::Version;
     use polyplug_utils::guest_contract_id;
 
@@ -3775,6 +3777,64 @@ mod tests {
         assert!(
             !out.contains("unsafe struct"),
             "Interfaces.cs must not contain 'unsafe struct': {out}"
+        );
+    }
+
+    #[test]
+    fn multi_provider_bundle_csharp_scopes_const_per_plugin_class() {
+        // C#'s contract-id const is a member of the per-plugin `{Plugin}Interfaces`
+        // class, so two providers of one contract get two classes each with their own
+        // copy — no namespace collision, no dedup needed (unlike Rust/C++).
+        let ir: ValidatedIr = ValidatedIr {
+            contracts: vec![ResolvedContract {
+                name: "pipeline.encoder".to_owned(),
+                contract_id: 0xAAAA_BBBB_CCCC_DDDD_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![],
+            }],
+            host_contracts: vec![],
+            types: vec![],
+            enums: vec![],
+            bundle: Some(ResolvedBundle {
+                name: "multi.bundle".to_owned(),
+                bundle_id: 0,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                loader: "dotnet".to_owned(),
+                file: ResolvedBundleFile::Single("test.dll".to_owned()),
+                plugins: vec![
+                    ResolvedPlugin {
+                        name: "encoder_a".to_owned(),
+                        implements: vec!["pipeline.encoder@1.0".to_owned()],
+                        optional: vec![],
+                    },
+                    ResolvedPlugin {
+                        name: "encoder_b".to_owned(),
+                        implements: vec!["pipeline.encoder@1.0".to_owned()],
+                        optional: vec![],
+                    },
+                ],
+                dependencies: vec![],
+                needs_reinit_on_dep_reload: false,
+            }),
+        };
+        let out: String =
+            generate_cs_guest_interfaces(&ir).expect("Interfaces.cs generation must succeed");
+        assert!(
+            out.contains("class EncoderAInterfaces") && out.contains("class EncoderBInterfaces"),
+            "each provider must get its own Interfaces class: {out}"
+        );
+        assert_eq!(
+            out.matches("PIPELINE_ENCODER_CONTRACT_ID = ").count(),
+            2,
+            "each plugin class carries its own class-scoped const copy: {out}"
         );
     }
 

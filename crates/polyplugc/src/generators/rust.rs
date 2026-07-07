@@ -643,6 +643,7 @@ fn generate_guest_interfaces_file(
     out.push_str("unsafe impl Sync for FnPtr {}\n\n");
 
     if let Some(bundle) = &ir.bundle {
+        let mut emitted_consts: HashSet<String> = HashSet::new();
         for plugin in &bundle.plugins {
             for contract_impl in &plugin.implements {
                 if let Some(contract) = ir.contracts.iter().find(|c| {
@@ -655,6 +656,7 @@ fn generate_guest_interfaces_file(
                         &plugin.name,
                         contract,
                         is_native_runtime(&bundle.loader),
+                        &mut emitted_consts,
                     )?;
                 }
             }
@@ -769,6 +771,10 @@ fn generate_guest_plugin_interface(
     plugin_name: &str,
     contract: &ResolvedContract,
     is_native: bool,
+    // Contract-id const identifiers already emitted in this file. Multiple plugins
+    // may provide the same contract (a valid multi-provider bundle); the const names
+    // the contract, so it is emitted once and every provider's interface references it.
+    emitted_consts: &mut HashSet<String>,
 ) -> Result<(), PolyplugcError> {
     let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
@@ -776,24 +782,24 @@ fn generate_guest_plugin_interface(
     // one 64-bit id has one name everywhere it appears — host types file, non-bundle
     // guest, and this bundle guest all emit `{CONTRACT}_CONTRACT_ID`. Only the
     // per-implementation symbols below (interface, fns, instance machinery) stay
-    // plugin-named. ponytail: two plugins implementing the same contract in one
-    // bundle would emit this const twice (a duplicate-definition error); hoist the
-    // const out of this per-plugin loop and dedup by contract if that bundle shape
-    // is ever supported.
+    // plugin-named. Several plugins may provide the same contract, so the const is
+    // emitted once (first provider) and shared; each provider's interface references it.
     let contract_upper: String = contract_name_to_upper_snake(&contract.name);
     let struct_name: String = contract_name_to_struct(&contract.name);
     let trait_name: String = contract_name_to_guest_trait(&contract.name);
     let fn_count: usize = contract.functions.len();
 
     out.push_str(&format!("/// Plugin: {plugin_name}\n"));
-    out.push_str(&format!(
-        "/// Contract ID constant -- pre-computed FNV-1a of \"{}@{}\".\n",
-        contract.name, contract.version.major
-    ));
-    out.push_str(&format!(
-        "pub const {contract_upper}_CONTRACT_ID: u64 = 0x{:016X};\n\n",
-        contract.contract_id
-    ));
+    if emitted_consts.insert(contract_upper.clone()) {
+        out.push_str(&format!(
+            "/// Contract ID constant -- pre-computed FNV-1a of \"{}@{}\".\n",
+            contract.name, contract.version.major
+        ));
+        out.push_str(&format!(
+            "pub const {contract_upper}_CONTRACT_ID: u64 = 0x{:016X};\n\n",
+            contract.contract_id
+        ));
+    }
 
     // Author factory + per-instance payload — no static implementation storage.
     let state_struct: String = format!("{}PluginState", to_pascal_ident(&plugin_lower));
@@ -1362,6 +1368,9 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("use polyplug_abi::BundleInitContext;\n");
     out.push_str("use core::ffi::c_void;\n");
     if let Some(bundle) = &ir.bundle {
+        // The contract-id const is shared across providers of the same contract, so
+        // its `use` is emitted once; the plugin-named interface `use` is per provider.
+        let mut imported_consts: HashSet<String> = HashSet::new();
         for plugin in &bundle.plugins {
             let plugin_upper: String = plugin.name.to_uppercase().replace('.', "_");
             // The id const is contract-named (see generate_guest_plugin_interface);
@@ -1372,9 +1381,11 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
                 .and_then(|impl_str: &String| impl_str.split('@').next())
                 .map(contract_name_to_upper_snake)
                 .unwrap_or_default();
-            out.push_str(&format!(
-                "use super::interfaces::{contract_upper}_CONTRACT_ID;\n"
-            ));
+            if imported_consts.insert(contract_upper.clone()) {
+                out.push_str(&format!(
+                    "use super::interfaces::{contract_upper}_CONTRACT_ID;\n"
+                ));
+            }
             out.push_str(&format!(
                 "use super::interfaces::{plugin_upper}_INTERFACE;\n"
             ));
@@ -5667,6 +5678,108 @@ mod tests {
         assert!(
             !out.contains("= mode as *const"),
             "casting a by-value enum/struct to a pointer is invalid Rust (E0606): {out}"
+        );
+    }
+
+    #[test]
+    fn multi_provider_bundle_emits_shared_contract_id_const_once() {
+        // Two plugins provide the SAME contract (a valid multi-provider bundle). The
+        // contract-id const names the contract, so it must be emitted exactly once and
+        // shared; each provider still gets its own plugin-named interface. Regression
+        // for the collision PP-22's contract-naming would otherwise cause.
+        let contract: ResolvedContract = ResolvedContract {
+            name: "pipeline.encoder".to_owned(),
+            contract_id: 0xAAAA_BBBB_CCCC_DDDD_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "encode".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "data".to_owned(),
+                    ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                }],
+                returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            }],
+        };
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![contract],
+            host_contracts: vec![],
+            bundle: Some(ResolvedBundle {
+                name: "multi.bundle".to_owned(),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                loader: "native".to_owned(),
+                file: ResolvedBundleFile::Single("test.so".to_owned()),
+                plugins: vec![
+                    ResolvedPlugin {
+                        name: "encoder_a".to_owned(),
+                        implements: vec!["pipeline.encoder@1.0".to_owned()],
+                        optional: vec![],
+                    },
+                    ResolvedPlugin {
+                        name: "encoder_b".to_owned(),
+                        implements: vec!["pipeline.encoder@1.0".to_owned()],
+                        optional: vec![],
+                    },
+                ],
+                bundle_id: 0,
+                dependencies: vec![],
+                needs_reinit_on_dep_reload: false,
+            }),
+        };
+
+        let generator: RustGenerator = RustGenerator;
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_guest(&ir, &mut files)
+            .expect("generate_guest");
+
+        let interfaces: &str = &files
+            .files
+            .iter()
+            .find(|f: &&GeneratedFile| f.path == Path::new("guest/interfaces.rs"))
+            .expect("guest/interfaces.rs emitted")
+            .content;
+        // The shared const is defined exactly once...
+        assert_eq!(
+            interfaces
+                .matches("pub const PIPELINE_ENCODER_CONTRACT_ID")
+                .count(),
+            1,
+            "shared contract-id const must be emitted exactly once: {interfaces}"
+        );
+        // ...and each provider still gets its own interface (which references it).
+        assert!(
+            interfaces.contains("ENCODER_A_INTERFACE")
+                && interfaces.contains("ENCODER_B_INTERFACE"),
+            "each provider must get its own plugin-named interface: {interfaces}"
+        );
+
+        let init: &str = &files
+            .files
+            .iter()
+            .find(|f: &&GeneratedFile| f.path == Path::new("guest/init.rs"))
+            .expect("guest/init.rs emitted")
+            .content;
+        // The shared const is imported once; both provider interfaces are registered.
+        assert_eq!(
+            init.matches("use super::interfaces::PIPELINE_ENCODER_CONTRACT_ID;")
+                .count(),
+            1,
+            "shared const import must appear exactly once: {init}"
+        );
+        assert!(
+            init.contains("ENCODER_A_INTERFACE") && init.contains("ENCODER_B_INTERFACE"),
+            "both provider interfaces must be registered: {init}"
         );
     }
 }
