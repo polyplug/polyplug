@@ -600,6 +600,54 @@ fn render_cs_abi_wrapper(
     )
 }
 
+/// Render a class-member method DEFINITION (indent level 1, inside a hand-emitted
+/// `class { … }`) via langprint: langprint owns the FORM (XML docs, visibility,
+/// `[static] <ret> Name(params)`, braces); polyplugc owns the verbatim body. Used
+/// for the guest host-caller `FromHost` factory and per-function method callers.
+fn render_cs_host_method(
+    name: String,
+    is_static: bool,
+    return_type: String,
+    parameters: Vec<CSharpParameter>,
+    docs: Vec<String>,
+    body: String,
+) -> Result<String, PolyplugcError> {
+    let method: CSharpMethod = CSharpMethod {
+        name,
+        visibility: CSharpVisibility::Public,
+        parameters,
+        generic_args: Vec::new(),
+        return_type: Some(return_type),
+        is_static,
+        is_abstract: false,
+        is_virtual: false,
+        is_override: false,
+        is_sealed: false,
+        is_async: false,
+        is_unsafe: false,
+        body: Some(vec![body]),
+        attributes: Vec::new(),
+        docs: if docs.is_empty() { None } else { Some(docs) },
+    };
+    let options: CSharpMethodRenderOptions = CSharpMethodRenderOptions {
+        verbatim_body: true,
+        ..CSharpMethodRenderOptions::default()
+    };
+    let mut indent_level: i32 = 1;
+    cs_backend()
+        .render_function(
+            &method,
+            None::<&str>,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/HostContracts.cs".to_owned(),
+            source,
+        })
+}
+
 /// Generate `guest/Interfaces.cs` — [UnmanagedCallersOnly] ABI methods + interface construction.
 fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
@@ -1893,7 +1941,10 @@ fn cs_guest_caller_return_expr(ty: &ResolvedTypeRef) -> String {
 }
 
 /// Generate one guest-side host contract caller class.
-fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedHostContract) {
+fn generate_cs_guest_host_contract_caller(
+    out: &mut String,
+    contract: &ResolvedHostContract,
+) -> Result<(), PolyplugcError> {
     let class_name: String = host_contract_name_to_cs_caller(&contract.name);
 
     out.push_str(&format!(
@@ -1907,64 +1958,83 @@ fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
     out.push_str("    // No process-wide host storage exists; the pointer flows per caller.\n");
     out.push_str("    private readonly IntPtr _host;\n\n");
 
-    // Private constructor
+    // Private constructor — one-liner (langprint always breaks bodies), hand-emitted.
     out.push_str(&format!(
         "    private {}(IntPtr host, IntPtr instance, IntPtr iface) {{ _host = host; _instance = instance; _interface = iface; }}\n\n",
         class_name
     ));
 
-    // Factory method - FromHost
-    out.push_str("    /// <summary>Factory method - creates caller from HostApi or null if not found.</summary>\n");
-    out.push_str(&format!(
-        "    public static {}? FromHost(IntPtr host, uint minVersion = 0) {{\n",
-        class_name
-    ));
-    out.push_str("        if (host == IntPtr.Zero) {\n");
-    out.push_str("            return null;\n");
-    out.push_str("        }\n");
-    out.push_str("        unsafe {\n");
-    out.push_str("            var hostInterface = (HostApi*)host;\n");
-    out.push_str("            var getHostContractFn = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr>)hostInterface->GetHostContract;\n");
-    out.push_str("            var resolveInterfaceFn = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr>)hostInterface->ResolveHostContractInterface;\n");
-    out.push_str(&format!(
+    // Factory method - FromHost. langprint renders the FORM; the body is verbatim.
+    let mut from_host_body: String = String::new();
+    from_host_body.push_str("        if (host == IntPtr.Zero) {\n");
+    from_host_body.push_str("            return null;\n");
+    from_host_body.push_str("        }\n");
+    from_host_body.push_str("        unsafe {\n");
+    from_host_body.push_str("            var hostInterface = (HostApi*)host;\n");
+    from_host_body.push_str("            var getHostContractFn = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr>)hostInterface->GetHostContract;\n");
+    from_host_body.push_str("            var resolveInterfaceFn = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr>)hostInterface->ResolveHostContractInterface;\n");
+    from_host_body.push_str(&format!(
         "            var instance = getHostContractFn(host, 0x{:016X}UL, minVersion);\n",
         contract.contract_id
     ));
-    out.push_str("            if (instance == IntPtr.Zero) {\n");
-    out.push_str("                return null;\n");
-    out.push_str("            }\n");
-    out.push_str(&format!(
+    from_host_body.push_str("            if (instance == IntPtr.Zero) {\n");
+    from_host_body.push_str("                return null;\n");
+    from_host_body.push_str("            }\n");
+    from_host_body.push_str(&format!(
         "            var iface = resolveInterfaceFn(host, 0x{:016X}UL, minVersion);\n",
         contract.contract_id
     ));
-    out.push_str("            if (iface == IntPtr.Zero) {\n");
-    out.push_str("                return null;\n");
-    out.push_str("            }\n");
-    out.push_str(&format!(
+    from_host_body.push_str("            if (iface == IntPtr.Zero) {\n");
+    from_host_body.push_str("                return null;\n");
+    from_host_body.push_str("            }\n");
+    from_host_body.push_str(&format!(
         "            return new {}(host, instance, iface);\n",
         class_name
     ));
-    out.push_str("        }\n");
-    out.push_str("    }\n\n");
+    from_host_body.push_str("        }");
+    out.push_str(&render_cs_host_method(
+        "FromHost".to_owned(),
+        true,
+        format!("{class_name}?"),
+        vec![
+            CSharpParameter {
+                name: "host".to_owned(),
+                param_type: "IntPtr".to_owned(),
+                default_value: None,
+            },
+            CSharpParameter {
+                name: "minVersion".to_owned(),
+                param_type: "uint".to_owned(),
+                default_value: Some("0".to_owned()),
+            },
+        ],
+        vec![
+            "<summary>Factory method - creates caller from HostApi or null if not found.</summary>"
+                .to_owned(),
+        ],
+        from_host_body,
+    )?);
+    out.push('\n');
 
-    // IsValid property
+    // IsValid property — expression-bodied one-liner, hand-emitted.
     out.push_str("    /// <summary>Check if caller is valid (interface is non-null).</summary>\n");
     out.push_str("    public bool IsValid => _interface != IntPtr.Zero;\n\n");
 
     // Methods for each function
     for func in &contract.functions {
-        generate_cs_guest_host_contract_method(out, func, &class_name);
+        generate_cs_guest_host_contract_method(out, func, &class_name)?;
     }
 
     out.push_str("}\n\n");
+    Ok(())
 }
 
 /// Generate one method for a guest-side host contract caller.
 fn generate_cs_guest_host_contract_method(
-    out: &mut String,
+    dst: &mut String,
     func: &ResolvedFunction,
     class_name: &str,
-) {
+) -> Result<(), PolyplugcError> {
     let fn_id: u32 = func.function_id;
     let method_name: String = pascal_case(&func.name);
     let return_type: String = match &func.returns {
@@ -1977,28 +2047,26 @@ fn generate_cs_guest_host_contract_method(
     };
     let has_return: bool = func.returns.is_some();
 
-    // Build parameter list
-    let params_str: String = if func.params.is_empty() {
-        String::new()
-    } else {
-        func.params
-            .iter()
-            .map(|p: &ResolvedParam| {
-                let cs_ty: String = cs_guest_caller_param_type_name(&p.ty);
-                format!("{} {}", cs_ty, p.name)
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+    // Build parameter list — langprint renders the method FORM; the body is verbatim.
+    let parameters: Vec<CSharpParameter> = func
+        .params
+        .iter()
+        .map(|p: &ResolvedParam| CSharpParameter {
+            name: p.name.clone(),
+            param_type: cs_guest_caller_param_type_name(&p.ty),
+            default_value: None,
+        })
+        .collect::<Vec<CSharpParameter>>();
 
-    out.push_str(&format!(
-        "    /// <summary>Call host contract function `{}` (function_id={})</summary>\n",
+    let docs: Vec<String> = vec![format!(
+        "<summary>Call host contract function `{}` (function_id={})</summary>",
         func.name, fn_id
-    ));
-    out.push_str(&format!(
-        "    public {} {}({}) {{\n",
-        return_type, method_name, params_str
-    ));
+    )];
+
+    // The body is accumulated into `body` (aliased as `out` so the existing
+    // push_str lines below are unchanged), then rendered as the verbatim slot.
+    let mut body: String = String::new();
+    let out: &mut String = &mut body;
 
     let what: String = format!("{}.{}", class_name, method_name);
 
@@ -2102,8 +2170,17 @@ fn generate_cs_guest_host_contract_method(
         out.push_str(&format!("            return {};\n", return_expr));
     }
 
-    out.push_str("        }\n");
-    out.push_str("    }\n\n");
+    out.push_str("        }");
+    dst.push_str(&render_cs_host_method(
+        method_name,
+        false,
+        return_type,
+        parameters,
+        docs,
+        body,
+    )?);
+    dst.push('\n');
+    Ok(())
 }
 
 /// Emit the args_ptr setup for a C# guest host contract method.
@@ -2258,7 +2335,7 @@ fn generate_cs_guest_host_contracts_file(ir: &ValidatedIr) -> Result<String, Pol
     }
 
     for contract in &ir.host_contracts {
-        generate_cs_guest_host_contract_caller(&mut out, contract);
+        generate_cs_guest_host_contract_caller(&mut out, contract)?;
     }
 
     // Emit contract ID constants
@@ -3984,7 +4061,8 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_cs_guest_host_contract_caller(&mut out, &contract);
+        generate_cs_guest_host_contract_caller(&mut out, &contract)
+            .expect("caller generation must succeed");
         assert!(
             out.contains("public sealed class HostLoggerContract"),
             "missing class: {out}"
@@ -4120,7 +4198,8 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_cs_guest_host_contract_caller(&mut out, &contract);
+        generate_cs_guest_host_contract_caller(&mut out, &contract)
+            .expect("caller generation must succeed");
         // Null-interface path logs InvalidPointer.
         assert!(
             out.contains(
