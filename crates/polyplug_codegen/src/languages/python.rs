@@ -637,6 +637,7 @@ impl Default for PythonGenerator {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)] // test code: a failed generate surfaces via expect
     use super::*;
     use crate::data::{FieldInfo, StructInfo};
 

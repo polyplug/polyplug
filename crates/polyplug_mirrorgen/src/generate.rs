@@ -2093,6 +2093,7 @@ fn to_upper_snake_case_for_generate(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)] // test code: a failed generate surfaces via expect
     use super::*;
     use crate::types::{AbiConst, AbiField, AbiStruct};
 

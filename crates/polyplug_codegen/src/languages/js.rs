@@ -489,6 +489,7 @@ impl Default for JsGenerator {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)] // test code: a failed generate surfaces via expect
     use std::collections::HashMap;
 
     use super::*;
