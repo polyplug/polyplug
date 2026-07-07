@@ -22,7 +22,13 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use langprint::backends::python_backend::{
+    PythonBackend, PythonEnum, PythonEnumMember, PythonFunction, PythonFunctionRenderOptions,
+    PythonParameter,
+};
+use langprint::renderers::{EnumRenderer, FunctionRenderer};
 use polyplug_codegen::PolyplugcError;
+use std::io;
 
 pub(crate) struct PythonGenerator;
 
@@ -36,8 +42,8 @@ impl CodeGenerator for PythonGenerator {
         ir: &ValidatedIr,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
-        let types_py: String = generate_host_types_file(ir);
-        let types_pyi: String = generate_host_types_stub(ir);
+        let types_py: String = generate_host_types_file(ir)?;
+        let types_pyi: String = generate_host_types_stub(ir)?;
         let callers_py: String = generate_host_callers_file(ir);
         let callers_pyi: String = generate_host_callers_stub(ir);
 
@@ -93,9 +99,9 @@ impl CodeGenerator for PythonGenerator {
         ir: &ValidatedIr,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
-        let types_py: String = generate_python_types_file(ir);
-        let types_pyi: String = generate_python_types_stub(ir);
-        let contracts_py: String = generate_guest_contracts_file(ir);
+        let types_py: String = generate_python_types_file(ir)?;
+        let types_pyi: String = generate_python_types_stub(ir)?;
+        let contracts_py: String = generate_guest_contracts_file(ir)?;
         let contracts_pyi: String = generate_guest_contracts_stub(ir);
 
         files.files.push(GeneratedFile {
@@ -136,7 +142,7 @@ impl CodeGenerator for PythonGenerator {
         }
 
         if !ir.host_contracts.is_empty() {
-            let host_contracts_py: String = generate_guest_host_contracts_file(ir);
+            let host_contracts_py: String = generate_guest_host_contracts_file(ir)?;
             let host_contracts_pyi: String = generate_guest_host_contracts_stub(ir);
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/host_contracts.py"),
@@ -171,7 +177,7 @@ impl CodeGenerator for PythonGenerator {
     }
 }
 
-fn generate_python_types_file(ir: &ValidatedIr) -> String {
+fn generate_python_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
@@ -184,7 +190,7 @@ fn generate_python_types_file(ir: &ValidatedIr) -> String {
 
     // Guest types file - no contract IDs here
     for e in &ir.enums {
-        generate_python_enum(&mut out, e);
+        generate_python_enum(&mut out, e)?;
         out.push('\n');
     }
 
@@ -203,10 +209,10 @@ fn generate_python_types_file(ir: &ValidatedIr) -> String {
         }
     }
 
-    out
+    Ok(out)
 }
 
-fn generate_python_types_stub(ir: &ValidatedIr) -> String {
+fn generate_python_types_stub(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
@@ -217,7 +223,7 @@ fn generate_python_types_stub(ir: &ValidatedIr) -> String {
         out.push_str("import enum\n\n");
     }
     for e in &ir.enums {
-        generate_python_enum(&mut out, e);
+        generate_python_enum(&mut out, e)?;
         out.push('\n');
     }
 
@@ -236,10 +242,10 @@ fn generate_python_types_stub(ir: &ValidatedIr) -> String {
         }
     }
 
-    out
+    Ok(out)
 }
 
-fn generate_host_types_file(ir: &ValidatedIr) -> String {
+fn generate_host_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
@@ -250,7 +256,7 @@ fn generate_host_types_file(ir: &ValidatedIr) -> String {
         out.push_str("import enum\n\n");
     }
     for e in &ir.enums {
-        generate_python_enum(&mut out, e);
+        generate_python_enum(&mut out, e)?;
         out.push('\n');
     }
 
@@ -269,10 +275,10 @@ fn generate_host_types_file(ir: &ValidatedIr) -> String {
         }
     }
 
-    out
+    Ok(out)
 }
 
-fn generate_host_types_stub(ir: &ValidatedIr) -> String {
+fn generate_host_types_stub(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
@@ -283,7 +289,7 @@ fn generate_host_types_stub(ir: &ValidatedIr) -> String {
         out.push_str("import enum\n\n");
     }
     for e in &ir.enums {
-        generate_python_enum(&mut out, e);
+        generate_python_enum(&mut out, e)?;
         out.push('\n');
     }
 
@@ -302,7 +308,7 @@ fn generate_host_types_stub(ir: &ValidatedIr) -> String {
         }
     }
 
-    out
+    Ok(out)
 }
 
 fn generate_host_callers_file(ir: &ValidatedIr) -> String {
@@ -468,7 +474,7 @@ fn generate_host_caller_class_stub(out: &mut String, contract: &ResolvedContract
     out.push('\n');
 }
 
-fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
+fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
@@ -544,8 +550,8 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
-                    generate_guest_plugin_trait(&mut out, &plugin.name, contract);
-                    generate_guest_plugin_interface(&mut out, &plugin.name, contract);
+                    generate_guest_plugin_trait(&mut out, &plugin.name, contract)?;
+                    generate_guest_plugin_interface(&mut out, &plugin.name, contract)?;
                     let plugin_lower: String = plugin.name.to_lowercase().replace('.', "_");
                     registrations.push((
                         plugin.name.clone(),
@@ -558,74 +564,89 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
         }
     } else {
         for contract in &ir.contracts {
-            generate_guest_contract_trait(&mut out, contract);
-            generate_guest_contract_interface(&mut out, contract);
+            generate_guest_contract_trait(&mut out, contract)?;
+            generate_guest_contract_interface(&mut out, contract)?;
             let lower: String = contract.name.replace('.', "_");
             let upper: String = contract_name_to_upper_snake(&contract.name);
             registrations.push((contract.name.clone(), lower, upper, contract));
         }
     }
 
-    out.push_str("def polyplug_abi_version() -> int:\n");
-    out.push_str("    return 1\n\n");
-    out.push_str(
-        "def polyplug_init(host_ptr: int, ctx_ptr: int) -> tuple[list[dict[str, Any]], AbiError]:\n",
-    );
-    out.push_str(
+    // polyplug_abi_version + polyplug_init are module entry points: langprint owns
+    // the `def ... -> ...:` FORM, polyplugc bakes the verbatim bodies (docstring +
+    // registration logic) below.
+    out.push_str(&render_py_defn_fn(
+        "polyplug_abi_version".to_owned(),
+        Vec::new(),
+        Some("int".to_owned()),
+        "    return 1".to_owned(),
+    )?);
+    out.push('\n');
+
+    let mut init_body: String = String::new();
+    init_body.push_str(
         "    \"\"\"Build this bundle's contract registrations for the polyplug_python VM loader.\n",
     );
-    out.push('\n');
-    out.push_str(
+    init_body.push('\n');
+    init_body.push_str(
         "    Returns a `(registrations, abi_error)` tuple: the loader reads this return\n",
     );
-    out.push_str(
+    init_body.push_str(
         "    value (nothing is deposited into the module namespace) and, when `abi_error.code\n",
     );
-    out.push_str(
+    init_body.push_str(
         "    == AbiErrorCode.Ok`, registers each contract in `registrations` itself. A factory\n",
     );
-    out.push_str(
+    init_body.push_str(
         "    that was never set at import time yields `([], AbiError(code=AbiErrorCode.Generic))`.\n\n",
     );
-    out.push_str("    Args:\n");
-    out.push_str("        host_ptr: HostApi pointer — passed to each author factory so every\n");
-    out.push_str(
+    init_body.push_str("    Args:\n");
+    init_body
+        .push_str("        host_ptr: HostApi pointer — passed to each author factory so every\n");
+    init_body.push_str(
         "                  implementation is constructed with its owning runtime's host\n",
     );
-    out.push_str("                  (no host pointer is stored in the guest SDK).\n");
-    out.push_str("        ctx_ptr: BundleInitContext pointer (unused)\n\n");
-    out.push_str("    Returns:\n");
-    out.push_str("        (registrations, abi_error) — the loader consumes registrations only\n");
-    out.push_str("        when abi_error.code == AbiErrorCode.Ok.\n");
-    out.push_str("    \"\"\"\n");
+    init_body.push_str("                  (no host pointer is stored in the guest SDK).\n");
+    init_body.push_str("        ctx_ptr: BundleInitContext pointer (unused)\n\n");
+    init_body.push_str("    Returns:\n");
+    init_body
+        .push_str("        (registrations, abi_error) — the loader consumes registrations only\n");
+    init_body.push_str("        when abi_error.code == AbiErrorCode.Ok.\n");
+    init_body.push_str("    \"\"\"\n");
     // The loader owns per-instance state: it calls each contract's factory once
     // per create_instance with the runtime's host pointer. polyplug_init only
     // registers the factory and callables, so host_ptr is unused here.
-    out.push_str("    _ = host_ptr\n");
-    out.push_str("    _ = ctx_ptr\n");
-    out.push_str("    registrations: list[dict[str, Any]] = []\n");
+    init_body.push_str("    _ = host_ptr\n");
+    init_body.push_str("    _ = ctx_ptr\n");
+    init_body.push_str("    registrations: list[dict[str, Any]] = []\n");
     for (_, _, impl_var, _) in &registrations {
-        out.push_str(&format!("    if _{impl_var}_FACTORY is None:\n"));
-        out.push_str("        return [], AbiError(code=int(AbiErrorCode.Generic))\n");
+        init_body.push_str(&format!("    if _{impl_var}_FACTORY is None:\n"));
+        init_body.push_str("        return [], AbiError(code=int(AbiErrorCode.Generic))\n");
     }
     for (display_name, lower, impl_var, contract) in &registrations {
         let contract_str: String = format!("{}@{}", contract.name, contract.version.major);
-        out.push_str("    register_contract(\n");
-        out.push_str("        registrations,\n");
-        out.push_str(&format!("        contract=\"{contract_str}\",\n"));
-        out.push_str(&format!("        factory=_{impl_var}_FACTORY,\n"));
-        out.push_str("        functions=[\n");
+        init_body.push_str("    register_contract(\n");
+        init_body.push_str("        registrations,\n");
+        init_body.push_str(&format!("        contract=\"{contract_str}\",\n"));
+        init_body.push_str(&format!("        factory=_{impl_var}_FACTORY,\n"));
+        init_body.push_str("        functions=[\n");
         for func in &contract.functions {
-            out.push_str(&format!("            {lower}_{}_abi,\n", func.name));
+            init_body.push_str(&format!("            {lower}_{}_abi,\n", func.name));
         }
-        out.push_str("        ],\n");
-        out.push_str(&format!("        plugin_name=\"{display_name}\",\n"));
-        out.push_str("    )\n");
+        init_body.push_str("        ],\n");
+        init_body.push_str(&format!("        plugin_name=\"{display_name}\",\n"));
+        init_body.push_str("    )\n");
     }
-    out.push_str("    return registrations, AbiError(code=int(AbiErrorCode.Ok))\n");
+    init_body.push_str("    return registrations, AbiError(code=int(AbiErrorCode.Ok))");
+    out.push_str(&render_py_defn_fn(
+        "polyplug_init".to_owned(),
+        py_params(&[("host_ptr", "int"), ("ctx_ptr", "int")]),
+        Some("tuple[list[dict[str, Any]], AbiError]".to_owned()),
+        init_body,
+    )?);
     out.push('\n');
 
-    out
+    Ok(out)
 }
 
 /// Whether a function returns a `StringView` (the variable-size return the guest
@@ -1323,14 +1344,18 @@ fn collect_type_refs(
     }
 }
 
-fn generate_guest_contract_trait(out: &mut String, contract: &ResolvedContract) {
+fn generate_guest_contract_trait(
+    out: &mut String,
+    contract: &ResolvedContract,
+) -> Result<(), PolyplugcError> {
     let trait_name: String = contract_name_to_guest_trait(&contract.name);
     out.push_str(&format!("class {}:\n", trait_name));
     for func in &contract.functions {
-        generate_guest_trait_method(out, func);
+        generate_guest_trait_method(out, func)?;
     }
     let upper: String = contract_name_to_upper_snake(&contract.name);
-    emit_python_factory_slot(out, &upper, &trait_name);
+    emit_python_factory_slot(out, &upper, &trait_name)?;
+    Ok(())
 }
 
 /// Emit the author-factory slot and registration helper for one impl variable.
@@ -1341,40 +1366,177 @@ fn generate_guest_contract_trait(out: &mut String, contract: &ResolvedContract) 
 /// instance has its own state and no implementation object is stored at module
 /// scope. The factory slot itself is set-once registration config (not per-call
 /// runtime state), bounded by the documented CPython once-per-process limit.
-fn emit_python_factory_slot(out: &mut String, var: &str, class_name: &str) {
+fn emit_python_factory_slot(
+    out: &mut String,
+    var: &str,
+    class_name: &str,
+) -> Result<(), PolyplugcError> {
+    // The `_<VAR>_FACTORY = None` module var is a plain assignment (not a def), so
+    // it stays hand-emitted; the `set_<var>_factory` def is FORM rendered by
+    // langprint with the docstring + global assignment as its verbatim body.
     out.push_str(&format!(
         "\n_{var}_FACTORY: Callable[[int], {class_name}] | None = None\n"
     ));
-    out.push_str(&format!(
-        "def set_{var}_factory(factory: Callable[[int], {class_name}]) -> None:\n"
-    ));
-    out.push_str("    \"\"\"Register the author factory; call once at module import time.\n\n");
-    out.push_str("    The loader calls the factory with the HostApi pointer once per instance\n");
-    out.push_str("    (create_instance), so each implementation is constructed with its owning\n");
-    out.push_str("    runtime's host pointer and two live instances never share state.\n");
-    out.push_str("    \"\"\"\n");
-    out.push_str(&format!("    global _{var}_FACTORY\n"));
-    out.push_str(&format!("    _{var}_FACTORY = factory\n\n"));
+    let mut body: String = String::new();
+    body.push_str("    \"\"\"Register the author factory; call once at module import time.\n\n");
+    body.push_str("    The loader calls the factory with the HostApi pointer once per instance\n");
+    body.push_str("    (create_instance), so each implementation is constructed with its owning\n");
+    body.push_str("    runtime's host pointer and two live instances never share state.\n");
+    body.push_str("    \"\"\"\n");
+    body.push_str(&format!("    global _{var}_FACTORY\n"));
+    body.push_str(&format!("    _{var}_FACTORY = factory"));
+    out.push_str(&render_py_defn_fn(
+        format!("set_{var}_factory"),
+        py_params(&[("factory", &format!("Callable[[int], {class_name}]"))]),
+        Some("None".to_owned()),
+        body,
+    )?);
+    out.push('\n');
+    Ok(())
 }
 
-fn generate_guest_plugin_trait(out: &mut String, plugin_name: &str, contract: &ResolvedContract) {
+fn generate_guest_plugin_trait(
+    out: &mut String,
+    plugin_name: &str,
+    contract: &ResolvedContract,
+) -> Result<(), PolyplugcError> {
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
     let class_name: String = plugin_guest_trait_name(plugin_name, &contract.name);
     out.push_str(&format!("class {class_name}:\n"));
     for func in &contract.functions {
-        generate_guest_trait_method(out, func);
+        generate_guest_trait_method(out, func)?;
     }
-    emit_python_factory_slot(out, &plugin_lower, &class_name);
+    emit_python_factory_slot(out, &plugin_lower, &class_name)?;
+    Ok(())
 }
 
-fn generate_guest_trait_method(out: &mut String, func: &ResolvedFunction) {
-    let sig_params: String = build_python_guest_impl_sig_params(func);
-    let ret_type: String = python_guest_impl_return_type(&func.returns);
-    out.push_str(&format!(
-        "    def {}(self{}) -> {}:\n",
-        func.name, sig_params, ret_type
-    ));
-    out.push_str("        raise NotImplementedError\n");
+fn generate_guest_trait_method(
+    out: &mut String,
+    func: &ResolvedFunction,
+) -> Result<(), PolyplugcError> {
+    // The typed `def` signature is FORM — langprint renders it (single source of
+    // truth for Python signature formatting). The `raise NotImplementedError`
+    // body is the trivial LOGIC slot. `self` leads with no type hint.
+    let mut parameters: Vec<PythonParameter> = Vec::with_capacity(func.params.len() + 1);
+    parameters.push(PythonParameter {
+        name: "self".to_owned(),
+        type_hint: None,
+        default: None,
+    });
+    for p in &func.params {
+        parameters.push(PythonParameter {
+            name: p.name.clone(),
+            type_hint: Some(python_guest_impl_type_name(&p.ty)),
+            default: None,
+        });
+    }
+    let method: PythonFunction = PythonFunction {
+        name: func.name.clone(),
+        parameters,
+        return_type: Some(python_guest_impl_return_type(&func.returns)),
+        docstring: None,
+        body: Some(vec!["raise NotImplementedError".to_owned()]),
+    };
+    let backend: PythonBackend = PythonBackend::default();
+    let mut indent_level: i32 = 1;
+    let rendered: String = backend
+        .render_function(&method, None::<&str>, None::<&str>, None, &mut indent_level)
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/contracts.py".to_owned(),
+            source,
+        })?;
+    out.push_str(&rendered);
+    Ok(())
+}
+
+/// Build a `PythonParameter` list from `(name, type_hint)` pairs. An empty hint
+/// string means no annotation (bare receiver-style parameter).
+fn py_params(pairs: &[(&str, &str)]) -> Vec<PythonParameter> {
+    pairs
+        .iter()
+        .map(|(name, hint): &(&str, &str)| PythonParameter {
+            name: (*name).to_owned(),
+            type_hint: if hint.is_empty() {
+                None
+            } else {
+                Some((*hint).to_owned())
+            },
+            default: None,
+        })
+        .collect::<Vec<PythonParameter>>()
+}
+
+/// Render a class-method DEFINITION (indent level 1, inside a hand-emitted
+/// `class X:`) via langprint: langprint owns the `def name(params) -> ret:` FORM;
+/// polyplugc owns the verbatim body. `decorator` is emitted verbatim before the
+/// `def` (e.g. `"    @classmethod\n"`). Used for the guest host-caller methods.
+fn render_py_method(
+    name: &str,
+    parameters: Vec<PythonParameter>,
+    return_type: Option<String>,
+    decorator: Option<&str>,
+    body: String,
+) -> Result<String, PolyplugcError> {
+    let func: PythonFunction = PythonFunction {
+        name: name.to_owned(),
+        parameters,
+        return_type,
+        docstring: None,
+        body: Some(vec![body]),
+    };
+    let options: PythonFunctionRenderOptions = PythonFunctionRenderOptions {
+        verbatim_body: true,
+        ..PythonFunctionRenderOptions::default()
+    };
+    let mut indent_level: i32 = 1;
+    PythonBackend::default()
+        .render_function(
+            &func,
+            decorator,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/host_contracts.py".to_owned(),
+            source,
+        })
+}
+
+/// Render a module-level Python function DEFINITION via langprint: langprint owns
+/// the `def name(params) -> ret:` FORM; polyplugc owns the body, passed verbatim
+/// (exact whitespace, nested blocks, and any docstring baked into the string).
+/// Python has no post-hoc formatter, so the body must be emitted byte-for-byte.
+fn render_py_defn_fn(
+    name: String,
+    parameters: Vec<PythonParameter>,
+    return_type: Option<String>,
+    body: String,
+) -> Result<String, PolyplugcError> {
+    let func: PythonFunction = PythonFunction {
+        name,
+        parameters,
+        return_type,
+        docstring: None,
+        body: Some(vec![body]),
+    };
+    let options: PythonFunctionRenderOptions = PythonFunctionRenderOptions {
+        verbatim_body: true,
+        ..PythonFunctionRenderOptions::default()
+    };
+    let mut indent_level: i32 = 0;
+    PythonBackend::default()
+        .render_function(
+            &func,
+            None::<&str>,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/contracts.py".to_owned(),
+            source,
+        })
 }
 
 fn generate_guest_trait_stub_method(out: &mut String, func: &ResolvedFunction) {
@@ -1417,21 +1579,24 @@ fn python_guest_impl_return_type(returns: &Option<ResolvedTypeRef>) -> String {
     }
 }
 
-fn generate_guest_contract_interface(out: &mut String, contract: &ResolvedContract) {
+fn generate_guest_contract_interface(
+    out: &mut String,
+    contract: &ResolvedContract,
+) -> Result<(), PolyplugcError> {
     // Non-bundle path: factory registered under `_<UPPER_SNAKE>_FACTORY`, callables
     // named `<lower>_<fn>_abi` (see generate_guest_contract_trait). The instance
     // impl is passed to each callable by the loader, not stored at module scope.
     let lower: String = contract.name.replace('.', "_");
     let trait_name: String = contract_name_to_guest_trait(&contract.name);
     let struct_name: String = contract_name_to_struct(&contract.name);
-    emit_guest_function_callables(out, contract, &lower, &trait_name, &struct_name);
+    emit_guest_function_callables(out, contract, &lower, &trait_name, &struct_name)
 }
 
 fn generate_guest_plugin_interface(
     out: &mut String,
     plugin_name: &str,
     contract: &ResolvedContract,
-) {
+) -> Result<(), PolyplugcError> {
     // Bundle path: factory registered under `_<plugin_lower>_FACTORY`, callables
     // named `<plugin_lower>_<fn>_abi` (see generate_guest_plugin_trait). The
     // instance impl is passed to each callable by the loader, not stored at module
@@ -1439,7 +1604,7 @@ fn generate_guest_plugin_interface(
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
     let plugin_class: String = plugin_guest_trait_name(plugin_name, &contract.name);
     let struct_name: String = contract_name_to_struct(&contract.name);
-    emit_guest_function_callables(out, contract, &plugin_lower, &plugin_class, &struct_name);
+    emit_guest_function_callables(out, contract, &plugin_lower, &plugin_class, &struct_name)
 }
 
 /// Emit the per-function VM-dispatch callables for one contract.
@@ -1459,7 +1624,7 @@ fn emit_guest_function_callables(
     fn_prefix: &str,
     impl_class: &str,
     struct_name: &str,
-) {
+) -> Result<(), PolyplugcError> {
     for func in &contract.functions {
         emit_guest_struct_consts(out, func, fn_prefix, struct_name);
     }
@@ -1468,19 +1633,19 @@ fn emit_guest_function_callables(
         let abi_name: String = format!("{fn_prefix}_{}_abi", func.name);
         let has_return: bool = has_return_value(&func.returns);
         let has_params: bool = !func.params.is_empty();
-        out.push_str(&format!(
-            "def {abi_name}(impl: {impl_class}, args_ptr: int, out_ptr: int, arena_ptr: int, arena_alloc: Callable[[int, int], int]) -> None:\n"
-        ));
+        // langprint renders the loader's five-argument `def` FORM; the dispatch
+        // body below is built into `body` and handed back verbatim.
+        let mut body: String = String::new();
         if has_params {
-            out.push_str("    if not args_ptr:\n");
-            out.push_str("        raise RuntimeError(\"null args pointer\")\n");
+            body.push_str("    if not args_ptr:\n");
+            body.push_str("        raise RuntimeError(\"null args pointer\")\n");
         }
         if has_return {
-            out.push_str("    if not out_ptr:\n");
-            out.push_str("        raise RuntimeError(\"null out pointer\")\n");
+            body.push_str("    if not out_ptr:\n");
+            body.push_str("        raise RuntimeError(\"null out pointer\")\n");
         }
         if !has_params {
-            out.push_str("    _ = args_ptr\n");
+            body.push_str("    _ = args_ptr\n");
         }
         // `arena_ptr` and the loader-supplied `arena_alloc` are forwarded to
         // `alloc_string_arena` only for StringView returns; every other shape
@@ -1491,14 +1656,30 @@ fn emit_guest_function_callables(
             Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView))
         );
         if !uses_arena {
-            out.push_str("    _ = arena_ptr\n");
-            out.push_str("    _ = arena_alloc\n");
+            body.push_str("    _ = arena_ptr\n");
+            body.push_str("    _ = arena_alloc\n");
         }
-        emit_guest_abi_args_unpack(out, func, fn_prefix, struct_name);
-        emit_guest_abi_call(out, func);
-        emit_guest_abi_return(out, func, fn_prefix);
+        emit_guest_abi_args_unpack(&mut body, func, fn_prefix, struct_name);
+        emit_guest_abi_call(&mut body, func);
+        emit_guest_abi_return(&mut body, func, fn_prefix);
+        if body.ends_with('\n') {
+            body.pop();
+        }
+        out.push_str(&render_py_defn_fn(
+            abi_name,
+            py_params(&[
+                ("impl", impl_class),
+                ("args_ptr", "int"),
+                ("out_ptr", "int"),
+                ("arena_ptr", "int"),
+                ("arena_alloc", "Callable[[int, int], int]"),
+            ]),
+            Some("None".to_owned()),
+            body,
+        )?);
         out.push('\n');
     }
+    Ok(())
 }
 
 /// Module-level `struct.Struct` constants for one function's scalar args and
@@ -2217,7 +2398,7 @@ fn generate_python_guest_host_contract_caller(
     out: &mut String,
     contract: &ResolvedHostContract,
     enums: &[EnumDef],
-) {
+) -> Result<(), PolyplugcError> {
     let class_name: String = host_contract_name_to_python_caller(&contract.name);
 
     out.push_str(&format!(
@@ -2225,54 +2406,93 @@ fn generate_python_guest_host_contract_caller(
         contract.name, contract.contract_id
     ));
     out.push_str(&format!("class {}:\n", class_name));
-    out.push_str(
-        "    def __init__(self, interface: int, instance: HostContractInstance) -> None:\n",
-    );
-    out.push_str("        self._interface: int = interface\n");
-    out.push_str("        self._instance: HostContractInstance = instance\n\n");
+
+    // langprint renders each method's `def` FORM (indent 1); the bodies are verbatim.
+    out.push_str(&render_py_method(
+        "__init__",
+        py_params(&[
+            ("self", ""),
+            ("interface", "int"),
+            ("instance", "HostContractInstance"),
+        ]),
+        Some("None".to_owned()),
+        None,
+        "        self._interface: int = interface\n        self._instance: HostContractInstance = instance".to_owned(),
+    )?);
+    out.push('\n');
 
     // Mirrors the canonical rust.rs caller flow: resolve_host_contract_interface
     // yields the interface (dispatch metadata), get_host_contract yields the
     // per-instance state whose .data is the native dispatch's first argument.
-    out.push_str("    @classmethod\n");
-    out.push_str("    def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None:\n");
-    out.push_str("        if host_ptr == 0:\n");
-    out.push_str("            return None\n");
-    out.push_str("        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))\n");
-    out.push_str(
+    let mut from_host_body: String = String::new();
+    from_host_body.push_str("        if host_ptr == 0:\n");
+    from_host_body.push_str("            return None\n");
+    from_host_body.push_str("        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))\n");
+    from_host_body.push_str(
         "        # Resolve the contract vtable — the source of dispatch metadata, NOT the instance.\n",
     );
-    out.push_str(&format!(
+    from_host_body.push_str(&format!(
         "        interface: int | None = host.contents.resolve_host_contract_interface(host_ptr, 0x{:016X}, min_version)\n",
         contract.contract_id
     ));
-    out.push_str("        if not interface:\n");
-    out.push_str("            return None\n");
-    out.push_str(
+    from_host_body.push_str("        if not interface:\n");
+    from_host_body.push_str("            return None\n");
+    from_host_body.push_str(
         "        # Per-instance state; native dispatch functions receive instance.data first.\n",
     );
-    out.push_str(&format!(
+    from_host_body.push_str(&format!(
         "        instance: HostContractInstance = host.contents.get_host_contract(host_ptr, 0x{:016X}, min_version)\n",
         contract.contract_id
     ));
-    out.push_str("        return cls(interface, instance)\n\n");
+    from_host_body.push_str("        return cls(interface, instance)");
+    out.push_str(&render_py_method(
+        "from_host",
+        vec![
+            PythonParameter {
+                name: "cls".to_owned(),
+                type_hint: None,
+                default: None,
+            },
+            PythonParameter {
+                name: "host_ptr".to_owned(),
+                type_hint: Some("int".to_owned()),
+                default: None,
+            },
+            PythonParameter {
+                name: "min_version".to_owned(),
+                type_hint: Some("int".to_owned()),
+                default: Some("0".to_owned()),
+            },
+        ],
+        Some("Self | None".to_owned()),
+        Some("    @classmethod\n"),
+        from_host_body,
+    )?);
+    out.push('\n');
 
-    out.push_str("    def is_valid(self) -> bool:\n");
-    out.push_str("        return self._interface != 0\n\n");
+    out.push_str(&render_py_method(
+        "is_valid",
+        py_params(&[("self", "")]),
+        Some("bool".to_owned()),
+        None,
+        "        return self._interface != 0".to_owned(),
+    )?);
+    out.push('\n');
 
     for func in &contract.functions {
-        generate_python_guest_host_contract_method(out, func, enums);
+        generate_python_guest_host_contract_method(out, func, enums)?;
     }
 
     out.push('\n');
+    Ok(())
 }
 
 /// Generate one method for a guest-side host contract caller.
 fn generate_python_guest_host_contract_method(
-    out: &mut String,
+    dst: &mut String,
     func: &ResolvedFunction,
     enums: &[EnumDef],
-) {
+) -> Result<(), PolyplugcError> {
     let fn_id: u32 = func.function_id;
     let return_type: String = match &func.returns {
         Some(ty) => python_guest_caller_return_type_name(ty),
@@ -2280,23 +2500,24 @@ fn generate_python_guest_host_contract_method(
     };
     let has_return: bool = func.returns.is_some();
 
-    let params_str: String = if func.params.is_empty() {
-        String::new()
-    } else {
-        func.params
-            .iter()
-            .map(|p: &ResolvedParam| {
-                let py_ty: String = python_guest_caller_param_type_name(&p.ty);
-                format!(", {}: {}", p.name, py_ty)
-            })
-            .collect::<Vec<_>>()
-            .join("")
-    };
+    // langprint renders the `def name(self, …) -> ret:` FORM; the body is verbatim.
+    let mut parameters: Vec<PythonParameter> = vec![PythonParameter {
+        name: "self".to_owned(),
+        type_hint: None,
+        default: None,
+    }];
+    for p in &func.params {
+        parameters.push(PythonParameter {
+            name: p.name.clone(),
+            type_hint: Some(python_guest_caller_param_type_name(&p.ty)),
+            default: None,
+        });
+    }
 
-    out.push_str(&format!(
-        "    def {}(self{}) -> {}:\n",
-        func.name, params_str, return_type
-    ));
+    // The body is accumulated into `body` (aliased as `out` so the existing
+    // push_str lines below are unchanged), then rendered as the verbatim slot.
+    let mut body: String = String::new();
+    let out: &mut String = &mut body;
 
     out.push_str("        if self._interface == 0:\n");
     if has_return {
@@ -2357,7 +2578,18 @@ fn generate_python_guest_host_contract_method(
         out.push_str("            return\n");
     }
     emit_python_guest_host_contract_success_return(out, &func.returns, enums);
-    out.push('\n');
+    if body.ends_with('\n') {
+        body.pop();
+    }
+    dst.push_str(&render_py_method(
+        &func.name,
+        parameters,
+        Some(return_type),
+        None,
+        body,
+    )?);
+    dst.push('\n');
+    Ok(())
 }
 
 /// Emit the args_ptr setup for a Python guest host contract method.
@@ -2520,7 +2752,7 @@ fn emit_python_guest_host_contract_out_setup(
 }
 
 /// Generate `guest/host_contracts.py` — caller classes for guest-side host contract callers.
-fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
+fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
@@ -2540,7 +2772,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     );
 
     for contract in &ir.host_contracts {
-        generate_python_guest_host_contract_caller(&mut out, contract, &ir.enums);
+        generate_python_guest_host_contract_caller(&mut out, contract, &ir.enums)?;
     }
 
     // Emit contract ID constants
@@ -2554,7 +2786,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
         ));
     }
 
-    out
+    Ok(out)
 }
 
 /// Collect type imports needed for guest host contract callers.
@@ -2762,18 +2994,40 @@ fn substitute_variant_refs_python(declared_variants: &[EnumVariant], expr: &str)
     result
 }
 
-fn generate_python_enum(out: &mut String, e: &EnumDef) {
+fn generate_python_enum(out: &mut String, e: &EnumDef) -> Result<(), PolyplugcError> {
     let base_class: &str = if e.bitflag {
         "enum.IntFlag"
     } else {
         "enum.IntEnum"
     };
-    out.push_str(&format!("class {}({}):\n", e.name, base_class));
-    for variant in &e.variants {
-        let upper_name: String = to_upper_snake_case(&variant.name);
-        let subst_value: String = substitute_variant_refs_python(&e.variants, &variant.value);
-        out.push_str(&format!("    {} = {}\n", upper_name, subst_value));
-    }
+    let py_enum: PythonEnum = PythonEnum {
+        name: e.name.clone(),
+        base_class: base_class.to_owned(),
+        members: e
+            .variants
+            .iter()
+            .map(|variant| PythonEnumMember {
+                name: to_upper_snake_case(&variant.name),
+                value: substitute_variant_refs_python(&e.variants, &variant.value),
+            })
+            .collect(),
+        docstring: None,
+    };
+    let mut indent_level: i32 = 0;
+    let rendered: String = PythonBackend::default()
+        .render_enum(
+            &py_enum,
+            None::<&str>,
+            None::<&str>,
+            None,
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "types.py".to_owned(),
+            source,
+        })?;
+    out.push_str(&rendered);
+    Ok(())
 }
 
 // ─── Host Interface Factories Generation ─────────────────────────────────────────
@@ -3690,7 +3944,7 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_python_enum(&mut out, &e);
+        generate_python_enum(&mut out, &e).expect("render enum");
         assert!(
             out.contains("class PixelFormat(enum.IntEnum)"),
             "missing class def: {out}"
@@ -3717,7 +3971,7 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_python_enum(&mut out, &e);
+        generate_python_enum(&mut out, &e).expect("render enum");
         assert!(
             out.contains("class ImageFlags(enum.IntFlag)"),
             "missing class def: {out}"
@@ -4291,7 +4545,8 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_python_guest_host_contract_caller(&mut out, &contract, &[]);
+        generate_python_guest_host_contract_caller(&mut out, &contract, &[])
+            .expect("caller generation must succeed");
         assert!(
             out.contains("class HostLoggerContract:"),
             "missing class def: {out}"
@@ -4361,7 +4616,8 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_python_guest_host_contract_caller(&mut out, &contract, &[]);
+        generate_python_guest_host_contract_caller(&mut out, &contract, &[])
+            .expect("caller generation must succeed");
         assert!(
             out.contains("class HostFsReaderContract:"),
             "missing class def: {out}"
@@ -4381,7 +4637,8 @@ mod tests {
             host_contracts: vec![],
             bundle: None,
         };
-        let result: String = generate_guest_host_contracts_file(&ir);
+        let result: String = generate_guest_host_contracts_file(&ir)
+            .expect("host contracts generation must succeed");
         assert!(result.contains("from polyplug_abi import"));
         assert!(!result.contains("class"));
     }
@@ -4411,7 +4668,8 @@ mod tests {
             host_contracts: vec![contract],
             bundle: None,
         };
-        let result: String = generate_guest_host_contracts_file(&ir);
+        let result: String = generate_guest_host_contracts_file(&ir)
+            .expect("host contracts generation must succeed");
         assert!(result.contains("class HostLoggerContract:"));
         assert!(result.contains("HOSTLOGGERCONTRACT_ID: int = 0x123456789ABCDEF0"));
     }

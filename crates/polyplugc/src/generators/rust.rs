@@ -21,6 +21,7 @@ use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
 use crate::ir::ResolvedDependency;
+use crate::ir::ResolvedField;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -28,7 +29,16 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use langprint::backends::rust_backend::{
+    RustBackend, RustEnum, RustEnumRenderOptions, RustEnumVariant, RustEnumVariantValue,
+    RustExternBlock, RustField, RustFunction, RustParameter, RustSelfKind, RustStruct,
+    RustStructRenderOptions, RustTrait, RustVisibility,
+};
+use langprint::renderers::EnumRenderer;
+use langprint::renderers::FunctionRenderer;
+use langprint::renderers::StructRenderer;
 use polyplug_codegen::PolyplugcError;
+use std::io;
 
 /// The Rust code generator.
 pub(crate) struct RustGenerator;
@@ -55,11 +65,11 @@ impl CodeGenerator for RustGenerator {
 
         // Emit enums before struct types
         for e in &ir.enums {
-            generate_rust_enum(&mut types_out, e);
+            generate_rust_enum(&mut types_out, e)?;
         }
         // Emit user-defined types from IR
         for ty in &ir.types {
-            generate_rust_type(&mut types_out, ty);
+            generate_rust_type(&mut types_out, ty)?;
         }
 
         // Emit generated arg-pack structs for multi-primitive-param functions
@@ -67,7 +77,7 @@ impl CodeGenerator for RustGenerator {
             let struct_name: String = contract_name_to_struct(&contract.name);
             for func in &contract.functions {
                 if needs_arg_pack(&func.params) {
-                    emit_arg_pack_struct(&mut types_out, &struct_name, func);
+                    emit_arg_pack_struct(&mut types_out, &struct_name, func)?;
                 }
             }
         }
@@ -77,7 +87,7 @@ impl CodeGenerator for RustGenerator {
             let struct_name: String = host_contract_name_to_trait(&contract.name);
             for func in &contract.functions {
                 if needs_arg_pack(&func.params) {
-                    emit_arg_pack_struct(&mut types_out, &struct_name, func);
+                    emit_arg_pack_struct(&mut types_out, &struct_name, func)?;
                 }
             }
         }
@@ -257,17 +267,17 @@ impl CodeGenerator for RustGenerator {
         types_out.push_str("use polyplug_abi::StringView;\n\n");
         // Emit enums before struct types
         for e in &ir.enums {
-            generate_rust_enum(&mut types_out, e);
+            generate_rust_enum(&mut types_out, e)?;
         }
         for ty in &ir.types {
-            generate_rust_type(&mut types_out, ty);
+            generate_rust_type(&mut types_out, ty)?;
         }
 
         for contract in &ir.contracts {
             let struct_name: String = contract_name_to_struct(&contract.name);
             for func in &contract.functions {
                 if needs_arg_pack(&func.params) {
-                    emit_arg_pack_struct(&mut types_out, &struct_name, func);
+                    emit_arg_pack_struct(&mut types_out, &struct_name, func)?;
                 }
             }
         }
@@ -276,7 +286,7 @@ impl CodeGenerator for RustGenerator {
             let struct_name: String = host_contract_name_to_trait(&contract.name);
             for func in &contract.functions {
                 if needs_arg_pack(&func.params) {
-                    emit_arg_pack_struct(&mut types_out, &struct_name, func);
+                    emit_arg_pack_struct(&mut types_out, &struct_name, func)?;
                 }
             }
         }
@@ -295,7 +305,7 @@ impl CodeGenerator for RustGenerator {
         contracts_out.push_str("use super::types::*;\n\n");
 
         for contract in &ir.contracts {
-            generate_guest_contract_trait(&mut contracts_out, contract);
+            generate_guest_contract_trait(&mut contracts_out, contract)?;
         }
 
         files.files.push(GeneratedFile {
@@ -328,7 +338,7 @@ impl CodeGenerator for RustGenerator {
 
         // ── host_contract_callers.rs ───────────────────────────────────────────
         if !ir.host_contracts.is_empty() {
-            let host_contract_callers_out: String = generate_guest_host_contracts_file(ir);
+            let host_contract_callers_out: String = generate_guest_host_contracts_file(ir)?;
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/host_contract_callers.rs"),
                 content: host_contract_callers_out,
@@ -476,54 +486,84 @@ fn generate_bundle_manifest(ir: &ValidatedIr) -> String {
 
 // ─── Guest code generation helpers ────────────────────────────────────────────────
 
-/// Generate the guest trait for one contract.
-fn generate_guest_contract_trait(out: &mut String, contract: &ResolvedContract) {
-    let trait_name: String = contract_name_to_guest_trait(&contract.name);
-    out.push_str(&format!(
-        "/// Guest trait for contract `{}` (id=0x{:016X})\n",
-        contract.name, contract.contract_id
-    ));
-    out.push_str(&format!("pub trait {trait_name}: Send + Sync {{\n"));
-    for func in &contract.functions {
-        generate_guest_trait_method(out, func, &contract_name_to_struct(&contract.name));
-    }
-    out.push_str("}\n\n");
+/// Guest trait for one contract — structure (trait + method signatures) rendered by langprint FORM;
+/// the type/name strings remain polyplugc's, so the output is byte-identical to the former emission.
+fn generate_guest_contract_trait(
+    out: &mut String,
+    contract: &ResolvedContract,
+) -> Result<(), PolyplugcError> {
+    let methods: Vec<RustFunction> = contract
+        .functions
+        .iter()
+        .map(guest_trait_method_form)
+        .collect();
+    let trait_def: RustTrait = RustTrait {
+        name: contract_name_to_guest_trait(&contract.name),
+        visibility: RustVisibility::Pub,
+        generic_args: Vec::new(),
+        supertraits: vec!["Send".to_owned(), "Sync".to_owned()],
+        methods,
+        attributes: Vec::new(),
+        docs: Some(vec![format!(
+            "Guest trait for contract `{}` (id=0x{:016X})",
+            contract.name, contract.contract_id
+        )]),
+    };
+    let backend: RustBackend = RustBackend::default();
+    let mut indent_level: i32 = 0;
+    let rendered: String = backend
+        .render_trait(&trait_def, None, &mut indent_level)
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/contracts.rs".to_owned(),
+            source,
+        })?;
+    out.push_str(&rendered);
+    out.push('\n');
+    Ok(())
 }
 
-/// Emit one trait method line into the contracts.rs trait.
-fn generate_guest_trait_method(out: &mut String, func: &ResolvedFunction, contract_struct: &str) {
+/// Bodyless `RustFunction` FORM for one guest-trait method (`&self` + params → `Result<T, GuestError>`).
+/// Preserves the former parameter rule exactly: a lone user-defined param is taken by `&`, else by value.
+fn guest_trait_method_form(func: &ResolvedFunction) -> RustFunction {
     let ret_type: String = match &func.returns {
         Some(ty) => rust_type_name(ty),
         None => "()".to_owned(),
     };
-    let sig_params: String = build_guest_trait_params(func, contract_struct);
-    out.push_str(&format!(
-        "    fn {}(&self{}) -> Result<{ret_type}, GuestError>;\n",
-        func.name, sig_params
-    ));
-}
-
-/// Build the trait method parameter list (after `&self`).
-fn build_guest_trait_params(func: &ResolvedFunction, contract_struct: &str) -> String {
-    if func.params.is_empty() {
-        return String::new();
-    }
-    if func.params.len() == 1 {
+    let parameters: Vec<RustParameter> = if func.params.len() == 1 {
         let param: &ResolvedParam = &func.params[0];
-        return match &param.ty {
-            ResolvedTypeRef::UserDefined(_) => {
-                format!(", {}: &{}", param.name, rust_type_name(&param.ty))
-            }
-            _ => format!(", {}: {}", param.name, rust_type_name(&param.ty)),
+        let param_type: String = match &param.ty {
+            ResolvedTypeRef::UserDefined(_) => format!("&{}", rust_type_name(&param.ty)),
+            _ => rust_type_name(&param.ty),
         };
+        vec![RustParameter {
+            name: param.name.clone(),
+            param_type,
+        }]
+    } else {
+        func.params
+            .iter()
+            .map(|p: &ResolvedParam| RustParameter {
+                name: p.name.clone(),
+                param_type: rust_type_name(&p.ty),
+            })
+            .collect()
+    };
+    RustFunction {
+        name: func.name.clone(),
+        visibility: RustVisibility::Private,
+        self_kind: RustSelfKind::Ref,
+        parameters,
+        generic_args: Vec::new(),
+        return_type: Some(format!("Result<{ret_type}, GuestError>")),
+        is_unsafe: false,
+        is_async: false,
+        is_const: false,
+        abi: None,
+        body: None,
+        attributes: Vec::new(),
+        docs: None,
+        comments: Vec::new(),
     }
-    // Multiple primitive params — individual args
-    let _ = contract_struct;
-    func.params
-        .iter()
-        .map(|p: &ResolvedParam| format!(", {}: {}", p.name, rust_type_name(&p.ty)))
-        .collect::<Vec<_>>()
-        .join("")
 }
 
 /// Convert contract name to guest trait name, e.g. "test.add" -> "TestAddGuestContract".
@@ -660,7 +700,7 @@ fn generate_guest_contract_interface(
         &trait_name,
         &state_struct,
         &format!("{upper}_CONTRACT_ID"),
-    );
+    )?;
 
     // ABI wrapper functions
     for func in &contract.functions {
@@ -755,7 +795,7 @@ fn generate_guest_plugin_interface(
         &trait_name,
         &state_struct,
         &format!("{plugin_upper}_CONTRACT_ID"),
-    );
+    )?;
 
     for func in &contract.functions {
         generate_guest_abi_wrapper(
@@ -825,6 +865,42 @@ fn generate_guest_plugin_interface(
 /// `create_instance` call and carried — together with the `HostContext` —
 /// in `GuestContractInstance.data`. No static storage is involved, so two
 /// runtimes loading the same plugin dylib get fully isolated instances.
+/// Render a Rust function for `interfaces.rs` via langprint, mapping the
+/// `io::Error` to a `PolyplugcError`. The emitted text is later canonicalized
+/// by polyplugc's rustfmt pass, so only equivalent tokens are required.
+fn render_rust_interface_fn(func: &RustFunction) -> Result<String, PolyplugcError> {
+    let mut indent_level: i32 = 0;
+    RustBackend::default()
+        .render_function(func, None::<&str>, None::<&str>, None, &mut indent_level)
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/interfaces.rs".to_owned(),
+            source,
+        })
+}
+
+/// Render a Rust function/struct for `host_contract_callers.rs` via langprint.
+/// The emitted text is later canonicalized by polyplugc's rustfmt pass, so only
+/// equivalent tokens are required (langprint owns FORM; the body is the slot).
+fn render_rust_host_fn(func: &RustFunction) -> Result<String, PolyplugcError> {
+    let mut indent_level: i32 = 0;
+    RustBackend::default()
+        .render_function(func, None::<&str>, None::<&str>, None, &mut indent_level)
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/host_contract_callers.rs".to_owned(),
+            source,
+        })
+}
+
+fn render_rust_host_struct(strukt: &RustStruct) -> Result<String, PolyplugcError> {
+    let mut indent_level: i32 = 0;
+    RustBackend::default()
+        .render_struct(strukt, None::<&str>, None::<&str>, None, &mut indent_level)
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/host_contract_callers.rs".to_owned(),
+            source,
+        })
+}
+
 fn emit_guest_instance_machinery(
     out: &mut String,
     prefix_upper: &str,
@@ -832,95 +908,222 @@ fn emit_guest_instance_machinery(
     trait_name: &str,
     state_struct: &str,
     contract_id_const: &str,
-) {
+) -> Result<(), PolyplugcError> {
     let factory_name: String = format!("polyplug_create_{lower}");
 
-    out.push_str("unsafe extern \"Rust\" {\n");
-    out.push_str(&format!(
-        "    /// Author-provided factory — define it in the plugin crate as:\n\
-         \x20   /// `#[unsafe(no_mangle)]`\n\
-         \x20   /// `pub fn {factory_name}(host: HostContext) -> Box<dyn {trait_name}> {{ ... }}`\n"
-    ));
-    out.push_str(&format!(
-        "    fn {factory_name}(host: HostContext) -> Box<dyn {trait_name}>;\n"
-    ));
-    out.push_str("}\n\n");
+    let extern_block: RustExternBlock = RustExternBlock {
+        abi: "Rust".to_owned(),
+        is_unsafe: true,
+        items: vec![RustFunction {
+            name: factory_name.clone(),
+            visibility: RustVisibility::Private,
+            self_kind: RustSelfKind::None,
+            parameters: vec![RustParameter {
+                name: "host".to_owned(),
+                param_type: "HostContext".to_owned(),
+            }],
+            generic_args: Vec::new(),
+            return_type: Some(format!("Box<dyn {trait_name}>")),
+            is_unsafe: false,
+            is_async: false,
+            is_const: false,
+            abi: None,
+            body: None,
+            attributes: Vec::new(),
+            docs: Some(vec![
+                "Author-provided factory — define it in the plugin crate as:".to_owned(),
+                "`#[unsafe(no_mangle)]`".to_owned(),
+                format!(
+                    "`pub fn {factory_name}(host: HostContext) -> Box<dyn {trait_name}> {{ ... }}`"
+                ),
+            ]),
+            comments: Vec::new(),
+        }],
+        docs: None,
+    };
+    let mut indent_level: i32 = 0;
+    let rendered: String = RustBackend::default()
+        .render_extern_block(&extern_block, None, &mut indent_level)
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/interfaces.rs".to_owned(),
+            source,
+        })?;
+    out.push_str(&rendered);
+    out.push('\n');
 
-    out.push_str(&format!(
-        "/// Per-instance payload carried in `GuestContractInstance.data`.\n\
-         struct {state_struct} {{\n\
-         \x20   /// Host context captured at instance creation — routes every host call\n\
-         \x20   /// (allocation, logging, error reporting) to the runtime that owns it.\n\
-         \x20   host: HostContext,\n\
-         \x20   /// The author's implementation, created by `{factory_name}`.\n\
-         \x20   implementation: Box<dyn {trait_name}>,\n\
-         }}\n\n"
-    ));
+    let state_strukt: RustStruct = RustStruct {
+        name: state_struct.to_owned(),
+        visibility: RustVisibility::Private,
+        generic_args: Vec::new(),
+        fields: vec![
+            RustField {
+                name: "host".to_owned(),
+                field_type: "HostContext".to_owned(),
+                visibility: RustVisibility::Private,
+                attributes: Vec::new(),
+                docs: Some(vec![
+                    "Host context captured at instance creation — routes every host call"
+                        .to_owned(),
+                    "(allocation, logging, error reporting) to the runtime that owns it."
+                        .to_owned(),
+                ]),
+            },
+            RustField {
+                name: "implementation".to_owned(),
+                field_type: format!("Box<dyn {trait_name}>"),
+                visibility: RustVisibility::Private,
+                attributes: Vec::new(),
+                docs: Some(vec![format!(
+                    "The author's implementation, created by `{factory_name}`."
+                )]),
+            },
+        ],
+        methods: Vec::new(),
+        derives: Vec::new(),
+        attributes: Vec::new(),
+        is_tuple: false,
+        docs: Some(vec![
+            "Per-instance payload carried in `GuestContractInstance.data`.".to_owned(),
+        ]),
+    };
+    let mut state_indent: i32 = 0;
+    let state_rendered: String = RustBackend::default()
+        .render_struct(
+            &state_strukt,
+            None::<&str>,
+            None::<&str>,
+            None,
+            &mut state_indent,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/interfaces.rs".to_owned(),
+            source,
+        })?;
+    out.push_str(&state_rendered);
+    out.push_str("\n\n");
 
-    out.push_str(&format!(
-        "/// Create a new instance: calls the author factory and boxes the payload.\n\
-         /// Writes a null handle through `out_instance` when `host` is null or the factory panics.\n\
-         unsafe extern \"C\" fn {prefix_upper}_create_instance(\n\
-         \x20   _loader_data: polyplug_abi::dispatch::VmLoaderData,\n\
-         \x20   host: *const HostApi,\n\
-         \x20   _args: *const (),\n\
-         \x20   out_instance: *mut GuestContractInstance,\n\
-         ) {{\n\
-         \x20   if out_instance.is_null() {{\n\
-         \x20       return;\n\
-         \x20   }}\n\
-         \x20   if host.is_null() {{\n\
-         \x20       // SAFETY: out_instance is non-null (checked above) and writable per the ABI contract.\n\
-         \x20       unsafe {{ out_instance.write(GuestContractInstance::null()); }}\n\
-         \x20       return;\n\
-         \x20   }}\n\
-         \x20   // SAFETY: host is non-null (checked above) and valid per the ABI contract\n\
-         \x20   // for create_instance; it stays valid for the runtime's lifetime.\n\
-         \x20   let host_ctx: HostContext = unsafe {{ HostContext::new(host) }};\n\
-         \x20   let implementation: Box<dyn {trait_name}> =\n\
-         \x20       match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {{\n\
-         \x20           // SAFETY: the author defines `{factory_name}` in the plugin crate\n\
-         \x20           // with `#[unsafe(no_mangle)]`; same-crate Rust ABI, signature enforced\n\
-         \x20           // by the extern declaration above.\n\
-         \x20           unsafe {{ {factory_name}(host_ctx) }}\n\
-         \x20       }})) {{\n\
-         \x20           Ok(i) => i,\n\
-         \x20           Err(_) => {{\n\
-         \x20               // SAFETY: out_instance is non-null and writable per the ABI contract.\n\
-         \x20               unsafe {{ out_instance.write(GuestContractInstance::null()); }}\n\
-         \x20               return;\n\
-         \x20           }}\n\
-         \x20       }};\n\
-         \x20   let state: Box<{state_struct}> = Box::new({state_struct} {{\n\
-         \x20       host: host_ctx,\n\
-         \x20       implementation,\n\
-         \x20   }});\n\
-         \x20   // SAFETY: out_instance is non-null (checked above) and writable per the ABI contract.\n\
-         \x20   unsafe {{\n\
-         \x20       out_instance.write(GuestContractInstance {{\n\
-         \x20           data: Box::into_raw(state) as *mut c_void,\n\
-         \x20           contract_id: GuestContractId::from_u64({contract_id_const}),\n\
-         \x20       }});\n\
-         \x20   }}\n\
-         }}\n\n"
-    ));
+    // FORM: langprint renders the fn shell; the body (rustfmt-canonicalized) is the slot.
+    let create_body: String = format!(
+        "if out_instance.is_null() {{\n\
+         return;\n\
+         }}\n\
+         if host.is_null() {{\n\
+         // SAFETY: out_instance is non-null (checked above) and writable per the ABI contract.\n\
+         unsafe {{ out_instance.write(GuestContractInstance::null()); }}\n\
+         return;\n\
+         }}\n\
+         // SAFETY: host is non-null (checked above) and valid per the ABI contract\n\
+         // for create_instance; it stays valid for the runtime's lifetime.\n\
+         let host_ctx: HostContext = unsafe {{ HostContext::new(host) }};\n\
+         let implementation: Box<dyn {trait_name}> =\n\
+         match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {{\n\
+         // SAFETY: the author defines `{factory_name}` in the plugin crate\n\
+         // with `#[unsafe(no_mangle)]`; same-crate Rust ABI, signature enforced\n\
+         // by the extern declaration above.\n\
+         unsafe {{ {factory_name}(host_ctx) }}\n\
+         }})) {{\n\
+         Ok(i) => i,\n\
+         Err(_) => {{\n\
+         // SAFETY: out_instance is non-null and writable per the ABI contract.\n\
+         unsafe {{ out_instance.write(GuestContractInstance::null()); }}\n\
+         return;\n\
+         }}\n\
+         }};\n\
+         let state: Box<{state_struct}> = Box::new({state_struct} {{\n\
+         host: host_ctx,\n\
+         implementation,\n\
+         }});\n\
+         // SAFETY: out_instance is non-null (checked above) and writable per the ABI contract.\n\
+         unsafe {{\n\
+         out_instance.write(GuestContractInstance {{\n\
+         data: Box::into_raw(state) as *mut c_void,\n\
+         contract_id: GuestContractId::from_u64({contract_id_const}),\n\
+         }});\n\
+         }}"
+    );
+    let create_fn: RustFunction = RustFunction {
+        name: format!("{prefix_upper}_create_instance"),
+        visibility: RustVisibility::Private,
+        self_kind: RustSelfKind::None,
+        parameters: vec![
+            RustParameter {
+                name: "_loader_data".to_owned(),
+                param_type: "polyplug_abi::dispatch::VmLoaderData".to_owned(),
+            },
+            RustParameter {
+                name: "host".to_owned(),
+                param_type: "*const HostApi".to_owned(),
+            },
+            RustParameter {
+                name: "_args".to_owned(),
+                param_type: "*const ()".to_owned(),
+            },
+            RustParameter {
+                name: "out_instance".to_owned(),
+                param_type: "*mut GuestContractInstance".to_owned(),
+            },
+        ],
+        generic_args: Vec::new(),
+        return_type: None,
+        is_unsafe: true,
+        is_async: false,
+        is_const: false,
+        abi: Some("C".to_owned()),
+        body: Some(vec![create_body]),
+        attributes: Vec::new(),
+        docs: Some(vec![
+            "Create a new instance: calls the author factory and boxes the payload.".to_owned(),
+            "Writes a null handle through `out_instance` when `host` is null or the factory panics."
+                .to_owned(),
+        ]),
+        comments: Vec::new(),
+    };
+    out.push_str(&render_rust_interface_fn(&create_fn)?);
+    out.push('\n');
 
-    out.push_str(&format!(
-        "/// Destroy an instance created by `{prefix_upper}_create_instance`.\n\
-         unsafe extern \"C\" fn {prefix_upper}_destroy_instance(\n\
-         \x20   _loader_data: polyplug_abi::dispatch::VmLoaderData,\n\
-         \x20   _host: *const HostApi,\n\
-         \x20   instance: GuestContractInstance,\n\
-         ) {{\n\
-         \x20   if instance.data.is_null() {{\n\
-         \x20       return;\n\
-         \x20   }}\n\
-         \x20   // SAFETY: instance.data was produced by `{prefix_upper}_create_instance` via\n\
-         \x20   // Box::into_raw and is dropped exactly once here — the host calls\n\
-         \x20   // destroy_instance exactly once per created instance.\n\
-         \x20   drop(unsafe {{ Box::from_raw(instance.data as *mut {state_struct}) }});\n\
-         }}\n\n"
-    ));
+    let destroy_body: String = format!(
+        "if instance.data.is_null() {{\n\
+         return;\n\
+         }}\n\
+         // SAFETY: instance.data was produced by `{prefix_upper}_create_instance` via\n\
+         // Box::into_raw and is dropped exactly once here — the host calls\n\
+         // destroy_instance exactly once per created instance.\n\
+         drop(unsafe {{ Box::from_raw(instance.data as *mut {state_struct}) }});"
+    );
+    let destroy_fn: RustFunction = RustFunction {
+        name: format!("{prefix_upper}_destroy_instance"),
+        visibility: RustVisibility::Private,
+        self_kind: RustSelfKind::None,
+        parameters: vec![
+            RustParameter {
+                name: "_loader_data".to_owned(),
+                param_type: "polyplug_abi::dispatch::VmLoaderData".to_owned(),
+            },
+            RustParameter {
+                name: "_host".to_owned(),
+                param_type: "*const HostApi".to_owned(),
+            },
+            RustParameter {
+                name: "instance".to_owned(),
+                param_type: "GuestContractInstance".to_owned(),
+            },
+        ],
+        generic_args: Vec::new(),
+        return_type: None,
+        is_unsafe: true,
+        is_async: false,
+        is_const: false,
+        abi: Some("C".to_owned()),
+        body: Some(vec![destroy_body]),
+        attributes: Vec::new(),
+        docs: Some(vec![format!(
+            "Destroy an instance created by `{prefix_upper}_create_instance`."
+        )]),
+        comments: Vec::new(),
+    };
+    out.push_str(&render_rust_interface_fn(&destroy_fn)?);
+    out.push('\n');
+    Ok(())
 }
 
 /// Convert a lowercase snake identifier to PascalCase, e.g. "my_plugin" -> "MyPlugin".
@@ -949,50 +1152,42 @@ fn generate_guest_abi_wrapper(
 ) -> Result<(), PolyplugcError> {
     let wrapper_name: String = format!("{contract_lower}_{}_abi", func.name);
     let has_return: bool = func.returns.is_some();
-    let out_param: &str = if has_return {
-        "out: *mut ()"
-    } else {
-        "_out: *mut ()"
-    };
+    let out_param_name: &str = if has_return { "out" } else { "_out" };
 
-    out.push_str(&format!(
-        "/// ABI wrapper for {} (function_id = {}).\n",
-        func.name, func.function_id
-    ));
-    out.push_str("// SAFETY: args and out pointers are validated at entry before dereferencing.\n");
-    out.push_str("#[allow(clippy::unnecessary_cast)]\n");
-    out.push_str(&format!(
-        "extern \"C\" fn {wrapper_name}(instance: GuestContractInstance, args: *const (), {out_param}, out_err: *mut AbiError) {{\n"
-    ));
+    // ---- LOGIC (the single body slot): the dispatch statements. FORM around them
+    // (doc, SAFETY comment, `#[allow]`, `extern "C"` signature) is delegated to
+    // langprint's `render_function` below. Body indentation is free — the whole
+    // file is canonicalized by rustfmt on write (`format_for_disk`). ----
+    let mut body: String = String::new();
     // The body computes the AbiError result via an inner closure, then writes it
-    // through `out_err` (the new out-param ABI). Early-exit paths write through
+    // through `out_err` (the out-param ABI). Early-exit paths write through
     // `out_err` and return rather than returning the value.
-    out.push_str("    let __result_err: AbiError = (|| {\n");
-    out.push_str("    if instance.data.is_null() {\n");
-    out.push_str("        return AbiError { code: AbiErrorCode::InvalidPointer as u32, message: string_view_from_static(b\"instance is null\") };\n");
-    out.push_str("    }\n");
-    out.push_str(&format!(
+    body.push_str("let __result_err: AbiError = (|| {\n");
+    body.push_str("    if instance.data.is_null() {\n");
+    body.push_str("        return AbiError { code: AbiErrorCode::InvalidPointer as u32, message: string_view_from_static(b\"instance is null\") };\n");
+    body.push_str("    }\n");
+    body.push_str(&format!(
         "    // SAFETY: instance.data was produced by create_instance via Box::into_raw\n\
          \x20   // and stays valid until destroy_instance; the host never mutates it.\n\
          \x20   let state: &{state_struct} = unsafe {{ &*(instance.data as *const {state_struct}) }};\n"
     ));
-    out.push_str("    match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {\n");
-    out.push_str(&format!(
+    body.push_str("    match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {\n");
+    body.push_str(&format!(
         "        let impl_ref: &dyn {trait_name} = state.implementation.as_ref();\n"
     ));
 
     if !func.params.is_empty() {
-        out.push_str("        if args.is_null() {\n");
-        out.push_str("            return AbiError { code: AbiErrorCode::InvalidPointer as u32, message: string_view_from_static(b\"args pointer is null\") };\n");
-        out.push_str("        }\n");
+        body.push_str("        if args.is_null() {\n");
+        body.push_str("            return AbiError { code: AbiErrorCode::InvalidPointer as u32, message: string_view_from_static(b\"args pointer is null\") };\n");
+        body.push_str("        }\n");
     }
     if has_return {
-        out.push_str("        if out.is_null() {\n");
-        out.push_str("            return AbiError { code: AbiErrorCode::InvalidPointer as u32, message: string_view_from_static(b\"out pointer is null\") };\n");
-        out.push_str("        }\n");
+        body.push_str("        if out.is_null() {\n");
+        body.push_str("            return AbiError { code: AbiErrorCode::InvalidPointer as u32, message: string_view_from_static(b\"out pointer is null\") };\n");
+        body.push_str("        }\n");
     }
 
-    emit_guest_wrapper_call(out, func, contract_struct);
+    emit_guest_wrapper_call(&mut body, func, contract_struct);
 
     // Match on result
     if has_return {
@@ -1000,37 +1195,92 @@ fn generate_guest_abi_wrapper(
             Some(ty) => rust_type_name(ty),
             None => String::new(),
         };
-        out.push_str("        match result {\n");
-        out.push_str("            Ok(val) => {\n");
-        out.push_str(&format!(
+        body.push_str("        match result {\n");
+        body.push_str("            Ok(val) => {\n");
+        body.push_str(&format!(
             "                // SAFETY: out is a valid *mut {ret_ty} per ABI contract.\n"
         ));
-        out.push_str(&format!(
+        body.push_str(&format!(
             "                unsafe {{ core::ptr::write(out as *mut {ret_ty}, val); }}\n"
         ));
-        out.push_str("                abi_error_ok()\n");
-        out.push_str("            }\n");
-        out.push_str("            Err(e) => plugin_error_to_abi_error(state.host, e),\n");
-        out.push_str("        }\n");
+        body.push_str("                abi_error_ok()\n");
+        body.push_str("            }\n");
+        body.push_str("            Err(e) => plugin_error_to_abi_error(state.host, e),\n");
+        body.push_str("        }\n");
     } else {
-        out.push_str("        match result {\n");
-        out.push_str("            Ok(()) => abi_error_ok(),\n");
-        out.push_str("            Err(e) => plugin_error_to_abi_error(state.host, e),\n");
-        out.push_str("        }\n");
+        body.push_str("        match result {\n");
+        body.push_str("            Ok(()) => abi_error_ok(),\n");
+        body.push_str("            Err(e) => plugin_error_to_abi_error(state.host, e),\n");
+        body.push_str("        }\n");
     }
 
-    out.push_str("    })) {\n");
-    out.push_str("        Ok(err) => err,\n");
-    out.push_str("        Err(_) => AbiError::panic_caught(),\n");
-    out.push_str("    }\n");
-    out.push_str("    })();\n");
-    out.push_str("    if !out_err.is_null() {\n");
-    out.push_str(
+    body.push_str("    })) {\n");
+    body.push_str("        Ok(err) => err,\n");
+    body.push_str("        Err(_) => AbiError::panic_caught(),\n");
+    body.push_str("    }\n");
+    body.push_str("    })();\n");
+    body.push_str("    if !out_err.is_null() {\n");
+    body.push_str(
         "        // SAFETY: out_err is a valid, writable *mut AbiError per the ABI contract.\n",
     );
-    out.push_str("        unsafe { out_err.write(__result_err); }\n");
-    out.push_str("    }\n");
-    out.push_str("}\n\n");
+    body.push_str("        unsafe { out_err.write(__result_err); }\n");
+    body.push_str("    }");
+
+    // ---- FORM: langprint renders the wrapper shell around the body slot. ----
+    let wrapper: RustFunction = RustFunction {
+        name: wrapper_name,
+        visibility: RustVisibility::Private,
+        self_kind: RustSelfKind::None,
+        parameters: vec![
+            RustParameter {
+                name: "instance".to_owned(),
+                param_type: "GuestContractInstance".to_owned(),
+            },
+            RustParameter {
+                name: "args".to_owned(),
+                param_type: "*const ()".to_owned(),
+            },
+            RustParameter {
+                name: out_param_name.to_owned(),
+                param_type: "*mut ()".to_owned(),
+            },
+            RustParameter {
+                name: "out_err".to_owned(),
+                param_type: "*mut AbiError".to_owned(),
+            },
+        ],
+        generic_args: Vec::new(),
+        return_type: None,
+        is_unsafe: false,
+        is_async: false,
+        is_const: false,
+        abi: Some("C".to_owned()),
+        body: Some(vec![body]),
+        attributes: vec!["allow(clippy::unnecessary_cast)".to_owned()],
+        docs: Some(vec![format!(
+            "ABI wrapper for {} (function_id = {}).",
+            func.name, func.function_id
+        )]),
+        comments: vec![
+            "SAFETY: args and out pointers are validated at entry before dereferencing.".to_owned(),
+        ],
+    };
+    let backend: RustBackend = RustBackend::default();
+    let mut indent_level: i32 = 0;
+    let rendered: String = backend
+        .render_function(
+            &wrapper,
+            None::<&str>,
+            None::<&str>,
+            None,
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/interfaces.rs".to_owned(),
+            source,
+        })?;
+    out.push_str(&rendered);
+    out.push('\n');
 
     Ok(())
 }
@@ -1267,23 +1517,74 @@ fn needs_arg_pack(params: &[ResolvedParam]) -> bool {
 }
 
 /// Emit a `#[repr(C)]` arg-pack struct for a multi-param function into `types.rs`.
-fn emit_arg_pack_struct(out: &mut String, contract_struct: &str, func: &ResolvedFunction) {
+fn emit_arg_pack_struct(
+    out: &mut String,
+    contract_struct: &str,
+    func: &ResolvedFunction,
+) -> Result<(), PolyplugcError> {
     let struct_name: String = arg_pack_struct_name(contract_struct, &func.name);
-    out.push_str(&format!(
-        "/// Auto-generated arg-pack for `{contract_struct}::{}`\n",
+    let doc: String = format!(
+        "Auto-generated arg-pack for `{contract_struct}::{}`",
         func.name
-    ));
-    out.push_str("#[repr(C)]\n");
-    out.push_str("#[derive(Debug, Clone, Copy)]\n");
-    out.push_str(&format!("pub struct {struct_name} {{\n"));
-    for param in &func.params {
-        out.push_str(&format!(
-            "    pub {}: {},\n",
-            param.name,
-            rust_type_name(&param.ty)
-        ));
-    }
-    out.push_str("}\n\n");
+    );
+    let fields: Vec<(String, String)> = func
+        .params
+        .iter()
+        .map(|p: &ResolvedParam| (p.name.clone(), rust_type_name(&p.ty)))
+        .collect::<Vec<(String, String)>>();
+    out.push_str(&render_rust_repr_c_struct(&struct_name, doc, fields)?);
+    Ok(())
+}
+
+/// Render a `#[repr(C)] #[derive(Debug, Clone, Copy)]` struct via langprint's Rust
+/// StructRenderer. `attributes_before_derives` reproduces polyplugc's `#[repr(C)]`
+/// then `#[derive(...)]` order (rustfmt does not reorder attributes). rustfmt on
+/// write canonicalizes everything else, so this is byte-identical.
+fn render_rust_repr_c_struct(
+    name: &str,
+    doc: String,
+    fields: Vec<(String, String)>,
+) -> Result<String, PolyplugcError> {
+    let rust_fields: Vec<RustField> = fields
+        .into_iter()
+        .map(|(fname, ftype): (String, String)| RustField {
+            name: fname,
+            field_type: ftype,
+            visibility: RustVisibility::Pub,
+            attributes: Vec::new(),
+            docs: None,
+        })
+        .collect::<Vec<RustField>>();
+    let strukt: RustStruct = RustStruct {
+        name: name.to_owned(),
+        visibility: RustVisibility::Pub,
+        generic_args: Vec::new(),
+        fields: rust_fields,
+        methods: Vec::new(),
+        derives: vec!["Debug".to_owned(), "Clone".to_owned(), "Copy".to_owned()],
+        attributes: vec!["repr(C)".to_owned()],
+        is_tuple: false,
+        docs: Some(vec![doc]),
+    };
+    let options: RustStructRenderOptions = RustStructRenderOptions {
+        attributes_before_derives: true,
+        ..RustStructRenderOptions::default()
+    };
+    let backend: RustBackend = RustBackend::default();
+    let mut indent_level: i32 = 0;
+    let rendered: String = backend
+        .render_struct(
+            &strukt,
+            None::<&str>,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/types.rs".to_owned(),
+            source,
+        })?;
+    Ok(format!("{rendered}\n"))
 }
 
 /// Generate the PascalCase arg-pack struct name for a function.
@@ -1972,19 +2273,15 @@ fn args_type_comment(func: &ResolvedFunction, contract_struct: &str) -> String {
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
-fn generate_rust_type(out: &mut String, ty: &ResolvedType) {
-    out.push_str(&format!("/// User-defined type `{}`\n", ty.name));
-    out.push_str("#[repr(C)]\n");
-    out.push_str("#[derive(Debug, Clone, Copy)]\n");
-    out.push_str(&format!("pub struct {} {{\n", ty.name));
-    for field in &ty.fields {
-        out.push_str(&format!(
-            "    pub {}: {},\n",
-            field.name,
-            rust_type_name(&field.ty)
-        ));
-    }
-    out.push_str("}\n\n");
+fn generate_rust_type(out: &mut String, ty: &ResolvedType) -> Result<(), PolyplugcError> {
+    let doc: String = format!("User-defined type `{}`", ty.name);
+    let fields: Vec<(String, String)> = ty
+        .fields
+        .iter()
+        .map(|f: &ResolvedField| (f.name.clone(), rust_type_name(&f.ty)))
+        .collect::<Vec<(String, String)>>();
+    out.push_str(&render_rust_repr_c_struct(&ty.name, doc, fields)?);
+    Ok(())
 }
 
 fn rust_type_name(ty: &ResolvedTypeRef) -> String {
@@ -2068,7 +2365,7 @@ fn substitute_variant_refs_rust_bitflag(declared_variants: &[EnumVariant], expr:
     result
 }
 
-fn generate_rust_enum(out: &mut String, e: &EnumDef) {
+fn generate_rust_enum(out: &mut String, e: &EnumDef) -> Result<(), PolyplugcError> {
     let repr_str: &str = e.repr.rust_name();
     if e.bitflag {
         let mod_name: String = to_snake_case(&e.name);
@@ -2091,17 +2388,61 @@ fn generate_rust_enum(out: &mut String, e: &EnumDef) {
         out.push_str("}\n");
         out.push_str(&format!("pub use {}::{};\n\n", mod_name, e.name));
     } else {
-        out.push_str(&format!("/// Enum `{}` (repr {})\n", e.name, repr_str));
-        out.push_str(&format!("#[repr({})]\n", repr_str));
-        out.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
-        out.push_str(&format!("pub enum {} {{\n", e.name));
-        for variant in &e.variants {
+        out.push_str(&render_rust_enum_decl(e, repr_str)?);
+    }
+    Ok(())
+}
+
+/// Render a `#[repr(_)] #[derive(...)] pub enum` (the non-bitflag path) via
+/// langprint's Rust EnumRenderer. `attributes_before_derives` reproduces
+/// polyplugc's `#[repr(_)]`-first order; rustfmt canonicalizes the rest.
+fn render_rust_enum_decl(e: &EnumDef, repr_str: &str) -> Result<String, PolyplugcError> {
+    let variants: Vec<RustEnumVariant> = e
+        .variants
+        .iter()
+        .map(|variant: &EnumVariant| {
             let subst_value: String =
                 substitute_variant_refs_rust_enum(&e.variants, &variant.value, &e.name, repr_str);
-            out.push_str(&format!("    {} = {},\n", variant.name, subst_value));
-        }
-        out.push_str("}\n\n");
-    }
+            RustEnumVariant {
+                name: variant.name.clone(),
+                value: RustEnumVariantValue::Discriminant(subst_value),
+                docs: None,
+            }
+        })
+        .collect::<Vec<RustEnumVariant>>();
+    let rust_enum: RustEnum = RustEnum {
+        name: e.name.clone(),
+        visibility: RustVisibility::Pub,
+        variants,
+        repr: Some(repr_str.to_owned()),
+        derives: vec![
+            "Debug".to_owned(),
+            "Clone".to_owned(),
+            "Copy".to_owned(),
+            "PartialEq".to_owned(),
+            "Eq".to_owned(),
+        ],
+        docs: Some(vec![format!("Enum `{}` (repr {})", e.name, repr_str)]),
+    };
+    let options: RustEnumRenderOptions = RustEnumRenderOptions {
+        attributes_before_derives: true,
+        ..RustEnumRenderOptions::default()
+    };
+    let backend: RustBackend = RustBackend::default();
+    let mut indent_level: i32 = 0;
+    let rendered: String = backend
+        .render_enum(
+            &rust_enum,
+            None::<&str>,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/types.rs".to_owned(),
+            source,
+        })?;
+    Ok(format!("{rendered}\n"))
 }
 
 fn contract_name_to_struct(name: &str) -> String {
@@ -2803,7 +3144,7 @@ fn host_abi_type_name(ty: &ResolvedTypeRef) -> String {
 }
 
 /// Generate all guest-side host contract callers into a single file.
-fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
+fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let header: &str = "// THIS FILE IS AUTO-GENERATED BY polyplugc. DO NOT EDIT.\n\
 // Re-generate with: polyplugc generate --bundle bundle.toml --lang rust --out <dir>\n\
 #![allow(unused_imports)]\n\
@@ -2840,23 +3181,65 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
         out.push_str("const CALL_ARENA_BUF_LEN: usize = 512;\n\n");
     }
 
-    out.push_str("/// Error type for host contract calls from guest.\n");
-    out.push_str("#[derive(Debug)]\n");
-    out.push_str("pub struct HostContractError {\n");
-    out.push_str("    /// ABI error code (non-zero).\n");
-    out.push_str("    pub code: AbiErrorCode,\n");
-    out.push_str("    /// Human-readable error message (may be empty).\n");
-    out.push_str("    pub message: String,\n");
-    out.push_str("}\n\n");
+    // langprint renders the HostContractError struct FORM; rustfmt canonicalizes.
+    let err_struct: RustStruct = RustStruct {
+        name: "HostContractError".to_owned(),
+        visibility: RustVisibility::Pub,
+        generic_args: Vec::new(),
+        fields: vec![
+            RustField {
+                name: "code".to_owned(),
+                field_type: "AbiErrorCode".to_owned(),
+                visibility: RustVisibility::Pub,
+                attributes: Vec::new(),
+                docs: Some(vec!["ABI error code (non-zero).".to_owned()]),
+            },
+            RustField {
+                name: "message".to_owned(),
+                field_type: "String".to_owned(),
+                visibility: RustVisibility::Pub,
+                attributes: Vec::new(),
+                docs: Some(vec![
+                    "Human-readable error message (may be empty).".to_owned(),
+                ]),
+            },
+        ],
+        methods: Vec::new(),
+        derives: vec!["Debug".to_owned()],
+        attributes: Vec::new(),
+        is_tuple: false,
+        docs: Some(vec![
+            "Error type for host contract calls from guest.".to_owned(),
+        ]),
+    };
+    out.push_str(&render_rust_host_struct(&err_struct)?);
+    out.push_str("\n\n");
+    // The impl shell stays hand-emitted (langprint renders the members, not the block).
     out.push_str("impl HostContractError {\n");
-    out.push_str("    /// Create a new error with the given code.\n");
-    out.push_str("    pub fn new(code: AbiErrorCode) -> Self {\n");
-    out.push_str("        Self { code, message: String::new() }\n");
-    out.push_str("    }\n");
+    let new_fn: RustFunction = RustFunction {
+        name: "new".to_owned(),
+        visibility: RustVisibility::Pub,
+        self_kind: RustSelfKind::None,
+        parameters: vec![RustParameter {
+            name: "code".to_owned(),
+            param_type: "AbiErrorCode".to_owned(),
+        }],
+        generic_args: Vec::new(),
+        return_type: Some("Self".to_owned()),
+        is_unsafe: false,
+        is_async: false,
+        is_const: false,
+        abi: None,
+        body: Some(vec!["Self { code, message: String::new() }".to_owned()]),
+        attributes: Vec::new(),
+        docs: Some(vec!["Create a new error with the given code.".to_owned()]),
+        comments: Vec::new(),
+    };
+    out.push_str(&render_rust_host_fn(&new_fn)?);
     out.push_str("}\n\n");
 
     for contract in &ir.host_contracts {
-        generate_guest_host_contract_caller(&mut out, contract);
+        generate_guest_host_contract_caller(&mut out, contract)?;
     }
 
     for contract in &ir.host_contracts {
@@ -2872,129 +3255,226 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
         ));
     }
 
-    out
+    Ok(out)
 }
 
 /// Generate one guest-side host contract caller struct.
-fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHostContract) {
+fn generate_guest_host_contract_caller(
+    out: &mut String,
+    contract: &ResolvedHostContract,
+) -> Result<(), PolyplugcError> {
     let caller_name: String = host_contract_name_to_caller(&contract.name);
     let needs_arena: bool = contract.functions.iter().any(fn_needs_arena);
 
-    out.push_str(&format!(
-        "/// Guest caller for host contract `{}` (id=0x{:016X})\n",
+    // langprint renders the caller struct FORM (fields + docs); rustfmt canonicalizes.
+    let mut struct_docs: Vec<String> = vec![format!(
+        "Guest caller for host contract `{}` (id=0x{:016X})",
         contract.name, contract.contract_id
-    ));
+    )];
     if needs_arena {
-        out.push_str("///\n");
-        out.push_str(
-            "/// # Call-arena lifetime\n\
-             ///\n\
-             /// Methods returning variable-size values (`StringView`, `Buffer`, or structs\n\
-             /// that may embed one) take `&mut self` and reset this caller's arena at the\n\
-             /// start of the call. Any view returned by such a method borrows arena memory\n\
-             /// and is valid only until the next arena-backed call on the same caller.\n",
-        );
+        struct_docs.extend([
+            String::new(),
+            "# Call-arena lifetime".to_owned(),
+            String::new(),
+            "Methods returning variable-size values (`StringView`, `Buffer`, or structs".to_owned(),
+            "that may embed one) take `&mut self` and reset this caller's arena at the".to_owned(),
+            "start of the call. Any view returned by such a method borrows arena memory".to_owned(),
+            "and is valid only until the next arena-backed call on the same caller.".to_owned(),
+        ]);
     }
-    out.push_str(&format!("pub struct {caller_name} {{\n"));
-    out.push_str(
-        "    /// Vtable for the host contract: provides dispatch metadata and function pointers.\n",
-    );
-    out.push_str("    /// Resolved via `HostApi::resolve_host_contract_interface`.\n");
-    out.push_str("    interface: *const HostContractInterface,\n");
-    out.push_str("    /// Per-instance state for the host contract, produced by\n");
-    out.push_str("    /// `HostApi::get_host_contract`. Passed as the first argument to native\n");
-    out.push_str("    /// dispatch functions (the host thunk dereferences it as the implementation pointer).\n");
-    out.push_str("    instance: HostContractInstance,\n");
-    out.push_str(
-        "    /// Host interface pointer captured in `from_host` — used for cross-boundary\n",
-    );
-    out.push_str("    /// string allocation when marshalling StringView parameters.\n");
-    out.push_str("    host: *const HostApi,\n");
+    let mut fields: Vec<RustField> = vec![
+        RustField {
+            name: "interface".to_owned(),
+            field_type: "*const HostContractInterface".to_owned(),
+            visibility: RustVisibility::Private,
+            attributes: Vec::new(),
+            docs: Some(vec![
+                "Vtable for the host contract: provides dispatch metadata and function pointers."
+                    .to_owned(),
+                "Resolved via `HostApi::resolve_host_contract_interface`.".to_owned(),
+            ]),
+        },
+        RustField {
+            name: "instance".to_owned(),
+            field_type: "HostContractInstance".to_owned(),
+            visibility: RustVisibility::Private,
+            attributes: Vec::new(),
+            docs: Some(vec![
+                "Per-instance state for the host contract, produced by".to_owned(),
+                "`HostApi::get_host_contract`. Passed as the first argument to native".to_owned(),
+                "dispatch functions (the host thunk dereferences it as the implementation pointer)."
+                    .to_owned(),
+            ]),
+        },
+        RustField {
+            name: "host".to_owned(),
+            field_type: "*const HostApi".to_owned(),
+            visibility: RustVisibility::Private,
+            attributes: Vec::new(),
+            docs: Some(vec![
+                "Host interface pointer captured in `from_host` — used for cross-boundary"
+                    .to_owned(),
+                "string allocation when marshalling StringView parameters.".to_owned(),
+            ]),
+        },
+    ];
     if needs_arena {
-        out.push_str(
-            "    /// Stable-address backing buffer for the per-call arena. Boxed so the\n\
-             \x20   /// arena's interior pointers stay valid when the caller is moved.\n",
-        );
-        out.push_str("    arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]>,\n");
-        out.push_str(
-            "    /// Per-call bump arena over `arena_buf`, reset at each arena-backed call.\n",
-        );
-        out.push_str("    arena: CallArena,\n");
+        fields.push(RustField {
+            name: "arena_buf".to_owned(),
+            field_type: "Box<[u8; CALL_ARENA_BUF_LEN]>".to_owned(),
+            visibility: RustVisibility::Private,
+            attributes: Vec::new(),
+            docs: Some(vec![
+                "Stable-address backing buffer for the per-call arena. Boxed so the".to_owned(),
+                "arena's interior pointers stay valid when the caller is moved.".to_owned(),
+            ]),
+        });
+        fields.push(RustField {
+            name: "arena".to_owned(),
+            field_type: "CallArena".to_owned(),
+            visibility: RustVisibility::Private,
+            attributes: Vec::new(),
+            docs: Some(vec![
+                "Per-call bump arena over `arena_buf`, reset at each arena-backed call.".to_owned(),
+            ]),
+        });
     }
-    out.push_str("}\n\n");
+    let caller_struct: RustStruct = RustStruct {
+        name: caller_name.clone(),
+        visibility: RustVisibility::Pub,
+        generic_args: Vec::new(),
+        fields,
+        methods: Vec::new(),
+        derives: Vec::new(),
+        attributes: Vec::new(),
+        is_tuple: false,
+        docs: Some(struct_docs),
+    };
+    out.push_str(&render_rust_host_struct(&caller_struct)?);
+    out.push_str("\n\n");
 
+    // The impl shell stays hand-emitted; langprint renders each member fn below.
     out.push_str(&format!("impl {caller_name} {{\n"));
 
-    out.push_str("    /// Factory method - creates caller from HostApi or None if not found.\n");
-    out.push_str("    ///\n");
-    out.push_str("    /// # Safety\n");
-    out.push_str("    /// The `host` pointer must be valid and non-null.\n");
-    out.push_str(
-        "    pub unsafe fn from_host(host: *const HostApi, min_version: u32) -> Option<Self> {\n",
+    // from_host — factory that resolves the host-contract vtable + instance.
+    let mut from_host_body: String = String::new();
+    from_host_body.push_str("if host.is_null() {\n");
+    from_host_body.push_str("return None;\n");
+    from_host_body.push_str("}\n");
+    from_host_body.push_str("// SAFETY: host is non-null and valid per ABI contract.\n");
+    from_host_body.push_str("let host: &HostApi = unsafe { &*host };\n");
+    from_host_body
+        .push_str("// Resolve the contract vtable. This is the source of dispatch metadata\n");
+    from_host_body.push_str("// (dispatch_type, function_count, functions) — NOT the instance.\n");
+    from_host_body.push_str(
+        "// SAFETY: `host` is the reborrowed non-null HostApi; resolve_host_contract_interface\n",
     );
-    out.push_str("        if host.is_null() {\n");
-    out.push_str("            return None;\n");
-    out.push_str("        }\n");
-    out.push_str("        // SAFETY: host is non-null and valid per ABI contract.\n");
-    out.push_str("        let host: &HostApi = unsafe { &*host };\n");
-    out.push_str(
-        "        // Resolve the contract vtable. This is the source of dispatch metadata\n",
+    from_host_body.push_str(
+        "// is an ABI function pointer safe to call with a valid host (returns null if absent).\n",
     );
-    out.push_str("        // (dispatch_type, function_count, functions) — NOT the instance.\n");
-    out.push_str("        // SAFETY: `host` is the reborrowed non-null HostApi; resolve_host_contract_interface\n");
-    out.push_str("        // is an ABI function pointer safe to call with a valid host (returns null if absent).\n");
-    out.push_str("        let interface: *const HostContractInterface = unsafe {\n");
-    out.push_str(&format!(
-        "            (host.resolve_host_contract_interface)(host, 0x{:016X}_u64, min_version)\n",
+    from_host_body.push_str("let interface: *const HostContractInterface = unsafe {\n");
+    from_host_body.push_str(&format!(
+        "(host.resolve_host_contract_interface)(host, 0x{:016X}_u64, min_version)\n",
         contract.contract_id
     ));
-    out.push_str("        };\n");
-    out.push_str("        if interface.is_null() {\n");
-    out.push_str("            return None;\n");
-    out.push_str("        }\n");
-    out.push_str(
-        "        // Obtain the per-instance state. Native dispatch functions receive this\n",
+    from_host_body.push_str("};\n");
+    from_host_body.push_str("if interface.is_null() {\n");
+    from_host_body.push_str("return None;\n");
+    from_host_body.push_str("}\n");
+    from_host_body
+        .push_str("// Obtain the per-instance state. Native dispatch functions receive this\n");
+    from_host_body
+        .push_str("// pointer as their first argument; the host thunk dereferences it.\n");
+    from_host_body.push_str(
+        "// SAFETY: `host` is the reborrowed non-null HostApi; get_host_contract is an ABI\n",
     );
-    out.push_str("        // pointer as their first argument; the host thunk dereferences it.\n");
-    out.push_str("        // SAFETY: `host` is the reborrowed non-null HostApi; get_host_contract is an ABI\n");
-    out.push_str("        // function pointer safe to call with a valid host (null-data instance if absent).\n");
-    out.push_str("        let instance: HostContractInstance = unsafe {\n");
-    out.push_str(&format!(
-        "            (host.get_host_contract)(host, 0x{:016X}_u64, min_version)\n",
+    from_host_body.push_str(
+        "// function pointer safe to call with a valid host (null-data instance if absent).\n",
+    );
+    from_host_body.push_str("let instance: HostContractInstance = unsafe {\n");
+    from_host_body.push_str(&format!(
+        "(host.get_host_contract)(host, 0x{:016X}_u64, min_version)\n",
         contract.contract_id
     ));
-    out.push_str("        };\n");
+    from_host_body.push_str("};\n");
     if needs_arena {
-        out.push_str(
-            "        // Box the backing buffer first so the arena's interior pointers refer\n",
+        from_host_body
+            .push_str("// Box the backing buffer first so the arena's interior pointers refer\n");
+        from_host_body
+            .push_str("// to a stable heap address that survives moving the caller value.\n");
+        from_host_body.push_str(
+            "let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);\n",
         );
-        out.push_str(
-            "        // to a stable heap address that survives moving the caller value.\n",
-        );
-        out.push_str("        let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);\n");
-        out.push_str(
-            "        let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);\n",
-        );
-        out.push_str(&format!(
-            "        Some({caller_name} {{ interface, instance, host: host as *const HostApi, arena_buf, arena }})\n"
+        from_host_body
+            .push_str("let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);\n");
+        from_host_body.push_str(&format!(
+            "Some({caller_name} {{ interface, instance, host: host as *const HostApi, arena_buf, arena }})"
         ));
     } else {
-        out.push_str(&format!(
-            "        Some({caller_name} {{ interface, instance, host: host as *const HostApi }})\n"
+        from_host_body.push_str(&format!(
+            "Some({caller_name} {{ interface, instance, host: host as *const HostApi }})"
         ));
     }
-    out.push_str("    }\n\n");
+    let from_host_fn: RustFunction = RustFunction {
+        name: "from_host".to_owned(),
+        visibility: RustVisibility::Pub,
+        self_kind: RustSelfKind::None,
+        parameters: vec![
+            RustParameter {
+                name: "host".to_owned(),
+                param_type: "*const HostApi".to_owned(),
+            },
+            RustParameter {
+                name: "min_version".to_owned(),
+                param_type: "u32".to_owned(),
+            },
+        ],
+        generic_args: Vec::new(),
+        return_type: Some("Option<Self>".to_owned()),
+        is_unsafe: true,
+        is_async: false,
+        is_const: false,
+        abi: None,
+        body: Some(vec![from_host_body]),
+        attributes: Vec::new(),
+        docs: Some(vec![
+            "Factory method - creates caller from HostApi or None if not found.".to_owned(),
+            String::new(),
+            "# Safety".to_owned(),
+            "The `host` pointer must be valid and non-null.".to_owned(),
+        ]),
+        comments: Vec::new(),
+    };
+    out.push_str(&render_rust_host_fn(&from_host_fn)?);
+    out.push('\n');
 
-    out.push_str("    /// Check if caller is valid (resolved interface is non-null).\n");
-    out.push_str("    pub fn is_valid(&self) -> bool {\n");
-    out.push_str("        !self.interface.is_null()\n");
-    out.push_str("    }\n\n");
+    let is_valid_fn: RustFunction = RustFunction {
+        name: "is_valid".to_owned(),
+        visibility: RustVisibility::Pub,
+        self_kind: RustSelfKind::Ref,
+        parameters: Vec::new(),
+        generic_args: Vec::new(),
+        return_type: Some("bool".to_owned()),
+        is_unsafe: false,
+        is_async: false,
+        is_const: false,
+        abi: None,
+        body: Some(vec!["!self.interface.is_null()".to_owned()]),
+        attributes: Vec::new(),
+        docs: Some(vec![
+            "Check if caller is valid (resolved interface is non-null).".to_owned(),
+        ]),
+        comments: Vec::new(),
+    };
+    out.push_str(&render_rust_host_fn(&is_valid_fn)?);
+    out.push('\n');
 
     for func in &contract.functions {
-        generate_guest_host_contract_method(out, func, &caller_name);
+        generate_guest_host_contract_method(out, func, &caller_name)?;
     }
 
     out.push_str("}\n\n");
+    Ok(())
 }
 
 /// Generate one method for a guest-side host contract caller.
@@ -3002,139 +3482,136 @@ fn generate_guest_host_contract_method(
     out: &mut String,
     func: &ResolvedFunction,
     caller_name: &str,
-) {
+) -> Result<(), PolyplugcError> {
     let fn_id: u32 = func.function_id;
     let needs_arena: bool = fn_needs_arena(func);
 
-    let params_str: String = if func.params.is_empty() {
-        String::new()
-    } else {
-        func.params
-            .iter()
-            .map(|p: &ResolvedParam| format!(", {}: {}", p.name, guest_param_type_name(&p.ty)))
-            .collect::<Vec<_>>()
-            .join("")
-    };
+    let parameters: Vec<RustParameter> = func
+        .params
+        .iter()
+        .map(|p: &ResolvedParam| RustParameter {
+            name: p.name.clone(),
+            param_type: guest_param_type_name(&p.ty),
+        })
+        .collect::<Vec<RustParameter>>();
 
     let ret_type: String = match &func.returns {
         Some(ty) => guest_host_return_type_name(ty),
         None => "()".to_owned(),
     };
 
-    out.push_str(&format!(
-        "    /// Call host contract function `{}` (function_id={})\n",
+    // langprint renders the `pub fn name(&self, …) -> Result<…>` FORM; the dispatch
+    // body below is built into `body` and rendered as the slot (rustfmt canonicalizes).
+    let mut docs: Vec<String> = vec![format!(
+        "Call host contract function `{}` (function_id={})",
         func.name, fn_id
-    ));
-    let self_param: &str = if needs_arena { "&mut self" } else { "&self" };
+    )];
     if needs_arena {
-        out.push_str(
-            "    /// Returns a value borrowing this caller's arena; it stays valid until\n\
-             \x20   /// the next arena-backed call on this caller.\n",
-        );
+        docs.push("Returns a value borrowing this caller's arena; it stays valid until".to_owned());
+        docs.push("the next arena-backed call on this caller.".to_owned());
     }
-    out.push_str(&format!(
-        "    pub fn {}({self_param}{}) -> Result<{ret_type}, HostContractError> {{\n",
-        func.name, params_str
-    ));
 
+    let mut body: String = String::new();
     if needs_arena {
-        out.push_str(
+        body.push_str(
             "        // Reset the arena at call start: frees the previous call's overflow\n",
         );
-        out.push_str(
+        body.push_str(
             "        // blocks and rewinds the primary region, invalidating prior views.\n",
         );
-        out.push_str("        self.arena.reset();\n");
+        body.push_str("        self.arena.reset();\n");
     }
 
-    out.push_str("        if self.interface.is_null() {\n");
-    out.push_str(
+    body.push_str("        if self.interface.is_null() {\n");
+    body.push_str(
         "            return Err(HostContractError::new(AbiErrorCode::HostContractNotFound));\n",
     );
-    out.push_str("        }\n");
+    body.push_str("        }\n");
 
-    out.push_str(
+    body.push_str(
         "        // SAFETY: self.interface is non-null (checked above) and points to a valid\n",
     );
-    out.push_str("        // HostContractInterface produced by resolve_host_contract_interface.\n");
-    out.push_str(
+    body.push_str(
+        "        // HostContractInterface produced by resolve_host_contract_interface.\n",
+    );
+    body.push_str(
         "        let interface: &HostContractInterface = unsafe { &*self.interface };\n\n",
     );
 
-    emit_guest_host_contract_args_setup(out, func, caller_name);
+    emit_guest_host_contract_args_setup(&mut body, func, caller_name);
 
-    emit_guest_host_contract_out_setup(out, &func.returns);
+    emit_guest_host_contract_out_setup(&mut body, &func.returns);
 
-    out.push_str("        let mut err: AbiError = AbiError::ok();\n");
-    out.push_str(
+    body.push_str("        let mut err: AbiError = AbiError::ok();\n");
+    body.push_str(
         "        // SAFETY: args_ptr/out_ptr/&mut err match the host-contract ABI contract.\n",
     );
-    out.push_str("        unsafe {\n");
-    out.push_str("            match interface.dispatch_type {\n");
-    out.push_str("                DispatchType::Native => {\n");
+    body.push_str("        unsafe {\n");
+    body.push_str("            match interface.dispatch_type {\n");
+    body.push_str("                DispatchType::Native => {\n");
     // The function-id bounds check lives INSIDE the Native arm: reading
     // dispatch.native.function_count on a VM interface would alias bits of
     // dispatch.vm.call through the union (garbage). The VM-side loader
     // enforces its own bounds.
-    out.push_str(&format!(
+    body.push_str(&format!(
         "                    if interface.dispatch.native.function_count < {fn_id}_u32 + 1 {{\n"
     ));
-    out.push_str(
+    body.push_str(
         "                        return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed));\n",
     );
-    out.push_str("                    }\n");
-    out.push_str(&format!(
+    body.push_str("                    }\n");
+    body.push_str(&format!(
         "                    let fn_ptr: *const () = *interface.dispatch.native.functions.add({fn_id}_usize);\n"
     ));
-    out.push_str("                    // SAFETY: Transmuting *const () to a function pointer is sound because:\n");
-    out.push_str("                    // - Function pointers have the same size and alignment as data pointers\n");
-    out.push_str("                    // - The interface guarantees that the function at this index is a native dispatch\n");
-    out.push_str("                    //   with the exact signature: unsafe extern \"C\" fn(*const (), *const (), *mut (), *mut AbiError)\n");
-    out.push_str("                    let dispatch_fn: unsafe extern \"C\" fn(*const (), *const (), *mut (), *mut AbiError) = core::mem::transmute(fn_ptr);\n");
-    out.push_str(
+    body.push_str("                    // SAFETY: Transmuting *const () to a function pointer is sound because:\n");
+    body.push_str("                    // - Function pointers have the same size and alignment as data pointers\n");
+    body.push_str("                    // - The interface guarantees that the function at this index is a native dispatch\n");
+    body.push_str("                    //   with the exact signature: unsafe extern \"C\" fn(*const (), *const (), *mut (), *mut AbiError)\n");
+    body.push_str("                    let dispatch_fn: unsafe extern \"C\" fn(*const (), *const (), *mut (), *mut AbiError) = core::mem::transmute(fn_ptr);\n");
+    body.push_str(
         "                    // The native thunk receives the per-instance state as its first\n",
     );
-    out.push_str(
+    body.push_str(
         "                    // argument and dereferences it as the implementation pointer.\n",
     );
-    out.push_str(
+    body.push_str(
         "                    dispatch_fn(self.instance.data as *const (), args_ptr, out_ptr, &mut err);\n",
     );
-    out.push_str("                }\n");
-    out.push_str("                DispatchType::VirtualMachine => {\n");
+    body.push_str("                }\n");
+    body.push_str("                DispatchType::VirtualMachine => {\n");
     let arena_arg: &str = if needs_arena {
         "&mut self.arena as *mut CallArena"
     } else {
         "core::ptr::null_mut()"
     };
-    out.push_str(&format!(
+    body.push_str(&format!(
         "                    (interface.dispatch.vm.call)(interface.dispatch.vm.loader_data, GuestContractInstance::null(), {fn_id}_u32, args_ptr, out_ptr, {arena_arg}, &mut err);\n"
     ));
-    out.push_str("                }\n");
-    out.push_str("            }\n");
-    out.push_str("        };\n\n");
+    body.push_str("                }\n");
+    body.push_str("            }\n");
+    body.push_str("        };\n\n");
 
-    out.push_str("        if err.code != AbiErrorCode::Ok as u32 {\n");
-    out.push_str("            let message: String = if err.message.ptr.is_null() || err.message.len == 0 {\n");
-    out.push_str("                String::new()\n");
-    out.push_str("            } else {\n");
-    out.push_str("                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data.\n");
-    out.push_str(
+    body.push_str("        if err.code != AbiErrorCode::Ok as u32 {\n");
+    body.push_str("            let message: String = if err.message.ptr.is_null() || err.message.len == 0 {\n");
+    body.push_str("                String::new()\n");
+    body.push_str("            } else {\n");
+    body.push_str("                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data.\n");
+    body.push_str(
         "                // The message is owned by the producer (static or runtime-owned); the\n",
     );
-    out.push_str(
+    body.push_str(
         "                // receiver must NEVER free it. We only copy it into an owned String.\n",
     );
-    out.push_str("                let s: String = unsafe {\n");
-    out.push_str("                    let slice: &[u8] = core::slice::from_raw_parts(err.message.ptr, err.message.len);\n");
-    out.push_str("                    core::str::from_utf8_unchecked(slice).to_owned()\n");
-    out.push_str("                };\n");
-    out.push_str("                s\n");
-    out.push_str("            };\n");
-    out.push_str("            return Err(HostContractError { code: AbiErrorCode::from_u32(err.code), message });\n");
-    out.push_str("        }\n\n");
+    body.push_str("                let s: String = unsafe {\n");
+    body.push_str("                    let slice: &[u8] = core::slice::from_raw_parts(err.message.ptr, err.message.len);\n");
+    body.push_str("                    core::str::from_utf8_unchecked(slice).to_owned()\n");
+    body.push_str("                };\n");
+    body.push_str("                s\n");
+    body.push_str("            };\n");
+    body.push_str("            return Err(HostContractError { code: AbiErrorCode::from_u32(err.code), message });\n");
+    body.push_str("        }\n\n");
 
-    emit_out_assume_init(out, &func.returns);
+    emit_out_assume_init(&mut body, &func.returns);
 
     match &func.returns {
         Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) => {
@@ -3143,7 +3620,7 @@ fn generate_guest_host_contract_method(
             // explicitly. The non-empty branch keeps the raw construction because its lifetime
             // is tied to &mut self (the arena memory), not to the local out_val — calling
             // out_val.as_str() would borrow the local and not compile against the return type.
-            out.push_str(
+            body.push_str(
                 "        // SAFETY: out_val.ptr points to host-owned memory that the contract guarantees\n\
                  \x20       // stays valid until the next arena-backed call on this caller. The returned &str\n\
                  \x20       // borrows &mut self, so the borrow checker forbids another call (which would reset\n\
@@ -3165,7 +3642,7 @@ fn generate_guest_host_contract_method(
             // null pointer is UB even at len==0, so the empty case is guarded explicitly. The
             // non-empty branch keeps the raw construction because its lifetime is tied to
             // &mut self, not to the local out_val.
-            out.push_str(
+            body.push_str(
                 "        // SAFETY: out_val.ptr points to host-owned memory valid until the next arena-backed\n\
                  \x20       // call on this caller; the returned &[u8] borrows &mut self, so no second call can\n\
                  \x20       // invalidate it while the view is alive. A null/empty buffer never dereferences.\n\
@@ -3178,14 +3655,39 @@ fn generate_guest_host_contract_method(
             );
         }
         Some(_) => {
-            out.push_str("        Ok(out_val)\n");
+            body.push_str("        Ok(out_val)\n");
         }
         None => {
-            out.push_str("        Ok(())\n");
+            body.push_str("        Ok(())\n");
         }
     }
 
-    out.push_str("    }\n\n");
+    if body.ends_with('\n') {
+        body.pop();
+    }
+    let method: RustFunction = RustFunction {
+        name: func.name.clone(),
+        visibility: RustVisibility::Pub,
+        self_kind: if needs_arena {
+            RustSelfKind::RefMut
+        } else {
+            RustSelfKind::Ref
+        },
+        parameters,
+        generic_args: Vec::new(),
+        return_type: Some(format!("Result<{ret_type}, HostContractError>")),
+        is_unsafe: false,
+        is_async: false,
+        is_const: false,
+        abi: None,
+        body: Some(vec![body]),
+        attributes: Vec::new(),
+        docs: Some(docs),
+        comments: Vec::new(),
+    };
+    out.push_str(&render_rust_host_fn(&method)?);
+    out.push('\n');
+    Ok(())
 }
 
 /// Generate ergonomic guest-side type name for caller method parameters.
@@ -3955,7 +4457,7 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_rust_enum(&mut out, &e);
+        generate_rust_enum(&mut out, &e).expect("render enum");
         assert!(out.contains("#[repr(u32)]"), "missing repr attr: {out}");
         assert!(
             out.contains("pub enum PixelFormat"),
@@ -3985,7 +4487,7 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_rust_enum(&mut out, &e);
+        generate_rust_enum(&mut out, &e).expect("render enum");
         assert!(out.contains("pub mod image_flags"), "missing module: {out}");
         assert!(
             out.contains("pub type ImageFlags = u32"),
@@ -4020,7 +4522,7 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_rust_enum(&mut out, &e);
+        generate_rust_enum(&mut out, &e).expect("render enum");
         assert!(
             out.contains("Self::Compressed as u32"),
             "missing Self::Compressed cast: {out}"
@@ -4398,7 +4900,8 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_guest_host_contract_caller(&mut out, &contract);
+        generate_guest_host_contract_caller(&mut out, &contract)
+            .expect("caller generation must succeed");
         assert!(
             out.contains("pub fn get(&mut self) -> Result<&str, HostContractError>"),
             "StringView return must emit Result<&str, HostContractError>: {out}"
@@ -4436,7 +4939,8 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_guest_host_contract_caller(&mut out, &contract);
+        generate_guest_host_contract_caller(&mut out, &contract)
+            .expect("caller generation must succeed");
         assert!(
             out.contains("pub fn read(&mut self) -> Result<&[u8], HostContractError>"),
             "Buffer return must emit Result<&[u8], HostContractError>: {out}"
@@ -4561,7 +5065,8 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_guest_host_contract_caller(&mut out, &contract);
+        generate_guest_host_contract_caller(&mut out, &contract)
+            .expect("caller generation must succeed");
         assert!(
             out.contains("pub struct HostLoggerCaller"),
             "missing struct: {out}"
@@ -4604,7 +5109,8 @@ mod tests {
             }],
             bundle: None,
         };
-        let out: String = generate_guest_host_contracts_file(&ir);
+        let out: String = generate_guest_host_contracts_file(&ir)
+            .expect("host contracts generation must succeed");
         assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
         assert!(
             out.contains("pub struct HostLoggerCaller"),

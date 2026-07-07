@@ -21,6 +21,7 @@ polyplug_abi = { workspace = true }
 polyplug_codegen = { workspace = true }
 polyplug_signing = { workspace = true }
 polyplug_utils = { workspace = true }
+langprint = { workspace = true }
 ed25519-dalek = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }

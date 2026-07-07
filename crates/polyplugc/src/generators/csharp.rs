@@ -20,8 +20,14 @@ use crate::ir::ResolvedParam;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use langprint::backends::csharp_backend::{
+    CSharpBackend, CSharpEnum, CSharpEnumMember, CSharpField, CSharpMethod,
+    CSharpMethodRenderOptions, CSharpParameter, CSharpType, CSharpTypeKind, CSharpVisibility,
+};
+use langprint::renderers::{EnumRenderer, FunctionRenderer, StructRenderer};
 use polyplug_codegen::PolyplugcError;
 use polyplug_codegen::ResolvedBundleFile;
+use std::io;
 
 /// The C# code generator.
 pub(crate) struct CSharpGenerator;
@@ -56,33 +62,118 @@ fn cs_type_name(ty: &ResolvedTypeRef) -> String {
     }
 }
 
-/// Emit a C# struct definition for a user-defined IR type.
-fn generate_cs_user_type(ty: &ResolvedType) -> String {
-    let mut out: String = String::new();
-    out.push_str("[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]\n");
-    out.push_str(&format!("public struct {} {{\n", ty.name));
-    for field in &ty.fields {
-        let cs_ty: String = cs_type_name(&field.ty);
-        out.push_str(&format!("    public {} {};\n", cs_ty, field.name));
+/// The langprint C# backend configured to match polyplugc's golden output:
+/// 4-space indent, LF newlines, and K&R braces (opening `{` hugs the header
+/// line, not Allman). FORM (declarations, signatures, field layout) is emitted
+/// through this backend; polyplugc keeps only the bodies/logic.
+fn cs_backend() -> CSharpBackend {
+    CSharpBackend {
+        open_brace_on_new_line: false,
+        ..CSharpBackend::default()
     }
-    out.push_str("}\n");
-    out
+}
+
+/// Map a langprint render `io::Error` to a `PolyplugcError` for `Types.cs`.
+fn cs_types_write_err(source: io::Error) -> PolyplugcError {
+    PolyplugcError::WriteFailed {
+        path: "Types.cs".to_owned(),
+        source,
+    }
+}
+
+/// Render a `[StructLayout(Sequential)]` POD struct (user-defined type or
+/// arg-pack) as C# FORM via langprint. Both `Types.cs` structs are plain
+/// blittable field bags, so they share one emitter.
+fn render_cs_pod_struct(
+    name: String,
+    fields: Vec<(String, String)>,
+) -> Result<String, PolyplugcError> {
+    let cs_struct: CSharpType = CSharpType {
+        kind: CSharpTypeKind::Struct,
+        name,
+        visibility: CSharpVisibility::Public,
+        is_abstract: false,
+        is_sealed: false,
+        is_static: false,
+        is_unsafe: false,
+        is_partial: false,
+        generic_args: Vec::new(),
+        base_class: None,
+        interfaces: Vec::new(),
+        fields: fields
+            .into_iter()
+            .map(|(field_type, field_name)| CSharpField {
+                name: field_name,
+                field_type,
+                visibility: CSharpVisibility::Public,
+                is_static: false,
+                is_const: false,
+                is_readonly: false,
+                initializer: None,
+                attributes: Vec::new(),
+                docs: None,
+            })
+            .collect(),
+        properties: Vec::new(),
+        methods: Vec::new(),
+        attributes: vec![
+            "System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)"
+                .to_owned(),
+        ],
+        docs: None,
+    };
+    let mut indent_level: i32 = 0;
+    cs_backend()
+        .render_struct(
+            &cs_struct,
+            None::<&str>,
+            None::<&str>,
+            None,
+            &mut indent_level,
+        )
+        .map_err(cs_types_write_err)
+}
+
+/// Emit a C# struct definition for a user-defined IR type.
+fn generate_cs_user_type(ty: &ResolvedType) -> Result<String, PolyplugcError> {
+    let fields: Vec<(String, String)> = ty
+        .fields
+        .iter()
+        .map(|field| (cs_type_name(&field.ty), field.name.clone()))
+        .collect();
+    render_cs_pod_struct(ty.name.clone(), fields)
 }
 
 /// Emit a C# enum definition for a validated IR enum.
-fn generate_cs_enum(e: &EnumDef) -> String {
-    let repr_cs: &str = e.repr.cs_name();
-    let mut out: String = String::new();
-    if e.bitflag {
-        out.push_str("[Flags]\n");
-    }
-    out.push_str(&format!("public enum {} : {} {{\n", e.name, repr_cs));
-    for variant in &e.variants {
-        // C# supports integer expressions natively, emit verbatim
-        out.push_str(&format!("    {} = {},\n", variant.name, variant.value));
-    }
-    out.push_str("}\n");
-    out
+fn generate_cs_enum(e: &EnumDef) -> Result<String, PolyplugcError> {
+    let cs_enum: CSharpEnum = CSharpEnum {
+        name: e.name.clone(),
+        visibility: CSharpVisibility::Public,
+        underlying_type: Some(e.repr.cs_name().to_owned()),
+        members: e
+            .variants
+            .iter()
+            // C# supports integer expressions natively, emit the value verbatim.
+            .map(|variant| CSharpEnumMember {
+                name: variant.name.clone(),
+                value: Some(variant.value.clone()),
+                docs: None,
+            })
+            .collect(),
+        is_flags: e.bitflag,
+        attributes: Vec::new(),
+        docs: None,
+    };
+    let mut indent_level: i32 = 0;
+    cs_backend()
+        .render_enum(
+            &cs_enum,
+            None::<&str>,
+            None::<&str>,
+            None,
+            &mut indent_level,
+        )
+        .map_err(cs_types_write_err)
 }
 
 /// Returns true if the function needs an arg-pack struct (2+ parameters).
@@ -221,24 +312,17 @@ fn emit_cs_call_arena_helpers(out: &mut String) {
 }
 
 /// Emit a C# arg-pack struct for a function with 2+ primitive parameters.
-fn emit_cs_arg_pack(contract_struct: &str, func: &ResolvedFunction) -> String {
-    let mut out: String = String::new();
-    out.push_str("[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]\n");
-    out.push_str(&format!(
-        "public struct {}{}Args {{\n",
-        contract_struct,
-        pascal_case(&func.name)
-    ));
-    for param in &func.params {
-        let cs_ty: String = cs_type_name(&param.ty);
-        out.push_str(&format!(
-            "    public {} {};\n",
-            cs_ty,
-            pascal_case(&param.name)
-        ));
-    }
-    out.push_str("}\n");
-    out
+fn emit_cs_arg_pack(
+    contract_struct: &str,
+    func: &ResolvedFunction,
+) -> Result<String, PolyplugcError> {
+    let name: String = format!("{}{}Args", contract_struct, pascal_case(&func.name));
+    let fields: Vec<(String, String)> = func
+        .params
+        .iter()
+        .map(|param| (cs_type_name(&param.ty), pascal_case(&param.name)))
+        .collect();
+    render_cs_pod_struct(name, fields)
 }
 
 /// Convert a name to PascalCase (e.g. "add_primitive" → "AddPrimitive", "test.add" → "TestAdd").
@@ -280,7 +364,7 @@ fn cs_return_type(func: &ResolvedFunction) -> String {
 }
 
 /// Generate the `Types.cs` file content for guest (uses Polyplug.Guest and Polyplug.Abi).
-fn generate_cs_types_file(ir: &ValidatedIr) -> String {
+fn generate_cs_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
     out.push_str("using Polyplug.Guest;\n");
@@ -289,13 +373,13 @@ fn generate_cs_types_file(ir: &ValidatedIr) -> String {
 
     // Emit enums before struct types
     for e in &ir.enums {
-        out.push_str(&generate_cs_enum(e));
+        out.push_str(&generate_cs_enum(e)?);
         out.push('\n');
     }
 
     // Emit user-defined types
     for ty in &ir.types {
-        out.push_str(&generate_cs_user_type(ty));
+        out.push_str(&generate_cs_user_type(ty)?);
         out.push('\n');
     }
 
@@ -304,17 +388,17 @@ fn generate_cs_types_file(ir: &ValidatedIr) -> String {
         let struct_name: String = pascal_case(&contract.name) + "Contract";
         for func in &contract.functions {
             if needs_arg_pack(&func.params) {
-                out.push_str(&emit_cs_arg_pack(&struct_name, func));
+                out.push_str(&emit_cs_arg_pack(&struct_name, func)?);
                 out.push('\n');
             }
         }
     }
 
-    out
+    Ok(out)
 }
 
 /// Generate the `Types.cs` file content for host (uses Polyplug.Host namespace).
-fn generate_cs_host_types_file(ir: &ValidatedIr) -> String {
+fn generate_cs_host_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
     out.push_str("using Polyplug.Host;\n");
@@ -335,21 +419,21 @@ fn generate_cs_host_types_file(ir: &ValidatedIr) -> String {
 
     // Emit enums before struct types
     for e in &ir.enums {
-        out.push_str(&generate_cs_enum(e));
+        out.push_str(&generate_cs_enum(e)?);
         out.push('\n');
     }
 
     // Emit user-defined types
     for ty in &ir.types {
-        out.push_str(&generate_cs_user_type(ty));
+        out.push_str(&generate_cs_user_type(ty)?);
         out.push('\n');
     }
 
-    out
+    Ok(out)
 }
 
 /// Generate `guest/Contracts.cs` — guest interfaces for each contract.
-fn generate_cs_guest_contracts(ir: &ValidatedIr) -> String {
+fn generate_cs_guest_contracts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
     out.push_str("using Polyplug.Guest;\n");
@@ -362,45 +446,210 @@ fn generate_cs_guest_contracts(ir: &ValidatedIr) -> String {
             contract.name, contract.contract_id
         ));
         out.push_str(&format!("public interface {} {{\n", iface_name));
+        // The typed method signature is FORM — langprint renders it (single source of
+        // truth for C# signature formatting). The `interface { … }` shell stays here.
         for func in &contract.functions {
-            let ret: String = cs_return_type(func);
-            let method_name: String = pascal_case(&func.name);
-            if func.params.is_empty() {
-                out.push_str(&format!("    {} {}();\n", ret, method_name));
-            } else if func.params.len() == 1 {
-                let param: &ResolvedParam = &func.params[0];
-                let is_struct: bool = matches!(&param.ty, ResolvedTypeRef::UserDefined(_));
-                if is_struct {
-                    let cs_ty: String = cs_type_name(&param.ty);
-                    out.push_str(&format!(
-                        "    {} {}(ref {} {});\n",
-                        ret, method_name, cs_ty, param.name
-                    ));
-                } else {
-                    let cs_ty: String = cs_type_name(&param.ty);
-                    out.push_str(&format!(
-                        "    {} {}({} {});\n",
-                        ret, method_name, cs_ty, param.name
-                    ));
-                }
-            } else {
-                // Multiple params — list individually
-                let params_str: String = func
-                    .params
-                    .iter()
-                    .map(|p: &ResolvedParam| format!("{} {}", cs_type_name(&p.ty), p.name))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                out.push_str(&format!("    {} {}({});\n", ret, method_name, params_str));
-            }
+            out.push_str(&cs_render_interface_method(func)?);
         }
         out.push_str("}\n\n");
     }
-    out
+    Ok(out)
+}
+
+/// Render one guest-interface method signature via langprint as a bodyless
+/// `CSharpMethod`. Preserves polyplugc's parameter rule exactly: a lone
+/// user-defined param takes `ref`, everything else is by value.
+fn cs_render_interface_method(func: &ResolvedFunction) -> Result<String, PolyplugcError> {
+    let parameters: Vec<CSharpParameter> = if func.params.len() == 1
+        && matches!(&func.params[0].ty, ResolvedTypeRef::UserDefined(_))
+    {
+        let param: &ResolvedParam = &func.params[0];
+        vec![CSharpParameter {
+            name: param.name.clone(),
+            param_type: format!("ref {}", cs_type_name(&param.ty)),
+            default_value: None,
+        }]
+    } else {
+        func.params
+            .iter()
+            .map(|p: &ResolvedParam| CSharpParameter {
+                name: p.name.clone(),
+                param_type: cs_type_name(&p.ty),
+                default_value: None,
+            })
+            .collect::<Vec<CSharpParameter>>()
+    };
+    let method: CSharpMethod = CSharpMethod {
+        name: pascal_case(&func.name),
+        visibility: CSharpVisibility::Default,
+        parameters,
+        generic_args: Vec::new(),
+        return_type: Some(cs_return_type(func)),
+        is_static: false,
+        is_abstract: false,
+        is_virtual: false,
+        is_override: false,
+        is_sealed: false,
+        is_async: false,
+        is_unsafe: false,
+        body: None,
+        attributes: Vec::new(),
+        docs: None,
+    };
+    let backend: CSharpBackend = CSharpBackend::default();
+    let mut indent_level: i32 = 1;
+    backend
+        .render_function(&method, None::<&str>, None::<&str>, None, &mut indent_level)
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/Contracts.cs".to_owned(),
+            source,
+        })
+}
+
+/// The `[UnmanagedCallersOnly]` attribute (without the leading `[`) carried by
+/// every C# guest ABI thunk — the Cdecl calling convention the dotnet loader
+/// invokes them through.
+const CS_UNMANAGED_CDECL: &str =
+    "UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })";
+
+/// Render a `private static [unsafe] void` guest-machinery method DEFINITION via
+/// langprint. langprint owns the FORM — attribute, `private static unsafe` modifiers,
+/// `void` return, name, parameters, and braces; polyplugc owns the body. The body
+/// is emitted verbatim (exact whitespace baked in, no trailing newline) because C#
+/// has no post-hoc formatter and the hand-baked try/catch indentation cannot be
+/// reproduced by the re-indenting body renderer.
+fn render_cs_defn_method(
+    name: String,
+    parameters: Vec<CSharpParameter>,
+    is_unsafe: bool,
+    body: String,
+) -> Result<String, PolyplugcError> {
+    let method: CSharpMethod = CSharpMethod {
+        name,
+        visibility: CSharpVisibility::Private,
+        parameters,
+        generic_args: Vec::new(),
+        return_type: None,
+        is_static: true,
+        is_abstract: false,
+        is_virtual: false,
+        is_override: false,
+        is_sealed: false,
+        is_async: false,
+        is_unsafe,
+        body: Some(vec![body]),
+        attributes: vec![CS_UNMANAGED_CDECL.to_owned()],
+        docs: None,
+    };
+    let options: CSharpMethodRenderOptions = CSharpMethodRenderOptions {
+        verbatim_body: true,
+        ..CSharpMethodRenderOptions::default()
+    };
+    let mut indent_level: i32 = 1;
+    cs_backend()
+        .render_function(
+            &method,
+            None::<&str>,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/Interfaces.cs".to_owned(),
+            source,
+        })
+}
+
+/// Build a `CSharpParameter` list from `(type, name)` pairs. langprint models a
+/// parameter as a type string plus a name; pointer sigils (`*`) live in the type.
+fn cs_params(pairs: &[(&str, &str)]) -> Vec<CSharpParameter> {
+    pairs
+        .iter()
+        .map(|(param_type, name): &(&str, &str)| CSharpParameter {
+            name: (*name).to_owned(),
+            param_type: (*param_type).to_owned(),
+            default_value: None,
+        })
+        .collect::<Vec<CSharpParameter>>()
+}
+
+/// Render a per-function guest ABI thunk DEFINITION via langprint. langprint owns
+/// the FORM (`[UnmanagedCallersOnly]` + `private static unsafe void name(...)`);
+/// the dispatch body — built by `emit_cs_guest_dispatch_body` — is the verbatim slot.
+fn render_cs_abi_wrapper(
+    abi_method: &str,
+    state_class: &str,
+    contract_struct: &str,
+    func: &ResolvedFunction,
+) -> Result<String, PolyplugcError> {
+    let mut body: String = String::new();
+    emit_cs_guest_dispatch_body(&mut body, state_class, contract_struct, func);
+    if body.ends_with('\n') {
+        body.pop();
+    }
+    render_cs_defn_method(
+        abi_method.to_owned(),
+        cs_params(&[
+            ("GuestContractInstance", "instance"),
+            ("IntPtr", "argsPtr"),
+            ("IntPtr", "outPtr"),
+            ("AbiError*", "outErr"),
+        ]),
+        true,
+        body,
+    )
+}
+
+/// Render a class-member method DEFINITION (indent level 1, inside a hand-emitted
+/// `class { … }`) via langprint: langprint owns the FORM (XML docs, visibility,
+/// `[static] <ret> Name(params)`, braces); polyplugc owns the verbatim body. Used
+/// for the guest host-caller `FromHost` factory and per-function method callers.
+fn render_cs_host_method(
+    name: String,
+    is_static: bool,
+    return_type: String,
+    parameters: Vec<CSharpParameter>,
+    docs: Vec<String>,
+    body: String,
+) -> Result<String, PolyplugcError> {
+    let method: CSharpMethod = CSharpMethod {
+        name,
+        visibility: CSharpVisibility::Public,
+        parameters,
+        generic_args: Vec::new(),
+        return_type: Some(return_type),
+        is_static,
+        is_abstract: false,
+        is_virtual: false,
+        is_override: false,
+        is_sealed: false,
+        is_async: false,
+        is_unsafe: false,
+        body: Some(vec![body]),
+        attributes: Vec::new(),
+        docs: if docs.is_empty() { None } else { Some(docs) },
+    };
+    let options: CSharpMethodRenderOptions = CSharpMethodRenderOptions {
+        verbatim_body: true,
+        ..CSharpMethodRenderOptions::default()
+    };
+    let mut indent_level: i32 = 1;
+    cs_backend()
+        .render_function(
+            &method,
+            None::<&str>,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/HostContracts.cs".to_owned(),
+            source,
+        })
 }
 
 /// Generate `guest/Interfaces.cs` — [UnmanagedCallersOnly] ABI methods + interface construction.
-fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
+fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
     out.push_str("using System.Runtime.CompilerServices;\n");
@@ -416,7 +665,7 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
-                    generate_cs_guest_plugin_interface(&mut out, &plugin.name, contract);
+                    generate_cs_guest_plugin_interface(&mut out, &plugin.name, contract)?;
                 }
             }
         }
@@ -439,22 +688,20 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
             out.push_str(&format!(
                 "    public const ulong {upper}_CONTRACT_ID = 0x{contract_id:016X}UL;\n"
             ));
-            emit_cs_guest_instance_machinery(&mut out, &upper, &lower, &class_name, &iface_name);
+            emit_cs_guest_instance_machinery(&mut out, &upper, &lower, &class_name, &iface_name)?;
 
             // [UnmanagedCallersOnly] ABI methods
             let state_class: String = format!("{class_name}InstanceState");
             for func in &contract.functions {
                 let fn_name: String = func.name.replace('-', "_");
                 let abi_method: String = format!("{lower}_{fn_name}_abi");
-                out.push_str(
-                    "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
-                );
-                out.push_str(&format!(
-                    "    private static unsafe void {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {{\n",
-                    abi_method
-                ));
-                emit_cs_guest_dispatch_body(&mut out, &state_class, &class_name, func);
-                out.push_str("    }\n\n");
+                out.push_str(&render_cs_abi_wrapper(
+                    &abi_method,
+                    &state_class,
+                    &class_name,
+                    func,
+                )?);
+                out.push('\n');
             }
 
             // Function pointer array
@@ -517,14 +764,14 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
             out.push_str("}\n\n");
         }
     }
-    out
+    Ok(out)
 }
 
 fn generate_cs_guest_plugin_interface(
     out: &mut String,
     plugin_name: &str,
     contract: &ResolvedContract,
-) {
+) -> Result<(), PolyplugcError> {
     let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
     let iface_name: String = contract_name_to_cs_interface(&contract.name);
@@ -561,7 +808,7 @@ fn generate_cs_guest_plugin_interface(
         &plugin_lower,
         &class_name_pascal,
         &iface_name,
-    );
+    )?;
 
     // [UnmanagedCallersOnly] ABI methods
     let state_class: String = format!("{class_name_pascal}InstanceState");
@@ -569,13 +816,13 @@ fn generate_cs_guest_plugin_interface(
     for func in &contract.functions {
         let fn_name: String = func.name.replace('-', "_");
         let abi_method: String = format!("{lower}_{fn_name}_abi", lower = plugin_lower);
-        out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
-        out.push_str(&format!(
-            "    private static unsafe void {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {{\n",
-            abi_method
-        ));
-        emit_cs_guest_dispatch_body(out, &state_class, &arg_pack_prefix, func);
-        out.push_str("    }\n\n");
+        out.push_str(&render_cs_abi_wrapper(
+            &abi_method,
+            &state_class,
+            &arg_pack_prefix,
+            func,
+        )?);
+        out.push('\n');
     }
 
     // Function pointer array
@@ -659,6 +906,7 @@ fn generate_cs_guest_plugin_interface(
     out.push_str("        }\n");
     out.push_str("    }\n");
     out.push_str("}\n\n");
+    Ok(())
 }
 
 /// Emit the per-plugin instance machinery: the author-factory slot (set once at
@@ -676,7 +924,7 @@ fn emit_cs_guest_instance_machinery(
     lower: &str,
     class_pascal: &str,
     iface_name: &str,
-) {
+) -> Result<(), PolyplugcError> {
     out.push_str(&format!(
         "    private static Func<IntPtr, {iface_name}>? _factory_{lower};\n"
     ));
@@ -707,69 +955,92 @@ fn emit_cs_guest_instance_machinery(
     out.push_str(&format!("        public {iface_name} Impl = null!;\n"));
     out.push_str("    }\n\n");
 
-    out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
-    out.push_str(&format!(
-        "    private static unsafe void {upper}_CreateInstance(VmLoaderData loaderData, IntPtr host, IntPtr args, GuestContractInstance* outInstance) {{\n"
-    ));
-    out.push_str(
+    // CreateInstance / DestroyInstance are ABI thunks: langprint renders the FORM
+    // (the [UnmanagedCallersOnly] attribute, `private static [unsafe] void`
+    // signature, and braces); polyplugc owns the body bytes below, passed verbatim.
+    let mut create_body: String = String::new();
+    create_body.push_str(
         "        _ = loaderData;  // Native-dispatch contracts ignore the VM loader handle.\n",
     );
-    out.push_str(
+    create_body.push_str(
         "        // Calls the author factory and carries the payload in instance.Data as a\n",
     );
-    out.push_str("        // normal (non-pinned) GCHandle — an opaque token the host never\n");
-    out.push_str("        // dereferences. Writes a null handle when host is null, the factory\n");
-    out.push_str("        // was not registered, or it throws.\n");
-    out.push_str("        if (outInstance == null) return;\n");
-    out.push_str("        try {\n");
-    out.push_str(&format!("            var factory = _factory_{lower};\n"));
-    out.push_str("            if (host == IntPtr.Zero || factory is null) {\n");
-    out.push_str(
+    create_body
+        .push_str("        // normal (non-pinned) GCHandle — an opaque token the host never\n");
+    create_body
+        .push_str("        // dereferences. Writes a null handle when host is null, the factory\n");
+    create_body.push_str("        // was not registered, or it throws.\n");
+    create_body.push_str("        if (outInstance == null) return;\n");
+    create_body.push_str("        try {\n");
+    create_body.push_str(&format!("            var factory = _factory_{lower};\n"));
+    create_body.push_str("            if (host == IntPtr.Zero || factory is null) {\n");
+    create_body.push_str(
         "                *outInstance = new GuestContractInstance { Data = IntPtr.Zero };\n",
     );
-    out.push_str("                return;\n");
-    out.push_str("            }\n");
-    out.push_str(&format!(
+    create_body.push_str("                return;\n");
+    create_body.push_str("            }\n");
+    create_body.push_str(&format!(
         "            var state = new {class_pascal}InstanceState {{ Host = host, Impl = factory(host) }};\n"
     ));
-    out.push_str(
+    create_body.push_str(
         "            var handle = System.Runtime.InteropServices.GCHandle.Alloc(state);\n",
     );
-    out.push_str("            *outInstance = new GuestContractInstance {\n");
-    out.push_str(
+    create_body.push_str("            *outInstance = new GuestContractInstance {\n");
+    create_body.push_str(
         "                Data = System.Runtime.InteropServices.GCHandle.ToIntPtr(handle),\n",
     );
-    out.push_str(&format!(
+    create_body.push_str(&format!(
         "                ContractId = {upper}_CONTRACT_ID,\n"
     ));
-    out.push_str("            };\n");
-    out.push_str("        } catch {\n");
-    out.push_str("            *outInstance = new GuestContractInstance { Data = IntPtr.Zero };\n");
-    out.push_str("        }\n");
-    out.push_str("    }\n\n");
+    create_body.push_str("            };\n");
+    create_body.push_str("        } catch {\n");
+    create_body
+        .push_str("            *outInstance = new GuestContractInstance { Data = IntPtr.Zero };\n");
+    create_body.push_str("        }");
+    out.push_str(&render_cs_defn_method(
+        format!("{upper}_CreateInstance"),
+        cs_params(&[
+            ("VmLoaderData", "loaderData"),
+            ("IntPtr", "host"),
+            ("IntPtr", "args"),
+            ("GuestContractInstance*", "outInstance"),
+        ]),
+        true,
+        create_body,
+    )?);
+    out.push('\n');
 
-    out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
-    out.push_str(&format!(
-        "    private static void {upper}_DestroyInstance(VmLoaderData loaderData, IntPtr host, GuestContractInstance instance) {{\n"
-    ));
-    out.push_str(
+    let mut destroy_body: String = String::new();
+    destroy_body.push_str(
         "        _ = loaderData;  // Native-dispatch contracts ignore the VM loader handle.\n",
     );
-    out.push_str(
+    destroy_body.push_str(
         "        // Frees the GCHandle allocated by CreateInstance; the payload becomes\n",
     );
-    out.push_str("        // collectible. The host calls destroy exactly once per instance.\n");
-    out.push_str("        if (instance.Data == IntPtr.Zero) return;\n");
-    out.push_str("        try {\n");
-    out.push_str(
+    destroy_body
+        .push_str("        // collectible. The host calls destroy exactly once per instance.\n");
+    destroy_body.push_str("        if (instance.Data == IntPtr.Zero) return;\n");
+    destroy_body.push_str("        try {\n");
+    destroy_body.push_str(
         "            System.Runtime.InteropServices.GCHandle.FromIntPtr(instance.Data).Free();\n",
     );
-    out.push_str("        } catch {\n");
-    out.push_str(
+    destroy_body.push_str("        } catch {\n");
+    destroy_body.push_str(
         "            // Foreign or double-freed handle: nothing safe to do in a native callback.\n",
     );
-    out.push_str("        }\n");
-    out.push_str("    }\n\n");
+    destroy_body.push_str("        }");
+    out.push_str(&render_cs_defn_method(
+        format!("{upper}_DestroyInstance"),
+        cs_params(&[
+            ("VmLoaderData", "loaderData"),
+            ("IntPtr", "host"),
+            ("GuestContractInstance", "instance"),
+        ]),
+        false,
+        destroy_body,
+    )?);
+    out.push('\n');
+    Ok(())
 }
 
 /// Emit the body of a guest contract ABI thunk: validate pointers, recover the
@@ -1670,7 +1941,10 @@ fn cs_guest_caller_return_expr(ty: &ResolvedTypeRef) -> String {
 }
 
 /// Generate one guest-side host contract caller class.
-fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedHostContract) {
+fn generate_cs_guest_host_contract_caller(
+    out: &mut String,
+    contract: &ResolvedHostContract,
+) -> Result<(), PolyplugcError> {
     let class_name: String = host_contract_name_to_cs_caller(&contract.name);
 
     out.push_str(&format!(
@@ -1684,64 +1958,83 @@ fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
     out.push_str("    // No process-wide host storage exists; the pointer flows per caller.\n");
     out.push_str("    private readonly IntPtr _host;\n\n");
 
-    // Private constructor
+    // Private constructor — one-liner (langprint always breaks bodies), hand-emitted.
     out.push_str(&format!(
         "    private {}(IntPtr host, IntPtr instance, IntPtr iface) {{ _host = host; _instance = instance; _interface = iface; }}\n\n",
         class_name
     ));
 
-    // Factory method - FromHost
-    out.push_str("    /// <summary>Factory method - creates caller from HostApi or null if not found.</summary>\n");
-    out.push_str(&format!(
-        "    public static {}? FromHost(IntPtr host, uint minVersion = 0) {{\n",
-        class_name
-    ));
-    out.push_str("        if (host == IntPtr.Zero) {\n");
-    out.push_str("            return null;\n");
-    out.push_str("        }\n");
-    out.push_str("        unsafe {\n");
-    out.push_str("            var hostInterface = (HostApi*)host;\n");
-    out.push_str("            var getHostContractFn = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr>)hostInterface->GetHostContract;\n");
-    out.push_str("            var resolveInterfaceFn = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr>)hostInterface->ResolveHostContractInterface;\n");
-    out.push_str(&format!(
+    // Factory method - FromHost. langprint renders the FORM; the body is verbatim.
+    let mut from_host_body: String = String::new();
+    from_host_body.push_str("        if (host == IntPtr.Zero) {\n");
+    from_host_body.push_str("            return null;\n");
+    from_host_body.push_str("        }\n");
+    from_host_body.push_str("        unsafe {\n");
+    from_host_body.push_str("            var hostInterface = (HostApi*)host;\n");
+    from_host_body.push_str("            var getHostContractFn = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr>)hostInterface->GetHostContract;\n");
+    from_host_body.push_str("            var resolveInterfaceFn = (delegate* unmanaged[Cdecl]<IntPtr, ulong, uint, IntPtr>)hostInterface->ResolveHostContractInterface;\n");
+    from_host_body.push_str(&format!(
         "            var instance = getHostContractFn(host, 0x{:016X}UL, minVersion);\n",
         contract.contract_id
     ));
-    out.push_str("            if (instance == IntPtr.Zero) {\n");
-    out.push_str("                return null;\n");
-    out.push_str("            }\n");
-    out.push_str(&format!(
+    from_host_body.push_str("            if (instance == IntPtr.Zero) {\n");
+    from_host_body.push_str("                return null;\n");
+    from_host_body.push_str("            }\n");
+    from_host_body.push_str(&format!(
         "            var iface = resolveInterfaceFn(host, 0x{:016X}UL, minVersion);\n",
         contract.contract_id
     ));
-    out.push_str("            if (iface == IntPtr.Zero) {\n");
-    out.push_str("                return null;\n");
-    out.push_str("            }\n");
-    out.push_str(&format!(
+    from_host_body.push_str("            if (iface == IntPtr.Zero) {\n");
+    from_host_body.push_str("                return null;\n");
+    from_host_body.push_str("            }\n");
+    from_host_body.push_str(&format!(
         "            return new {}(host, instance, iface);\n",
         class_name
     ));
-    out.push_str("        }\n");
-    out.push_str("    }\n\n");
+    from_host_body.push_str("        }");
+    out.push_str(&render_cs_host_method(
+        "FromHost".to_owned(),
+        true,
+        format!("{class_name}?"),
+        vec![
+            CSharpParameter {
+                name: "host".to_owned(),
+                param_type: "IntPtr".to_owned(),
+                default_value: None,
+            },
+            CSharpParameter {
+                name: "minVersion".to_owned(),
+                param_type: "uint".to_owned(),
+                default_value: Some("0".to_owned()),
+            },
+        ],
+        vec![
+            "<summary>Factory method - creates caller from HostApi or null if not found.</summary>"
+                .to_owned(),
+        ],
+        from_host_body,
+    )?);
+    out.push('\n');
 
-    // IsValid property
+    // IsValid property — expression-bodied one-liner, hand-emitted.
     out.push_str("    /// <summary>Check if caller is valid (interface is non-null).</summary>\n");
     out.push_str("    public bool IsValid => _interface != IntPtr.Zero;\n\n");
 
     // Methods for each function
     for func in &contract.functions {
-        generate_cs_guest_host_contract_method(out, func, &class_name);
+        generate_cs_guest_host_contract_method(out, func, &class_name)?;
     }
 
     out.push_str("}\n\n");
+    Ok(())
 }
 
 /// Generate one method for a guest-side host contract caller.
 fn generate_cs_guest_host_contract_method(
-    out: &mut String,
+    dst: &mut String,
     func: &ResolvedFunction,
     class_name: &str,
-) {
+) -> Result<(), PolyplugcError> {
     let fn_id: u32 = func.function_id;
     let method_name: String = pascal_case(&func.name);
     let return_type: String = match &func.returns {
@@ -1754,28 +2047,26 @@ fn generate_cs_guest_host_contract_method(
     };
     let has_return: bool = func.returns.is_some();
 
-    // Build parameter list
-    let params_str: String = if func.params.is_empty() {
-        String::new()
-    } else {
-        func.params
-            .iter()
-            .map(|p: &ResolvedParam| {
-                let cs_ty: String = cs_guest_caller_param_type_name(&p.ty);
-                format!("{} {}", cs_ty, p.name)
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+    // Build parameter list — langprint renders the method FORM; the body is verbatim.
+    let parameters: Vec<CSharpParameter> = func
+        .params
+        .iter()
+        .map(|p: &ResolvedParam| CSharpParameter {
+            name: p.name.clone(),
+            param_type: cs_guest_caller_param_type_name(&p.ty),
+            default_value: None,
+        })
+        .collect::<Vec<CSharpParameter>>();
 
-    out.push_str(&format!(
-        "    /// <summary>Call host contract function `{}` (function_id={})</summary>\n",
+    let docs: Vec<String> = vec![format!(
+        "<summary>Call host contract function `{}` (function_id={})</summary>",
         func.name, fn_id
-    ));
-    out.push_str(&format!(
-        "    public {} {}({}) {{\n",
-        return_type, method_name, params_str
-    ));
+    )];
+
+    // The body is accumulated into `body` (aliased as `out` so the existing
+    // push_str lines below are unchanged), then rendered as the verbatim slot.
+    let mut body: String = String::new();
+    let out: &mut String = &mut body;
 
     let what: String = format!("{}.{}", class_name, method_name);
 
@@ -1879,8 +2170,17 @@ fn generate_cs_guest_host_contract_method(
         out.push_str(&format!("            return {};\n", return_expr));
     }
 
-    out.push_str("        }\n");
-    out.push_str("    }\n\n");
+    out.push_str("        }");
+    dst.push_str(&render_cs_host_method(
+        method_name,
+        false,
+        return_type,
+        parameters,
+        docs,
+        body,
+    )?);
+    dst.push('\n');
+    Ok(())
 }
 
 /// Emit the args_ptr setup for a C# guest host contract method.
@@ -2012,7 +2312,7 @@ fn emit_cs_log_call_failure_helper(out: &mut String) {
     out.push_str("}\n\n");
 }
 
-fn generate_cs_guest_host_contracts_file(ir: &ValidatedIr) -> String {
+fn generate_cs_guest_host_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
     out.push_str("using Polyplug.Guest;\n");
@@ -2028,14 +2328,14 @@ fn generate_cs_guest_host_contracts_file(ir: &ValidatedIr) -> String {
         let caller_name: String = host_contract_name_to_cs_caller(&contract.name);
         for func in &contract.functions {
             if needs_arg_pack(&func.params) {
-                out.push_str(&emit_cs_arg_pack(&caller_name, func));
+                out.push_str(&emit_cs_arg_pack(&caller_name, func)?);
                 out.push('\n');
             }
         }
     }
 
     for contract in &ir.host_contracts {
-        generate_cs_guest_host_contract_caller(&mut out, contract);
+        generate_cs_guest_host_contract_caller(&mut out, contract)?;
     }
 
     // Emit contract ID constants
@@ -2054,7 +2354,7 @@ fn generate_cs_guest_host_contracts_file(ir: &ValidatedIr) -> String {
         out.push_str("}\n\n");
     }
 
-    out
+    Ok(out)
 }
 
 /// Generate `guest/BundleConstants.cs` — bundle-level C# constants (only emitted when `ir.bundle.is_some()`).
@@ -3245,7 +3545,7 @@ impl CodeGenerator for CSharpGenerator {
     ) -> Result<(), PolyplugcError> {
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/Types.cs"),
-            content: generate_cs_host_types_file(ir),
+            content: generate_cs_host_types_file(ir)?,
             force_regenerate: false,
         });
         files.files.push(GeneratedFile {
@@ -3284,17 +3584,17 @@ impl CodeGenerator for CSharpGenerator {
     ) -> Result<(), PolyplugcError> {
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/Types.cs"),
-            content: generate_cs_types_file(ir),
+            content: generate_cs_types_file(ir)?,
             force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/Contracts.cs"),
-            content: generate_cs_guest_contracts(ir),
+            content: generate_cs_guest_contracts(ir)?,
             force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/Interfaces.cs"),
-            content: generate_cs_guest_interfaces(ir),
+            content: generate_cs_guest_interfaces(ir)?,
             force_regenerate: false,
         });
         files.files.push(GeneratedFile {
@@ -3317,7 +3617,7 @@ impl CodeGenerator for CSharpGenerator {
         if !ir.host_contracts.is_empty() {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/HostContracts.cs"),
-                content: generate_cs_guest_host_contracts_file(ir),
+                content: generate_cs_guest_host_contracts_file(ir)?,
                 force_regenerate: false,
             });
         }
@@ -3361,7 +3661,7 @@ mod tests {
                 },
             ],
         };
-        let out: String = generate_cs_enum(&e);
+        let out: String = generate_cs_enum(&e).expect("render enum");
         assert!(
             out.contains("public enum PixelFormat : uint"),
             "missing enum def: {out}"
@@ -3390,7 +3690,7 @@ mod tests {
                 },
             ],
         };
-        let out: String = generate_cs_enum(&e);
+        let out: String = generate_cs_enum(&e).expect("render enum");
         assert!(
             out.contains("[Flags]"),
             "bitflag should have [Flags]: {out}"
@@ -3452,7 +3752,8 @@ mod tests {
             enums: vec![],
             bundle: None,
         };
-        let out: String = generate_cs_guest_interfaces(&ir);
+        let out: String =
+            generate_cs_guest_interfaces(&ir).expect("Interfaces.cs generation must succeed");
         assert!(
             !out.contains("unsafe struct"),
             "Interfaces.cs must not contain 'unsafe struct': {out}"
@@ -3760,7 +4061,8 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_cs_guest_host_contract_caller(&mut out, &contract);
+        generate_cs_guest_host_contract_caller(&mut out, &contract)
+            .expect("caller generation must succeed");
         assert!(
             out.contains("public sealed class HostLoggerContract"),
             "missing class: {out}"
@@ -3851,7 +4153,8 @@ mod tests {
             }],
             bundle: None,
         };
-        let out: String = generate_cs_guest_host_contracts_file(&ir);
+        let out: String =
+            generate_cs_guest_host_contracts_file(&ir).expect("render host contracts");
         assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
         assert!(
             out.contains("public sealed class HostLoggerContract"),
@@ -3895,7 +4198,8 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_cs_guest_host_contract_caller(&mut out, &contract);
+        generate_cs_guest_host_contract_caller(&mut out, &contract)
+            .expect("caller generation must succeed");
         // Null-interface path logs InvalidPointer.
         assert!(
             out.contains(

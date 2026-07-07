@@ -38,7 +38,7 @@ inline void log_call_failure(const HostApi* host, const char* scope, const char*
 /// Plugins use this class to call host-provided functionality.
 class HostLoggerContract {
 public:
-    /// Factory method - creates caller from HostApi or nullopt if not found.
+    // Factory method - creates caller from HostApi or nullopt if not found.
     static std::optional<HostLoggerContract> from_host(const HostApi* host, uint32_t min_version = 0) noexcept {
         if (host == nullptr) {
             return std::nullopt;
@@ -53,14 +53,13 @@ public:
         }
         return HostLoggerContract(host, interface, instance);
     }
-
     /// Check if caller is valid (interface and instance are non-null).
     bool is_valid() const noexcept { return interface_ != nullptr && instance_.data != nullptr; }
 
     /// Explicit bool conversion for validity check.
     explicit operator bool() const noexcept { return interface_ != nullptr && instance_.data != nullptr; }
 
-    /// Call host contract function `log` (function_id=0)
+    // Call host contract function `log` (function_id=0)
     void log(std::string_view message) noexcept {
         if (interface_ == nullptr) {
             detail::log_call_failure(host_, "guest.host_caller", "HostLoggerContract.log", static_cast<uint32_t>(AbiErrorCode::InvalidPointer));
@@ -93,8 +92,7 @@ public:
         }
 
     }
-
-    /// Call host contract function `log_with_level` (function_id=1)
+    // Call host contract function `log_with_level` (function_id=1)
     void log_with_level(const polyplug_generated::LogLevel& level, std::string_view message) noexcept {
         if (interface_ == nullptr) {
             detail::log_call_failure(host_, "guest.host_caller", "HostLoggerContract.log_with_level", static_cast<uint32_t>(AbiErrorCode::InvalidPointer));
@@ -128,7 +126,6 @@ public:
         }
 
     }
-
 private:
     explicit HostLoggerContract(const HostApi* host, const HostContractInterface* interface, HostContractInstance instance) noexcept
         : host_(host), interface_(interface), instance_(instance) {}

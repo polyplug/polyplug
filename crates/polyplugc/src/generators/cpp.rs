@@ -27,7 +27,14 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use langprint::backends::cpp_backend::{
+    CppBackend, CppEnum, CppEnumVariant, CppFunction, CppFunctionRenderOptions, CppParameter,
+    CppVisibility, DocsStyle,
+};
+use langprint::renderers::EnumRenderer;
+use langprint::renderers::FunctionRenderer;
 use polyplug_codegen::PolyplugcError;
+use std::io;
 
 /// The C++ code generator.
 pub(crate) struct CppGenerator;
@@ -42,7 +49,7 @@ impl CodeGenerator for CppGenerator {
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
         // ── File 1: types.hpp ────────────────────────────────────────────────
-        let types_hpp: String = generate_types_hpp(ir);
+        let types_hpp: String = generate_types_hpp(ir)?;
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/types.hpp"),
             content: types_hpp,
@@ -94,7 +101,7 @@ impl CodeGenerator for CppGenerator {
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
         // ── File 1: types.hpp ────────────────────────────────────────────────
-        let types_hpp: String = generate_types_hpp(ir);
+        let types_hpp: String = generate_types_hpp(ir)?;
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/types.hpp"),
             content: types_hpp,
@@ -102,7 +109,7 @@ impl CodeGenerator for CppGenerator {
         });
 
         // ── File 2: contracts.hpp ────────────────────────────────────────────
-        let contracts_hpp: String = generate_contracts_hpp(ir);
+        let contracts_hpp: String = generate_contracts_hpp(ir)?;
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/contracts.hpp"),
             content: contracts_hpp,
@@ -139,7 +146,7 @@ impl CodeGenerator for CppGenerator {
 
         // ── File 5: host_contracts.hpp (guest-side callers) ─────────────────────
         if !ir.host_contracts.is_empty() {
-            let host_contracts_hpp: String = generate_cpp_guest_host_contracts_file(ir);
+            let host_contracts_hpp: String = generate_cpp_guest_host_contracts_file(ir)?;
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/host_contracts.hpp"),
                 content: host_contracts_hpp,
@@ -164,7 +171,7 @@ impl CodeGenerator for CppGenerator {
 
 // ─── types.hpp generator ─────────────────────────────────────────────────────
 
-fn generate_types_hpp(ir: &ValidatedIr) -> String {
+fn generate_types_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CPP_FILE_HEADER);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
@@ -185,7 +192,7 @@ fn generate_types_hpp(ir: &ValidatedIr) -> String {
 
     // Emit enums before struct types
     for e in &ir.enums {
-        generate_cpp_enum(&mut out, e);
+        generate_cpp_enum(&mut out, e)?;
     }
 
     for ty in &ir.types {
@@ -193,12 +200,12 @@ fn generate_types_hpp(ir: &ValidatedIr) -> String {
     }
 
     out.push_str("}  // namespace polyplug_generated\n");
-    out
+    Ok(out)
 }
 
 // ─── contracts.hpp generator ─────────────────────────────────────────────────
 
-fn generate_contracts_hpp(ir: &ValidatedIr) -> String {
+fn generate_contracts_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CPP_FILE_HEADER);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
@@ -209,14 +216,17 @@ fn generate_contracts_hpp(ir: &ValidatedIr) -> String {
     out.push_str("struct RuntimeError { uint32_t code; };\n\n");
 
     for contract in &ir.contracts {
-        generate_cpp_guest_contract_class(&mut out, contract);
+        generate_cpp_guest_contract_class(&mut out, contract)?;
     }
 
     out.push_str("}  // namespace polyplug_plugin\n");
-    out
+    Ok(out)
 }
 
-fn generate_cpp_guest_contract_class(out: &mut String, contract: &ResolvedContract) {
+fn generate_cpp_guest_contract_class(
+    out: &mut String,
+    contract: &ResolvedContract,
+) -> Result<(), PolyplugcError> {
     let class_name: String = contract_name_to_guest_contract_class(&contract.name);
     out.push_str(&format!(
         "/// Abstract plugin base for contract `{}` (id=0x{:016X})\n",
@@ -226,38 +236,71 @@ fn generate_cpp_guest_contract_class(out: &mut String, contract: &ResolvedContra
     out.push_str(&format!("    virtual ~{}() = default;\n", class_name));
 
     for func in &contract.functions {
-        generate_cpp_guest_abstract_method(out, func);
+        out.push_str(&cpp_render_abstract_method(func)?);
     }
 
     out.push_str("};\n\n");
+    Ok(())
 }
 
-fn generate_cpp_guest_abstract_method(out: &mut String, func: &ResolvedFunction) {
+/// Render one pure-virtual guest-contract method via langprint (declaration-mode
+/// `CppFunction`). Preserves polyplugc's parameter rule: a user-defined param is
+/// taken by `const T&`, primitives/ABI types by value.
+fn cpp_render_abstract_method(func: &ResolvedFunction) -> Result<String, PolyplugcError> {
     let return_type: String = func
         .returns
         .as_ref()
         .map(cpp_type_name)
         .unwrap_or_else(|| "void".to_owned());
 
-    let params: Vec<String> = func
+    let parameters: Vec<CppParameter> = func
         .params
         .iter()
-        .map(|p| {
+        .map(|p: &ResolvedParam| {
             let cpp_ty: String = cpp_type_name(&p.ty);
-            match &p.ty {
-                ResolvedTypeRef::UserDefined(_) => format!("const {}& {}", cpp_ty, p.name),
-                ResolvedTypeRef::Primitive(_) | ResolvedTypeRef::AbiType(_) => {
-                    format!("{} {}", cpp_ty, p.name)
-                }
+            let param_type: String = match &p.ty {
+                ResolvedTypeRef::UserDefined(_) => format!("const {}&", cpp_ty),
+                ResolvedTypeRef::Primitive(_) | ResolvedTypeRef::AbiType(_) => cpp_ty,
+            };
+            CppParameter {
+                name: p.name.clone(),
+                param_type,
+                default_value: None,
             }
         })
-        .collect();
-    let params_str: String = params.join(", ");
+        .collect::<Vec<CppParameter>>();
 
-    out.push_str(&format!(
-        "    virtual {} {}({}) = 0;\n",
-        return_type, func.name, params_str
-    ));
+    let method: CppFunction = CppFunction {
+        name: func.name.clone(),
+        parent_name: None,
+        visibility: CppVisibility::Public,
+        parameters,
+        template_params: Vec::new(),
+        return_type: Some(return_type),
+        is_static: false,
+        is_const: false,
+        is_virtual: true,
+        is_pure_virtual: true,
+        is_inline: false,
+        is_noexcept: false,
+        is_override: false,
+        is_final: false,
+        is_extern_c: false,
+        is_friend: false,
+        is_deleted: false,
+        is_default: false,
+        body: None,
+        docs: None,
+    };
+    let backend: CppBackend = CppBackend::default();
+    let mut indent_level: i32 = 1;
+    let rendered: String = backend
+        .render_function(&method, None::<&str>, None::<&str>, None, &mut indent_level)
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/contracts.hpp".to_owned(),
+            source,
+        })?;
+    Ok(format!("{rendered}\n"))
 }
 
 // ─── interfaces.hpp generator ───────────────────────────────────────────────────
@@ -327,7 +370,7 @@ fn generate_cpp_guest_plugin_interface(
         &plugin_lower,
         &class_name,
         &state_struct,
-    );
+    )?;
 
     for func in &contract.functions {
         generate_cpp_guest_abi_wrapper(out, &plugin_lower, &state_struct, func)?;
@@ -386,7 +429,7 @@ fn generate_cpp_guest_contract_interface(
         upper, contract.contract_id
     ));
 
-    emit_cpp_guest_instance_machinery(out, &upper, &lower, &class_name, &state_struct);
+    emit_cpp_guest_instance_machinery(out, &upper, &lower, &class_name, &state_struct)?;
 
     // ABI wrapper functions — one per function
     for func in &contract.functions {
@@ -438,20 +481,204 @@ fn generate_cpp_guest_contract_interface(
 /// `create_instance` call and carried — together with the HostApi pointer —
 /// in `GuestContractInstance.data`. No DSO-global storage is involved, so two
 /// runtimes loading the same plugin DSO get fully isolated instances.
+/// Render a `interfaces.hpp` free-function definition via langprint. langprint
+/// owns the signature (FORM); the caller owns every body byte (LOGIC) through
+/// `verbatim_body` — C++ has no post-hoc formatter, so exact whitespace (and
+/// even the pre-existing irregular indentation of some wrapper bodies) is baked
+/// into `body` and emitted unchanged.
+fn render_cpp_defn_fn(
+    name: String,
+    parameters: Vec<CppParameter>,
+    is_static: bool,
+    is_inline: bool,
+    docs: Vec<String>,
+    body: String,
+) -> Result<String, PolyplugcError> {
+    let func: CppFunction = CppFunction {
+        name,
+        parent_name: None,
+        visibility: CppVisibility::Default,
+        parameters,
+        template_params: Vec::new(),
+        return_type: Some("void".to_owned()),
+        is_static,
+        is_const: false,
+        is_virtual: false,
+        is_pure_virtual: false,
+        is_inline,
+        is_noexcept: true,
+        is_override: false,
+        is_final: false,
+        is_extern_c: false,
+        is_friend: false,
+        is_deleted: false,
+        is_default: false,
+        body: Some(vec![body]),
+        docs: if docs.is_empty() { None } else { Some(docs) },
+    };
+    let options: CppFunctionRenderOptions = CppFunctionRenderOptions {
+        render_definition: true,
+        docs_on_definition: true,
+        verbatim_body: true,
+        ..CppFunctionRenderOptions::default()
+    };
+    let backend: CppBackend = CppBackend::default();
+    let mut indent_level: i32 = 0;
+    backend
+        .render_function(
+            &func,
+            None::<&str>,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/interfaces.hpp".to_owned(),
+            source,
+        })
+}
+
+/// Render a `noexcept` class-member method DEFINITION (indent level 1, inside a
+/// hand-emitted `class { … };`) via langprint: langprint owns the FORM (docs,
+/// `[static] <ret> name(params) noexcept`, braces); polyplugc owns the verbatim
+/// body. Used for the guest host-caller methods whose bodies have hand-baked
+/// nested (switch/case) indentation the re-indenting renderer can't reproduce.
+fn render_cpp_host_method(
+    name: String,
+    parameters: Vec<CppParameter>,
+    return_type: String,
+    is_static: bool,
+    docs: Vec<String>,
+    body: String,
+) -> Result<String, PolyplugcError> {
+    let func: CppFunction = CppFunction {
+        name,
+        parent_name: None,
+        visibility: CppVisibility::Default,
+        parameters,
+        template_params: Vec::new(),
+        return_type: Some(return_type),
+        is_static,
+        is_const: false,
+        is_virtual: false,
+        is_pure_virtual: false,
+        is_inline: false,
+        is_noexcept: true,
+        is_override: false,
+        is_final: false,
+        is_extern_c: false,
+        is_friend: false,
+        is_deleted: false,
+        is_default: false,
+        body: Some(vec![body]),
+        docs: if docs.is_empty() { None } else { Some(docs) },
+    };
+    let options: CppFunctionRenderOptions = CppFunctionRenderOptions {
+        render_definition: true,
+        docs_on_definition: true,
+        verbatim_body: true,
+        ..CppFunctionRenderOptions::default()
+    };
+    let backend: CppBackend = CppBackend::default();
+    let mut indent_level: i32 = 1;
+    backend
+        .render_function(
+            &func,
+            None::<&str>,
+            None::<&str>,
+            Some(&options),
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/host_contracts.hpp".to_owned(),
+            source,
+        })
+}
+
+/// The four `VmLoaderData/HostApi/…` parameters shared by the create-instance signature.
+fn cpp_create_instance_params() -> Vec<CppParameter> {
+    vec![
+        CppParameter {
+            name: "loader_data".to_owned(),
+            param_type: "VmLoaderData".to_owned(),
+            default_value: None,
+        },
+        CppParameter {
+            name: "host".to_owned(),
+            param_type: "const HostApi*".to_owned(),
+            default_value: None,
+        },
+        CppParameter {
+            name: "args".to_owned(),
+            param_type: "const void*".to_owned(),
+            default_value: None,
+        },
+        CppParameter {
+            name: "out_instance".to_owned(),
+            param_type: "GuestContractInstance*".to_owned(),
+            default_value: None,
+        },
+    ]
+}
+
 fn emit_cpp_guest_instance_machinery(
     out: &mut String,
     prefix_upper: &str,
     lower: &str,
     class_name: &str,
     state_struct: &str,
-) {
-    out.push_str(&format!(
-        "// Author-provided factory — implement this in your plugin .cpp. Called once\n\
-         // per host-created instance; ownership of the returned object transfers to\n\
-         // the instance (deleted in {prefix_upper}_destroy_instance).\n\
-         {class_name}* polyplug_create_{lower}(const HostApi* host);\n\n"
-    ));
+) -> Result<(), PolyplugcError> {
+    // Author factory forward declaration (no body → declaration mode).
+    let factory_decl: CppFunction = CppFunction {
+        name: format!("polyplug_create_{lower}"),
+        parent_name: None,
+        visibility: CppVisibility::Default,
+        parameters: vec![CppParameter {
+            name: "host".to_owned(),
+            param_type: "const HostApi*".to_owned(),
+            default_value: None,
+        }],
+        template_params: Vec::new(),
+        return_type: Some(format!("{class_name}*")),
+        is_static: false,
+        is_const: false,
+        is_virtual: false,
+        is_pure_virtual: false,
+        is_inline: false,
+        is_noexcept: false,
+        is_override: false,
+        is_final: false,
+        is_extern_c: false,
+        is_friend: false,
+        is_deleted: false,
+        is_default: false,
+        body: None,
+        docs: Some(vec![
+            "Author-provided factory — implement this in your plugin .cpp. Called once".to_owned(),
+            "per host-created instance; ownership of the returned object transfers to".to_owned(),
+            format!("the instance (deleted in {prefix_upper}_destroy_instance)."),
+        ]),
+    };
+    let backend: CppBackend = CppBackend::default();
+    let mut decl_indent: i32 = 0;
+    let factory_rendered: String = backend
+        .render_function(
+            &factory_decl,
+            None::<&str>,
+            None::<&str>,
+            None,
+            &mut decl_indent,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/interfaces.hpp".to_owned(),
+            source,
+        })?;
+    out.push_str(&factory_rendered);
+    out.push_str("\n\n");
 
+    // Per-instance payload struct. Left hand-emitted: langprint's C++ struct
+    // renderer emits a blank line before the closing `};` (its house style),
+    // which this golden does not have — not worth a new option for a 2-field POD.
     out.push_str(&format!(
         "// Per-instance payload carried in GuestContractInstance.data.\n\
          struct {state_struct} {{\n\
@@ -463,12 +690,8 @@ fn emit_cpp_guest_instance_machinery(
          }};\n\n"
     ));
 
-    out.push_str(&format!(
-        "// Create a new instance: calls the author factory and heap-allocates the payload.\n\
-         // Writes a null handle to *out_instance when host is null, the factory returns\n\
-         // null, or it throws.\n\
-         static void {prefix_upper}_create_instance(VmLoaderData loader_data, const HostApi* host, const void* args, GuestContractInstance* out_instance) noexcept {{\n\
-         \x20   (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.\n\
+    let create_body: String = format!(
+        "    (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.\n\
          \x20   (void)args;  // Contract-specific init args are unused by generated glue.\n\
          \x20   if (out_instance == nullptr) return;\n\
          \x20   if (host == nullptr) {{\n\
@@ -485,24 +708,63 @@ fn emit_cpp_guest_instance_machinery(
          \x20       *out_instance = GuestContractInstance{{state, {prefix_upper}_CONTRACT_ID}};\n\
          \x20   }} catch (...) {{\n\
          \x20       *out_instance = GuestContractInstance{{nullptr, 0U}};\n\
-         \x20   }}\n\
-         }}\n\n"
-    ));
+         \x20   }}"
+    );
+    out.push_str(&render_cpp_defn_fn(
+        format!("{prefix_upper}_create_instance"),
+        cpp_create_instance_params(),
+        true,
+        false,
+        vec![
+            "Create a new instance: calls the author factory and heap-allocates the payload."
+                .to_owned(),
+            "Writes a null handle to *out_instance when host is null, the factory returns"
+                .to_owned(),
+            "null, or it throws.".to_owned(),
+        ],
+        create_body,
+    )?);
+    out.push_str("\n\n");
 
-    out.push_str(&format!(
-        "// Destroy an instance created by {prefix_upper}_create_instance: deletes the\n\
-         // implementation (ownership transferred from the factory) and the payload.\n\
-         static void {prefix_upper}_destroy_instance(VmLoaderData loader_data, const HostApi* host, GuestContractInstance instance) noexcept {{\n\
-         \x20   (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.\n\
+    let destroy_body: String = format!(
+        "    (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.\n\
          \x20   (void)host;  // The payload is guest-owned; no host call is needed to free it.\n\
          \x20   if (instance.data == nullptr) {{\n\
          \x20       return;\n\
          \x20   }}\n\
          \x20   auto* state = static_cast<{state_struct}*>(instance.data);\n\
          \x20   delete state->impl;\n\
-         \x20   delete state;\n\
-         }}\n\n"
-    ));
+         \x20   delete state;"
+    );
+    out.push_str(&render_cpp_defn_fn(
+        format!("{prefix_upper}_destroy_instance"),
+        vec![
+            CppParameter {
+                name: "loader_data".to_owned(),
+                param_type: "VmLoaderData".to_owned(),
+                default_value: None,
+            },
+            CppParameter {
+                name: "host".to_owned(),
+                param_type: "const HostApi*".to_owned(),
+                default_value: None,
+            },
+            CppParameter {
+                name: "instance".to_owned(),
+                param_type: "GuestContractInstance".to_owned(),
+                default_value: None,
+            },
+        ],
+        true,
+        false,
+        vec![
+            format!("Destroy an instance created by {prefix_upper}_create_instance: deletes the"),
+            "implementation (ownership transferred from the factory) and the payload.".to_owned(),
+        ],
+        destroy_body,
+    )?);
+    out.push_str("\n\n");
+    Ok(())
 }
 
 /// Convert a lowercase snake identifier to PascalCase, e.g. "my_plugin" -> "MyPlugin".
@@ -532,98 +794,127 @@ fn generate_cpp_guest_abi_wrapper(
     );
     let has_params: bool = !func.params.is_empty();
 
-    out.push_str(&format!(
-        "// ABI wrapper for {} (function_id = {})\n",
-        func.name, fn_id
-    ));
-    out.push_str(&format!(
-        "inline void {0}_{1}_abi(GuestContractInstance instance, const void* args, void* out, AbiError* out_err) noexcept {{\n",
-        contract_lower, func.name
-    ));
-    out.push_str("    if (instance.data == nullptr) {\n");
-    out.push_str("        static constexpr const char* null_inst_msg = \"instance is null\";\n");
-    out.push_str(
+    let mut body: String = String::new();
+    body.push_str("    if (instance.data == nullptr) {\n");
+    body.push_str("        static constexpr const char* null_inst_msg = \"instance is null\";\n");
+    body.push_str(
         "        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(null_inst_msg), 16}};\n",
     );
-    out.push_str("        return;\n");
-    out.push_str("    }\n");
-    out.push_str("    // SAFETY: instance.data was produced by create_instance and stays valid\n");
-    out.push_str("    // until destroy_instance; the host never mutates it.\n");
-    out.push_str(&format!(
+    body.push_str("        return;\n");
+    body.push_str("    }\n");
+    body.push_str("    // SAFETY: instance.data was produced by create_instance and stays valid\n");
+    body.push_str("    // until destroy_instance; the host never mutates it.\n");
+    body.push_str(&format!(
         "    const auto* state = static_cast<const {state_struct}*>(instance.data);\n"
     ));
-    out.push_str("    try {\n");
+    body.push_str("    try {\n");
 
     if has_params {
-        out.push_str("        if (args == nullptr) {\n");
-        out.push_str(
+        body.push_str("        if (args == nullptr) {\n");
+        body.push_str(
             "            *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};\n",
         );
-        out.push_str("            return;\n");
-        out.push_str("        }\n");
+        body.push_str("            return;\n");
+        body.push_str("        }\n");
     }
     if !is_void_return {
-        out.push_str("        if (out == nullptr) {\n");
-        out.push_str(
+        body.push_str("        if (out == nullptr) {\n");
+        body.push_str(
             "            *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};\n",
         );
-        out.push_str("            return;\n");
-        out.push_str("        }\n");
+        body.push_str("            return;\n");
+        body.push_str("        }\n");
     }
 
     // Build the call expression
     let call_expr: String = build_guest_call_expr(contract_lower, func);
-    out.push_str(&call_expr);
+    body.push_str(&call_expr);
 
     if is_void_return {
         // For void, emit success return (call_expr already emits the call + newline)
-        out.push_str("        // SAFETY: out pointer is not dereferenced for void return per ABI contract.\n");
-        out.push_str("        (void)out;\n");
-        out.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
-        out.push_str("        return;\n");
+        body.push_str("        // SAFETY: out pointer is not dereferenced for void return per ABI contract.\n");
+        body.push_str("        (void)out;\n");
+        body.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
+        body.push_str("        return;\n");
     } else {
         let ret_type: String = func
             .returns
             .as_ref()
             .map(cpp_type_name)
             .unwrap_or_else(|| "void".to_owned());
-        out.push_str(&format!(
+        body.push_str(&format!(
             "        // SAFETY: out is a valid void* pointing to a {ret_type} per ABI contract.\n"
         ));
-        out.push_str("        // The host guarantees proper alignment and size before calling this wrapper.\n");
-        out.push_str(&format!(
+        body.push_str("        // The host guarantees proper alignment and size before calling this wrapper.\n");
+        body.push_str(&format!(
             "        *static_cast<{}*>(out) = result;\n",
             ret_type
         ));
-        out.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
-        out.push_str("        return;\n");
+        body.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n");
+        body.push_str("        return;\n");
     }
 
-    out.push_str("    } catch (const std::exception&) {\n");
-    out.push_str(
+    body.push_str("    } catch (const std::exception&) {\n");
+    body.push_str(
         "        // The AbiError message must outlive this stack frame; the host never frees it.\n",
     );
-    out.push_str(
+    body.push_str(
         "        // e.what() points into the (about-to-be-destroyed) exception object, so we\n",
     );
-    out.push_str("        // return a static literal instead of a dangling pointer.\n");
-    out.push_str(
+    body.push_str("        // return a static literal instead of a dangling pointer.\n");
+    body.push_str(
         "        // SAFETY: err_msg is a static constexpr string literal with known length 26.\n",
     );
-    out.push_str(
+    body.push_str(
         "        static constexpr const char* err_msg = \"guest threw std::exception\";\n",
     );
-    out.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 26}};\n");
-    out.push_str("        return;\n");
-    out.push_str("    } catch (...) {\n");
-    out.push_str(
+    body.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 26}};\n");
+    body.push_str("        return;\n");
+    body.push_str("    } catch (...) {\n");
+    body.push_str(
         "        // SAFETY: panic_msg is a static constexpr string literal with known length 15.\n",
     );
-    out.push_str("        static constexpr const char* panic_msg = \"plugin panicked\";\n");
-    out.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};\n");
-    out.push_str("        return;\n");
-    out.push_str("    }\n");
-    out.push_str("}\n\n");
+    body.push_str("        static constexpr const char* panic_msg = \"plugin panicked\";\n");
+    body.push_str("        *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};\n");
+    body.push_str("        return;\n");
+    body.push_str("    }\n");
+
+    let wrapper_params: Vec<CppParameter> = vec![
+        CppParameter {
+            name: "instance".to_owned(),
+            param_type: "GuestContractInstance".to_owned(),
+            default_value: None,
+        },
+        CppParameter {
+            name: "args".to_owned(),
+            param_type: "const void*".to_owned(),
+            default_value: None,
+        },
+        CppParameter {
+            name: "out".to_owned(),
+            param_type: "void*".to_owned(),
+            default_value: None,
+        },
+        CppParameter {
+            name: "out_err".to_owned(),
+            param_type: "AbiError*".to_owned(),
+            default_value: None,
+        },
+    ];
+    // Strip the trailing newline: verbatim_body appends its own before `}`.
+    let body: String = body.strip_suffix('\n').unwrap_or(&body).to_owned();
+    out.push_str(&render_cpp_defn_fn(
+        format!("{contract_lower}_{}_abi", func.name),
+        wrapper_params,
+        false,
+        true,
+        vec![format!(
+            "ABI wrapper for {} (function_id = {})",
+            func.name, fn_id
+        )],
+        body,
+    )?);
+    out.push_str("\n\n");
 
     Ok(())
 }
@@ -1029,16 +1320,12 @@ fn substitute_variant_refs_cpp(
     result
 }
 
-fn generate_cpp_enum(out: &mut String, e: &EnumDef) {
+fn generate_cpp_enum(out: &mut String, e: &EnumDef) -> Result<(), PolyplugcError> {
     let repr_cpp: &str = e.repr.cpp_name();
-    out.push_str(&format!("/// Enum `{}` (repr: {})\n", e.name, repr_cpp));
-    out.push_str(&format!("enum class {} : {} {{\n", e.name, repr_cpp));
-    for variant in &e.variants {
-        let subst_value: String =
-            substitute_variant_refs_cpp(&e.variants, &variant.value, &e.name, repr_cpp);
-        out.push_str(&format!("    {} = {},\n", variant.name, subst_value));
-    }
-    out.push_str("};\n");
+    // The `enum class Name : underlying { … };` declaration is FORM — langprint
+    // renders it. The bitflag operator overloads below stay hand-emitted (they are
+    // free functions, not part of the enum).
+    out.push_str(&render_cpp_enum_decl(e, repr_cpp)?);
     if e.bitflag {
         out.push_str(&format!(
             "inline {} operator|({}  a, {} b) {{ return static_cast<{}>(static_cast<{}>(a) | static_cast<{}>(b)); }}\n",
@@ -1054,6 +1341,52 @@ fn generate_cpp_enum(out: &mut String, e: &EnumDef) {
         ));
     }
     out.push('\n');
+    Ok(())
+}
+
+/// Render the `enum class Name : underlying { … };` declaration via langprint's
+/// C++ EnumRenderer (TripleSlash docs for `///`, variants unaligned). No C++
+/// formatter, so langprint emits the exact bytes.
+fn render_cpp_enum_decl(e: &EnumDef, repr_cpp: &str) -> Result<String, PolyplugcError> {
+    let variants: Vec<CppEnumVariant> = e
+        .variants
+        .iter()
+        .map(|variant: &EnumVariant| CppEnumVariant {
+            name: variant.name.clone(),
+            value: Some(substitute_variant_refs_cpp(
+                &e.variants,
+                &variant.value,
+                &e.name,
+                repr_cpp,
+            )),
+            docs: None,
+        })
+        .collect::<Vec<CppEnumVariant>>();
+    let cpp_enum: CppEnum = CppEnum {
+        name: e.name.clone(),
+        variants,
+        is_enum_class: true,
+        underlying_type: Some(repr_cpp.to_owned()),
+        docs: Some(vec![format!("Enum `{}` (repr: {})", e.name, repr_cpp)]),
+    };
+    let backend: CppBackend = CppBackend {
+        docs_style: DocsStyle::TripleSlash,
+        space_before_enum_base: true,
+        ..CppBackend::default()
+    };
+    let mut indent_level: i32 = 0;
+    backend
+        .render_enum(
+            &cpp_enum,
+            None::<&str>,
+            None::<&str>,
+            None,
+            &mut indent_level,
+        )
+        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+            path: "guest/types.hpp".to_owned(),
+            source,
+        })
 }
 
 // ─── Per-type struct emitter ──────────────────────────────────────────────────
@@ -2042,7 +2375,10 @@ fn cpp_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
 }
 
 /// Generate one guest-side host contract caller class.
-fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &ResolvedHostContract) {
+fn generate_cpp_guest_host_contract_caller(
+    out: &mut String,
+    contract: &ResolvedHostContract,
+) -> Result<(), PolyplugcError> {
     let class_name: String = host_contract_name_to_cpp_caller(&contract.name);
 
     out.push_str(&format!(
@@ -2052,48 +2388,61 @@ fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str("/// Plugins use this class to call host-provided functionality.\n");
     out.push_str(&format!("class {} {{\npublic:\n", class_name));
 
-    // Factory method - from_host
-    out.push_str("    /// Factory method - creates caller from HostApi or nullopt if not found.\n");
-    out.push_str(&format!(
-        "    static std::optional<{}> from_host(const HostApi* host, uint32_t min_version = 0) noexcept {{\n",
-        class_name
-    ));
-    out.push_str("        if (host == nullptr) {\n");
-    out.push_str("            return std::nullopt;\n");
-    out.push_str("        }\n");
-    // Get the instance first
-    out.push_str(&format!(
+    // Factory method - from_host. langprint renders the FORM; the body is verbatim.
+    let mut from_host_body: String = String::new();
+    from_host_body.push_str("        if (host == nullptr) {\n");
+    from_host_body.push_str("            return std::nullopt;\n");
+    from_host_body.push_str("        }\n");
+    from_host_body.push_str(&format!(
         "        HostContractInstance instance = host->get_host_contract(host, 0x{:016X}ULL, min_version);\n",
         contract.contract_id
     ));
-    out.push_str("        if (instance.data == nullptr) {\n");
-    out.push_str("            return std::nullopt;\n");
-    out.push_str("        }\n");
-    // Resolve the interface for dispatch metadata
-    out.push_str(&format!(
+    from_host_body.push_str("        if (instance.data == nullptr) {\n");
+    from_host_body.push_str("            return std::nullopt;\n");
+    from_host_body.push_str("        }\n");
+    from_host_body.push_str(&format!(
         "        const HostContractInterface* interface = host->resolve_host_contract_interface(host, 0x{:016X}ULL, min_version);\n",
         contract.contract_id
     ));
-    out.push_str("        if (interface == nullptr) {\n");
-    out.push_str("            return std::nullopt;\n");
-    out.push_str("        }\n");
-    out.push_str(&format!(
-        "        return {}(host, interface, instance);\n",
+    from_host_body.push_str("        if (interface == nullptr) {\n");
+    from_host_body.push_str("            return std::nullopt;\n");
+    from_host_body.push_str("        }\n");
+    from_host_body.push_str(&format!(
+        "        return {}(host, interface, instance);",
         class_name
     ));
-    out.push_str("    }\n\n");
+    out.push_str(&render_cpp_host_method(
+        "from_host".to_owned(),
+        vec![
+            CppParameter {
+                name: "host".to_owned(),
+                param_type: "const HostApi*".to_owned(),
+                default_value: None,
+            },
+            CppParameter {
+                name: "min_version".to_owned(),
+                param_type: "uint32_t".to_owned(),
+                default_value: Some("0".to_owned()),
+            },
+        ],
+        format!("std::optional<{class_name}>"),
+        true,
+        vec!["Factory method - creates caller from HostApi or nullopt if not found.".to_owned()],
+        from_host_body,
+    )?);
+    out.push('\n');
 
-    // is_valid method
+    // is_valid method — one-liner (langprint always breaks bodies to new lines), hand-emitted.
     out.push_str("    /// Check if caller is valid (interface and instance are non-null).\n");
     out.push_str("    bool is_valid() const noexcept { return interface_ != nullptr && instance_.data != nullptr; }\n\n");
 
-    // Explicit bool conversion
+    // Explicit bool conversion — one-liner + operator, hand-emitted.
     out.push_str("    /// Explicit bool conversion for validity check.\n");
     out.push_str("    explicit operator bool() const noexcept { return interface_ != nullptr && instance_.data != nullptr; }\n\n");
 
     // Methods for each function
     for func in &contract.functions {
-        generate_cpp_guest_host_contract_method(out, func, &class_name);
+        generate_cpp_guest_host_contract_method(out, func, &class_name)?;
     }
 
     // Private section
@@ -2109,6 +2458,7 @@ fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str("    const HostContractInterface* interface_;\n");
     out.push_str("    HostContractInstance instance_;\n");
     out.push_str("};\n\n");
+    Ok(())
 }
 
 /// Emit the shared `detail::log_call_failure` helper used by guest-side
@@ -2145,10 +2495,10 @@ fn emit_cpp_log_call_failure_helper(out: &mut String) {
 
 /// Generate one method for a guest-side host contract caller.
 fn generate_cpp_guest_host_contract_method(
-    out: &mut String,
+    dst: &mut String,
     func: &ResolvedFunction,
     class_name: &str,
-) {
+) -> Result<(), PolyplugcError> {
     let fn_id: u32 = func.function_id;
 
     let return_type: String = func
@@ -2157,22 +2507,26 @@ fn generate_cpp_guest_host_contract_method(
         .map(cpp_guest_caller_return_type_name)
         .unwrap_or_else(|| "void".to_owned());
 
-    // Build parameter list
-    let params: Vec<String> = func
+    // Build parameter list — langprint renders the method FORM; the body is verbatim.
+    let parameters: Vec<CppParameter> = func
         .params
         .iter()
-        .map(|p| format!("{} {}", cpp_guest_caller_param_type_name(&p.ty), p.name))
-        .collect();
-    let params_str: String = params.join(", ");
+        .map(|p| CppParameter {
+            name: p.name.clone(),
+            param_type: cpp_guest_caller_param_type_name(&p.ty),
+            default_value: None,
+        })
+        .collect::<Vec<CppParameter>>();
 
-    out.push_str(&format!(
-        "    /// Call host contract function `{}` (function_id={})\n",
+    let docs: Vec<String> = vec![format!(
+        "Call host contract function `{}` (function_id={})",
         func.name, fn_id
-    ));
-    out.push_str(&format!(
-        "    {} {}({}) noexcept {{\n",
-        return_type, func.name, params_str
-    ));
+    )];
+
+    // The body is accumulated into `body` (aliased as `out` so the existing
+    // push_str lines below are unchanged), then rendered as the verbatim slot.
+    let mut body: String = String::new();
+    let out: &mut String = &mut body;
 
     let what: String = format!("{}.{}", class_name, func.name);
     let default_return: String = if func.returns.is_some() {
@@ -2244,7 +2598,19 @@ fn generate_cpp_guest_host_contract_method(
         out.push_str(&format!("        return {};\n", expr));
     }
 
-    out.push_str("    }\n\n");
+    if body.ends_with('\n') {
+        body.pop();
+    }
+    dst.push_str(&render_cpp_host_method(
+        func.name.clone(),
+        parameters,
+        return_type,
+        false,
+        docs,
+        body,
+    )?);
+    dst.push('\n');
+    Ok(())
 }
 
 /// Emit the args_ptr setup for a C++ guest host contract method.
@@ -2376,7 +2742,7 @@ fn emit_cpp_guest_host_contract_out_setup(out: &mut String, returns: &Option<Res
 }
 
 /// Generate all guest-side host contract callers into a single file.
-fn generate_cpp_guest_host_contracts_file(ir: &ValidatedIr) -> String {
+fn generate_cpp_guest_host_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CPP_FILE_HEADER);
     out.push_str(
@@ -2396,7 +2762,7 @@ fn generate_cpp_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     emit_cpp_log_call_failure_helper(&mut out);
 
     for contract in &ir.host_contracts {
-        generate_cpp_guest_host_contract_caller(&mut out, contract);
+        generate_cpp_guest_host_contract_caller(&mut out, contract)?;
     }
 
     for contract in &ir.host_contracts {
@@ -2413,7 +2779,7 @@ fn generate_cpp_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     }
 
     out.push_str("}  // namespace polyplug_plugin\n");
-    out
+    Ok(out)
 }
 
 /// Generate one pure virtual method for a host contract function.
@@ -3514,7 +3880,7 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_cpp_enum(&mut out, &e);
+        generate_cpp_enum(&mut out, &e).expect("render enum");
         assert!(
             out.contains("enum class PixelFormat : uint32_t"),
             "missing enum class: {out}"
@@ -3547,7 +3913,7 @@ mod tests {
             ],
         };
         let mut out: String = String::new();
-        generate_cpp_enum(&mut out, &e);
+        generate_cpp_enum(&mut out, &e).expect("render enum");
         assert!(
             out.contains("enum class ImageFlags : uint32_t"),
             "missing enum class: {out}"
@@ -4029,7 +4395,8 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_cpp_guest_host_contract_caller(&mut out, &contract);
+        generate_cpp_guest_host_contract_caller(&mut out, &contract)
+            .expect("caller generation must succeed");
         assert!(
             out.contains("class HostLoggerContract"),
             "missing class: {out}"
@@ -4080,7 +4447,8 @@ mod tests {
             }],
             bundle: None,
         };
-        let out: String = generate_cpp_guest_host_contracts_file(&ir);
+        let out: String = generate_cpp_guest_host_contracts_file(&ir)
+            .expect("host contracts generation must succeed");
         assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
         assert!(
             out.contains("class HostLoggerContract"),
