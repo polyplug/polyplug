@@ -4,7 +4,17 @@
 //! delegates in ABI structs), correct Array<T> representations, and
 //! PascalCase naming per D-35.
 
-use crate::data::{ConstInfo, EnumInfo, FunctionInfo, StructInfo, UnionInfo};
+use std::io;
+
+use langprint::backends::csharp_backend::{
+    CSharpBackend, CSharpEnum, CSharpEnumMember, CSharpField, CSharpType, CSharpTypeKind,
+    CSharpVisibility,
+};
+use langprint::renderers::{EnumRenderer, StructRenderer};
+
+use crate::data::{
+    ConstInfo, EnumInfo, EnumVariant, FunctionInfo, StructInfo, UnionInfo, UnionVariant,
+};
 use crate::error::PolyplugcError;
 use crate::languages::{CodeGenerator, GenerationContext};
 
@@ -132,30 +142,44 @@ impl CSharpGenerator {
         }
     }
 
-    fn format_xml_doc(doc: &str) -> String {
-        doc.lines()
-            .map(|line: &str| {
-                if line.is_empty() {
-                    String::from("///")
-                } else {
-                    format!("/// {}", line)
-                }
-            })
-            .collect::<Vec<String>>()
-            .join("\n")
+    /// Split a doc string into per-line content for langprint's doc renderer.
+    ///
+    /// Each line becomes a `Vec` entry with no trailing newline; a blank source
+    /// line becomes an empty entry, which langprint renders as a bare `///` (no
+    /// trailing space). The mirror's Rust doc lines carry a leading space, so
+    /// langprint's `/// ` prefix produces the golden `///  content` (two spaces).
+    fn doc_lines(doc: &str) -> Vec<String> {
+        doc.lines().map(String::from).collect::<Vec<String>>()
     }
 
-    fn format_indented_xml_doc(doc: &str, indent: &str) -> String {
-        doc.lines()
-            .map(|line: &str| {
-                if line.is_empty() {
-                    format!("{}///", indent)
-                } else {
-                    format!("{}/// {}", indent, line)
-                }
-            })
-            .collect::<Vec<String>>()
-            .join("\n")
+    /// Build a langprint `CSharpField` with the ABI-mirror defaults: public
+    /// visibility, no static/const/readonly/initializer. `attributes` carries the
+    /// union `FieldOffset(0)` marker; `docs` carries the field's doc lines.
+    fn cs_field(
+        field_type: &str,
+        name: &str,
+        docs: Option<Vec<String>>,
+        attributes: Vec<String>,
+    ) -> CSharpField {
+        CSharpField {
+            name: String::from(name),
+            field_type: String::from(field_type),
+            visibility: CSharpVisibility::Public,
+            is_static: false,
+            is_const: false,
+            is_readonly: false,
+            initializer: None,
+            attributes,
+            docs,
+        }
+    }
+
+    /// Map a langprint render `io::Error` to a `PolyplugcError` for `Abi.cs`.
+    fn write_err(source: io::Error) -> PolyplugcError {
+        PolyplugcError::WriteFailed {
+            path: String::from("sdks/csharp/abi/Abi.cs"),
+            source,
+        }
     }
 
     fn to_pascal_case(s: &str) -> String {
@@ -189,12 +213,11 @@ impl CodeGenerator for CSharpGenerator {
         item: &StructInfo,
         _ctx: &GenerationContext,
     ) -> Result<String, PolyplugcError> {
-        let mut output = String::new();
-
-        if let Some(doc) = &item.doc {
-            output.push_str(&Self::format_xml_doc(doc));
-            output.push('\n');
-        }
+        // langprint renders the `[attr] public [unsafe] struct Name { … }` FORM
+        // (docs, StructLayout attribute, fields, Allman braces); polyplugc keeps
+        // the field type-string LOGIC (Array<T> expansion, fn-pointer → IntPtr,
+        // fixed-buffer mapping) and the trailing `Expected size` WIRING comment.
+        let mut output: String = String::new();
 
         // Pre-scan: does any field use a fixed-size primitive array?
         // If so the struct must be declared `unsafe` to allow `fixed` buffers.
@@ -203,62 +226,93 @@ impl CodeGenerator for CSharpGenerator {
             .iter()
             .any(|f| Self::parse_fixed_array(&f.rust_type).is_some());
 
-        // Use Size attribute if size hint is known.
-        if let Some(size) = item.size_hint {
-            output.push_str(&format!(
-                "[StructLayout(LayoutKind.Sequential, Size = {})]\n",
-                size
-            ));
-        } else {
-            output.push_str("[StructLayout(LayoutKind.Sequential)]\n");
-        }
-        if has_fixed_array {
-            output.push_str(&format!("public unsafe struct {}\n", item.name));
-        } else {
-            output.push_str(&format!("public struct {}\n", item.name));
-        }
-        output.push_str("{\n");
-
+        // Map each ABI field to one or more langprint fields (the LOGIC).
+        let mut fields: Vec<CSharpField> = Vec::new();
         for field in &item.fields {
-            if let Some(doc) = &field.doc {
-                output.push_str(&Self::format_indented_xml_doc(doc, "    "));
-                output.push('\n');
-            }
+            let docs: Option<Vec<String>> = field.doc.as_deref().map(Self::doc_lines);
 
-            // Handle Array<T> — expand into 3 sub-fields per D-21.
+            // Array<T> — expand into 3 sub-fields per D-21; the field doc rides
+            // the first sub-field only.
             if Self::is_array(&field.rust_type) {
                 let field_name: String = Self::to_pascal_case(&field.name);
-                output.push_str(&format!("    public IntPtr {};\n", field_name));
-                output.push_str(&format!("    public nuint {}Len;\n", field_name));
-                output.push_str(&format!("    public nuint {}Align;\n", field_name));
+                fields.push(Self::cs_field("IntPtr", &field_name, docs, Vec::new()));
+                fields.push(Self::cs_field(
+                    "nuint",
+                    &format!("{}Len", field_name),
+                    None,
+                    Vec::new(),
+                ));
+                fields.push(Self::cs_field(
+                    "nuint",
+                    &format!("{}Align", field_name),
+                    None,
+                    Vec::new(),
+                ));
                 continue;
             }
 
-            // Handle function pointer fields — emit IntPtr (blittable, no managed
+            // Function pointer field — emit IntPtr (blittable, no managed
             // delegate in the ABI struct so unions stay overlappable in .NET).
             if Self::is_function_pointer(&field.rust_type) {
                 let field_name: String = Self::to_pascal_case(&field.name);
-                output.push_str(&format!("    public IntPtr {};\n", field_name));
+                fields.push(Self::cs_field("IntPtr", &field_name, docs, Vec::new()));
                 continue;
             }
 
-            // Handle fixed-size primitive arrays, e.g. `[u8;32]` from `quote!()`.
-            // C# requires `unsafe fixed` for inline fixed buffers inside structs.
+            // Fixed-size primitive array, e.g. `[u8;32]`. langprint has no
+            // fixed-buffer / array-dimension model, so the `unsafe fixed` modifiers
+            // ride the type string and the `[N]` dimension rides the name: langprint
+            // then renders `public unsafe fixed {elem} {Name}[{count}];` verbatim.
             if let Some((cs_elem, count)) = Self::parse_fixed_array(&field.rust_type) {
                 let field_name: String = Self::to_pascal_case(&field.name);
-                output.push_str(&format!(
-                    "    public unsafe fixed {} {}[{}];\n",
-                    cs_elem, field_name, count
+                fields.push(Self::cs_field(
+                    &format!("unsafe fixed {}", cs_elem),
+                    &format!("{}[{}]", field_name, count),
+                    docs,
+                    Vec::new(),
                 ));
                 continue;
             }
 
             let csharp_type: String = Self::rust_type_to_csharp(&field.rust_type);
             let field_name: String = Self::to_pascal_case(&field.name);
-            output.push_str(&format!("    public {} {};\n", csharp_type, field_name));
+            fields.push(Self::cs_field(&csharp_type, &field_name, docs, Vec::new()));
         }
 
-        output.push_str("}\n");
+        let attribute: String = match item.size_hint {
+            Some(size) => format!("StructLayout(LayoutKind.Sequential, Size = {})", size),
+            None => String::from("StructLayout(LayoutKind.Sequential)"),
+        };
+        let cs_struct: CSharpType = CSharpType {
+            kind: CSharpTypeKind::Struct,
+            name: item.name.clone(),
+            visibility: CSharpVisibility::Public,
+            is_abstract: false,
+            is_sealed: false,
+            is_static: false,
+            is_unsafe: has_fixed_array,
+            is_partial: false,
+            generic_args: Vec::new(),
+            base_class: None,
+            interfaces: Vec::new(),
+            fields,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: vec![attribute],
+            docs: item.doc.as_deref().map(Self::doc_lines),
+        };
+        let backend: CSharpBackend = CSharpBackend::default();
+        let mut indent_level: i32 = 0;
+        let rendered: String = backend
+            .render_struct(
+                &cs_struct,
+                None::<&str>,
+                None::<&str>,
+                None,
+                &mut indent_level,
+            )
+            .map_err(Self::write_err)?;
+        output.push_str(&rendered);
 
         // Emit size documentation comment if known (actual validation is in LayoutTests.cs).
         if let Some(size) = item.size_hint {
@@ -274,33 +328,51 @@ impl CodeGenerator for CSharpGenerator {
         item: &EnumInfo,
         _ctx: &GenerationContext,
     ) -> Result<String, PolyplugcError> {
-        let mut output = String::new();
+        // langprint renders the `public enum Name : uint { … }` FORM (docs,
+        // Allman braces, member docs); polyplugc keeps the mirror's explicit-value
+        // LOGIC: a valueless first variant is pinned to `= 0`, later valueless
+        // variants stay bare. The mirror separates enums with a trailing blank line;
+        // langprint ends the declaration with a single newline.
+        let members: Vec<CSharpEnumMember> = item
+            .variants
+            .iter()
+            .enumerate()
+            .map(|(i, variant): (usize, &EnumVariant)| {
+                let value: Option<String> = match variant.value {
+                    Some(value) => Some(value.to_string()),
+                    None if i == 0 => Some(String::from("0")),
+                    None => None,
+                };
+                CSharpEnumMember {
+                    name: variant.name.clone(),
+                    value,
+                    docs: variant.doc.as_deref().map(Self::doc_lines),
+                }
+            })
+            .collect::<Vec<CSharpEnumMember>>();
 
-        if let Some(doc) = &item.doc {
-            output.push_str(&Self::format_xml_doc(doc));
-            output.push('\n');
-        }
-
-        output.push_str(&format!("public enum {} : uint\n", item.name));
-        output.push_str("{\n");
-
-        for (i, variant) in item.variants.iter().enumerate() {
-            if let Some(doc) = &variant.doc {
-                output.push_str(&Self::format_indented_xml_doc(doc, "    "));
-                output.push('\n');
-            }
-
-            if let Some(value) = variant.value {
-                output.push_str(&format!("    {} = {},\n", variant.name, value));
-            } else if i == 0 {
-                output.push_str(&format!("    {} = 0,\n", variant.name));
-            } else {
-                output.push_str(&format!("    {},\n", variant.name));
-            }
-        }
-
-        output.push_str("}\n\n");
-        Ok(output)
+        let cs_enum: CSharpEnum = CSharpEnum {
+            name: item.name.clone(),
+            visibility: CSharpVisibility::Public,
+            underlying_type: Some(String::from("uint")),
+            members,
+            is_flags: false,
+            attributes: Vec::new(),
+            docs: item.doc.as_deref().map(Self::doc_lines),
+        };
+        let backend: CSharpBackend = CSharpBackend::default();
+        let mut indent_level: i32 = 0;
+        let mut rendered: String = backend
+            .render_enum(
+                &cs_enum,
+                None::<&str>,
+                None::<&str>,
+                None,
+                &mut indent_level,
+            )
+            .map_err(Self::write_err)?;
+        rendered.push('\n');
+        Ok(rendered)
     }
 
     fn generate_union(
@@ -308,26 +380,56 @@ impl CodeGenerator for CSharpGenerator {
         item: &UnionInfo,
         _ctx: &GenerationContext,
     ) -> Result<String, PolyplugcError> {
-        let mut output = String::new();
+        // A C# union is a `[StructLayout(LayoutKind.Explicit)]` struct whose every
+        // field carries `[FieldOffset(0)]`. langprint renders the struct FORM plus
+        // the per-field attribute; polyplugc keeps the variant type-string LOGIC.
+        // The mirror separates unions with a trailing blank line.
+        let fields: Vec<CSharpField> = item
+            .variants
+            .iter()
+            .map(|variant: &UnionVariant| {
+                let csharp_type: String = Self::rust_type_to_csharp(&variant.type_name);
+                let variant_name: String = Self::to_pascal_case(&variant.name);
+                Self::cs_field(
+                    &csharp_type,
+                    &variant_name,
+                    None,
+                    vec![String::from("FieldOffset(0)")],
+                )
+            })
+            .collect::<Vec<CSharpField>>();
 
-        if let Some(doc) = &item.doc {
-            output.push_str(&Self::format_xml_doc(doc));
-            output.push('\n');
-        }
-
-        output.push_str("[StructLayout(LayoutKind.Explicit)]\n");
-        output.push_str(&format!("public struct {}\n", item.name));
-        output.push_str("{\n");
-
-        for variant in &item.variants {
-            let csharp_type: String = Self::rust_type_to_csharp(&variant.type_name);
-            let variant_name: String = Self::to_pascal_case(&variant.name);
-            output.push_str("    [FieldOffset(0)]\n");
-            output.push_str(&format!("    public {} {};\n", csharp_type, variant_name));
-        }
-
-        output.push_str("}\n\n");
-        Ok(output)
+        let cs_union: CSharpType = CSharpType {
+            kind: CSharpTypeKind::Struct,
+            name: item.name.clone(),
+            visibility: CSharpVisibility::Public,
+            is_abstract: false,
+            is_sealed: false,
+            is_static: false,
+            is_unsafe: false,
+            is_partial: false,
+            generic_args: Vec::new(),
+            base_class: None,
+            interfaces: Vec::new(),
+            fields,
+            properties: Vec::new(),
+            methods: Vec::new(),
+            attributes: vec![String::from("StructLayout(LayoutKind.Explicit)")],
+            docs: item.doc.as_deref().map(Self::doc_lines),
+        };
+        let backend: CSharpBackend = CSharpBackend::default();
+        let mut indent_level: i32 = 0;
+        let mut rendered: String = backend
+            .render_struct(
+                &cs_union,
+                None::<&str>,
+                None::<&str>,
+                None,
+                &mut indent_level,
+            )
+            .map_err(Self::write_err)?;
+        rendered.push('\n');
+        Ok(rendered)
     }
 
     fn generate_function(
