@@ -4,6 +4,7 @@
 //! representations, and snake_case naming per D-35.
 
 use crate::data::{ConstInfo, EnumInfo, FunctionInfo, StructInfo, UnionInfo};
+use crate::error::PolyplugcError;
 use crate::languages::{CodeGenerator, GenerationContext};
 
 /// Lua/LuaJIT ABI code generator.
@@ -317,7 +318,17 @@ impl LuaGenerator {
 }
 
 impl CodeGenerator for LuaGenerator {
-    fn generate_const(&self, item: &ConstInfo, _ctx: &GenerationContext) -> String {
+    fn generate_const(
+        &self,
+        item: &ConstInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
+        // Stays hand-emitted WIRING (like struct/enum/union/header below). The
+        // const is the ONE Lua-native declaration in this mirror — a plain module
+        // field assignment (`M.NAME = ffi.cast(...)`) OUTSIDE the `ffi.cdef[[ ]]`
+        // block. Both the `M.` prefix and the whole `ffi.cast(...)` value are built
+        // here (LOGIC); a langprint field renderer would contribute only the ` = `
+        // and newline, so there is no FORM worth delegating for a single line.
         let c_type: &str = match item.rust_type.as_str() {
             "u64" => "uint64_t",
             "u32" => "uint32_t",
@@ -325,13 +336,24 @@ impl CodeGenerator for LuaGenerator {
             "i32" => "int32_t",
             _ => &item.rust_type,
         };
-        format!(
+        Ok(format!(
             "M.{} = ffi.cast(\"{}\", {})\n",
             item.name, c_type, item.value
-        )
+        ))
     }
 
-    fn generate_struct(&self, item: &StructInfo, _ctx: &GenerationContext) -> String {
+    fn generate_struct(
+        &self,
+        item: &StructInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
+        // Stays hand-emitted WIRING: this whole block is literal C text inside
+        // the `ffi.cdef[[ ... ]]` LuaJIT surface — the ONE place CLAUDE.md Rule 10
+        // sanctions a literal ABI C signature. langprint's Lua backend models
+        // idiomatic Lua declarations (Lua-table enums, module fields, functions),
+        // not C `typedef struct` blocks, so there is no FORM to delegate to; the
+        // field type-string mapping, Array<T> expansion, and fn-pointer typedefs
+        // are the LOGIC, emitted directly as C.
         let mut output = String::new();
         let mut typedefs = String::new();
 
@@ -396,10 +418,19 @@ impl CodeGenerator for LuaGenerator {
         // Prepend typedefs before the struct.
         let mut result = typedefs;
         result.push_str(&output);
-        result
+        Ok(result)
     }
 
-    fn generate_enum(&self, item: &EnumInfo, _ctx: &GenerationContext) -> String {
+    fn generate_enum(
+        &self,
+        item: &EnumInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
+        // Stays hand-emitted WIRING (see `generate_struct`): a C `typedef enum`
+        // block inside `ffi.cdef`. langprint's Lua `render_enum` produces a Lua
+        // constant table (`local Name = { A = 0 }`) — a different artifact from
+        // the mirror's C enum, and not valid inside a cdef — so it cannot be
+        // delegated. The explicit-value LOGIC is emitted directly as C.
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -426,10 +457,18 @@ impl CodeGenerator for LuaGenerator {
         }
 
         output.push_str(&format!("    }} {};\n\n", item.name));
-        output
+        Ok(output)
     }
 
-    fn generate_union(&self, item: &UnionInfo, _ctx: &GenerationContext) -> String {
+    fn generate_union(
+        &self,
+        item: &UnionInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
+        // Stays hand-emitted WIRING (see `generate_struct`): a C `typedef union`
+        // block inside `ffi.cdef`. langprint's Lua backend has no union FORM at
+        // all (unions are meaningless in Lua), so there is nothing to delegate;
+        // the variant type-string mapping is the LOGIC, emitted directly as C.
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -444,10 +483,14 @@ impl CodeGenerator for LuaGenerator {
         }
 
         output.push_str(&format!("    }} {};\n\n", item.name));
-        output
+        Ok(output)
     }
 
-    fn generate_function(&self, item: &FunctionInfo, _ctx: &GenerationContext) -> String {
+    fn generate_function(
+        &self,
+        item: &FunctionInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let _ret_type: String = item
             .return_type
             .as_ref()
@@ -462,9 +505,9 @@ impl CodeGenerator for LuaGenerator {
             .join(", ");
 
         if params.is_empty() {
-            format!("local function {}() end\n\n", item.name)
+            Ok(format!("local function {}() end\n\n", item.name))
         } else {
-            format!("local function {}({}) end\n\n", item.name, params)
+            Ok(format!("local function {}({}) end\n\n", item.name, params))
         }
     }
 
@@ -476,15 +519,21 @@ impl CodeGenerator for LuaGenerator {
         "lua"
     }
 
-    fn generate_header(&self, _ctx: &GenerationContext) -> String {
-        "local ffi = require(\"ffi\")\nlocal M = {}\n\nffi.cdef[[\n".to_string()
+    fn generate_header(&self, _ctx: &GenerationContext) -> Result<String, PolyplugcError> {
+        // Stays hand-emitted WIRING: the `require("ffi")` line and the `ffi.cdef[[`
+        // opener have no langprint model, and the `local M = {}` module scaffold is
+        // only produced by langprint's whole-module `render_module` (which also
+        // emits the fields and the `return M` in one pass). This mirror splits the
+        // module across header / cdef body / footer, so the scaffold is emitted by
+        // hand here and closed by `generate_footer`.
+        Ok("local ffi = require(\"ffi\")\nlocal M = {}\n\nffi.cdef[[\n".to_string())
     }
 
-    fn generate_footer(&self, _ctx: &GenerationContext) -> String {
+    fn generate_footer(&self, _ctx: &GenerationContext) -> Result<String, PolyplugcError> {
         // The `ffi.cdef[[ ... ]]` block is opened by `generate_header` and
         // closed by the orchestrator before emitting Lua-statement constants,
         // so the footer only returns the module table.
-        "return M\n".to_string()
+        Ok("return M\n".to_string())
     }
 }
 
@@ -496,6 +545,7 @@ impl Default for LuaGenerator {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)] // test code: a failed generate surfaces via expect
     use super::*;
     use crate::data::{FieldInfo, StructInfo};
 
@@ -579,7 +629,7 @@ mod tests {
             size_hint: Some(32),
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("uint8_t bytes[32];"),
             "fixed byte array should emit C array field: {}",
@@ -609,7 +659,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("void* data;"),
             "Array items should be void*: {}",

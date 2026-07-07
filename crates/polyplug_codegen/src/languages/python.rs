@@ -3,7 +3,17 @@
 //! Generates typed CFUNCTYPE typedefs for function pointer fields,
 //! correct Array<T> representations, and idiomatic Python naming.
 
-use crate::data::{ConstInfo, EnumInfo, FunctionInfo, StructInfo, UnionInfo};
+use std::io;
+
+use langprint::backends::python_backend::{
+    PythonBackend, PythonEnum, PythonEnumMember, PythonStruct, PythonStructField,
+};
+use langprint::renderers::{EnumRenderer, StructRenderer};
+
+use crate::data::{
+    ConstInfo, EnumInfo, EnumVariant, FunctionInfo, StructInfo, UnionInfo, UnionVariant,
+};
+use crate::error::PolyplugcError;
 use crate::languages::{CodeGenerator, GenerationContext};
 
 /// Python ABI code generator.
@@ -345,23 +355,43 @@ impl PythonGenerator {
         }
     }
 
-    fn format_docstring(doc: &str, indent_level: usize) -> String {
-        let indent: String = "    ".repeat(indent_level);
-        // Doc text carried over from rustdoc may contain backslashes (e.g. the
-        // escaped `\[dependency\]` table reference). In a regular docstring
-        // those are invalid escape sequences and raise SyntaxWarning on import
-        // (SyntaxError under -W error) — emit a raw docstring in that case.
-        let prefix: &str = if doc.contains('\\') { "r" } else { "" };
-        let lines: Vec<&str> = doc.lines().collect();
-        if lines.len() == 1 {
-            format!("{}{}\"\"\"{}\"\"\"\n", indent, prefix, lines[0])
-        } else {
-            let mut result: String = format!("{}{}\"\"\"{}\n", indent, prefix, lines[0]);
-            for line in &lines[1..] {
-                result.push_str(&format!("{}{}\n", indent, line));
-            }
-            result.push_str(&format!("{}\"\"\"\n", indent));
-            result
+    /// The docstring text langprint should render for an ABI item — the item's
+    /// own doc, or the language-neutral `default` when the item carries none.
+    ///
+    /// langprint owns the triple-quote FORM: the raw `r"""` prefix on
+    /// backslash-bearing text and the PEP 257 own-line closing `"""` are enabled
+    /// on the backend (see `Self::backend`), so the caller supplies content only.
+    fn docstring(doc: &Option<String>, default: &str) -> String {
+        match doc {
+            Some(doc) => doc.clone(),
+            None => String::from(default),
+        }
+    }
+
+    /// The Python backend configured for the ABI mirror: raw-string docstrings on
+    /// backslash and PEP 257 own-line closing quotes, matching the mirror's
+    /// hand-written convention byte-for-byte.
+    fn backend() -> PythonBackend {
+        PythonBackend {
+            docstring_close_on_own_line: true,
+            docstring_raw_on_backslash: true,
+            ..PythonBackend::default()
+        }
+    }
+
+    /// Map a langprint render `io::Error` to a `PolyplugcError` for `abi.py`.
+    fn write_err(source: io::Error) -> PolyplugcError {
+        PolyplugcError::WriteFailed {
+            path: String::from("sdks/python/abi/abi.py"),
+            source,
+        }
+    }
+
+    /// Build a langprint `PythonStructField` (a `("name", ctype)` `_fields_` entry).
+    fn py_field(name: &str, ctype: &str) -> PythonStructField {
+        PythonStructField {
+            name: String::from(name),
+            ctype: String::from(ctype),
         }
     }
 }
@@ -383,67 +413,90 @@ fn to_snake_case(s: &str) -> String {
 }
 
 impl CodeGenerator for PythonGenerator {
-    fn generate_const(&self, item: &ConstInfo, _ctx: &GenerationContext) -> String {
-        format!("{}: int = {}\n", item.name, item.value)
+    fn generate_const(
+        &self,
+        item: &ConstInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
+        // A module-level typed constant (`NAME: int = VALUE`) has no langprint
+        // Python FORM to delegate to — langprint models classes, enums, structs
+        // and defs, not bare module assignments — so this one-line WIRING stays
+        // local (the C# ABI mirror likewise emits no namespace-level constants).
+        Ok(format!("{}: int = {}\n", item.name, item.value))
     }
 
-    fn generate_struct(&self, item: &StructInfo, ctx: &GenerationContext) -> String {
-        let mut output = String::new();
-        let mut typedefs = String::new();
+    fn generate_struct(
+        &self,
+        item: &StructInfo,
+        ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
+        // langprint renders the `class Name(ctypes.Structure): """doc""" _fields_`
+        // FORM; polyplug_codegen keeps the field ctype-string LOGIC (Array<T>
+        // expansion, fn-pointer → CFUNCTYPE typedef name, fixed-array mapping) and
+        // the surrounding WIRING langprint cannot express: the two leading blank
+        // lines and the CFUNCTYPE typedefs sit BEFORE the class, and the size
+        // assertion sits AFTER it.
+        let mut output: String = String::new();
 
-        // Pre-scan fields for function pointer types — collect CFUNCTYPE typedefs.
+        // CFUNCTYPE typedefs emitted before the class (WIRING).
+        output.push_str("\n\n");
         for field in &item.fields {
             if Self::is_function_pointer(&field.rust_type) {
-                let (typedef, _type_name) =
+                let (typedef, _type_name): (String, String) =
                     Self::generate_cfunctype(&item.name, &field.name, &field.rust_type);
-                typedefs.push_str(&typedef);
+                output.push_str(&typedef);
             }
         }
 
-        output.push_str("\n\n");
-        // Emit CFUNCTYPE typedefs before the class.
-        output.push_str(&typedefs);
-
-        output.push_str("class ");
-        output.push_str(&item.name);
-        output.push_str("(ctypes.Structure):\n");
-
-        if let Some(doc) = &item.doc {
-            output.push_str(&Self::format_docstring(doc, 1));
-        } else {
-            output.push_str("    \"\"\"ABI struct.\"\"\"\n");
-        }
-
-        output.push_str("    _fields_ = [\n");
+        // Map each ABI field to one or more langprint fields (the LOGIC).
+        let mut fields: Vec<PythonStructField> = Vec::new();
         for field in &item.fields {
-            // Handle Array<T> — expand into 3 sub-fields per D-21.
+            // Array<T> — expand into 3 sub-fields per D-21.
             if Self::is_array(&field.rust_type) {
-                output.push_str(&format!("        (\"{}\", ctypes.c_void_p),\n", field.name));
-                output.push_str(&format!(
-                    "        (\"{}_len\", ctypes.c_size_t),\n",
-                    field.name
+                fields.push(Self::py_field(&field.name, "ctypes.c_void_p"));
+                fields.push(Self::py_field(
+                    &format!("{}_len", field.name),
+                    "ctypes.c_size_t",
                 ));
-                output.push_str(&format!(
-                    "        (\"{}__align\", ctypes.c_size_t),\n",
-                    field.name
+                fields.push(Self::py_field(
+                    &format!("{}__align", field.name),
+                    "ctypes.c_size_t",
                 ));
                 continue;
             }
 
-            // Handle function pointer fields — use the CFUNCTYPE typedef name.
+            // Function pointer field — use the CFUNCTYPE typedef name.
             if Self::is_function_pointer(&field.rust_type) {
-                let (_, type_name) =
+                let (_, type_name): (String, String) =
                     Self::generate_cfunctype(&item.name, &field.name, &field.rust_type);
-                output.push_str(&format!("        (\"{}\", {}),\n", field.name, type_name));
+                fields.push(Self::py_field(&field.name, &type_name));
                 continue;
             }
 
             let py_type: String = Self::field_type_to_python(&field.rust_type, ctx);
-            output.push_str(&format!("        (\"{}\", {}),\n", field.name, py_type));
+            fields.push(Self::py_field(&field.name, &py_type));
         }
-        output.push_str("    ]\n");
 
-        // Emit size hint comment and assertion if known.
+        let py_struct: PythonStruct = PythonStruct {
+            name: item.name.clone(),
+            base_class: String::from("ctypes.Structure"),
+            fields,
+            docstring: Some(Self::docstring(&item.doc, "ABI struct.")),
+        };
+        let backend: PythonBackend = Self::backend();
+        let mut indent_level: i32 = 0;
+        let rendered: String = backend
+            .render_struct(
+                &py_struct,
+                None::<&str>,
+                None::<&str>,
+                None,
+                &mut indent_level,
+            )
+            .map_err(Self::write_err)?;
+        output.push_str(&rendered);
+
+        // Emit size hint comment and assertion if known (WIRING).
         if let Some(size) = item.size_hint {
             output.push_str(&format!("\n# Expected size: {} bytes\n", size));
             output.push_str(&format!(
@@ -452,59 +505,98 @@ impl CodeGenerator for PythonGenerator {
             ));
         }
 
-        output
+        Ok(output)
     }
 
-    fn generate_enum(&self, item: &EnumInfo, _ctx: &GenerationContext) -> String {
-        let mut output = String::new();
+    fn generate_enum(
+        &self,
+        item: &EnumInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
+        // langprint renders the `class Name(enum.IntEnum): """doc"""` FORM;
+        // polyplug_codegen keeps the mirror's explicit-value LOGIC (a valueless
+        // first variant is pinned to `= 0`, later valueless variants take their
+        // ordinal index) and the two leading blank lines (WIRING).
+        let members: Vec<PythonEnumMember> = item
+            .variants
+            .iter()
+            .enumerate()
+            .map(|(i, variant): (usize, &EnumVariant)| {
+                let value: String = match variant.value {
+                    Some(value) => value.to_string(),
+                    None if i == 0 => String::from("0"),
+                    None => i.to_string(),
+                };
+                PythonEnumMember {
+                    name: variant.name.clone(),
+                    value,
+                }
+            })
+            .collect::<Vec<PythonEnumMember>>();
 
-        output.push_str("\n\nclass ");
-        output.push_str(&item.name);
-        output.push_str("(enum.IntEnum):\n");
-
-        if let Some(doc) = &item.doc {
-            output.push_str(&Self::format_docstring(doc, 1));
-        } else {
-            output.push_str("    \"\"\"ABI enum.\"\"\"\n");
-        }
-
-        for (i, variant) in item.variants.iter().enumerate() {
-            if let Some(value) = variant.value {
-                output.push_str(&format!("    {} = {}\n", variant.name, value));
-            } else if i == 0 {
-                output.push_str(&format!("    {} = 0\n", variant.name));
-            } else {
-                output.push_str(&format!("    {} = {}\n", variant.name, i));
-            }
-        }
-
-        output
+        let py_enum: PythonEnum = PythonEnum {
+            name: item.name.clone(),
+            base_class: String::from("enum.IntEnum"),
+            members,
+            docstring: Some(Self::docstring(&item.doc, "ABI enum.")),
+        };
+        let backend: PythonBackend = Self::backend();
+        let mut indent_level: i32 = 0;
+        let rendered: String = backend
+            .render_enum(
+                &py_enum,
+                None::<&str>,
+                None::<&str>,
+                None,
+                &mut indent_level,
+            )
+            .map_err(Self::write_err)?;
+        Ok(format!("\n\n{}", rendered))
     }
 
-    fn generate_union(&self, item: &UnionInfo, ctx: &GenerationContext) -> String {
-        let mut output = String::new();
+    fn generate_union(
+        &self,
+        item: &UnionInfo,
+        ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
+        // A ctypes union shares the `_fields_` FORM with a struct, differing only
+        // in the `ctypes.Union` base class; langprint renders it via the same
+        // struct renderer with `base_class = "ctypes.Union"`. polyplug_codegen
+        // keeps the variant ctype-string LOGIC and the two leading blank lines.
+        let fields: Vec<PythonStructField> = item
+            .variants
+            .iter()
+            .map(|variant: &UnionVariant| {
+                let py_type: String = Self::field_type_to_python(&variant.type_name, ctx);
+                Self::py_field(&variant.name, &py_type)
+            })
+            .collect::<Vec<PythonStructField>>();
 
-        output.push_str("\n\nclass ");
-        output.push_str(&item.name);
-        output.push_str("(ctypes.Union):\n");
-
-        if let Some(doc) = &item.doc {
-            output.push_str(&Self::format_docstring(doc, 1));
-        } else {
-            output.push_str("    \"\"\"ABI union.\"\"\"\n");
-        }
-
-        output.push_str("    _fields_ = [\n");
-        for variant in &item.variants {
-            let py_type: String = Self::field_type_to_python(&variant.type_name, ctx);
-            output.push_str(&format!("        (\"{}\", {}),\n", variant.name, py_type));
-        }
-        output.push_str("    ]\n");
-
-        output
+        let py_union: PythonStruct = PythonStruct {
+            name: item.name.clone(),
+            base_class: String::from("ctypes.Union"),
+            fields,
+            docstring: Some(Self::docstring(&item.doc, "ABI union.")),
+        };
+        let backend: PythonBackend = Self::backend();
+        let mut indent_level: i32 = 0;
+        let rendered: String = backend
+            .render_struct(
+                &py_union,
+                None::<&str>,
+                None::<&str>,
+                None,
+                &mut indent_level,
+            )
+            .map_err(Self::write_err)?;
+        Ok(format!("\n\n{}", rendered))
     }
 
-    fn generate_function(&self, item: &FunctionInfo, _ctx: &GenerationContext) -> String {
+    fn generate_function(
+        &self,
+        item: &FunctionInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let ret_type: String = item
             .return_type
             .as_ref()
@@ -518,10 +610,10 @@ impl CodeGenerator for PythonGenerator {
             .collect::<Vec<_>>()
             .join(", ");
 
-        format!(
+        Ok(format!(
             "def {}({}) -> {}:\n    pass\n\n",
             item.name, params, ret_type
-        )
+        ))
     }
 
     fn file_extension(&self) -> &'static str {
@@ -532,8 +624,8 @@ impl CodeGenerator for PythonGenerator {
         "python"
     }
 
-    fn generate_header(&self, _ctx: &GenerationContext) -> String {
-        "from __future__ import annotations\n\nimport ctypes\nimport enum\nfrom typing import ClassVar\n\n".to_string()
+    fn generate_header(&self, _ctx: &GenerationContext) -> Result<String, PolyplugcError> {
+        Ok("from __future__ import annotations\n\nimport ctypes\nimport enum\nfrom typing import ClassVar\n\n".to_string())
     }
 }
 
@@ -545,6 +637,7 @@ impl Default for PythonGenerator {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)] // test code: a failed generate surfaces via expect
     use super::*;
     use crate::data::{FieldInfo, StructInfo};
 
@@ -618,7 +711,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("CFUNCTYPE"),
             "struct with fn ptr should emit CFUNCTYPE: {}",
@@ -648,7 +741,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains(r#"("items", ctypes.c_void_p)"#),
             "Array items should be c_void_p: {}",
@@ -683,7 +776,7 @@ mod tests {
             size_hint: Some(32),
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains(r#"("bytes", ctypes.c_uint8 * 32)"#),
             "fixed byte array should emit ctypes array field: {}",

@@ -67,8 +67,11 @@ serde_json = { version = "1.0" }
 syn = { version = "2", features = ["full", "parsing", "extra-traits"] }
 quote = "1"
 
-# Cross-language FORM emitter (co-developed sibling crate). Pinned to the crates.io release carrying the FORM-seam API (langprint 0.2.1).
-langprint = { version = "0.2.1" }
+# Cross-language FORM emitter (co-developed sibling crate). Pinned to a git rev on
+# corrm/langprint (langprint 0.2.2, not yet on crates.io) because PP-20's ABI-mirror
+# delegation needs 0.2.2-only APIs. NOTE: a git dep blocks `cargo publish` of polyplug
+# until langprint 0.2.2 ships to crates.io and this flips back to a `version` pin.
+langprint = { git = "https://github.com/corrm/langprint", rev = "9d47d2ce2e073a6a9584d680a1546b0c9bc78a89" }
 
 # Dynamic loading
 libloading = { version = "0.9" }

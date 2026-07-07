@@ -17,6 +17,7 @@ pub use lua::LuaGenerator;
 pub use python::PythonGenerator;
 
 use crate::data::{ConstInfo, EnumInfo, FunctionInfo, StructInfo, UnionInfo};
+use crate::error::PolyplugcError;
 use std::collections::HashMap;
 
 /// Context passed to code generators during generation.
@@ -66,19 +67,39 @@ impl GenerationContext {
 /// produce idiomatic code for the target language while maintaining ABI compatibility.
 pub trait CodeGenerator {
     /// Generate code for a constant.
-    fn generate_const(&self, item: &ConstInfo, ctx: &GenerationContext) -> String;
+    fn generate_const(
+        &self,
+        item: &ConstInfo,
+        ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError>;
 
     /// Generate code for a struct.
-    fn generate_struct(&self, item: &StructInfo, ctx: &GenerationContext) -> String;
+    fn generate_struct(
+        &self,
+        item: &StructInfo,
+        ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError>;
 
     /// Generate code for an enum.
-    fn generate_enum(&self, item: &EnumInfo, ctx: &GenerationContext) -> String;
+    fn generate_enum(
+        &self,
+        item: &EnumInfo,
+        ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError>;
 
     /// Generate code for a union.
-    fn generate_union(&self, item: &UnionInfo, ctx: &GenerationContext) -> String;
+    fn generate_union(
+        &self,
+        item: &UnionInfo,
+        ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError>;
 
     /// Generate code for a function.
-    fn generate_function(&self, item: &FunctionInfo, ctx: &GenerationContext) -> String;
+    fn generate_function(
+        &self,
+        item: &FunctionInfo,
+        ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError>;
 
     /// Return the file extension for this language (e.g., "hpp", "cs", "py").
     fn file_extension(&self) -> &'static str;
@@ -87,10 +108,10 @@ pub trait CodeGenerator {
     fn language_name(&self) -> &'static str;
 
     /// Generate the file header (includes, imports, etc.).
-    fn generate_header(&self, ctx: &GenerationContext) -> String;
+    fn generate_header(&self, ctx: &GenerationContext) -> Result<String, PolyplugcError>;
 
     /// Generate the file footer (closing namespaces, etc.).
-    fn generate_footer(&self, _ctx: &GenerationContext) -> String {
-        String::new()
+    fn generate_footer(&self, _ctx: &GenerationContext) -> Result<String, PolyplugcError> {
+        Ok(String::new())
     }
 }

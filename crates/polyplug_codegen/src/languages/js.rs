@@ -4,6 +4,7 @@
 //! for DataView/UnsafePointerView access. Targets Deno host per D-34.
 
 use crate::data::{ConstInfo, EnumInfo, FunctionInfo, StructInfo, UnionInfo};
+use crate::error::PolyplugcError;
 use crate::languages::{CodeGenerator, GenerationContext};
 
 /// JavaScript/TypeScript ABI code generator.
@@ -228,7 +229,19 @@ impl JsGenerator {
 }
 
 impl CodeGenerator for JsGenerator {
-    fn generate_const(&self, item: &ConstInfo, _ctx: &GenerationContext) -> String {
+    fn generate_const(
+        &self,
+        item: &ConstInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
+        // Stays hand-emitted WIRING. This is a bare typed module constant
+        // (`export const NAME: number = VALUE;`) — the exact FORM the offset/size
+        // constants in `generate_struct` also use. langprint's JS backend models
+        // plain-JavaScript runtime declarations (an untyped `class`, an
+        // `Object.freeze` const-object enum, a `function`), not TypeScript
+        // type-level declarations, so it has no typed-const FORM to delegate to;
+        // the `bigint` → `{value}n` suffix mapping is polyplug LOGIC emitted
+        // directly (the Python ABI mirror likewise keeps its module constant local).
         let ts_type: String = Self::rust_type_to_ts(&item.rust_type);
         let formatted_value: String = if ts_type == "bigint" {
             format!("{}n", item.value)
@@ -236,13 +249,27 @@ impl CodeGenerator for JsGenerator {
             item.value.clone()
         };
 
-        format!(
+        Ok(format!(
             "export const {}: {} = {};\n\n",
             item.name, ts_type, formatted_value
-        )
+        ))
     }
 
-    fn generate_struct(&self, item: &StructInfo, ctx: &GenerationContext) -> String {
+    fn generate_struct(
+        &self,
+        item: &StructInfo,
+        ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
+        // Stays hand-emitted WIRING. The mirror's struct FORM is a TypeScript
+        // `export interface Name { field: type; }` followed by a block of
+        // `export const NAME_FIELD_OFFSET: number = N;` layout constants.
+        // langprint's JS backend renders PLAIN JavaScript — an untyped
+        // `class Name { field = value; }`, never a typed `interface` — so there is
+        // no interface FORM to delegate to. Everything here is polyplug LOGIC
+        // regardless: rust→TS type mapping, Array<T> field expansion, fn-pointer →
+        // `number`, and the field offset/size arithmetic that dominates the output.
+        // (Contrast the C#/Python mirrors, whose langprint backends genuinely model
+        // the target's struct declaration; the JS backend models no TS type form.)
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -327,10 +354,22 @@ impl CodeGenerator for JsGenerator {
         ));
 
         output.push_str(&offset_constants);
-        output
+        Ok(output)
     }
 
-    fn generate_enum(&self, item: &EnumInfo, _ctx: &GenerationContext) -> String {
+    fn generate_enum(
+        &self,
+        item: &EnumInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
+        // Stays hand-emitted WIRING. The mirror's enum FORM is a TypeScript
+        // `export const enum Name { Member = value, }` block with per-variant JSDoc.
+        // langprint's JS `render_enum` produces the runtime const-object idiom
+        // instead (`export const Name = Object.freeze({ … } as const);` plus a
+        // companion `type`) and carries no per-member doc — a different artifact
+        // from the mirror's `const enum`, so it cannot be delegated. The
+        // explicit-value LOGIC (valueless first variant pinned to 0, later valueless
+        // variants take their ordinal index) is emitted directly.
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -354,10 +393,21 @@ impl CodeGenerator for JsGenerator {
         }
 
         output.push_str("}\n\n");
-        output
+        Ok(output)
     }
 
-    fn generate_union(&self, item: &UnionInfo, _ctx: &GenerationContext) -> String {
+    fn generate_union(
+        &self,
+        item: &UnionInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
+        // Stays hand-emitted WIRING. The mirror's union FORM is a TypeScript
+        // discriminated union (`export type Name = | { variant: type } … ;`).
+        // langprint's JS backend has no `type`/union FORM at all, and this ABI has
+        // exactly ONE union — adding a whole JsUnion type + renderer (plus JSDoc)
+        // to langprint to replace a single ~6-line string join would be a
+        // negative-value cross-crate abstraction (the variant type-string mapping
+        // is polyplug LOGIC regardless). Emitted directly.
         let mut output = String::new();
 
         if let Some(doc) = &item.doc {
@@ -372,10 +422,14 @@ impl CodeGenerator for JsGenerator {
         }
 
         output.push_str(";\n\n");
-        output
+        Ok(output)
     }
 
-    fn generate_function(&self, item: &FunctionInfo, _ctx: &GenerationContext) -> String {
+    fn generate_function(
+        &self,
+        item: &FunctionInfo,
+        _ctx: &GenerationContext,
+    ) -> Result<String, PolyplugcError> {
         let ret_type: String = item
             .return_type
             .as_ref()
@@ -389,10 +443,10 @@ impl CodeGenerator for JsGenerator {
             .collect::<Vec<_>>()
             .join(", ");
 
-        format!(
+        Ok(format!(
             "export function {}({}): {} {{}}\n\n",
             item.name, params, ret_type
-        )
+        ))
     }
 
     fn file_extension(&self) -> &'static str {
@@ -403,8 +457,11 @@ impl CodeGenerator for JsGenerator {
         "js"
     }
 
-    fn generate_header(&self, _ctx: &GenerationContext) -> String {
-        String::new()
+    fn generate_header(&self, _ctx: &GenerationContext) -> Result<String, PolyplugcError> {
+        // No header WIRING: the abi.ts mirror opens straight into declarations
+        // (the file banner is prepended by the build script). langprint models no
+        // whole-module JS/TS scaffold to delegate to here.
+        Ok(String::new())
     }
 }
 
@@ -432,6 +489,7 @@ impl Default for JsGenerator {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)] // test code: a failed generate surfaces via expect
     use std::collections::HashMap;
 
     use super::*;
@@ -461,7 +519,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("export interface TestStruct"),
             "should emit TypeScript interface: {}",
@@ -501,7 +559,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         // In the interface, fn ptr fields should be typed as number.
         assert!(
             output.contains("callback: number;"),
@@ -532,7 +590,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("items: number;"),
             "Array items should be number in interface: {}",
@@ -568,7 +626,7 @@ mod tests {
             size_hint: Some(32),
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("bytes: number[];"),
             "fixed byte array should emit number[] interface field: {}",
@@ -623,7 +681,7 @@ mod tests {
             size_hint: None,
         };
 
-        let output: String = generator.generate_struct(&item, &ctx);
+        let output: String = generator.generate_struct(&item, &ctx).expect("generate");
         assert!(
             output.contains("export const POLICY_HOLDER_POLICY_OFFSET: number = 4;"),
             "repr(u32) enum field must sit at offset 4, got: {output}"
