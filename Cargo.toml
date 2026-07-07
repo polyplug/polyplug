@@ -67,8 +67,8 @@ serde_json = { version = "1.0" }
 syn = { version = "2", features = ["full", "parsing", "extra-traits"] }
 quote = "1"
 
-# Cross-language FORM emitter (co-developed sibling crate). Pinned to the crates.io release carrying the FORM-seam API (langprint 0.2.1).
-langprint = { version = "0.2.1" }
+# Cross-language FORM emitter (co-developed sibling crate). path = local dev/gate; version = crates.io pin for publish. PP-20 dev needs unreleased langprint fixes → flip to pure `version` at publish (E7).
+langprint = { version = "0.2.1", path = "../langprint" }
 
 # Dynamic loading
 libloading = { version = "0.9" }

@@ -3,7 +3,12 @@
 //! Generates typed function pointer typedefs, correct Array<T> representations,
 //! and snake_case naming in the `polyplug` namespace per D-35.
 
-use crate::data::{ConstInfo, EnumInfo, FunctionInfo, StructInfo, UnionInfo};
+use std::io;
+
+use langprint::backends::cpp_backend::{CppBackend, CppEnum, CppEnumVariant, DocsStyle};
+use langprint::renderers::EnumRenderer;
+
+use crate::data::{ConstInfo, EnumInfo, EnumVariant, FunctionInfo, StructInfo, UnionInfo};
 use crate::error::PolyplugcError;
 use crate::languages::{CodeGenerator, GenerationContext};
 
@@ -273,6 +278,15 @@ impl CppGenerator {
         }
     }
 
+    /// Split a doc string into per-line content for langprint's doc renderer.
+    ///
+    /// Mirrors `format_doc_comment`'s use of `str::lines()`: each line becomes a
+    /// `Vec` entry with no trailing newline, and a blank source line becomes an
+    /// empty entry (which langprint renders as a bare `///`).
+    fn doc_lines(doc: &str) -> Vec<String> {
+        doc.lines().map(String::from).collect::<Vec<String>>()
+    }
+
     /// Generate a typedef for a function pointer type.
     ///
     /// Returns (typedef_line, type_name_to_use_in_struct).
@@ -435,29 +449,58 @@ impl CodeGenerator for CppGenerator {
         item: &EnumInfo,
         _ctx: &GenerationContext,
     ) -> Result<String, PolyplugcError> {
-        let mut output = String::new();
-
-        if let Some(doc) = &item.doc {
-            output.push_str(&Self::format_doc_comment(doc, 0));
-        }
-
+        // langprint renders the `enum class Name : repr { … };` FORM (TripleSlash
+        // docs, `Name : repr` spacing); polyplug_codegen keeps the repr mapping
+        // and the mirror's explicit-value LOGIC: a valueless first variant is
+        // pinned to `= 0`, later valueless variants stay bare.
         let repr: String = Self::rust_type_to_cpp(&item.repr);
-        output.push_str(&format!("enum class {} : {} {{\n", item.name, repr));
-        for (i, variant) in item.variants.iter().enumerate() {
-            if let Some(doc) = &variant.doc {
-                output.push_str(&Self::format_doc_comment(doc, 4));
-            }
+        let variants: Vec<CppEnumVariant> = item
+            .variants
+            .iter()
+            .enumerate()
+            .map(|(i, variant): (usize, &EnumVariant)| {
+                let value: Option<String> = match variant.value {
+                    Some(value) => Some(value.to_string()),
+                    None if i == 0 => Some(String::from("0")),
+                    None => None,
+                };
+                CppEnumVariant {
+                    name: variant.name.clone(),
+                    value,
+                    docs: variant.doc.as_deref().map(Self::doc_lines),
+                }
+            })
+            .collect::<Vec<CppEnumVariant>>();
 
-            if let Some(value) = variant.value {
-                output.push_str(&format!("    {} = {},\n", variant.name, value));
-            } else if i == 0 {
-                output.push_str(&format!("    {} = 0,\n", variant.name));
-            } else {
-                output.push_str(&format!("    {},\n", variant.name));
-            }
-        }
-        output.push_str("};\n\n");
-        Ok(output)
+        let cpp_enum: CppEnum = CppEnum {
+            name: item.name.clone(),
+            variants,
+            is_enum_class: true,
+            underlying_type: Some(repr),
+            docs: item.doc.as_deref().map(Self::doc_lines),
+        };
+        let backend: CppBackend = CppBackend {
+            docs_style: DocsStyle::TripleSlash,
+            space_before_enum_base: true,
+            ..CppBackend::default()
+        };
+        let mut indent_level: i32 = 0;
+        let mut rendered: String = backend
+            .render_enum(
+                &cpp_enum,
+                None::<&str>,
+                None::<&str>,
+                None,
+                &mut indent_level,
+            )
+            .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+                path: String::from("sdks/cpp/abi/polyplug/abi.hpp"),
+                source,
+            })?;
+        // The mirror separates enums with a trailing blank line; langprint ends
+        // the declaration with a single newline.
+        rendered.push('\n');
+        Ok(rendered)
     }
 
     fn generate_union(
