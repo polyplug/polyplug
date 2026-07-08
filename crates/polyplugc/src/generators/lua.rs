@@ -25,10 +25,35 @@ use langprint::backends::lua_backend::{
     LuaBackend, LuaEnum, LuaEnumMember, LuaFunction, LuaFunctionRenderOptions,
 };
 use langprint::renderers::{EnumRenderer, FunctionRenderer};
+use langprint::{ImportEntry, ImportSet, TargetLanguage};
 use polyplug_codegen::PolyplugcError;
 use std::io;
 
 pub(crate) struct LuaGenerator;
+
+/// Render grouped Lua `local m = require("m")` blocks through langprint's
+/// [`ImportSet`] so the `require` syntax lives in one place rather than in
+/// hand-written `push_str("local … = require(…)\n")` sequences. Each inner slice
+/// is one `(binding, module)` group (deduped + sorted by binding name); non-empty
+/// groups are separated by a blank line. Empty groups are skipped, so callers can
+/// pass a conditional group unconditionally. The result ends in a single newline.
+fn lua_require_block(groups: &[&[(&str, &str)]]) -> String {
+    let mut blocks: Vec<String> = Vec::new();
+    for group in groups {
+        let mut set: ImportSet = ImportSet::new(TargetLanguage::Lua);
+        for (name, module) in *group {
+            set.add(ImportEntry::Require {
+                name: (*name).to_string(),
+                module: (*module).to_string(),
+            });
+        }
+        let rendered: String = set.render();
+        if !rendered.is_empty() {
+            blocks.push(rendered);
+        }
+    }
+    blocks.join("\n")
+}
 
 impl CodeGenerator for LuaGenerator {
     fn generate_host(
@@ -207,11 +232,15 @@ fn generate_bundle_manifest_lua(ir: &ValidatedIr) -> String {
 fn generate_lua_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(file_header());
-    // Conditionally require the bit library for bitwise enum support
+    // Conditionally require the bit library for bitwise enum support (sorted
+    // before `ffi` by ImportSet, matching the previous hand-written order).
+    let mut requires: Vec<(&str, &str)> = Vec::new();
     if needs_bit_library(&ir.enums) {
-        out.push_str("local bit = require(\"bit\")\n");
+        requires.push(("bit", "bit"));
     }
-    out.push_str("local ffi = require(\"ffi\")\n\n");
+    requires.push(("ffi", "ffi"));
+    out.push_str(&lua_require_block(&[requires.as_slice()]));
+    out.push('\n');
     out.push_str(cdef_guarded_block());
     out.push_str("cdef_guarded([[\n");
     for ty in &ir.types {
@@ -242,7 +271,8 @@ fn generate_lua_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
 fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(file_header());
-    out.push_str("local ffi = require(\"ffi\")\n\n");
+    out.push_str(&lua_require_block(&[&[("ffi", "ffi")]]));
+    out.push('\n');
 
     // ABI constants for host
     out.push_str("-- ABI error codes (match polyplug_abi.AbiErrorCode)\n");
@@ -309,8 +339,11 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
 fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(file_header());
-    out.push_str("local ffi = require(\"ffi\")\n");
-    out.push_str("local polyplug_guest = require(\"polyplug_guest\")\n\n");
+    out.push_str(&lua_require_block(&[&[
+        ("ffi", "ffi"),
+        ("polyplug_guest", "polyplug_guest"),
+    ]]));
+    out.push('\n');
     out.push_str("local M = {}\n\n");
 
     // The LuaLoader (Rust side) drives registration: after it execs the bundle
@@ -2247,11 +2280,14 @@ fn contract_name_to_lua_peer_class(name: &str) -> String {
 fn generate_lua_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) -> String {
     let mut out: String = String::new();
     out.push_str(file_header());
-    out.push_str("local ffi = require(\"ffi\")\n");
     // polyplug_abi declares GuestContractInterface, GuestContractInstance,
     // GuestContractHandle, AbiError, StringView, Buffer, HostApi — all needed below.
-    out.push_str("local polyplug_abi = require(\"polyplug_abi\")\n");
-    out.push_str("local polyplug_guest = require(\"polyplug_guest\")\n\n");
+    out.push_str(&lua_require_block(&[&[
+        ("ffi", "ffi"),
+        ("polyplug_abi", "polyplug_abi"),
+        ("polyplug_guest", "polyplug_guest"),
+    ]]));
+    out.push('\n');
 
     // cdef the per-function argument-pack structs (multi-param functions only).
     // Guarded: another generated module may have declared the same packs.
@@ -2555,11 +2591,14 @@ fn generate_lua_guest_peer_method(
 fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(file_header());
-    out.push_str("local ffi = require(\"ffi\")\n");
     // Require the polyplug_abi Lua SDK so the HostContractInterface / AbiError /
     // GuestContractInstance cdefs this module casts to are declared. Without this
     // require the ffi.cast(\"HostContractInterface*\", ...) below would fail at load.
-    out.push_str("local polyplug_abi = require(\"polyplug_abi\")\n\n");
+    out.push_str(&lua_require_block(&[&[
+        ("ffi", "ffi"),
+        ("polyplug_abi", "polyplug_abi"),
+    ]]));
+    out.push('\n');
 
     // cdef the per-function argument-pack structs (multi-param functions only).
     // Guarded: another generated module may have declared the same packs.
@@ -2632,7 +2671,8 @@ fn generate_lua_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str(file_header());
     out.push_str("-- Requires the polyplug_abi cdefs (HostContractInterface, AbiError, ...);\n");
     out.push_str("-- the host must require(\"polyplug_abi\") before requiring this module.\n");
-    out.push_str("local ffi = require(\"ffi\")\n\n");
+    out.push_str(&lua_require_block(&[&[("ffi", "ffi")]]));
+    out.push('\n');
 
     out.push_str("-- ABI error codes (match polyplug_abi.AbiErrorCode)\n");
     out.push_str("local AbiErrorCode = {\n");
