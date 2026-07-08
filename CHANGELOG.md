@@ -14,6 +14,13 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
 
 ### Fixed
 
+- **A Python struct with an `enum` field could not be instantiated.** The
+  generated `class Rec(ctypes.Structure)` emitted `("flag", Status)` in
+  `_fields_`, but a generated enum is an `enum.IntEnum` — not a ctypes type — so
+  the first use raised `TypeError: this type has no size`. The field now uses the
+  enum's repr ctype (matching the already-correct arg-pack path). Lua (`uint32_t`)
+  and C++ (`enum class`) were unaffected. Covered by
+  `*_struct_with_enum_field_round_trips` across all 6 languages.
 - **A struct with an `Array<T>` field generated type declarations in the wrong
   order.** The synthesized `ArrayOf_*` wrapper was emitted *after* the struct that
   embeds it, so the C-family type modules failed before any call ran: the Lua

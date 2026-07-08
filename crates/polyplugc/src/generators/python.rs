@@ -242,7 +242,7 @@ fn generate_python_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError
     }
 
     for ty in &ir.types {
-        generate_python_user_type(&mut out, ty);
+        generate_python_user_type(&mut out, ty, &ir.enums);
         out.push('\n');
     }
 
@@ -316,7 +316,7 @@ fn generate_host_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> 
     }
 
     for ty in &ir.types {
-        generate_python_user_type(&mut out, ty);
+        generate_python_user_type(&mut out, ty, &ir.enums);
         out.push('\n');
     }
 
@@ -878,11 +878,16 @@ fn generate_init_py(_ir: &ValidatedIr) -> String {
     out
 }
 
-fn generate_python_user_type(out: &mut String, ty: &ResolvedType) {
+fn generate_python_user_type(out: &mut String, ty: &ResolvedType, enums: &[EnumDef]) {
     out.push_str(&format!("class {}(ctypes.Structure):\n", ty.name));
     out.push_str("    _fields_: ClassVar = [\n");
     for field in &ty.fields {
-        let field_ty: String = python_type_name(&field.ty);
+        // An enum field uses its repr ctype: `ctypes.Structure._fields_` rejects an
+        // `enum.IntEnum` class ("this type has no size") at class-creation time.
+        let field_ty: String = match python_enum_for_type(&field.ty, enums) {
+            Some(e) => python_ctype_for_repr(&e.repr).to_owned(),
+            None => python_type_name(&field.ty),
+        };
         out.push_str(&format!("        (\"{}\", {}),\n", field.name, field_ty));
     }
     out.push_str("    ]\n");

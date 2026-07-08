@@ -3051,6 +3051,613 @@ fn csharp_struct_with_array_field_round_trips() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Struct with an ENUM field, returned as `Array<Rec>`. An enum has no ctypes
+// class (generated enums are `enum.IntEnum`) and no cdef'd C type, so the type
+// declaration must use the enum's repr integer for the field. Python got this
+// wrong: `class Rec(ctypes.Structure)` emitted `("flag", Status)`, which raised
+// `TypeError: this type has no size` the first time `Rec` was instantiated —
+// fixed in `generate_python_user_type`. lua (`uint32_t`) and cpp (`enum class`)
+// were already correct. This also exercises the enum struct-FIELD marshaling
+// path in the VM generators (distinct from the enum ARRAY-ELEMENT path above).
+// ═══════════════════════════════════════════════════════════════════════════
+
+const RECS_API_TOML: &str = r#"
+[[enum]]
+name = "Status"
+repr = "u32"
+[[enum.variants]]
+name = "Idle"
+value = "0"
+[[enum.variants]]
+name = "Busy"
+value = "7"
+
+[[types]]
+name = "Rec"
+fields = [
+    { name = "flag", type = "Status" },
+    { name = "n",    type = "u32" },
+]
+
+[[plugin_contract]]
+name = "sys.Recs"
+version = "1.0.0"
+
+[[plugin_contract.functions]]
+name = "recs"
+return = "Array<Rec>"
+"#;
+
+const RECS_BUNDLE_TOML: &str = r#"
+[bundle]
+name = "sys_recs"
+version = "1.0.0"
+api = "api.toml"
+loader = "native"
+
+[bundle.file]
+linux.x86_64 = "librecs.so"
+
+[[plugin]]
+name = "recs"
+implements = ["sys.Recs@1.0"]
+"#;
+
+const RECS_MAIN_RS: &str = r##"#[path = "../gen/guest/mod.rs"]
+mod generated;
+
+use std::sync::Mutex;
+
+use generated::contracts::SysRecsGuestContract;
+use generated::types::{ArrayOf_Rec, Rec, Status};
+use polyplug_guest::{GuestError, HostContext, ReturnArena};
+
+struct Plugin {
+    arena: Mutex<ReturnArena>,
+}
+
+impl SysRecsGuestContract for Plugin {
+    fn recs(&self) -> Result<ArrayOf_Rec, GuestError> {
+        let mut arena = self.arena.lock().expect("arena lock");
+        arena.reset();
+        let rows: [Rec; 2] = [
+            Rec { flag: Status::Busy, n: 1 },
+            Rec { flag: Status::Idle, n: 2 },
+        ];
+        let (items, len) = arena.alloc_array(&rows);
+        Ok(ArrayOf_Rec { items, len })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub fn polyplug_create_recs(host: HostContext) -> Box<dyn SysRecsGuestContract> {
+    Box::new(Plugin {
+        arena: Mutex::new(ReturnArena::new(host, 4096)),
+    })
+}
+
+fn main() {
+    // SAFETY: null host, never dereferenced (4 KiB buffer never overflows here).
+    let host: HostContext = unsafe { HostContext::new(core::ptr::null()) };
+    let plugin: Box<dyn SysRecsGuestContract> = polyplug_create_recs(host);
+    let w: ArrayOf_Rec = plugin.recs().expect("recs must return Ok");
+    // SAFETY: items/len from `alloc_array` on the still-alive arena (no reset since).
+    let rs: &[Rec] = unsafe { w.as_slice() };
+    assert_eq!(w.len, 2, "recs len");
+    assert_eq!(rs[0].flag, Status::Busy, "r0.flag");
+    assert_eq!(rs[0].n, 1, "r0.n");
+    assert_eq!(rs[1].flag, Status::Idle, "r1.flag");
+    assert_eq!(rs[1].n, 2, "r1.n");
+    println!("OK: Array<Rec{{enum field}}> round-tripped byte-correct");
+}
+"##;
+
+#[test]
+fn rust_struct_with_enum_field_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("driver");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(project_dir.join("src")).expect("create src dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "rust",
+        RECS_API_TOML,
+        RECS_BUNDLE_TOML,
+    );
+
+    let cargo_toml: String = format!(
+        "[package]\n\
+         name = \"driver\"\n\
+         version = \"0.1.0\"\n\
+         edition = \"2024\"\n\n\
+         [[bin]]\n\
+         name = \"driver\"\n\
+         path = \"src/main.rs\"\n\n\
+         [dependencies]\n\
+         polyplug_abi = {{ path = \"{}\" }}\n\
+         polyplug_guest = {{ path = \"{}\" }}\n\
+         polyplug_utils = {{ path = \"{}\" }}\n",
+        dep_path(polyplug_abi_path()),
+        dep_path(rust_guest_sdk_path()),
+        dep_path(polyplug_utils_path()),
+    );
+    fs::write(project_dir.join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
+    fs::write(project_dir.join("src/main.rs"), RECS_MAIN_RS).expect("write src/main.rs");
+
+    let target_dir: PathBuf = tmp.path().join("target");
+    let run: Output = Command::new(env!("CARGO"))
+        .arg("run")
+        .arg("--manifest-path")
+        .arg(project_dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .output()
+        .expect("failed to spawn cargo run for the recs driver");
+    assert!(
+        run.status.success(),
+        "recs driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+const CPP_RECS_MAIN: &str = r##"#include "guest/init.hpp"
+#include <polyplug/guest.hpp>
+#include <cassert>
+#include <cstdio>
+
+namespace polyplug_plugin {
+class RecsImpl : public SysRecsGuestContract {
+public:
+    RecsImpl() : arena_(4096) {}
+    polyplug_generated::ArrayOf_Rec recs() override {
+        arena_.reset();
+        polyplug_generated::Rec rows[2];
+        rows[0].flag = polyplug_generated::Status::Busy;
+        rows[0].n = 1;
+        rows[1].flag = polyplug_generated::Status::Idle;
+        rows[1].n = 2;
+        polyplug::ArrayRef ref = arena_.alloc_array(rows, 2);
+        return polyplug_generated::ArrayOf_Rec{ref.items, ref.len};
+    }
+private:
+    polyplug::ReturnArena arena_;
+};
+SysRecsGuestContract* polyplug_create_recs(const HostApi*) { return new RecsImpl(); }
+}  // namespace polyplug_plugin
+
+int main() {
+    polyplug_plugin::SysRecsGuestContract* impl =
+        polyplug_plugin::polyplug_create_recs(nullptr);
+    polyplug_generated::ArrayOf_Rec w = impl->recs();
+    assert(w.len == 2);
+    const polyplug_generated::Rec* rs = w.elements();
+    assert(rs[0].flag == polyplug_generated::Status::Busy);
+    assert(rs[0].n == 1);
+    assert(rs[1].flag == polyplug_generated::Status::Idle);
+    assert(rs[1].n == 2);
+    std::printf("OK: Array<Rec{enum field}> round-tripped byte-correct\n");
+    delete impl;
+    return 0;
+}
+"##;
+
+#[test]
+fn cpp_struct_with_enum_field_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("plugin");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "cpp",
+        RECS_API_TOML,
+        RECS_BUNDLE_TOML,
+    );
+
+    let main_cpp: PathBuf = project_dir.join("driver.cpp");
+    fs::write(&main_cpp, CPP_RECS_MAIN).expect("write driver.cpp");
+    let exe: PathBuf = project_dir.join("driver");
+
+    let build: Output = Command::new("c++")
+        .arg("-std=c++20")
+        .arg("-O0")
+        .arg("-I")
+        .arg(&gen_dir)
+        .arg("-I")
+        .arg(cpp_abi_include())
+        .arg("-I")
+        .arg(cpp_guest_include())
+        .arg(&main_cpp)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("failed to spawn c++ compiler");
+    assert!(
+        build.status.success(),
+        "c++ build of the recs driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        build.status.code(),
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    let run: Output = Command::new(&exe)
+        .output()
+        .expect("failed to run recs driver");
+    assert!(
+        run.status.success(),
+        "C++ recs driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "C++ recs driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+const LUA_RECS_BODY: &str = r#"
+local ffi = require("ffi")
+require("polyplug_abi")
+require("generated.guest.types")
+local contracts = require("generated.guest.contracts")
+
+local ARENA = ffi.new("uint8_t[?]", 65536)
+local cursor = 1
+local function arena_alloc(size, _arena)
+    local addr = ffi.cast("uintptr_t", ARENA) + cursor
+    cursor = cursor + tonumber(size)
+    return addr
+end
+
+contracts.set_recs_factory(function(_host)
+    return {
+        recs = function(_self)
+            return { { flag = 7, n = 1 }, { flag = 0, n = 2 } }
+        end,
+    }
+end)
+
+local regs = polyplug_init(1, 1)
+local entry = regs["sys.Recs"]
+assert(entry ~= nil, "sys.Recs must be registered")
+local inst = entry.factory(0)
+
+local out = ffi.new("ArrayOf_Rec[1]")
+entry.functions[0](inst, 0, ffi.cast("uintptr_t", out), 0, arena_alloc)
+assert(tonumber(out[0].len) == 2, "recs len")
+local rs = ffi.cast("Rec*", out[0].items)
+assert(rs[0].flag == 7, "r0.flag")
+assert(rs[0].n == 1, "r0.n")
+assert(rs[1].flag == 0, "r1.flag")
+assert(rs[1].n == 2, "r1.n")
+
+io.write("OK: Array<Rec{enum field}> round-tripped byte-correct\n")
+"#;
+
+#[test]
+fn lua_struct_with_enum_field_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("generated");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "lua",
+        RECS_API_TOML,
+        RECS_BUNDLE_TOML,
+    );
+
+    let guest_dir: PathBuf = repo_root().join("sdks").join("lua").join("guest");
+    let abi_dir: PathBuf = repo_root().join("sdks").join("lua").join("abi");
+    let project_fwd: String = project_dir.to_string_lossy().replace('\\', "/");
+    let guest_fwd: String = guest_dir.to_string_lossy().replace('\\', "/");
+    let abi_fwd: String = abi_dir.to_string_lossy().replace('\\', "/");
+    let driver: String = format!(
+        "package.path = \"{project_fwd}/?.lua;{guest_fwd}/?.lua;{abi_fwd}/?.lua;\" .. package.path\n{LUA_RECS_BODY}"
+    );
+    let driver_path: PathBuf = project_dir.join("driver.lua");
+    fs::write(&driver_path, driver).expect("write driver.lua");
+
+    let run: Output = Command::new("luajit")
+        .arg(&driver_path)
+        .output()
+        .expect("failed to spawn luajit");
+    assert!(
+        run.status.success(),
+        "LuaJIT recs driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "LuaJIT recs driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+const JS_RECS_DRIVER: &str = r#"import { RECS_INTERFACE, setRecsFactory } from "./generated/guest/contracts.ts";
+
+const MEM = new ArrayBuffer(1 << 16);
+const DV = new DataView(MEM);
+let cursor = 4097;
+const bridge = {
+  writeU32: (p: number, v: number) => DV.setUint32(p, v >>> 0, true),
+  writeI32: (p: number, v: number) => DV.setInt32(p, v | 0, true),
+  writeF32: (p: number, v: number) => DV.setFloat32(p, v, true),
+  writeF64: (p: number, v: number) => DV.setFloat64(p, v, true),
+  writeByte: (p: number, v: number) => DV.setUint8(p, v & 0xff),
+  readU32: (p: number) => DV.getUint32(p, true),
+  arenaAlloc: (size: number, _arena: number) => {
+    const a = cursor;
+    cursor += Number(size);
+    return [a % 4294967296, Math.floor(a / 4294967296)];
+  },
+};
+
+setRecsFactory(((_b: any, _lo: number, _hi: number) => ({
+  fn0: () => [{ flag: 7, n: 1 }, { flag: 0, n: 2 }],
+})) as any);
+
+const impl = (RECS_INTERFACE.factory as any)(bridge, 0, 0);
+const OUT = 16;
+(RECS_INTERFACE.functions as any)[0](impl, 0, OUT, 0, bridge);
+const items = DV.getUint32(OUT, true) + DV.getUint32(OUT + 4, true) * 4294967296;
+const len = DV.getUint32(OUT + 8, true);
+if (len !== 2) throw new Error("recs len " + len);
+// Rec { flag: u32@0, n: u32@4 } -> sizeof 8.
+if (DV.getUint32(items, true) !== 7 || DV.getUint32(items + 4, true) !== 1) throw new Error("r0");
+if (DV.getUint32(items + 8, true) !== 0 || DV.getUint32(items + 12, true) !== 2) throw new Error("r1");
+
+console.log("OK: Array<Rec{enum field}> round-tripped byte-correct");
+"#;
+
+#[test]
+fn js_struct_with_enum_field_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("generated");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "js-quickjs",
+        RECS_API_TOML,
+        RECS_BUNDLE_TOML,
+    );
+
+    let driver_path: PathBuf = project_dir.join("driver.ts");
+    fs::write(&driver_path, JS_RECS_DRIVER).expect("write driver.ts");
+
+    let run: Output = Command::new("deno")
+        .arg("run")
+        .arg("--no-lock")
+        .arg(&driver_path)
+        .output()
+        .expect("failed to spawn deno run");
+    assert!(
+        run.status.success(),
+        "Deno recs driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "Deno recs driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+/// Python driver: this is the direct regression for the enum-struct-field bug —
+/// before the fix, importing `Rec` raised `TypeError: this type has no size`.
+const PY_RECS_DRIVER: &str = r#"import ctypes
+from types import SimpleNamespace
+from guest.types import ArrayOf_Rec, Rec
+from guest.contracts import recs_recs_abi
+
+BUF = ctypes.create_string_buffer(1 << 16)
+BASE = ctypes.addressof(BUF)
+_cursor = [1]
+
+
+def arena_alloc(size, _arena):
+    a = BASE + _cursor[0]
+    _cursor[0] += int(size)
+    return a
+
+
+impl = SimpleNamespace(recs=lambda: [
+    SimpleNamespace(flag=7, n=1),
+    SimpleNamespace(flag=0, n=2),
+])
+
+out = ArrayOf_Rec()
+recs_recs_abi(impl, 0, ctypes.addressof(out), 0, arena_alloc)
+assert out.len == 2, "recs len=%d" % out.len
+esize = ctypes.sizeof(Rec)
+
+
+def read(i):
+    r = Rec.from_address(out.items + i * esize)
+    return (int(r.flag), int(r.n))
+
+
+assert read(0) == (7, 1), read(0)
+assert read(1) == (0, 2), read(1)
+print("OK: Array<Rec{enum field}> round-tripped byte-correct")
+"#;
+
+#[test]
+fn python_struct_with_enum_field_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "python",
+        RECS_API_TOML,
+        RECS_BUNDLE_TOML,
+    );
+
+    let driver_path: PathBuf = project_dir.join("driver.py");
+    fs::write(&driver_path, PY_RECS_DRIVER).expect("write driver.py");
+
+    let sdk: PathBuf = repo_root().join("sdks").join("python");
+    let shim: PathBuf = project_dir.join("shim");
+    fs::create_dir_all(shim.join("polyplug").join("abi")).expect("create shim polyplug/abi");
+    fs::write(shim.join("polyplug").join("__init__.py"), b"").expect("write polyplug init");
+    fs::write(shim.join("polyplug").join("abi").join("__init__.py"), b"")
+        .expect("write polyplug.abi init");
+    fs::copy(
+        sdk.join("abi").join("abi.py"),
+        shim.join("polyplug").join("abi").join("abi.py"),
+    )
+    .expect("copy polyplug/abi/abi.py");
+
+    let pythonpath: String = env::join_paths([
+        gen_dir.clone(),
+        sdk.join("guest"),
+        sdk.join("polyplug_abi"),
+        shim,
+    ])
+    .expect("join PYTHONPATH")
+    .to_string_lossy()
+    .into_owned();
+
+    let run: Output = Command::new("python3")
+        .arg(&driver_path)
+        .env("PYTHONPATH", &pythonpath)
+        .output()
+        .expect("failed to spawn python3");
+    assert!(
+        run.status.success(),
+        "python3 recs driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "python3 recs driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+/// C# driver for struct-with-enum-field.
+const CS_RECS_DRIVER: &str = r####"using Polyplug.Abi;
+using Polyplug.Guest;
+
+static void Check(bool cond, string what) { if (!cond) throw new Exception("mismatch: " + what); }
+
+var plugin = new RecsPlugin();
+unsafe
+{
+    ArrayOf_Rec w = plugin.Recs();
+    Check(w.len == 2, "recs.len");
+    Rec* rs = (Rec*)(void*)(nuint)w.items;
+    Check(rs[0].flag == Status.Busy && rs[0].n == 1, "r0");
+    Check(rs[1].flag == Status.Idle && rs[1].n == 2, "r1");
+}
+Console.WriteLine("OK: Array<Rec{enum field}> round-tripped byte-correct");
+
+sealed class RecsPlugin : ISysRecsGuestContract
+{
+    private readonly ReturnArena _arena = new(4096);
+    public ArrayOf_Rec Recs()
+    {
+        _arena.Reset();
+        Rec[] rows =
+        {
+            new() { flag = Status.Busy, n = 1 },
+            new() { flag = Status.Idle, n = 2 },
+        };
+        var (items, len) = _arena.AllocArray<Rec>(rows);
+        return new ArrayOf_Rec { items = items, len = len };
+    }
+}
+"####;
+
+#[test]
+fn csharp_struct_with_enum_field_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "csharp",
+        RECS_API_TOML,
+        RECS_BUNDLE_TOML,
+    );
+
+    fs::write(project_dir.join("Program.cs"), CS_RECS_DRIVER).expect("write Program.cs");
+
+    let abi_csproj: PathBuf = repo_root().join("sdks/csharp/abi/Polyplug.Abi.csproj");
+    let guest_csproj: PathBuf = repo_root().join("sdks/csharp/guest/Polyplug.Guest.csproj");
+    let csproj: String = format!(
+        "<Project Sdk=\"Microsoft.NET.Sdk\">\n  \
+         <PropertyGroup>\n    \
+         <OutputType>Exe</OutputType>\n    \
+         <TargetFramework>net10.0</TargetFramework>\n    \
+         <Nullable>enable</Nullable>\n    \
+         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n    \
+         <ImplicitUsings>enable</ImplicitUsings>\n  \
+         </PropertyGroup>\n  \
+         <ItemGroup>\n    \
+         <ProjectReference Include=\"{abi}\" />\n    \
+         <ProjectReference Include=\"{guest}\" />\n  \
+         </ItemGroup>\n\
+         </Project>\n",
+        abi = abi_csproj.display(),
+        guest = guest_csproj.display(),
+    );
+    let csproj_path: PathBuf = project_dir.join("recs.csproj");
+    fs::write(&csproj_path, csproj).expect("write recs.csproj");
+
+    let run: Output = Command::new("dotnet")
+        .arg("run")
+        .arg("-c")
+        .arg("Release")
+        .arg("--project")
+        .arg(&csproj_path)
+        .output()
+        .expect("failed to spawn dotnet");
+    assert!(
+        run.status.success(),
+        "dotnet recs driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "dotnet recs driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Buffer regression guard (rust). `Buffer` is an OWNING type — deliberately NOT
 // `Copy` (unlike borrowed `StringView`) — so a struct/arg-pack embedding it must
 // NOT derive `Copy/Clone`, must `use polyplug_abi::Buffer`, and a multi-param
