@@ -39,6 +39,34 @@ Runtime proof: `examples/verify_to_str_errors.sh` (`just verify-to-str-errors`)
 executes every SDK's real `to_str` against an invalid view and a valid view,
 asserting the invalid one errors and the valid one decodes.
 
+## Method Contracts (Buffer)
+
+`Buffer { ptr, len, cap }` is an owning byte buffer. Its one golden helper reads
+those bytes **raw** — the byte counterpart to `to_str`'s decoding:
+
+| Method | Contract |
+|---|---|
+| `as_bytes` | Borrow the buffer's `len` bytes. **Never decodes** — byte-exact, so interior NULs and non-UTF-8 bytes are preserved (it is the byte primitive, like C++ `to_string_view` is for text). A null pointer or zero length yields an empty view without dereferencing. |
+
+**Zero-copy where the runtime allows it.** `as_bytes` returns a view aliasing the
+buffer's own memory (no allocation), valid only while the buffer's allocation is
+live:
+
+| Language | Return | Copy? |
+|---|---|---|
+| Rust (`sdks/rust/guest`) | `&[u8]` | zero-copy |
+| C++ (`sdks/cpp/abi`) | `std::basic_string_view<uint8_t>` | zero-copy |
+| C# (`sdks/csharp/abi`) | `ReadOnlySpan<byte>` | zero-copy |
+| Python (`sdks/python`) | `memoryview` | zero-copy |
+| Lua (`sdks/lua/abi`) | `(const uint8_t* cdata, len)` pair | zero-copy |
+| JS (`sdks/js/abi` Deno, `sdks/js/guest` QuickJS) | `Uint8Array` | **copies** — the Deno FFI pointer view and the QuickJS bridge cannot view host memory, so the bytes are materialized |
+
+Runtime proof: `examples/verify_as_bytes.sh` (`just verify-as-bytes`) executes
+every SDK's real `as_bytes` against a buffer of `{0x00, 0xFF, 0x41}` (interior
+NUL + a non-UTF-8 byte) and a zero-length buffer, asserting byte-exact readback
+and an empty view. Zero-copy is asserted structurally in the Rust unit tests
+(pointer identity) and the C# xunit tests (mutate-then-observe).
+
 ## Contract / Bundle ID Contracts (ContractId)
 
 Every language SDK exposes the canonical FNV-1a 64-bit ID scheme so authors

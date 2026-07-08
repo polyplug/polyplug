@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ctypes
 
-from polyplug_abi.abi import StringView
+from polyplug_abi.abi import Buffer, StringView
 
 
 def to_str(sv: StringView) -> str:
@@ -89,6 +89,31 @@ def split(sv: StringView, delimiter: str) -> list[str]:
     if not delimiter:
         return [s]
     return s.split(delimiter)
+
+
+def as_bytes(buf: Buffer) -> memoryview:
+    """Borrow a Buffer's bytes as a zero-copy ``memoryview``.
+
+    Unlike :func:`to_str`, this never decodes: the view is byte-exact, so
+    interior NULs and non-UTF-8 bytes are preserved. The returned ``memoryview``
+    overlays the buffer's own memory (no copy); the caller must keep the
+    buffer's allocation alive for as long as the view is read.
+
+    A null pointer or zero length yields an empty view without dereferencing
+    the pointer.
+
+    Args:
+        buf: Buffer from polyplug ABI.
+
+    Returns:
+        A zero-copy ``memoryview`` over ``buf``'s ``len`` bytes.
+    """
+    if not buf.ptr or buf.len == 0:
+        return memoryview(b"")
+    # from_address overlays existing memory (no copy); memoryview roots the
+    # ctypes array so it lives as long as the view.
+    overlay = (ctypes.c_char * buf.len).from_address(buf.ptr)
+    return memoryview(overlay)
 
 
 def bytes_as_view(data: bytes) -> StringView:

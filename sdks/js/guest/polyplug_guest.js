@@ -188,7 +188,8 @@ export default {
     allocString,
     allocStringArena,
     freeBytes,
-    toStr
+    toStr,
+    asBytes
 };
 
 /**
@@ -445,6 +446,33 @@ export function toStr(bridge, sv) {
         i += extra + 1;
     }
     return str;
+}
+
+/**
+ * Borrow a Buffer's bytes as a Uint8Array.
+ *
+ * Unlike {@link toStr} this never decodes: the bytes are byte-exact, so interior
+ * NULs and non-UTF-8 bytes are preserved. QuickJS cannot dereference a host
+ * pointer, so the bytes are read through the bridge — a copy is unavoidable on
+ * this runtime (there is no zero-copy view of host memory from the guest VM).
+ *
+ * @param {Object} bridge - Host-capability bridge passed in by the loader.
+ * @param {Buffer} buf - Buffer from polyplug ABI (ptr_lo/ptr_hi split, len).
+ * @returns {Uint8Array} The buffer's `len` bytes.
+ *
+ * @example
+ * const bytes = asBytes(bridge, buffer);
+ */
+export function asBytes(bridge, buf) {
+    if (!buf || buf.len === 0) {
+        return new Uint8Array(0);
+    }
+    // Reconstruct the 64-bit pointer from the QuickJS hi/lo split.
+    const ptr = (BigInt(buf.ptr_hi) << 32n) + BigInt(buf.ptr_lo);
+    if (ptr === 0n) {
+        return new Uint8Array(0);
+    }
+    return readBytes(bridge, ptr, buf.len);
 }
 
 /**

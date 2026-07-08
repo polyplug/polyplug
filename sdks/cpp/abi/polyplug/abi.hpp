@@ -1279,6 +1279,15 @@ inline std::string_view to_string_view(StringView sv) noexcept {
     return {reinterpret_cast<const char*>(sv.ptr), sv.len};
 }
 
+/// Borrow a Buffer's bytes as a zero-copy view (no allocation, no UTF-8 decode).
+/// A basic_string_view<uint8_t> aliases the buffer's own memory, so it is valid
+/// only while the buffer's allocation is live. A null pointer or zero length
+/// yields an empty view without dereferencing the pointer.
+inline std::basic_string_view<std::uint8_t> as_bytes(Buffer b) noexcept {
+    if (!b.ptr || b.len == 0) return {};
+    return {reinterpret_cast<const std::uint8_t*>(b.ptr), b.len};
+}
+
 /// Returns true if every byte of `s` is part of a well-formed UTF-8 sequence
 /// (rejecting overlong forms, surrogates, and code points above U+10FFFF) —
 /// matching Rust's core::str::from_utf8 strictness. C++ has no standard UTF-8

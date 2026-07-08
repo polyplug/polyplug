@@ -142,6 +142,21 @@ public static class StringViewHelper
     public static string ToStr(StringView sv) => ToString(sv);
 
     /// <summary>
+    /// Borrows a Buffer's bytes as a zero-copy <see cref="ReadOnlySpan{T}"/>.
+    /// Unlike <see cref="ToString(StringView)"/> this never decodes: the span is
+    /// byte-exact (interior NULs and non-UTF-8 bytes preserved) and aliases the
+    /// buffer's own memory (no copy), so it is valid only while the buffer's
+    /// allocation is live. A null pointer or zero length yields an empty span.
+    /// </summary>
+    public static unsafe ReadOnlySpan<byte> AsBytes(this Buffer b)
+    {
+        if (b.Ptr == IntPtr.Zero || b.Len == 0)
+            return ReadOnlySpan<byte>.Empty;
+
+        return new ReadOnlySpan<byte>((void*)b.Ptr, (int)b.Len);
+    }
+
+    /// <summary>
     /// Checks if a StringView starts with the given prefix.
     /// </summary>
     public static bool StartsWith(StringView sv, string prefix)
@@ -486,6 +501,21 @@ function M.to_str(sv)
     return s
 end
 
+--- Borrow a Buffer's bytes as a zero-copy (ptr, len) pair.
+-- Unlike M.to_str this never decodes: the bytes are byte-exact (interior NULs
+-- and non-UTF-8 bytes are preserved). Returns a `const uint8_t*` cdata that
+-- aliases the buffer's own memory (no copy) plus the length; index it as
+-- ptr[0]..ptr[len-1]. The pointer is valid only while the buffer's allocation
+-- is live. A null or zero-length buffer returns (nil, 0) without dereferencing.
+-- @param buf Buffer from polyplug ABI (ffi.cdata), or nil
+-- @return const uint8_t* pointer cdata (or nil), number length
+function M.as_bytes(buf)
+    if buf == nil or buf.ptr == nil or buf.len == 0 then
+        return nil, 0
+    end
+    return ffi.cast("const uint8_t*", buf.ptr), tonumber(buf.len)
+end
+
 --- Check if StringView starts with prefix.
 -- @param sv StringView from polyplug ABI
 -- @param prefix string Prefix string to check for
@@ -585,6 +615,38 @@ export function stringViewToString(sv: StringView | null | undefined): string {
     if (pointer === null) return '';
     const bytes: ArrayBuffer = new deno.UnsafePointerView(pointer).getArrayBuffer(Number(sv.len));
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+}
+
+/**
+ * Borrow a Buffer's bytes as a Uint8Array.
+ *
+ * Unlike {@link toStr} this never decodes: the bytes are byte-exact (interior
+ * NULs and non-UTF-8 bytes are preserved). Deno's FFI pointer view copies host
+ * memory into a fresh ArrayBuffer, so a zero-copy view is not possible on this
+ * runtime — the returned array owns its bytes.
+ * @param buf - The Buffer to read.
+ * @returns The buffer's `len` bytes, or an empty array for a null/zero-length buffer.
+ * @throws Error when no Deno FFI environment is available to read Buffer memory.
+ */
+export function asBytes(buf: Buffer | null | undefined): Uint8Array {
+    if (!buf || buf.ptr === 0n || buf.len === 0) return new Uint8Array(0);
+    const deno = (globalThis as {
+        Deno?: {
+            UnsafePointer: { create(value: bigint): unknown };
+            UnsafePointerView: new (pointer: unknown) => {
+                getArrayBuffer(byteLength: number): ArrayBuffer;
+            };
+        };
+    }).Deno;
+    if (deno === undefined) {
+        throw new Error(
+            'asBytes: no Deno FFI environment is available to read Buffer memory ' +
+            '(Deno.UnsafePointerView is required; refusing to silently return empty bytes)',
+        );
+    }
+    const pointer: unknown = deno.UnsafePointer.create(buf.ptr);
+    if (pointer === null) return new Uint8Array(0);
+    return new Uint8Array(new deno.UnsafePointerView(pointer).getArrayBuffer(Number(buf.len)));
 }
 
 /**
@@ -723,6 +785,15 @@ namespace abi {
 inline std::string_view to_string_view(StringView sv) noexcept {
     if (!sv.ptr || sv.len == 0) return {};
     return {reinterpret_cast<const char*>(sv.ptr), sv.len};
+}
+
+/// Borrow a Buffer's bytes as a zero-copy view (no allocation, no UTF-8 decode).
+/// A basic_string_view<uint8_t> aliases the buffer's own memory, so it is valid
+/// only while the buffer's allocation is live. A null pointer or zero length
+/// yields an empty view without dereferencing the pointer.
+inline std::basic_string_view<std::uint8_t> as_bytes(Buffer b) noexcept {
+    if (!b.ptr || b.len == 0) return {};
+    return {reinterpret_cast<const std::uint8_t*>(b.ptr), b.len};
 }
 
 /// Returns true if every byte of `s` is part of a well-formed UTF-8 sequence

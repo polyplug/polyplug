@@ -510,6 +510,12 @@ verify-id-helpers:
 verify-to-str-errors:
     @bash examples/verify_to_str_errors.sh
 
+# Cross-language runtime proof that Buffer `as_bytes` returns the buffer's bytes
+# byte-exact (never UTF-8 decoded) in every SDK. sdk_validator enforces the
+# helper exists; this proves the behavior.
+verify-as-bytes:
+    @bash examples/verify_as_bytes.sh
+
 # Guard against inline fully-qualified paths (CLAUDE.md import rule). Requires ast-grep.
 verify-no-fq-paths:
     @echo "=== Verifying no inline fully-qualified paths ==="
@@ -533,7 +539,7 @@ gate:
     @echo "✓✓✓ GATE PASSED — fmt, hygiene, SDK validator, ABI-mirror drift, lint, every SDK build, docs, full test matrix."
 
 # Full test matrix: rust workspace + every SDK host suite + C++/C# SDK + integration + cross-language conformance.
-test-all: download-native-local test-rust-all test-host-libs test-sdk-cpp test-sdk-csharp test-integration verify-id-helpers verify-to-str-errors
+test-all: download-native-local test-rust-all test-host-libs test-sdk-cpp test-sdk-csharp test-integration verify-id-helpers verify-to-str-errors verify-as-bytes
     @echo ""
     @echo "=== Full Test Matrix Passed ==="
 

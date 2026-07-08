@@ -1315,6 +1315,21 @@ function M.to_str(sv)
     return s
 end
 
+--- Borrow a Buffer's bytes as a zero-copy (ptr, len) pair.
+-- Unlike M.to_str this never decodes: the bytes are byte-exact (interior NULs
+-- and non-UTF-8 bytes are preserved). Returns a `const uint8_t*` cdata that
+-- aliases the buffer's own memory (no copy) plus the length; index it as
+-- ptr[0]..ptr[len-1]. The pointer is valid only while the buffer's allocation
+-- is live. A null or zero-length buffer returns (nil, 0) without dereferencing.
+-- @param buf Buffer from polyplug ABI (ffi.cdata), or nil
+-- @return const uint8_t* pointer cdata (or nil), number length
+function M.as_bytes(buf)
+    if buf == nil or buf.ptr == nil or buf.len == 0 then
+        return nil, 0
+    end
+    return ffi.cast("const uint8_t*", buf.ptr), tonumber(buf.len)
+end
+
 --- Check if StringView starts with prefix.
 -- @param sv StringView from polyplug ABI
 -- @param prefix string Prefix string to check for

@@ -1520,6 +1520,38 @@ export function stringViewToString(sv: StringView | null | undefined): string {
 }
 
 /**
+ * Borrow a Buffer's bytes as a Uint8Array.
+ *
+ * Unlike {@link toStr} this never decodes: the bytes are byte-exact (interior
+ * NULs and non-UTF-8 bytes are preserved). Deno's FFI pointer view copies host
+ * memory into a fresh ArrayBuffer, so a zero-copy view is not possible on this
+ * runtime — the returned array owns its bytes.
+ * @param buf - The Buffer to read.
+ * @returns The buffer's `len` bytes, or an empty array for a null/zero-length buffer.
+ * @throws Error when no Deno FFI environment is available to read Buffer memory.
+ */
+export function asBytes(buf: Buffer | null | undefined): Uint8Array {
+    if (!buf || buf.ptr === 0n || buf.len === 0) return new Uint8Array(0);
+    const deno = (globalThis as {
+        Deno?: {
+            UnsafePointer: { create(value: bigint): unknown };
+            UnsafePointerView: new (pointer: unknown) => {
+                getArrayBuffer(byteLength: number): ArrayBuffer;
+            };
+        };
+    }).Deno;
+    if (deno === undefined) {
+        throw new Error(
+            'asBytes: no Deno FFI environment is available to read Buffer memory ' +
+            '(Deno.UnsafePointerView is required; refusing to silently return empty bytes)',
+        );
+    }
+    const pointer: unknown = deno.UnsafePointer.create(buf.ptr);
+    if (pointer === null) return new Uint8Array(0);
+    return new Uint8Array(new deno.UnsafePointerView(pointer).getArrayBuffer(Number(buf.len)));
+}
+
+/**
  * Strip a prefix from a string.
  * @param sv - The input StringView or string.
  * @param prefix - The prefix to strip.

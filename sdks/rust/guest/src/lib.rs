@@ -63,7 +63,7 @@ use core::fmt;
 use core::{mem, ptr, slice, str};
 
 use polyplug_abi::types::LogLevel;
-use polyplug_abi::{AbiError, AbiErrorCode, CallArena, HostApi, StringView};
+use polyplug_abi::{AbiError, AbiErrorCode, Buffer, CallArena, HostApi, StringView};
 
 /// Per-instance handle to the host runtime that created a plugin instance.
 ///
@@ -502,11 +502,37 @@ pub unsafe fn split<'a>(sv: &'a StringView, delimiter: &str) -> Result<Vec<&'a s
     Ok(s.split(delimiter).collect())
 }
 
+/// Borrow a `Buffer`'s bytes as a slice — zero-copy, no allocation.
+///
+/// A null pointer or zero length yields an empty slice without dereferencing
+/// the pointer. The returned slice borrows the buffer's memory for the
+/// lifetime `'a`, so it is valid only while the buffer's allocation is live.
+///
+/// # Safety
+/// For a non-null, non-empty buffer the caller must guarantee `buf.ptr` is
+/// valid for `buf.len` bytes and the memory is live for the borrow.
+///
+/// # Example
+/// ```rust
+/// use polyplug_abi::Buffer;
+/// use polyplug_guest::as_bytes;
+///
+/// let mut data = *b"raw";
+/// let buf = Buffer { ptr: data.as_mut_ptr(), len: 3, cap: 3 };
+/// // SAFETY: `buf` borrows a live byte slice for the duration of this call.
+/// assert_eq!(unsafe { as_bytes(&buf) }, b"raw");
+/// ```
+pub unsafe fn as_bytes(buf: &Buffer) -> &[u8] {
+    // SAFETY: forwarded to the caller via this function's `# Safety` contract;
+    // `Buffer::as_slice` handles the null/zero-length cases without a deref.
+    unsafe { buf.as_slice() }
+}
+
 #[cfg(test)]
 mod tests {
     use core::ptr;
 
-    use polyplug_abi::{AbiErrorCode, StringView};
+    use polyplug_abi::{AbiErrorCode, Buffer, StringView};
 
     fn view(bytes: &[u8]) -> StringView {
         StringView {
@@ -603,5 +629,45 @@ mod tests {
             unsafe { crate::split(&sv, "::") }.ok(),
             Some(vec!["a", "b", "c"])
         );
+    }
+
+    #[test]
+    fn as_bytes_null_buffer_is_empty() {
+        let buf = Buffer {
+            ptr: ptr::null_mut(),
+            len: 5,
+            cap: 5,
+        };
+        // SAFETY: a null buffer is explicitly legal input for as_bytes.
+        assert!(unsafe { crate::as_bytes(&buf) }.is_empty());
+    }
+
+    #[test]
+    fn as_bytes_zero_len_is_empty() {
+        let mut data = *b"x";
+        let buf = Buffer {
+            ptr: data.as_mut_ptr(),
+            len: 0,
+            cap: 1,
+        };
+        // SAFETY: the buffer borrows a live byte slice for the duration of the call.
+        assert!(unsafe { crate::as_bytes(&buf) }.is_empty());
+    }
+
+    #[test]
+    fn as_bytes_round_trips_raw_bytes() {
+        // Include an interior NUL and a non-UTF-8 byte: as_bytes is byte-exact,
+        // never string-decoded.
+        let mut data = [0x00u8, 0xFF, 0x41, 0x00];
+        let buf = Buffer {
+            ptr: data.as_mut_ptr(),
+            len: data.len(),
+            cap: data.len(),
+        };
+        // SAFETY: the buffer borrows a live byte slice for the duration of the call.
+        let got: &[u8] = unsafe { crate::as_bytes(&buf) };
+        assert_eq!(got, &[0x00, 0xFF, 0x41, 0x00]);
+        // Zero-copy: the slice must alias the buffer's own memory, not a copy.
+        assert_eq!(got.as_ptr(), data.as_ptr());
     }
 }

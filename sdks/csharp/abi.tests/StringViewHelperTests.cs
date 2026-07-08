@@ -88,5 +88,70 @@ namespace Polyplug.Abi.Tests
         {
             Assert.Equal(new[] { "a", "b", "c" }, SplitPinned("a::b::c", "::"));
         }
+
+        [Fact]
+        public unsafe void AsBytesReturnsRawBytesByteExact()
+        {
+            // Interior NUL and 0xFF: as_bytes is byte-exact, never UTF-8 decoded.
+            byte[] data = { 0x00, 0xFF, 0x41, 0x00 };
+            fixed (byte* p = data)
+            {
+                Polyplug.Abi.Buffer buf = new Polyplug.Abi.Buffer
+                {
+                    Ptr = (IntPtr)p,
+                    Len = (nuint)data.Length,
+                    Cap = (nuint)data.Length,
+                };
+                Assert.True(buf.AsBytes().SequenceEqual(data));
+            }
+        }
+
+        [Fact]
+        public unsafe void AsBytesNullBufferIsEmpty()
+        {
+            Polyplug.Abi.Buffer buf = new Polyplug.Abi.Buffer
+            {
+                Ptr = IntPtr.Zero,
+                Len = 5,
+                Cap = 5,
+            };
+            Assert.True(buf.AsBytes().IsEmpty);
+        }
+
+        [Fact]
+        public unsafe void AsBytesZeroLengthIsEmpty()
+        {
+            byte[] data = { 0x41 };
+            fixed (byte* p = data)
+            {
+                Polyplug.Abi.Buffer buf = new Polyplug.Abi.Buffer
+                {
+                    Ptr = (IntPtr)p,
+                    Len = 0,
+                    Cap = (nuint)data.Length,
+                };
+                Assert.True(buf.AsBytes().IsEmpty);
+            }
+        }
+
+        [Fact]
+        public unsafe void AsBytesIsZeroCopyView()
+        {
+            // Mutating the backing buffer must be visible through the span — proof
+            // it aliases the buffer's memory rather than copying it.
+            byte[] data = { 0x01, 0x02, 0x03 };
+            fixed (byte* p = data)
+            {
+                Polyplug.Abi.Buffer buf = new Polyplug.Abi.Buffer
+                {
+                    Ptr = (IntPtr)p,
+                    Len = (nuint)data.Length,
+                    Cap = (nuint)data.Length,
+                };
+                ReadOnlySpan<byte> view = buf.AsBytes();
+                data[1] = 0x99;
+                Assert.Equal(0x99, view[1]);
+            }
+        }
     }
 }

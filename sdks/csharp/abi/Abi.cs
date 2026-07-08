@@ -1339,6 +1339,21 @@ public static class StringViewHelper
     public static string ToStr(StringView sv) => ToString(sv);
 
     /// <summary>
+    /// Borrows a Buffer's bytes as a zero-copy <see cref="ReadOnlySpan{T}"/>.
+    /// Unlike <see cref="ToString(StringView)"/> this never decodes: the span is
+    /// byte-exact (interior NULs and non-UTF-8 bytes preserved) and aliases the
+    /// buffer's own memory (no copy), so it is valid only while the buffer's
+    /// allocation is live. A null pointer or zero length yields an empty span.
+    /// </summary>
+    public static unsafe ReadOnlySpan<byte> AsBytes(this Buffer b)
+    {
+        if (b.Ptr == IntPtr.Zero || b.Len == 0)
+            return ReadOnlySpan<byte>.Empty;
+
+        return new ReadOnlySpan<byte>((void*)b.Ptr, (int)b.Len);
+    }
+
+    /// <summary>
     /// Checks if a StringView starts with the given prefix.
     /// </summary>
     public static bool StartsWith(StringView sv, string prefix)
