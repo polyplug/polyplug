@@ -417,6 +417,100 @@ fn lua_array_of_struct_with_string_round_trips() {
     );
 }
 
+/// Deno driver: mocks the QuickJS `bridge` over an ArrayBuffer, drives the
+/// generated dispatch wrapper with a factory whose `fn0` returns an array of
+/// plain JS objects, then reads the arena-filled `ArrayOf_Proc` back out of the
+/// buffer and asserts each field/string. The mock arena is align-1 and starts at
+/// an odd offset, so the generated marshaler MUST realign the element base.
+const JS_DRIVER: &str = r#"import { ENUMERATOR_INTERFACE, setEnumeratorFactory } from "./generated/guest/contracts.ts";
+
+const MEM = new ArrayBuffer(1 << 20);
+const DV = new DataView(MEM);
+let cursor = 4097; // odd, past the out slot → forces element realignment
+const bridge = {
+  writeU32: (p: number, v: number) => DV.setUint32(p, v >>> 0, true),
+  writeI32: (p: number, v: number) => DV.setInt32(p, v | 0, true),
+  writeF32: (p: number, v: number) => DV.setFloat32(p, v, true),
+  writeF64: (p: number, v: number) => DV.setFloat64(p, v, true),
+  writeByte: (p: number, v: number) => DV.setUint8(p, v & 0xff),
+  readU32: (p: number) => DV.getUint32(p, true),
+  arenaAlloc: (size: number, _arena: number) => {
+    const a = cursor;
+    cursor += Number(size);
+    return [a % 4294967296, Math.floor(a / 4294967296)];
+  },
+};
+
+setEnumeratorFactory(((_b: any, _lo: number, _hi: number) => ({
+  fn0: () => [{ id: 7, name: "cs2.exe" }, { id: 42, name: "game.exe" }],
+})) as any);
+
+const impl = (ENUMERATOR_INTERFACE.factory as any)(bridge, 0, 0);
+const OUT = 16;
+(ENUMERATOR_INTERFACE.functions as any)[0](impl, 0, OUT, 0, bridge);
+
+const items = DV.getUint32(OUT, true) + DV.getUint32(OUT + 4, true) * 4294967296;
+const len = DV.getUint32(OUT + 8, true);
+if (len !== 2) throw new Error("len must be 2, got " + len);
+function readProc(base: number) {
+  const id = DV.getUint32(base, true);
+  const ptr = DV.getUint32(base + 8, true) + DV.getUint32(base + 12, true) * 4294967296;
+  const nlen = DV.getUint32(base + 16, true);
+  let s = "";
+  for (let i = 0; i < nlen; i++) s += String.fromCharCode(DV.getUint8(ptr + i));
+  return { id, name: s };
+}
+const p0 = readProc(items);
+const p1 = readProc(items + 24);
+if (p0.id !== 7 || p0.name !== "cs2.exe") throw new Error("proc0 wrong: " + JSON.stringify(p0));
+if (p1.id !== 42 || p1.name !== "game.exe") throw new Error("proc1 wrong: " + JSON.stringify(p1));
+console.log("OK: Array<Proc{StringView}> round-tripped byte-correct");
+"#;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// JS (QuickJS target): generate → run under Deno a driver that returns
+// Array<Proc> from an ergonomic JS array-of-objects through a mock bridge, and
+// assert the generated glue marshaled it into the (mock) arena byte-correct.
+// deno is guaranteed by CI.
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn js_array_of_struct_with_string_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("generated");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_array_bundle(&project_dir, &gen_dir, "js-quickjs");
+    assert!(
+        gen_dir.join("guest/contracts.ts").exists(),
+        "generated guest/contracts.ts must exist at {}",
+        gen_dir.join("guest/contracts.ts").display()
+    );
+
+    let driver_path: PathBuf = project_dir.join("driver.ts");
+    fs::write(&driver_path, JS_DRIVER).expect("write driver.ts");
+
+    let run: Output = Command::new("deno")
+        .arg("run")
+        .arg("--no-lock")
+        .arg(&driver_path)
+        .output()
+        .expect("failed to spawn deno run");
+    assert!(
+        run.status.success(),
+        "Deno Array<Proc> driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "Deno driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
 #[test]
 fn array_of_struct_with_string_round_trips() {
     let tmp: TempDir = tempdir().expect("tempdir");

@@ -27,6 +27,7 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use crate::ir::array_element_name;
 use langprint::backends::js_backend::{
     JsBackend, JsEnum, JsEnumMember, JsFunction, JsFunctionRenderOptions, JsParameter,
 };
@@ -2512,7 +2513,197 @@ fn emit_js_guest_return_write(
         out.push_str("    polyplug.writeU32(out_ptr + 12, 0);\n");
         return Ok(());
     }
-    emit_js_write_value(out, "    ", ret_ty, "out_ptr", 0, "result", ir)
+    let mut ctx: JsGuestMarshal<'_> = JsGuestMarshal { ir, uid: 0 };
+    emit_js_guest_marshal(out, "    ", ret_ty, "out_ptr", 0, "result", &mut ctx)
+}
+
+/// Threaded state for the recursive guest-return marshaler: the IR (for struct/
+/// enum/layout lookups) and a monotonic counter that names temporaries uniquely
+/// across nesting levels.
+struct JsGuestMarshal<'a> {
+    ir: &'a ValidatedIr,
+    uid: usize,
+}
+
+/// Element `ResolvedTypeRef` for an array-wrapper's element name (the suffix of
+/// `ArrayOf_<element>`): a primitive, an ABI builtin, or a user struct/enum.
+fn element_type_ref(name: &str) -> ResolvedTypeRef {
+    if let Some(p) = PrimitiveType::parse(name) {
+        ResolvedTypeRef::Primitive(p)
+    } else if let Some(b) = AbiBuiltin::parse(name) {
+        ResolvedTypeRef::AbiType(b)
+    } else {
+        ResolvedTypeRef::UserDefined(name.to_owned())
+    }
+}
+
+/// Marshal a guest RETURN value `value` (of `ty`) into the out buffer at
+/// `base + off`, ALLOCATING variable-size parts from the per-call arena
+/// (`polyplug.arenaAlloc(size, arena_ptr)`). Unlike `emit_js_write_value` (which
+/// assumes `StringView`/array pointers are already set), this is the return path
+/// where the author hands back ergonomic JS values: a string for `StringView`, an
+/// object for a struct, an array of objects for `ArrayOf_T`.
+fn emit_js_guest_marshal(
+    out: &mut String,
+    indent: &str,
+    ty: &ResolvedTypeRef,
+    base: &str,
+    off: usize,
+    value: &str,
+    ctx: &mut JsGuestMarshal<'_>,
+) -> Result<(), PolyplugcError> {
+    match ty {
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+            emit_js_guest_string_view(out, indent, base, off, value, ctx);
+            Ok(())
+        }
+        ResolvedTypeRef::UserDefined(name) if array_element_name(name).is_some() => {
+            let element: &str = array_element_name(name).unwrap_or(name);
+            emit_js_guest_marshal_array(out, indent, element, base, off, value, ctx)
+        }
+        // A struct (not an enum, which is a scalar) recurses field-by-field so its
+        // embedded StringView / array fields are allocated too.
+        ResolvedTypeRef::UserDefined(_)
+            if js_enum_for_type(ty, &ctx.ir.enums).is_none()
+                && js_struct_for_type(ty, &ctx.ir.types).is_some() =>
+        {
+            let s: &ResolvedType =
+                js_struct_for_type(ty, &ctx.ir.types).unwrap_or_else(|| unreachable!());
+            let mut offset: usize = off;
+            for field in &s.fields {
+                let a: usize = js_c_align(&field.ty, ctx.ir)?;
+                offset = align_up(offset, a);
+                let field_value: String = format!("{value}.{}", field.name);
+                emit_js_guest_marshal(out, indent, &field.ty, base, offset, &field_value, ctx)?;
+                offset += js_c_size(&field.ty, ctx.ir)?;
+            }
+            Ok(())
+        }
+        // Scalars, enums, Ptr, Buffer, Void: fixed-size, written directly.
+        _ => emit_js_write_value(out, indent, ty, base, off, value, ctx.ir),
+    }
+}
+
+/// Emit an allocating `StringView` write for a guest return: encode `value`,
+/// arena-allocate the bytes, copy them in, and write `{ptr, len}` at `base + off`.
+fn emit_js_guest_string_view(
+    out: &mut String,
+    indent: &str,
+    base: &str,
+    off: usize,
+    value: &str,
+    ctx: &mut JsGuestMarshal<'_>,
+) {
+    let id: usize = ctx.uid;
+    ctx.uid += 1;
+    out.push_str(&format!(
+        "{indent}const _sb{id} = _ppEncodeUtf8({value});\n"
+    ));
+    out.push_str(&format!(
+        "{indent}const _sbuf{id} = polyplug.arenaAlloc(_sb{id}.length > 0 ? _sb{id}.length : 1, arena_ptr);\n"
+    ));
+    out.push_str(&format!(
+        "{indent}const _sp{id} = _sbuf{id}[0] + _sbuf{id}[1] * 4294967296;\n"
+    ));
+    out.push_str(&format!(
+        "{indent}for (let _i{id} = 0; _i{id} < _sb{id}.length; _i{id}++) {{ polyplug.writeByte(_sp{id} + _i{id}, _sb{id}[_i{id}]); }}\n"
+    ));
+    out.push_str(&format!(
+        "{indent}polyplug.writeU32({}, _sbuf{id}[0]);\n",
+        js_ptr_at(base, off)
+    ));
+    out.push_str(&format!(
+        "{indent}polyplug.writeU32({}, _sbuf{id}[1]);\n",
+        js_ptr_at(base, off + 4)
+    ));
+    out.push_str(&format!(
+        "{indent}polyplug.writeU32({}, _sb{id}.length);\n",
+        js_ptr_at(base, off + 8)
+    ));
+    out.push_str(&format!(
+        "{indent}polyplug.writeU32({}, 0);\n",
+        js_ptr_at(base, off + 12)
+    ));
+}
+
+/// Emit an allocating array write: allocate `value.length` elements from the
+/// arena (align-1 allocator, so over-allocate and round the base up to the
+/// element alignment), marshal each element, then write `items`/`len` at
+/// `base + off`.
+fn emit_js_guest_marshal_array(
+    out: &mut String,
+    indent: &str,
+    element: &str,
+    base: &str,
+    off: usize,
+    value: &str,
+    ctx: &mut JsGuestMarshal<'_>,
+) -> Result<(), PolyplugcError> {
+    let id: usize = ctx.uid;
+    ctx.uid += 1;
+    let elem_ref: ResolvedTypeRef = element_type_ref(element);
+    let esize: usize = js_c_size(&elem_ref, ctx.ir)?;
+    let ealign: usize = js_c_align(&elem_ref, ctx.ir)?;
+    let write_items_len =
+        |out: &mut String, ind: &str, items_lo: &str, items_hi: &str, len: &str| {
+            out.push_str(&format!(
+                "{ind}polyplug.writeU32({}, {items_lo});\n",
+                js_ptr_at(base, off)
+            ));
+            out.push_str(&format!(
+                "{ind}polyplug.writeU32({}, {items_hi});\n",
+                js_ptr_at(base, off + 4)
+            ));
+            out.push_str(&format!(
+                "{ind}polyplug.writeU32({}, {len});\n",
+                js_ptr_at(base, off + 8)
+            ));
+            out.push_str(&format!(
+                "{ind}polyplug.writeU32({}, 0);\n",
+                js_ptr_at(base, off + 12)
+            ));
+        };
+    out.push_str(&format!("{indent}const _n{id} = {value}.length;\n"));
+    out.push_str(&format!("{indent}if (_n{id} === 0) {{\n"));
+    write_items_len(out, &format!("{indent}    "), "0", "0", "0");
+    out.push_str(&format!("{indent}}} else {{\n"));
+    let inner: String = format!("{indent}    ");
+    out.push_str(&format!(
+        "{inner}const _rb{id} = polyplug.arenaAlloc(_n{id} * {esize} + {}, arena_ptr);\n",
+        ealign - 1
+    ));
+    out.push_str(&format!(
+        "{inner}const _raddr{id} = _rb{id}[0] + _rb{id}[1] * 4294967296;\n"
+    ));
+    out.push_str(&format!(
+        "{inner}const _bs{id} = Math.ceil(_raddr{id} / {ealign}) * {ealign};\n"
+    ));
+    out.push_str(&format!(
+        "{inner}for (let _ix{id} = 0; _ix{id} < _n{id}; _ix{id}++) {{\n"
+    ));
+    out.push_str(&format!("{inner}    const _el{id} = {value}[_ix{id}];\n"));
+    out.push_str(&format!(
+        "{inner}    const _ep{id} = _bs{id} + _ix{id} * {esize};\n"
+    ));
+    emit_js_guest_marshal(
+        out,
+        &format!("{inner}    "),
+        &elem_ref,
+        &format!("_ep{id}"),
+        0,
+        &format!("_el{id}"),
+        ctx,
+    )?;
+    out.push_str(&format!("{inner}}}\n"));
+    write_items_len(
+        out,
+        &inner,
+        &format!("_bs{id} % 4294967296"),
+        &format!("Math.floor(_bs{id} / 4294967296)"),
+        &format!("_n{id}"),
+    );
+    out.push_str(&format!("{indent}}}\n"));
+    Ok(())
 }
 
 /// Emit statements writing `value` (a JS expression of `ty`'s shape) into the
