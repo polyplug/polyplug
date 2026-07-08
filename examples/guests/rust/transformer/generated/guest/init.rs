@@ -3,12 +3,12 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 #![allow(non_snake_case)]
+#![allow(non_camel_case_types)]
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use super::interfaces::DATA_TRANSFORMER_CONTRACT_ID;
-use super::interfaces::TRANSFORMER_INTERFACE;
 use core::ffi::c_void;
+
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::BundleInitContext;
@@ -19,6 +19,9 @@ use polyplug_abi::StringView;
 use polyplug_abi::Version;
 use polyplug_abi::abi_error_ok;
 use polyplug_abi::string_view_from_static;
+
+use super::interfaces::DATA_TRANSFORMER_CONTRACT_ID;
+use super::interfaces::TRANSFORMER_INTERFACE;
 
 // Note: polyplug_abi_version() should be exported by the plugin crate itself,
 // not by the generated code. Add this to your lib.rs:

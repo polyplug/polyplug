@@ -3,12 +3,14 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 #![allow(non_snake_case)]
+#![allow(non_camel_case_types)]
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use super::types::*;
 use polyplug_abi::Buffer;
 use polyplug_abi::StringView;
+
+use super::types::*;
 
 /// Host trait for contract `host.logger` (id=0xF53EB5F2845853BB)
 /// Hosts implement this trait to provide functionality to plugins.

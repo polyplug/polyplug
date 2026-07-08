@@ -3,12 +3,12 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 #![allow(non_snake_case)]
+#![allow(non_camel_case_types)]
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use super::host_contracts::*;
-use super::types::*;
 use core::ffi::c_void;
+
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::CallArena;
@@ -26,6 +26,9 @@ use polyplug_abi::VmLoaderData;
 use polyplug_abi::abi_error_ok;
 use polyplug_abi::string_view_from_static;
 use polyplug_utils::HostContractId;
+
+use super::host_contracts::*;
+use super::types::*;
 
 /// Create a host contract interface for `host.logger` with NATIVE dispatch.
 ///

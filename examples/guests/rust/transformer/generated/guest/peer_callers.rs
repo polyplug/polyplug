@@ -3,10 +3,10 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 #![allow(non_snake_case)]
+#![allow(non_camel_case_types)]
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use super::types::*;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::CallArena;
@@ -16,6 +16,8 @@ use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
 use polyplug_abi::StringView;
+
+use super::types::*;
 
 const CALL_ARENA_BUF_LEN: usize = 512;
 

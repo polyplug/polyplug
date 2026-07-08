@@ -3,12 +3,13 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 #![allow(non_snake_case)]
+#![allow(non_camel_case_types)]
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use super::types::*;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
+use polyplug_abi::Buffer;
 use polyplug_abi::CallArena;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
@@ -16,6 +17,8 @@ use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
 use polyplug_abi::StringView;
+
+use super::types::*;
 
 /// Size of each caller's inline call-arena buffer.
 ///
