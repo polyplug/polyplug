@@ -34,8 +34,37 @@ use langprint::backends::cpp_backend::{
 };
 use langprint::renderers::EnumRenderer;
 use langprint::renderers::FunctionRenderer;
+use langprint::{ImportEntry, ImportSet, TargetLanguage};
 use polyplug_codegen::PolyplugcError;
 use std::io;
+
+/// Render grouped C++ `#include` blocks through langprint's [`ImportSet`] so the
+/// `#include` syntax + dedup + sorting live in one place rather than in
+/// hand-written `push_str("#include …")` sequences. Each inner slice is one
+/// group of `(header, system)` entries — within a group [`ImportSet`] emits
+/// system `<...>` includes before local `"..."` ones, alphabetically. Non-empty
+/// groups are blank-line separated; empty groups are skipped. Convention here:
+/// project/local headers form the first group and `<system>` headers the second,
+/// giving the idiomatic "own headers, blank line, standard headers" layout that
+/// keeps each generated header self-contained. The result ends in a single
+/// newline; callers append a blank line before the code body.
+fn cpp_include_block(groups: &[&[(&str, bool)]]) -> String {
+    let mut blocks: Vec<String> = Vec::new();
+    for group in groups {
+        let mut set: ImportSet = ImportSet::new(TargetLanguage::Cpp);
+        for (header, system) in *group {
+            set.add(ImportEntry::Include {
+                header: (*header).to_string(),
+                system: *system,
+            });
+        }
+        let rendered: String = set.render();
+        if !rendered.is_empty() {
+            blocks.push(rendered);
+        }
+    }
+    blocks.join("\n")
+}
 
 /// The C++ code generator.
 pub(crate) struct CppGenerator;
@@ -177,8 +206,11 @@ fn generate_types_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str(CPP_FILE_HEADER);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
     out.push_str("#pragma once\n");
-    out.push_str("#include <cstdint>\n");
-    out.push_str("#include \"polyplug/abi.hpp\"\n\n");
+    out.push_str(&cpp_include_block(&[
+        &[("polyplug/abi.hpp", false)],
+        &[("cstdint", true)],
+    ]));
+    out.push('\n');
     out.push_str("namespace polyplug_generated {\n\n");
 
     // Emit contract ID constants
@@ -211,8 +243,11 @@ fn generate_contracts_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str(CPP_FILE_HEADER);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
     out.push_str("#pragma once\n");
-    out.push_str("#include \"types.hpp\"\n");
-    out.push_str("#include <cstdint>\n\n");
+    out.push_str(&cpp_include_block(&[
+        &[("types.hpp", false)],
+        &[("cstdint", true)],
+    ]));
+    out.push('\n');
     out.push_str("namespace polyplug_plugin {\n\n");
     out.push_str("struct RuntimeError { uint32_t code; };\n\n");
 
@@ -311,11 +346,11 @@ fn generate_interfaces_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str(CPP_FILE_HEADER);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
     out.push_str("#pragma once\n");
-    out.push_str("#include \"contracts.hpp\"\n");
-    out.push_str("#include \"polyplug/abi.hpp\"\n");
-    out.push_str("#include <cstdint>\n");
-    out.push_str("#include <cstring>\n");
-    out.push_str("#include <exception>\n\n");
+    out.push_str(&cpp_include_block(&[
+        &[("contracts.hpp", false), ("polyplug/abi.hpp", false)],
+        &[("cstdint", true), ("cstring", true), ("exception", true)],
+    ]));
+    out.push('\n');
     out.push_str("namespace polyplug_plugin {\n\n");
 
     if let Some(bundle) = &ir.bundle {
@@ -1031,9 +1066,12 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str(CPP_FILE_HEADER);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
     out.push_str("#pragma once\n");
-    out.push_str("#include \"interfaces.hpp\"\n");
-    out.push_str("#include \"polyplug/abi.hpp\"\n");
-    out.push_str("#include \"polyplug/guest.hpp\"\n\n");
+    out.push_str(&cpp_include_block(&[&[
+        ("interfaces.hpp", false),
+        ("polyplug/abi.hpp", false),
+        ("polyplug/guest.hpp", false),
+    ]]));
+    out.push('\n');
 
     // polyplug_abi_version
     out.push_str("extern \"C\" uint32_t polyplug_abi_version() { return 1U; }\n\n");
@@ -1169,16 +1207,23 @@ fn generate_host_callers_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError>
     out.push_str(CPP_FILE_HEADER);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
     out.push_str("#pragma once\n");
-    out.push_str("#include \"types.hpp\"\n");
-    out.push_str("#include \"polyplug/error.hpp\"\n");
-    out.push_str("#include \"polyplug/abi.hpp\"\n");
-    out.push_str("#include \"polyplug/runtime.hpp\"\n");
-    out.push_str("#include <array>\n");
-    out.push_str("#include <atomic>\n");
-    out.push_str("#include <cstddef>\n");
-    out.push_str("#include <cstdint>\n");
-    out.push_str("#include <memory>\n");
-    out.push_str("#include <optional>\n\n");
+    out.push_str(&cpp_include_block(&[
+        &[
+            ("types.hpp", false),
+            ("polyplug/error.hpp", false),
+            ("polyplug/abi.hpp", false),
+            ("polyplug/runtime.hpp", false),
+        ],
+        &[
+            ("array", true),
+            ("atomic", true),
+            ("cstddef", true),
+            ("cstdint", true),
+            ("memory", true),
+            ("optional", true),
+        ],
+    ]));
+    out.push('\n');
     out.push_str("namespace polyplug_generated {\n\n");
     if let Some(ref bundle) = ir.bundle {
         out.push_str(&format!(
@@ -2796,15 +2841,22 @@ fn generate_cpp_guest_host_contracts_file(ir: &ValidatedIr) -> Result<String, Po
         "// Re-generate with: polyplugc generate --bundle bundle.toml --lang cpp --out <dir>\n",
     );
     out.push_str("#pragma once\n");
-    out.push_str("#include \"types.hpp\"\n");
-    out.push_str("#include \"polyplug/abi.hpp\"\n");
-    out.push_str("#include \"polyplug/guest.hpp\"\n");
-    out.push_str("#include <cstddef>\n");
-    out.push_str("#include <cstdint>\n");
-    out.push_str("#include <cstdio>\n");
-    out.push_str("#include <cstring>\n");
-    out.push_str("#include <optional>\n");
-    out.push_str("#include <string_view>\n\n");
+    out.push_str(&cpp_include_block(&[
+        &[
+            ("types.hpp", false),
+            ("polyplug/abi.hpp", false),
+            ("polyplug/guest.hpp", false),
+        ],
+        &[
+            ("cstddef", true),
+            ("cstdint", true),
+            ("cstdio", true),
+            ("cstring", true),
+            ("optional", true),
+            ("string_view", true),
+        ],
+    ]));
+    out.push('\n');
     out.push_str("namespace polyplug_plugin {\n\n");
     emit_cpp_log_call_failure_helper(&mut out);
 
@@ -2863,9 +2915,11 @@ fn generate_cpp_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str(CPP_FILE_HEADER);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
     out.push_str("#pragma once\n");
-    out.push_str("#include \"types.hpp\"\n");
-    out.push_str("#include \"polyplug/abi.hpp\"\n");
-    out.push_str("#include <cstdint>\n\n");
+    out.push_str(&cpp_include_block(&[
+        &[("types.hpp", false), ("polyplug/abi.hpp", false)],
+        &[("cstdint", true)],
+    ]));
+    out.push('\n');
     out.push_str("namespace polyplug_host {\n\n");
 
     for contract in &ir.host_contracts {
@@ -2897,10 +2951,11 @@ fn generate_cpp_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str(CPP_FILE_HEADER);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
     out.push_str("#pragma once\n");
-    out.push_str("#include \"host_contracts.hpp\"\n");
-    out.push_str("#include \"polyplug/abi.hpp\"\n");
-    out.push_str("#include <cstdint>\n");
-    out.push_str("#include <memory>\n\n");
+    out.push_str(&cpp_include_block(&[
+        &[("host_contracts.hpp", false), ("polyplug/abi.hpp", false)],
+        &[("cstdint", true), ("memory", true)],
+    ]));
+    out.push('\n');
     out.push_str("namespace polyplug_host {\n\n");
 
     for contract in &ir.host_contracts {
@@ -3300,17 +3355,24 @@ fn generate_cpp_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract])
         "// Re-generate with: polyplugc generate --bundle bundle.toml --lang cpp --out <dir>\n",
     );
     out.push_str("#pragma once\n");
-    out.push_str("#include \"types.hpp\"\n");
-    out.push_str("#include \"polyplug/guest.hpp\"\n");
-    out.push_str("#include \"polyplug/abi.hpp\"\n");
-    out.push_str("#include <array>\n");
-    out.push_str("#include <atomic>\n");
-    out.push_str("#include <cstddef>\n");
-    out.push_str("#include <cstdint>\n");
-    out.push_str("#include <cstdio>\n");
-    out.push_str("#include <cstring>\n");
-    out.push_str("#include <memory>\n");
-    out.push_str("#include <optional>\n\n");
+    out.push_str(&cpp_include_block(&[
+        &[
+            ("types.hpp", false),
+            ("polyplug/guest.hpp", false),
+            ("polyplug/abi.hpp", false),
+        ],
+        &[
+            ("array", true),
+            ("atomic", true),
+            ("cstddef", true),
+            ("cstdint", true),
+            ("cstdio", true),
+            ("cstring", true),
+            ("memory", true),
+            ("optional", true),
+        ],
+    ]));
+    out.push('\n');
     out.push_str("namespace polyplug_plugin {\n\n");
     emit_cpp_log_call_failure_helper(&mut out);
     emit_cpp_revision_helper(&mut out);

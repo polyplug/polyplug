@@ -3,6 +3,7 @@
 #pragma once
 #include "contracts.hpp"
 #include "polyplug/abi.hpp"
+
 #include <cstdint>
 #include <cstring>
 #include <exception>

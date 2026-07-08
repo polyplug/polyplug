@@ -2,6 +2,7 @@
 // Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>
 #pragma once
 #include "types.hpp"
+
 #include <cstdint>
 
 namespace polyplug_plugin {
