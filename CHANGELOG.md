@@ -14,6 +14,13 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
 
 ### Fixed
 
+- **The C++ guest SDK headers were not relocatable.** `sdks/cpp/guest/polyplug/`
+  `guest.hpp` and `contract.hpp` included the ABI header by a source-tree-relative
+  path (`../../abi/polyplug/abi.hpp`), so vendoring the SDK into another project
+  (e.g. copying the headers under one include root) failed to find `abi.hpp`. They
+  now use `#include "polyplug/abi.hpp"`, matching the generated guest headers, so
+  the SDK resolves both in-tree (`-I sdks/cpp/abi`) and when vendored (`-I
+  <include>`).
 - **A Python struct with a `Buffer` field failed to load.** The generated types
   module hardcoded `from polyplug_abi import StringView` and never imported
   `Buffer`, so a struct such as `ReadResult { data: Buffer }` emitted

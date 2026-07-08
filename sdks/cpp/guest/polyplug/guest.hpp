@@ -33,7 +33,7 @@
 
 #pragma once
 
-#include "../../abi/polyplug/abi.hpp"
+#include "polyplug/abi.hpp"
 
 #include <cstddef>
 #include <cstdint>

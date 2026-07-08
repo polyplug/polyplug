@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "../../abi/polyplug/abi.hpp"
+#include "polyplug/abi.hpp"
 
 static_assert(POLYPLUG_ABI_VERSION == 1,
     "polyplug header version mismatch — recompile against updated headers");
