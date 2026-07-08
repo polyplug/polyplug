@@ -3658,6 +3658,145 @@ fn csharp_struct_with_enum_field_round_trips() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Enum PARAMETER dispatch (python-specific regression). An enum arrives at the
+// ABI as its repr integer, not as a ctypes type. Python read a SINGLE enum param
+// with `Status.from_address(args_ptr)` — but a generated enum is `enum.IntEnum`,
+// which has no `from_address`, so dispatch raised AttributeError. The multi-param
+// arg-pack path already read enum fields through their repr ctype. Fixed in
+// `emit_guest_abi_args_unpack`. This is python-only: lua reads the arg as
+// `uint32_t`, and the native generators (rust/cpp/csharp) receive enum params as
+// their real language enum type. Covers both the single-param and the packed
+// (enum + scalar) shapes.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const ENUMPARAM_API_TOML: &str = r#"
+[[enum]]
+name = "Status"
+repr = "u32"
+[[enum.variants]]
+name = "Idle"
+value = "0"
+[[enum.variants]]
+name = "Busy"
+value = "7"
+
+[[plugin_contract]]
+name = "sys.P"
+version = "1.0.0"
+
+[[plugin_contract.functions]]
+name = "one"
+params = [ { name = "s", type = "Status" } ]
+return = "u32"
+
+[[plugin_contract.functions]]
+name = "two"
+params = [ { name = "s", type = "Status" }, { name = "n", type = "u32" } ]
+return = "u32"
+"#;
+
+const ENUMPARAM_BUNDLE_TOML: &str = r#"
+[bundle]
+name = "sys_p"
+version = "1.0.0"
+api = "api.toml"
+loader = "native"
+
+[bundle.file]
+linux.x86_64 = "libp.so"
+
+[[plugin]]
+name = "p"
+implements = ["sys.P@1.0"]
+"#;
+
+const PY_ENUMPARAM_DRIVER: &str = r#"import ctypes
+from types import SimpleNamespace
+from guest.types import SysPContractTwoArgs
+from guest.contracts import p_one_abi, p_two_abi
+
+impl = SimpleNamespace(one=lambda s: int(s) + 100, two=lambda s, n: int(s) + int(n))
+
+
+def noop(_size, _arena):
+    return 0
+
+
+# Single enum param: read in place as its repr integer.
+one_args = ctypes.c_uint32(7)  # Busy
+one_out = ctypes.c_uint32(0)
+p_one_abi(impl, ctypes.addressof(one_args), ctypes.addressof(one_out), 0, noop)
+assert one_out.value == 107, one_out.value
+
+# Enum + scalar, read through the generated arg-pack struct (enum field = repr).
+two_args = SysPContractTwoArgs(s=7, n=5)
+two_out = ctypes.c_uint32(0)
+p_two_abi(impl, ctypes.addressof(two_args), ctypes.addressof(two_out), 0, noop)
+assert two_out.value == 12, two_out.value
+
+print("OK: enum params dispatched byte-correct")
+"#;
+
+#[test]
+fn python_enum_param_dispatches() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "python",
+        ENUMPARAM_API_TOML,
+        ENUMPARAM_BUNDLE_TOML,
+    );
+
+    let driver_path: PathBuf = project_dir.join("driver.py");
+    fs::write(&driver_path, PY_ENUMPARAM_DRIVER).expect("write driver.py");
+
+    let sdk: PathBuf = repo_root().join("sdks").join("python");
+    let shim: PathBuf = project_dir.join("shim");
+    fs::create_dir_all(shim.join("polyplug").join("abi")).expect("create shim polyplug/abi");
+    fs::write(shim.join("polyplug").join("__init__.py"), b"").expect("write polyplug init");
+    fs::write(shim.join("polyplug").join("abi").join("__init__.py"), b"")
+        .expect("write polyplug.abi init");
+    fs::copy(
+        sdk.join("abi").join("abi.py"),
+        shim.join("polyplug").join("abi").join("abi.py"),
+    )
+    .expect("copy polyplug/abi/abi.py");
+
+    let pythonpath: String = env::join_paths([
+        gen_dir.clone(),
+        sdk.join("guest"),
+        sdk.join("polyplug_abi"),
+        shim,
+    ])
+    .expect("join PYTHONPATH")
+    .to_string_lossy()
+    .into_owned();
+
+    let run: Output = Command::new("python3")
+        .arg(&driver_path)
+        .env("PYTHONPATH", &pythonpath)
+        .output()
+        .expect("failed to spawn python3");
+    assert!(
+        run.status.success(),
+        "python3 enum-param driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("dispatched byte-correct"),
+        "python3 enum-param driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Buffer regression guard (rust). `Buffer` is an OWNING type — deliberately NOT
 // `Copy` (unlike borrowed `StringView`) — so a struct/arg-pack embedding it must
 // NOT derive `Copy/Clone`, must `use polyplug_abi::Buffer`, and a multi-param

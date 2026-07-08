@@ -1880,7 +1880,7 @@ fn emit_guest_function_callables(
             body.push_str("    _ = arena_ptr\n");
             body.push_str("    _ = arena_alloc\n");
         }
-        emit_guest_abi_args_unpack(&mut body, func, fn_prefix, struct_name);
+        emit_guest_abi_args_unpack(&mut body, func, fn_prefix, struct_name, &ir.enums);
         emit_guest_abi_call(&mut body, func);
         emit_guest_abi_return(&mut body, func, fn_prefix, ir);
         if body.ends_with('\n') {
@@ -1935,8 +1935,23 @@ fn emit_guest_abi_args_unpack(
     func: &ResolvedFunction,
     fn_prefix: &str,
     contract_struct: &str,
+    enums: &[EnumDef],
 ) {
     if func.params.is_empty() {
+        return;
+    }
+    // Single enum param: an enum is an `enum.IntEnum`, not a ctypes type, so
+    // `Enum.from_address` does not exist. Read the repr integer in place — the
+    // guest receives it as an int, matching the multi-param arg-pack path (which
+    // reads each enum field through its repr ctype).
+    if func.params.len() == 1
+        && let Some(e) = python_enum_for_type(&func.params[0].ty, enums)
+    {
+        let name: &str = &func.params[0].name;
+        let repr_ct: &str = python_ctype_for_repr(&e.repr);
+        out.push_str(&format!(
+            "    {name} = {repr_ct}.from_address(args_ptr).value\n"
+        ));
         return;
     }
     // Single StringView param: view the args buffer as a StringView in place and

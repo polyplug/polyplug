@@ -14,6 +14,11 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
 
 ### Fixed
 
+- **A Python guest function taking a single `enum` parameter crashed on
+  dispatch.** The generated ABI wrapper read it with `Status.from_address(...)`,
+  but a generated enum is an `enum.IntEnum` (no `from_address`), raising
+  `AttributeError`. It now reads the repr integer in place, matching the
+  multi-parameter arg-pack path. Covered by `python_enum_param_dispatches`.
 - **A Python struct with an `enum` field could not be instantiated.** The
   generated `class Rec(ctypes.Structure)` emitted `("flag", Status)` in
   `_fields_`, but a generated enum is an `enum.IntEnum` — not a ctypes type — so
