@@ -12,6 +12,23 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
 
 ## [Unreleased]
 
+### Fixed
+
+- **Guest codegen for non-struct `Array<T>` return elements (Lua, Python).** Only
+  `Array<struct>` (the common array-of-records shape) marshaled correctly before;
+  arrays whose element is a scalar, a `StringView`, or an enum emitted broken
+  guest glue. The Lua generator wrote `ffi.sizeof("u32")` / `ffi.sizeof("<Enum>")`
+  (neither is a cdef'd LuaJIT C type) and assigned a Lua string straight into a
+  `StringView` cdata; the Python generator referenced an undefined `StringView` /
+  enum name in `contracts.py`. Now the Lua marshaler resolves each element to its
+  real C type (primitive → C integer/float name, enum → its repr integer,
+  `StringView` arena-allocated per element) and the Python marshaler uses the
+  enum's repr ctype and imports `StringView` for a `StringView`-array return. A
+  round-trip test per language (`*_scalar_string_enum_arrays_round_trip`, covering
+  `Array<u32>` at 257 elements, `Array<StringView>`, and `Array<enum>`) locks this
+  in. No ABI or API change — generated output for existing `Array<struct>`
+  contracts is unchanged.
+
 ## [0.1.3] - 2026-07-07
 
 Publishes the `polyplugc` CLI to npm, PyPI, and NuGet (first registry

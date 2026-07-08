@@ -1593,6 +1593,766 @@ fn csharp_kitchen_all_widths_round_trips() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Non-struct array elements: `Array<u32>` (scalar), `Array<StringView>` (direct
+// string), and `Array<Status>` (enum). These are the element kinds the marshaler
+// must handle DIRECTLY (not only as struct fields). They were silently broken in
+// the VM generators before this suite: the lua array marshaler emitted
+// `ffi.sizeof("u32")` / `ffi.sizeof("Status")` (no such cdef'd C type) and copied
+// a Lua string straight into a `StringView` cdata; the python marshaler referenced
+// the undefined `StringView` / `Status` ctypes names. Fixed in lua.rs
+// (`emit_lua_marshal_array_into` resolves the element to its LuaJIT C type;
+// `emit_lua_marshal_into` gained a StringView branch) and python.rs
+// (`emit_py_marshal_array` uses the enum repr ctype; contracts.py imports
+// StringView for a StringView-array return).
+//
+// The element COUNTS also probe the loop/stride math the struct tests miss:
+// `nums` returns 257 elements (large-N, index 256 exercises stride at scale),
+// `names` returns exactly 1 (off-by-one), `codes` returns 3.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const GAPS_API_TOML: &str = r#"
+[[enum]]
+name = "Status"
+repr = "u32"
+[[enum.variants]]
+name = "Idle"
+value = "0"
+[[enum.variants]]
+name = "Busy"
+value = "7"
+
+[[plugin_contract]]
+name = "sys.Gaps"
+version = "1.0.0"
+
+[[plugin_contract.functions]]
+name = "nums"
+return = "Array<u32>"
+
+[[plugin_contract.functions]]
+name = "names"
+return = "Array<StringView>"
+
+[[plugin_contract.functions]]
+name = "codes"
+return = "Array<Status>"
+"#;
+
+const GAPS_BUNDLE_TOML: &str = r#"
+[bundle]
+name = "sys_gaps"
+version = "1.0.0"
+api = "api.toml"
+loader = "native"
+
+[bundle.file]
+linux.x86_64 = "libgaps.so"
+
+[[plugin]]
+name = "gaps"
+implements = ["sys.Gaps@1.0"]
+"#;
+
+/// Rust driver: builds a 257-element `u32` array, a 1-element `StringView` array,
+/// and a 3-element `Status` array into the SDK `ReturnArena`, then reads each back
+/// through the generated `as_slice` and asserts values.
+const GAPS_MAIN_RS: &str = r##"#[path = "../gen/guest/mod.rs"]
+mod generated;
+
+use core::slice;
+use core::str;
+use std::sync::Mutex;
+
+use generated::contracts::SysGapsGuestContract;
+use generated::types::{ArrayOf_Status, ArrayOf_StringView, ArrayOf_u32, Status};
+use polyplug_abi::StringView;
+use polyplug_guest::{GuestError, HostContext, ReturnArena};
+
+struct Plugin {
+    arena: Mutex<ReturnArena>,
+}
+
+impl SysGapsGuestContract for Plugin {
+    fn nums(&self) -> Result<ArrayOf_u32, GuestError> {
+        let mut arena = self.arena.lock().expect("arena lock");
+        arena.reset();
+        let v: Vec<u32> = (0..257u32).collect();
+        let (items, len) = arena.alloc_array(v.as_slice());
+        Ok(ArrayOf_u32 { items, len })
+    }
+    fn names(&self) -> Result<ArrayOf_StringView, GuestError> {
+        let mut arena = self.arena.lock().expect("arena lock");
+        arena.reset();
+        let solo: [StringView; 1] = [arena.alloc_str("solo")];
+        let (items, len) = arena.alloc_array(&solo);
+        Ok(ArrayOf_StringView { items, len })
+    }
+    fn codes(&self) -> Result<ArrayOf_Status, GuestError> {
+        let mut arena = self.arena.lock().expect("arena lock");
+        arena.reset();
+        let codes: [Status; 3] = [Status::Busy, Status::Idle, Status::Busy];
+        let (items, len) = arena.alloc_array(&codes);
+        Ok(ArrayOf_Status { items, len })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub fn polyplug_create_gaps(host: HostContext) -> Box<dyn SysGapsGuestContract> {
+    Box::new(Plugin {
+        arena: Mutex::new(ReturnArena::new(host, 8192)),
+    })
+}
+
+fn sv_to_string(s: StringView) -> String {
+    if s.ptr.is_null() || s.len == 0 {
+        return String::new();
+    }
+    // SAFETY: `s` came from `alloc_str` (valid UTF-8, still alive; no reset since).
+    let bytes: &[u8] = unsafe { slice::from_raw_parts(s.ptr, s.len) };
+    str::from_utf8(bytes).expect("utf8").to_owned()
+}
+
+fn main() {
+    // SAFETY: null host, never dereferenced (8 KiB buffer never overflows here).
+    let host: HostContext = unsafe { HostContext::new(core::ptr::null()) };
+    let plugin: Box<dyn SysGapsGuestContract> = polyplug_create_gaps(host);
+
+    let n: ArrayOf_u32 = plugin.nums().expect("nums must return Ok");
+    // SAFETY: items/len from `alloc_array` on the still-alive arena (no reset since).
+    let nums: &[u32] = unsafe { n.as_slice() };
+    assert_eq!(n.len, 257, "nums len");
+    assert_eq!(nums[0], 0, "nums[0]");
+    assert_eq!(nums[128], 128, "nums[128]");
+    assert_eq!(nums[256], 256, "nums[256] (large-N stride)");
+
+    let m: ArrayOf_StringView = plugin.names().expect("names must return Ok");
+    // SAFETY: as above.
+    let names: &[StringView] = unsafe { m.as_slice() };
+    assert_eq!(m.len, 1, "names len (N=1)");
+    assert_eq!(sv_to_string(names[0]), "solo", "names[0] bytes");
+
+    let c: ArrayOf_Status = plugin.codes().expect("codes must return Ok");
+    // SAFETY: as above.
+    let codes: &[Status] = unsafe { c.as_slice() };
+    assert_eq!(c.len, 3, "codes len");
+    assert_eq!(codes[0], Status::Busy, "codes[0]");
+    assert_eq!(codes[1], Status::Idle, "codes[1]");
+    assert_eq!(codes[2], Status::Busy, "codes[2]");
+
+    println!("OK: Array<u32|StringView|enum> round-tripped byte-correct");
+}
+"##;
+
+#[test]
+fn rust_scalar_string_enum_arrays_round_trip() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("driver");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(project_dir.join("src")).expect("create src dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "rust",
+        GAPS_API_TOML,
+        GAPS_BUNDLE_TOML,
+    );
+
+    let cargo_toml: String = format!(
+        "[package]\n\
+         name = \"driver\"\n\
+         version = \"0.1.0\"\n\
+         edition = \"2024\"\n\n\
+         [[bin]]\n\
+         name = \"driver\"\n\
+         path = \"src/main.rs\"\n\n\
+         [dependencies]\n\
+         polyplug_abi = {{ path = \"{}\" }}\n\
+         polyplug_guest = {{ path = \"{}\" }}\n\
+         polyplug_utils = {{ path = \"{}\" }}\n",
+        dep_path(polyplug_abi_path()),
+        dep_path(rust_guest_sdk_path()),
+        dep_path(polyplug_utils_path()),
+    );
+    fs::write(project_dir.join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
+    fs::write(project_dir.join("src/main.rs"), GAPS_MAIN_RS).expect("write src/main.rs");
+
+    let target_dir: PathBuf = tmp.path().join("target");
+    let run: Output = Command::new(env!("CARGO"))
+        .arg("run")
+        .arg("--manifest-path")
+        .arg(project_dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .output()
+        .expect("failed to spawn cargo run for the gaps driver");
+    assert!(
+        run.status.success(),
+        "gaps driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+/// C++ driver for the non-struct-element arrays.
+const CPP_GAPS_MAIN: &str = r##"#include "guest/init.hpp"
+#include <polyplug/guest.hpp>
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <string>
+
+namespace polyplug_plugin {
+class GapsImpl : public SysGapsGuestContract {
+public:
+    GapsImpl() : arena_(8192) {}
+    polyplug_generated::ArrayOf_u32 nums() override {
+        arena_.reset();
+        uint32_t v[257];
+        for (uint32_t i = 0; i < 257; i++) v[i] = i;
+        polyplug::ArrayRef ref = arena_.alloc_array(v, 257);
+        return polyplug_generated::ArrayOf_u32{ref.items, ref.len};
+    }
+    polyplug_generated::ArrayOf_StringView names() override {
+        arena_.reset();
+        StringView solo[1];
+        solo[0] = arena_.alloc_str("solo");
+        polyplug::ArrayRef ref = arena_.alloc_array(solo, 1);
+        return polyplug_generated::ArrayOf_StringView{ref.items, ref.len};
+    }
+    polyplug_generated::ArrayOf_Status codes() override {
+        arena_.reset();
+        polyplug_generated::Status c[3] = {
+            polyplug_generated::Status::Busy,
+            polyplug_generated::Status::Idle,
+            polyplug_generated::Status::Busy,
+        };
+        polyplug::ArrayRef ref = arena_.alloc_array(c, 3);
+        return polyplug_generated::ArrayOf_Status{ref.items, ref.len};
+    }
+private:
+    polyplug::ReturnArena arena_;
+};
+SysGapsGuestContract* polyplug_create_gaps(const HostApi*) { return new GapsImpl(); }
+}  // namespace polyplug_plugin
+
+static std::string sv_str(const StringView& s) {
+    if (s.ptr == nullptr || s.len == 0) return std::string();
+    return std::string(reinterpret_cast<const char*>(s.ptr), s.len);
+}
+
+int main() {
+    polyplug_plugin::SysGapsGuestContract* impl =
+        polyplug_plugin::polyplug_create_gaps(nullptr);
+    polyplug_generated::ArrayOf_u32 n = impl->nums();
+    assert(n.len == 257);
+    const uint32_t* nums = n.elements();
+    assert(nums[0] == 0 && nums[128] == 128 && nums[256] == 256);
+    polyplug_generated::ArrayOf_StringView m = impl->names();
+    assert(m.len == 1);
+    assert(sv_str(m.elements()[0]) == "solo");
+    polyplug_generated::ArrayOf_Status c = impl->codes();
+    assert(c.len == 3);
+    const polyplug_generated::Status* codes = c.elements();
+    assert(codes[0] == polyplug_generated::Status::Busy);
+    assert(codes[1] == polyplug_generated::Status::Idle);
+    assert(codes[2] == polyplug_generated::Status::Busy);
+    std::printf("OK: Array<u32|StringView|enum> round-tripped byte-correct\n");
+    delete impl;
+    return 0;
+}
+"##;
+
+#[test]
+fn cpp_scalar_string_enum_arrays_round_trip() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("plugin");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "cpp",
+        GAPS_API_TOML,
+        GAPS_BUNDLE_TOML,
+    );
+
+    let main_cpp: PathBuf = project_dir.join("driver.cpp");
+    fs::write(&main_cpp, CPP_GAPS_MAIN).expect("write driver.cpp");
+    let exe: PathBuf = project_dir.join("driver");
+
+    let build: Output = Command::new("c++")
+        .arg("-std=c++20")
+        .arg("-O0")
+        .arg("-I")
+        .arg(&gen_dir)
+        .arg("-I")
+        .arg(cpp_abi_include())
+        .arg("-I")
+        .arg(cpp_guest_include())
+        .arg(&main_cpp)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("failed to spawn c++ compiler");
+    assert!(
+        build.status.success(),
+        "c++ build of the gaps driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        build.status.code(),
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    let run: Output = Command::new(&exe)
+        .output()
+        .expect("failed to run gaps driver");
+    assert!(
+        run.status.success(),
+        "C++ gaps driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "C++ gaps driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+/// LuaJIT driver: the three functions return ergonomic Lua tables (a 257-int
+/// array, a 1-string array, a 3-int enum-value array); the generated glue must
+/// marshal each into the (mock align-1) arena with the correct element C type.
+const LUA_GAPS_BODY: &str = r#"
+local ffi = require("ffi")
+require("polyplug_abi")
+require("generated.guest.types")
+local contracts = require("generated.guest.contracts")
+
+local ARENA = ffi.new("uint8_t[?]", 1048576)
+local cursor = 1
+local function arena_alloc(size, _arena)
+    local addr = ffi.cast("uintptr_t", ARENA) + cursor
+    cursor = cursor + tonumber(size)
+    return addr
+end
+
+contracts.set_gaps_factory(function(_host)
+    return {
+        nums = function(_self)
+            local t = {}
+            for i = 0, 256 do t[#t + 1] = i end
+            return t
+        end,
+        names = function(_self) return { "solo" } end,
+        codes = function(_self) return { 7, 0, 7 } end,
+    }
+end)
+
+local regs = polyplug_init(1, 1)
+local entry = regs["sys.Gaps"]
+assert(entry ~= nil, "sys.Gaps must be registered")
+local inst = entry.factory(0)
+
+local out0 = ffi.new("ArrayOf_u32[1]")
+entry.functions[0](inst, 0, ffi.cast("uintptr_t", out0), 0, arena_alloc)
+assert(tonumber(out0[0].len) == 257, "nums len")
+local nums = ffi.cast("uint32_t*", out0[0].items)
+assert(nums[0] == 0 and nums[128] == 128 and nums[256] == 256, "nums vals")
+
+local out1 = ffi.new("ArrayOf_StringView[1]")
+entry.functions[1](inst, 0, ffi.cast("uintptr_t", out1), 0, arena_alloc)
+assert(tonumber(out1[0].len) == 1, "names len")
+local names = ffi.cast("StringView*", out1[0].items)
+assert(ffi.string(names[0].ptr, names[0].len) == "solo", "names0")
+
+local out2 = ffi.new("ArrayOf_Status[1]")
+entry.functions[2](inst, 0, ffi.cast("uintptr_t", out2), 0, arena_alloc)
+assert(tonumber(out2[0].len) == 3, "codes len")
+local codes = ffi.cast("uint32_t*", out2[0].items)
+assert(codes[0] == 7 and codes[1] == 0 and codes[2] == 7, "codes vals")
+
+io.write("OK: Array<u32|StringView|enum> round-tripped byte-correct\n")
+"#;
+
+#[test]
+fn lua_scalar_string_enum_arrays_round_trip() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("generated");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "lua",
+        GAPS_API_TOML,
+        GAPS_BUNDLE_TOML,
+    );
+
+    let guest_dir: PathBuf = repo_root().join("sdks").join("lua").join("guest");
+    let abi_dir: PathBuf = repo_root().join("sdks").join("lua").join("abi");
+    let project_fwd: String = project_dir.to_string_lossy().replace('\\', "/");
+    let guest_fwd: String = guest_dir.to_string_lossy().replace('\\', "/");
+    let abi_fwd: String = abi_dir.to_string_lossy().replace('\\', "/");
+    let driver: String = format!(
+        "package.path = \"{project_fwd}/?.lua;{guest_fwd}/?.lua;{abi_fwd}/?.lua;\" .. package.path\n{LUA_GAPS_BODY}"
+    );
+    let driver_path: PathBuf = project_dir.join("driver.lua");
+    fs::write(&driver_path, driver).expect("write driver.lua");
+
+    let run: Output = Command::new("luajit")
+        .arg(&driver_path)
+        .output()
+        .expect("failed to spawn luajit");
+    assert!(
+        run.status.success(),
+        "LuaJIT gaps driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "LuaJIT gaps driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+/// Deno driver: the three functions return plain JS arrays through the mock
+/// bridge; the generated glue must marshal scalar / string / enum-value elements
+/// into the (mock align-1) arena.
+const JS_GAPS_DRIVER: &str = r#"import { GAPS_INTERFACE, setGapsFactory } from "./generated/guest/contracts.ts";
+
+const MEM = new ArrayBuffer(1 << 20);
+const DV = new DataView(MEM);
+let cursor = 4097;
+const bridge = {
+  writeU32: (p: number, v: number) => DV.setUint32(p, v >>> 0, true),
+  writeI32: (p: number, v: number) => DV.setInt32(p, v | 0, true),
+  writeF32: (p: number, v: number) => DV.setFloat32(p, v, true),
+  writeF64: (p: number, v: number) => DV.setFloat64(p, v, true),
+  writeByte: (p: number, v: number) => DV.setUint8(p, v & 0xff),
+  readU32: (p: number) => DV.getUint32(p, true),
+  arenaAlloc: (size: number, _arena: number) => {
+    const a = cursor;
+    cursor += Number(size);
+    return [a % 4294967296, Math.floor(a / 4294967296)];
+  },
+};
+
+setGapsFactory(((_b: any, _lo: number, _hi: number) => ({
+  fn0: () => Array.from({ length: 257 }, (_, i) => i),
+  fn1: () => ["solo"],
+  fn2: () => [7, 0, 7],
+})) as any);
+
+const impl = (GAPS_INTERFACE.factory as any)(bridge, 0, 0);
+function call(idx: number, out: number) {
+  (GAPS_INTERFACE.functions as any)[idx](impl, 0, out, 0, bridge);
+  const items = DV.getUint32(out, true) + DV.getUint32(out + 4, true) * 4294967296;
+  const len = DV.getUint32(out + 8, true);
+  return { items, len };
+}
+
+const n = call(0, 16);
+if (n.len !== 257) throw new Error("nums len " + n.len);
+if (
+  DV.getUint32(n.items, true) !== 0 ||
+  DV.getUint32(n.items + 128 * 4, true) !== 128 ||
+  DV.getUint32(n.items + 256 * 4, true) !== 256
+) throw new Error("nums vals");
+
+const m = call(1, 64);
+if (m.len !== 1) throw new Error("names len " + m.len);
+const ptr = DV.getUint32(m.items, true) + DV.getUint32(m.items + 4, true) * 4294967296;
+const slen = DV.getUint32(m.items + 8, true);
+let s = "";
+for (let i = 0; i < slen; i++) s += String.fromCharCode(DV.getUint8(ptr + i));
+if (s !== "solo") throw new Error("names0 " + s);
+
+const c = call(2, 112);
+if (c.len !== 3) throw new Error("codes len " + c.len);
+if (
+  DV.getUint32(c.items, true) !== 7 ||
+  DV.getUint32(c.items + 4, true) !== 0 ||
+  DV.getUint32(c.items + 8, true) !== 7
+) throw new Error("codes vals");
+
+console.log("OK: Array<u32|StringView|enum> round-tripped byte-correct");
+"#;
+
+#[test]
+fn js_scalar_string_enum_arrays_round_trip() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("generated");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "js-quickjs",
+        GAPS_API_TOML,
+        GAPS_BUNDLE_TOML,
+    );
+
+    let driver_path: PathBuf = project_dir.join("driver.ts");
+    fs::write(&driver_path, JS_GAPS_DRIVER).expect("write driver.ts");
+
+    let run: Output = Command::new("deno")
+        .arg("run")
+        .arg("--no-lock")
+        .arg(&driver_path)
+        .output()
+        .expect("failed to spawn deno run");
+    assert!(
+        run.status.success(),
+        "Deno gaps driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "Deno gaps driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+/// Python driver: the three functions return ergonomic lists; the generated
+/// ctypes glue must size/overlay scalar / StringView / enum-repr elements.
+const PY_GAPS_DRIVER: &str = r#"import ctypes
+from types import SimpleNamespace
+from guest.types import ArrayOf_u32, ArrayOf_StringView, ArrayOf_Status
+from guest.contracts import gaps_nums_abi, gaps_names_abi, gaps_codes_abi
+from polyplug_abi import StringView
+
+BUF = ctypes.create_string_buffer(1 << 20)
+BASE = ctypes.addressof(BUF)
+_cursor = [1]
+
+
+def arena_alloc(size, _arena):
+    a = BASE + _cursor[0]
+    _cursor[0] += int(size)
+    return a
+
+
+impl = SimpleNamespace(
+    nums=lambda: list(range(257)),
+    names=lambda: ["solo"],
+    codes=lambda: [7, 0, 7],
+)
+
+out0 = ArrayOf_u32()
+gaps_nums_abi(impl, 0, ctypes.addressof(out0), 0, arena_alloc)
+assert out0.len == 257, "nums len=%d" % out0.len
+nums = (ctypes.c_uint32 * 257).from_address(out0.items)
+assert nums[0] == 0 and nums[128] == 128 and nums[256] == 256, "nums vals"
+
+out1 = ArrayOf_StringView()
+gaps_names_abi(impl, 0, ctypes.addressof(out1), 0, arena_alloc)
+assert out1.len == 1, "names len=%d" % out1.len
+s0 = StringView.from_address(out1.items)
+assert ctypes.string_at(s0.ptr, s0.len).decode() == "solo", "names0"
+
+out2 = ArrayOf_Status()
+gaps_codes_abi(impl, 0, ctypes.addressof(out2), 0, arena_alloc)
+assert out2.len == 3, "codes len=%d" % out2.len
+codes = (ctypes.c_uint32 * 3).from_address(out2.items)
+assert codes[0] == 7 and codes[1] == 0 and codes[2] == 7, "codes vals"
+
+print("OK: Array<u32|StringView|enum> round-tripped byte-correct")
+"#;
+
+#[test]
+fn python_scalar_string_enum_arrays_round_trip() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "python",
+        GAPS_API_TOML,
+        GAPS_BUNDLE_TOML,
+    );
+
+    let driver_path: PathBuf = project_dir.join("driver.py");
+    fs::write(&driver_path, PY_GAPS_DRIVER).expect("write driver.py");
+
+    let sdk: PathBuf = repo_root().join("sdks").join("python");
+    let shim: PathBuf = project_dir.join("shim");
+    fs::create_dir_all(shim.join("polyplug").join("abi")).expect("create shim polyplug/abi");
+    fs::write(shim.join("polyplug").join("__init__.py"), b"").expect("write polyplug init");
+    fs::write(shim.join("polyplug").join("abi").join("__init__.py"), b"")
+        .expect("write polyplug.abi init");
+    fs::copy(
+        sdk.join("abi").join("abi.py"),
+        shim.join("polyplug").join("abi").join("abi.py"),
+    )
+    .expect("copy polyplug/abi/abi.py");
+
+    let pythonpath: String = env::join_paths([
+        gen_dir.clone(),
+        sdk.join("guest"),
+        sdk.join("polyplug_abi"),
+        shim,
+    ])
+    .expect("join PYTHONPATH")
+    .to_string_lossy()
+    .into_owned();
+
+    let run: Output = Command::new("python3")
+        .arg(&driver_path)
+        .env("PYTHONPATH", &pythonpath)
+        .output()
+        .expect("failed to spawn python3");
+    assert!(
+        run.status.success(),
+        "python3 gaps driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "python3 gaps driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+/// C# driver: implements `ISysGapsGuestContract` with the guest SDK `ReturnArena`
+/// (`AllocArray<uint>` / `AllocString`+`AllocArray<StringView>` /
+/// `AllocArray<Status>`), reads each returned wrapper back through the raw `items`
+/// pointer, and asserts values.
+const CS_GAPS_DRIVER: &str = r####"using System.Text;
+using Polyplug.Abi;
+using Polyplug.Guest;
+
+static unsafe string Sv(StringView s) =>
+    s.Ptr == IntPtr.Zero || s.Len == 0 ? "" : Encoding.UTF8.GetString((byte*)s.Ptr, (int)s.Len);
+static void Check(bool cond, string what) { if (!cond) throw new Exception("mismatch: " + what); }
+
+var plugin = new GapsPlugin();
+unsafe
+{
+    ArrayOf_u32 n = plugin.Nums();
+    Check(n.len == 257, "nums.len");
+    uint* np = (uint*)(void*)(nuint)n.items;
+    Check(np[0] == 0 && np[128] == 128 && np[256] == 256, "nums vals");
+
+    ArrayOf_StringView m = plugin.Names();
+    Check(m.len == 1, "names.len");
+    StringView* mp = (StringView*)(void*)(nuint)m.items;
+    Check(Sv(mp[0]) == "solo", "names[0]");
+
+    ArrayOf_Status c = plugin.Codes();
+    Check(c.len == 3, "codes.len");
+    Status* cp = (Status*)(void*)(nuint)c.items;
+    Check(cp[0] == Status.Busy && cp[1] == Status.Idle && cp[2] == Status.Busy, "codes vals");
+}
+Console.WriteLine("OK: Array<u32|StringView|enum> round-tripped byte-correct");
+
+sealed class GapsPlugin : ISysGapsGuestContract
+{
+    private readonly ReturnArena _arena = new(8192);
+    public ArrayOf_u32 Nums()
+    {
+        _arena.Reset();
+        uint[] v = new uint[257];
+        for (int i = 0; i < 257; i++) v[i] = (uint)i;
+        var (items, len) = _arena.AllocArray<uint>(v);
+        return new ArrayOf_u32 { items = items, len = len };
+    }
+    public ArrayOf_StringView Names()
+    {
+        _arena.Reset();
+        StringView[] solo = { _arena.AllocString("solo") };
+        var (items, len) = _arena.AllocArray<StringView>(solo);
+        return new ArrayOf_StringView { items = items, len = len };
+    }
+    public ArrayOf_Status Codes()
+    {
+        _arena.Reset();
+        Status[] codes = { Status.Busy, Status.Idle, Status.Busy };
+        var (items, len) = _arena.AllocArray<Status>(codes);
+        return new ArrayOf_Status { items = items, len = len };
+    }
+}
+"####;
+
+#[test]
+fn csharp_scalar_string_enum_arrays_round_trip() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "csharp",
+        GAPS_API_TOML,
+        GAPS_BUNDLE_TOML,
+    );
+
+    fs::write(project_dir.join("Program.cs"), CS_GAPS_DRIVER).expect("write Program.cs");
+
+    let abi_csproj: PathBuf = repo_root().join("sdks/csharp/abi/Polyplug.Abi.csproj");
+    let guest_csproj: PathBuf = repo_root().join("sdks/csharp/guest/Polyplug.Guest.csproj");
+    let csproj: String = format!(
+        "<Project Sdk=\"Microsoft.NET.Sdk\">\n  \
+         <PropertyGroup>\n    \
+         <OutputType>Exe</OutputType>\n    \
+         <TargetFramework>net10.0</TargetFramework>\n    \
+         <Nullable>enable</Nullable>\n    \
+         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n    \
+         <ImplicitUsings>enable</ImplicitUsings>\n  \
+         </PropertyGroup>\n  \
+         <ItemGroup>\n    \
+         <ProjectReference Include=\"{abi}\" />\n    \
+         <ProjectReference Include=\"{guest}\" />\n  \
+         </ItemGroup>\n\
+         </Project>\n",
+        abi = abi_csproj.display(),
+        guest = guest_csproj.display(),
+    );
+    let csproj_path: PathBuf = project_dir.join("gaps.csproj");
+    fs::write(&csproj_path, csproj).expect("write gaps.csproj");
+
+    let run: Output = Command::new("dotnet")
+        .arg("run")
+        .arg("-c")
+        .arg("Release")
+        .arg("--project")
+        .arg(&csproj_path)
+        .output()
+        .expect("failed to spawn dotnet");
+    assert!(
+        run.status.success(),
+        "dotnet gaps driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "dotnet gaps driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Buffer regression guard (rust). `Buffer` is an OWNING type — deliberately NOT
 // `Copy` (unlike borrowed `StringView`) — so a struct/arg-pack embedding it must
 // NOT derive `Copy/Clone`, must `use polyplug_abi::Buffer`, and a multi-param

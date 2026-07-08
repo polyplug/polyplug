@@ -15,6 +15,7 @@ use crate::ir::PrimitiveType;
 use crate::ir::ReprType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
+use crate::ir::ResolvedField;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -612,8 +613,18 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
     // for the (registrations, AbiError) return), plus alloc_string_arena on a
     // StringView/struct/array return; guest.types for any user-defined types.
     let mut project: Vec<ImportEntry> = Vec::new();
+    // `StringView` is referenced directly when a function takes a StringView arg
+    // (read via `to_str`) OR returns an `Array<StringView>` (the element marshaler
+    // overlays `StringView` on arena memory). `to_str` is only for reading args.
+    let any_stringview_array_ret: bool = ir.contracts.iter().any(|c: &ResolvedContract| {
+        c.functions
+            .iter()
+            .any(|f: &ResolvedFunction| return_has_stringview_array(&f.returns, ir))
+    });
     if any_string_arg {
         project.extend(py_from("polyplug_abi", &["StringView", "to_str"]));
+    } else if any_stringview_array_ret {
+        project.extend(py_from("polyplug_abi", &["StringView"]));
     }
     let guest_syms: &[&str] = if any_string_ret {
         &[
@@ -1431,6 +1442,40 @@ fn python_host_caller_return_expr(returns: &Option<ResolvedTypeRef>, enums: &[En
     }
 }
 
+/// Whether marshaling `returns` references the `StringView` ctype directly in
+/// contracts.py — true iff it contains an `Array<StringView>` at any nesting. A
+/// StringView *field* of a struct is filled via the struct's own ctypes layout
+/// (types.py) and needs no direct StringView reference here.
+fn return_has_stringview_array(returns: &Option<ResolvedTypeRef>, ir: &ValidatedIr) -> bool {
+    matches!(returns, Some(ty) if type_ref_has_stringview_array(ty, ir))
+}
+
+fn type_ref_has_stringview_array(ty: &ResolvedTypeRef, ir: &ValidatedIr) -> bool {
+    let ResolvedTypeRef::UserDefined(name) = ty else {
+        return false;
+    };
+    if let Some(element) = array_element_name(name) {
+        if element == "StringView" {
+            return true;
+        }
+        return ir
+            .types
+            .iter()
+            .find(|t: &&ResolvedType| t.name == element)
+            .is_some_and(|s: &ResolvedType| struct_has_stringview_array(s, ir));
+    }
+    ir.types
+        .iter()
+        .find(|t: &&ResolvedType| &t.name == name)
+        .is_some_and(|s: &ResolvedType| struct_has_stringview_array(s, ir))
+}
+
+fn struct_has_stringview_array(s: &ResolvedType, ir: &ValidatedIr) -> bool {
+    s.fields
+        .iter()
+        .any(|f: &ResolvedField| type_ref_has_stringview_array(&f.ty, ir))
+}
+
 fn collect_python_type_imports(ir: &ValidatedIr) -> BTreeSet<String> {
     let mut imports: BTreeSet<String> = BTreeSet::new();
     for ty in &ir.types {
@@ -2102,7 +2147,15 @@ fn emit_py_marshal_array(
     let el: String = format!("_el{id}");
     let ep: String = format!("_ep{id}");
     let elem_ref: ResolvedTypeRef = py_element_type_ref(element);
-    let elem_ct: String = python_type_name(&elem_ref);
+    // The ctypes overlay type for one element. An ENUM element has no ctypes
+    // class (generated enums are `enum.IntEnum`, which `ctypes.sizeof` /
+    // `from_address` reject), so it uses its repr's ctype and is filled via the
+    // scalar `.value` branch below (IntEnum is an int subclass). Structs/scalars/
+    // StringView keep their own ctype name.
+    let elem_ct: String = match python_enum_for_type(&elem_ref, &ir.enums) {
+        Some(e) => python_ctype_for_repr(&e.repr).to_owned(),
+        None => python_type_name(&elem_ref),
+    };
     out.push_str(&format!("{indent}{n} = len({src})\n"));
     out.push_str(&format!("{indent}if {n} == 0:\n"));
     out.push_str(&format!("{indent}    {dest}.items = 0\n"));

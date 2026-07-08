@@ -1017,7 +1017,7 @@ fn emit_lua_guest_marshal_return(
             // Array-wrapper (`ArrayOf_T`) or struct-by-value: the impl returns an
             // ergonomic Lua value (an array of tables / a table) and the generated
             // glue marshals it into the caller's arena field-by-field.
-            None => emit_lua_guest_marshal_composite_return(out, &lua_type_name(ret), types),
+            None => emit_lua_guest_marshal_composite_return(out, &lua_type_name(ret), types, enums),
         },
     }
 }
@@ -1026,7 +1026,12 @@ fn emit_lua_guest_marshal_return(
 /// (an array of tables for `ArrayOf_T`, or a table for a struct) and this glue
 /// bump-allocates the elements + their embedded strings into the caller's arena.
 /// A nil result raises (the loader maps it to Generic).
-fn emit_lua_guest_marshal_composite_return(out: &mut String, c_type: &str, types: &[ResolvedType]) {
+fn emit_lua_guest_marshal_composite_return(
+    out: &mut String,
+    c_type: &str,
+    types: &[ResolvedType],
+    enums: &[EnumDef],
+) {
     out.push_str("        if out_ptr ~= 0 and result == nil then\n");
     out.push_str(&format!(
         "            error(\"polyplug: implementation returned nil for a {c_type}-returning function\")\n"
@@ -1037,12 +1042,13 @@ fn emit_lua_guest_marshal_composite_return(out: &mut String, c_type: &str, types
         "            local out_ref = ffi.cast(\"{c_type}*\", ffi.cast(\"uintptr_t\", out_ptr))\n"
     ));
     let mut uid: usize = 0;
+    let ctx: LuaMarshalCtx = LuaMarshalCtx { types, enums };
     emit_lua_marshal_into(
         out,
         "out_ref[0]",
         "result",
         c_type,
-        types,
+        &ctx,
         "            ",
         &mut uid,
     );
@@ -1054,30 +1060,51 @@ fn emit_lua_guest_marshal_composite_return(out: &mut String, c_type: &str, types
 /// arena-allocate their bytes; nested structs recurse field-by-field; array
 /// wrappers (`ArrayOf_T`) allocate `#src` elements in the arena and recurse per
 /// element. `uid` names loop-local temporaries uniquely across nesting levels.
+/// Type context threaded through the recursive Lua marshaler: the struct type
+/// table (to marshal a struct element/field by field) plus the enum table
+/// (enums have no cdef'd C type, so they resolve to their repr C integer type).
+struct LuaMarshalCtx<'a> {
+    types: &'a [ResolvedType],
+    enums: &'a [EnumDef],
+}
+
 fn emit_lua_marshal_into(
     out: &mut String,
     dest: &str,
     src: &str,
     c_type: &str,
-    types: &[ResolvedType],
+    ctx: &LuaMarshalCtx,
     indent: &str,
     uid: &mut usize,
 ) {
     if let Some(element) = array_element_name(c_type) {
-        emit_lua_marshal_array_into(out, dest, src, element, types, indent, uid);
+        emit_lua_marshal_array_into(out, dest, src, element, ctx, indent, uid);
+        return;
+    }
+    // A `StringView` element/value: the impl produced a plain Lua string, so
+    // arena-allocate its bytes and store the resulting view (a direct `dest = src`
+    // would try to assign a Lua string into a `StringView` cdata, which LuaJIT
+    // rejects). StringView *fields* are handled in `emit_lua_marshal_field_into`;
+    // this covers a StringView *array element* (`Array<StringView>`).
+    if c_type == "StringView" {
+        out.push_str(&format!(
+            "{indent}{dest} = polyplug_guest.alloc_string_arena(arena_alloc, arena_ptr, {src})\n"
+        ));
         return;
     }
     // A struct in the type table: marshal each field into the destination cdata.
-    if let Some(ty) = types
+    if let Some(ty) = ctx
+        .types
         .iter()
         .find(|t: &&ResolvedType| t.name.as_str() == c_type)
     {
         for field in &ty.fields {
-            emit_lua_marshal_field_into(out, dest, src, field, types, indent, uid);
+            emit_lua_marshal_field_into(out, dest, src, field, ctx, indent, uid);
         }
         return;
     }
-    // Fallback: a bare cdata the impl already produced (e.g. Buffer) — copy it.
+    // Fallback: a scalar/enum (a Lua number written into a repr-typed cdata slot)
+    // or a bare cdata the impl already produced (e.g. Buffer) — copy it directly.
     out.push_str(&format!("{indent}{dest} = {src}\n"));
 }
 
@@ -1087,7 +1114,7 @@ fn emit_lua_marshal_field_into(
     dest: &str,
     src: &str,
     field: &ResolvedField,
-    types: &[ResolvedType],
+    ctx: &LuaMarshalCtx,
     indent: &str,
     uid: &mut usize,
 ) {
@@ -1102,11 +1129,12 @@ fn emit_lua_marshal_field_into(
         // A nested struct or array field recurses into its own marshaling.
         ResolvedTypeRef::UserDefined(name)
             if array_element_name(name).is_some()
-                || types
+                || ctx
+                    .types
                     .iter()
                     .any(|t: &ResolvedType| t.name.as_str() == name.as_str()) =>
         {
-            emit_lua_marshal_into(out, &dest_field, &src_field, name, types, indent, uid);
+            emit_lua_marshal_into(out, &dest_field, &src_field, name, ctx, indent, uid);
         }
         // Scalars, enums (an integer the impl returns as a number), and Buffer/Ptr
         // copy directly into the repr-typed cdata field.
@@ -1125,7 +1153,7 @@ fn emit_lua_marshal_array_into(
     dest: &str,
     src: &str,
     element: &str,
-    types: &[ResolvedType],
+    ctx: &LuaMarshalCtx,
     indent: &str,
     uid: &mut usize,
 ) {
@@ -1138,6 +1166,12 @@ fn emit_lua_marshal_array_into(
     let elems: String = format!("elems{id}");
     let i: String = format!("i{id}");
     let item: String = format!("it{id}");
+    // The FFI C type of the element: a primitive maps to its C integer/float name
+    // (`u32` → `uint32_t`), an enum to its repr's C integer (`Status` → `uint32_t`)
+    // since enums have no cdef'd C type, and StringView/Buffer/structs are cdef'd
+    // under their own name. Using the raw polyplug type name here would emit an
+    // `ffi.sizeof("u32")` / `ffi.sizeof("Status")` that LuaJIT cannot resolve.
+    let cname: String = lua_c_type_name(&lua_element_type_ref(element), ctx.enums);
     out.push_str(&format!("{indent}local {n} = #{src}\n"));
     out.push_str(&format!("{indent}if {n} == 0 then\n"));
     out.push_str(&format!("{indent}    {dest}.items = 0\n"));
@@ -1145,16 +1179,16 @@ fn emit_lua_marshal_array_into(
     out.push_str(&format!("{indent}else\n"));
     let inner: String = format!("{indent}    ");
     out.push_str(&format!(
-        "{inner}local {align} = ffi.alignof(\"{element}\")\n"
+        "{inner}local {align} = ffi.alignof(\"{cname}\")\n"
     ));
     out.push_str(&format!(
-        "{inner}local {raw} = ffi.cast(\"uintptr_t\", arena_alloc({n} * ffi.sizeof(\"{element}\") + {align} - 1, arena_ptr))\n"
+        "{inner}local {raw} = ffi.cast(\"uintptr_t\", arena_alloc({n} * ffi.sizeof(\"{cname}\") + {align} - 1, arena_ptr))\n"
     ));
     out.push_str(&format!(
         "{inner}local {base} = ({raw} + {align} - 1) - (({raw} + {align} - 1) % {align})\n"
     ));
     out.push_str(&format!(
-        "{inner}local {elems} = ffi.cast(\"{element}*\", {base})\n"
+        "{inner}local {elems} = ffi.cast(\"{cname}*\", {base})\n"
     ));
     out.push_str(&format!("{inner}for {i} = 0, {n} - 1 do\n"));
     out.push_str(&format!("{inner}    local {item} = {src}[{i} + 1]\n"));
@@ -1163,7 +1197,7 @@ fn emit_lua_marshal_array_into(
         &format!("{elems}[{i}]"),
         &item,
         element,
-        types,
+        ctx,
         &format!("{inner}    "),
         uid,
     );
@@ -1446,6 +1480,20 @@ fn contract_name_to_struct(name: &str) -> String {
 
 fn needs_arg_pack(params: &[ResolvedParam]) -> bool {
     params.len() >= 2
+}
+
+/// Parse an array-element type NAME (extracted from `ArrayOf_<element>`) back
+/// into a `ResolvedTypeRef` so it can be mapped to a LuaJIT C type. Primitives
+/// and ABI builtins are recognised by name; anything else is a user-defined
+/// struct or enum.
+fn lua_element_type_ref(name: &str) -> ResolvedTypeRef {
+    if let Some(p) = PrimitiveType::parse(name) {
+        ResolvedTypeRef::Primitive(p)
+    } else if let Some(b) = AbiBuiltin::parse(name) {
+        ResolvedTypeRef::AbiType(b)
+    } else {
+        ResolvedTypeRef::UserDefined(name.to_owned())
+    }
 }
 
 /// C type name for cdef / ffi.cast / ffi.new emission. Contract ENUMS have no
