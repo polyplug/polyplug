@@ -1460,6 +1460,138 @@ fn python_kitchen_all_widths_round_trips() {
     );
 }
 
+/// C# driver for the kitchen-sink contract: implements the generated
+/// `ISysKitchenGuestContract` using the guest SDK's `ReturnArena`
+/// (`AllocString` + `AllocArray`), calls `Make()`, reads the returned
+/// `ArrayOf_Kitchen` back through the raw `items` pointer, and asserts every
+/// field byte-for-byte (incl. a unicode `name` and an empty `tag`). Also proves
+/// `Empty()` yields len==0. Mirrors `KITCHEN_MAIN_RS` / `PY_KITCHEN_DRIVER`.
+const CS_KITCHEN_DRIVER: &str = r####"using System.Text;
+using Polyplug.Abi;
+using Polyplug.Guest;
+
+static unsafe string Sv(StringView s) =>
+    s.Ptr == IntPtr.Zero || s.Len == 0 ? "" : Encoding.UTF8.GetString((byte*)s.Ptr, (int)s.Len);
+static void Check(bool cond, string what) { if (!cond) throw new Exception("mismatch: " + what); }
+
+var plugin = new KitchenPlugin();
+unsafe
+{
+    ArrayOf_Kitchen arr = plugin.Make();
+    Check(arr.len == 2, "len");
+    Kitchen* p = (Kitchen*)(void*)(nuint)arr.items;
+
+    Check(p[0].flag == 1, "row0.flag");
+    Check(p[0].b8 == 255, "row0.b8");
+    Check(p[0].i16v == short.MinValue, "row0.i16v");
+    Check(p[0].i32v == int.MinValue, "row0.i32v");
+    Check(p[0].u64v == ulong.MaxValue, "row0.u64v");
+    Check(p[0].f64v == 3.141592653589793, "row0.f64v");
+    Check(p[0].f32v == 1.5f, "row0.f32v");
+    Check(Sv(p[0].name) == "café.exe", "row0.name");
+    Check(Sv(p[0].tag) == "", "row0.tag");
+
+    Check(p[1].flag == 0, "row1.flag");
+    Check(p[1].b8 == 0, "row1.b8");
+    Check(p[1].i16v == short.MaxValue, "row1.i16v");
+    Check(p[1].i32v == int.MaxValue, "row1.i32v");
+    Check(p[1].u64v == 0, "row1.u64v");
+    Check(p[1].f64v == -2.5, "row1.f64v");
+    Check(p[1].f32v == -0.25f, "row1.f32v");
+    Check(Sv(p[1].name) == "x", "row1.name");
+    Check(Sv(p[1].tag) == "tag2", "row1.tag");
+
+    ArrayOf_Kitchen empty = plugin.Empty();
+    Check(empty.len == 0, "empty.len");
+}
+Console.WriteLine("OK: Array<Kitchen{all-widths}> round-tripped byte-correct");
+
+sealed class KitchenPlugin : ISysKitchenGuestContract
+{
+    private readonly ReturnArena _arena = new(8192);
+    public ArrayOf_Kitchen Make()
+    {
+        _arena.Reset();
+        Kitchen[] rows =
+        {
+            new() { flag = 1, b8 = 255, i16v = short.MinValue, i32v = int.MinValue, u64v = ulong.MaxValue, f64v = 3.141592653589793, f32v = 1.5f, name = _arena.AllocString("café.exe"), tag = _arena.AllocString("") },
+            new() { flag = 0, b8 = 0, i16v = short.MaxValue, i32v = int.MaxValue, u64v = 0, f64v = -2.5, f32v = -0.25f, name = _arena.AllocString("x"), tag = _arena.AllocString("tag2") },
+        };
+        var (items, len) = _arena.AllocArray<Kitchen>(rows);
+        return new ArrayOf_Kitchen { items = items, len = len };
+    }
+    public ArrayOf_Kitchen Empty()
+    {
+        _arena.Reset();
+        var (items, len) = _arena.AllocArray<Kitchen>(ReadOnlySpan<Kitchen>.Empty);
+        return new ArrayOf_Kitchen { items = items, len = len };
+    }
+}
+"####;
+
+#[test]
+fn csharp_kitchen_all_widths_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "csharp",
+        KITCHEN_API_TOML,
+        KITCHEN_BUNDLE_TOML,
+    );
+
+    // The .NET SDK globs every `.cs` under the project directory, so the generated
+    // `gen/guest/*.cs` and this driver compile together with no explicit includes.
+    fs::write(project_dir.join("Program.cs"), CS_KITCHEN_DRIVER).expect("write Program.cs");
+
+    let abi_csproj: PathBuf = repo_root().join("sdks/csharp/abi/Polyplug.Abi.csproj");
+    let guest_csproj: PathBuf = repo_root().join("sdks/csharp/guest/Polyplug.Guest.csproj");
+    let csproj: String = format!(
+        "<Project Sdk=\"Microsoft.NET.Sdk\">\n  \
+         <PropertyGroup>\n    \
+         <OutputType>Exe</OutputType>\n    \
+         <TargetFramework>net10.0</TargetFramework>\n    \
+         <Nullable>enable</Nullable>\n    \
+         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n    \
+         <ImplicitUsings>enable</ImplicitUsings>\n  \
+         </PropertyGroup>\n  \
+         <ItemGroup>\n    \
+         <ProjectReference Include=\"{abi}\" />\n    \
+         <ProjectReference Include=\"{guest}\" />\n  \
+         </ItemGroup>\n\
+         </Project>\n",
+        abi = abi_csproj.display(),
+        guest = guest_csproj.display(),
+    );
+    let csproj_path: PathBuf = project_dir.join("kitchen.csproj");
+    fs::write(&csproj_path, csproj).expect("write kitchen.csproj");
+
+    let run: Output = Command::new("dotnet")
+        .arg("run")
+        .arg("-c")
+        .arg("Release")
+        .arg("--project")
+        .arg(&csproj_path)
+        .output()
+        .expect("failed to spawn dotnet");
+    assert!(
+        run.status.success(),
+        "dotnet Kitchen driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "dotnet Kitchen driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Buffer regression guard (rust). `Buffer` is an OWNING type — deliberately NOT
 // `Copy` (unlike borrowed `StringView`) — so a struct/arg-pack embedding it must
