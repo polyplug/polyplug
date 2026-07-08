@@ -3,7 +3,6 @@
 // Runtime: js-quickjs
 
 // Main entry point for bundling
+export { TRANSFORMER_INTERFACE, setTransformerFactory } from './contracts';
 export { polyplug_init } from './init';
-export { TRANSFORMER_INTERFACE } from './contracts';
-export { setTransformerFactory } from './contracts';
 export { ValidatorPeer } from './peer_callers';

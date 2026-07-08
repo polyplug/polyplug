@@ -2,8 +2,6 @@
 // DO NOT EDIT BY HAND
 // Runtime: js-quickjs
 
-import type { } from './types';
-
 /** Dispatch mechanism type — determines how function calls are routed. */
 const DispatchType = Object.freeze({
     Native: 0,

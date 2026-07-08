@@ -32,8 +32,48 @@ use langprint::backends::js_backend::{
     JsBackend, JsEnum, JsEnumMember, JsFunction, JsFunctionRenderOptions, JsParameter,
 };
 use langprint::renderers::{EnumRenderer, FunctionRenderer};
+use langprint::{ImportEntry, ImportSet, TargetLanguage};
 use polyplug_codegen::PolyplugcError;
 use std::io;
+
+/// A JS/TS named import `import {{ {name} }} from '{source}'`.
+fn js_named(name: &str, source: &str) -> ImportEntry {
+    ImportEntry::JsNamed {
+        name: name.to_string(),
+        source: source.to_string(),
+    }
+}
+
+/// A JS named re-export `export {{ {name} }} from '{source}'`.
+fn js_reexport(name: &str, source: &str) -> ImportEntry {
+    ImportEntry::JsReexport {
+        name: name.to_string(),
+        source: source.to_string(),
+    }
+}
+
+/// Render grouped JS/TS import & re-export statements through langprint's
+/// [`ImportSet`] so the syntax + dedup + grouping live in one place rather than
+/// in hand-written `push_str("import …")` sequences. [`ImportSet`] merges
+/// same-source entries onto one `{ a, b }` line and emits a fixed kind order
+/// (default, named, type-named, `type * as`, re-export). Each inner slice is one
+/// blank-line-separated group; empty groups are skipped, so a caller can pass a
+/// conditional group unconditionally. The result ends in a single newline (empty
+/// when every group is empty); callers append a blank line before the body.
+fn js_import_block(groups: &[&[ImportEntry]]) -> String {
+    let mut blocks: Vec<String> = Vec::new();
+    for group in groups {
+        let mut set: ImportSet = ImportSet::new(TargetLanguage::Js);
+        for entry in *group {
+            set.add(entry.clone());
+        }
+        let rendered: String = set.render();
+        if !rendered.is_empty() {
+            blocks.push(rendered);
+        }
+    }
+    blocks.join("\n")
+}
 use std::string::FromUtf8Error;
 
 /// Generator for js-quickjs plugin bundles.
@@ -329,13 +369,19 @@ fn generate_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
             }
         }
     }
-    if type_imports.is_empty() {
-        out.push_str("import type { } from './types';\n\n");
-    } else {
-        out.push_str(&format!(
-            "import type {{ {} }} from './types';\n\n",
-            type_imports.into_iter().collect::<Vec<String>>().join(", ")
-        ));
+    // An empty type set emits nothing (there are no type references to satisfy),
+    // dropping the placeholder `import type { } from './types';`.
+    let type_entries: Vec<ImportEntry> = type_imports
+        .iter()
+        .map(|n: &String| ImportEntry::JsTypeNamed {
+            name: n.clone(),
+            source: "./types".to_string(),
+        })
+        .collect();
+    let block: String = js_import_block(&[&type_entries]);
+    out.push_str(&block);
+    if !block.is_empty() {
+        out.push('\n');
     }
     out.push_str("/** Dispatch mechanism type — determines how function calls are routed. */\n");
     out.push_str("const DispatchType = Object.freeze({\n");
@@ -799,14 +845,16 @@ fn generate_index_ts(ir: &ValidatedIr) -> String {
          // Runtime: js-quickjs\n\n",
     );
 
-    out.push_str("// Main entry point for bundling\n");
-    out.push_str("export { polyplug_init } from './init';\n");
-
+    // Barrel re-exports: the bundle entry point (polyplug_init), each plugin's
+    // interface + factory from ./contracts, and any peer caller classes.
+    // ImportSet merges same-source entries onto one `export { … } from '…'` line.
+    let mut reexports: Vec<ImportEntry> = vec![js_reexport("polyplug_init", "./init")];
     if let Some(bundle) = bundle {
         for plugin in &bundle.plugins {
             let plugin_var: String = plugin.name.to_uppercase().replace(['.', '-'], "_");
-            out.push_str(&format!(
-                "export {{ {plugin_var}_INTERFACE }} from './contracts';\n"
+            reexports.push(js_reexport(
+                &format!("{plugin_var}_INTERFACE"),
+                "./contracts",
             ));
         }
         for plugin in &bundle.plugins {
@@ -827,20 +875,17 @@ fn generate_index_ts(ir: &ValidatedIr) -> String {
                     })
                     .collect::<String>()
             );
-            out.push_str(&format!(
-                "export {{ {set_factory_name} }} from './contracts';\n"
-            ));
+            reexports.push(js_reexport(&set_factory_name, "./contracts"));
         }
     }
-
     // Re-export peer caller classes when the bundle declares dependencies.
     let peer_contracts: Vec<&ResolvedContract> = collect_peer_contracts(ir);
     for contract in &peer_contracts {
         let class_name: String = guest_contract_name_to_ts_peer(&contract.name);
-        out.push_str(&format!(
-            "export {{ {class_name} }} from './peer_callers';\n"
-        ));
+        reexports.push(js_reexport(&class_name, "./peer_callers"));
     }
+    out.push_str("// Main entry point for bundling\n");
+    out.push_str(&js_import_block(&[&reexports]));
 
     out
 }
@@ -858,15 +903,16 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
          // Runtime: js-quickjs\n\n",
     );
 
-    out.push_str("import {\n");
-    for (idx, plugin) in bundle.plugins.iter().enumerate() {
-        let plugin_var: String = plugin.name.to_uppercase().replace(['.', '-'], "_");
-        if idx > 0 {
-            out.push_str(",\n");
-        }
-        out.push_str(&format!("    {plugin_var}_INTERFACE"));
-    }
-    out.push_str("\n} from './contracts';\n\n");
+    let contract_imports: Vec<ImportEntry> = bundle
+        .plugins
+        .iter()
+        .map(|plugin: &ResolvedPlugin| {
+            let plugin_var: String = plugin.name.to_uppercase().replace(['.', '-'], "_");
+            js_named(&format!("{plugin_var}_INTERFACE"), "./contracts")
+        })
+        .collect();
+    out.push_str(&js_import_block(&[&contract_imports]));
+    out.push('\n');
     out.push_str("// ABI error codes (match polyplug_abi.AbiErrorCode)\n");
     out.push_str("const AbiErrorCode = {\n");
     out.push_str("    Ok: 0,\n");
@@ -3621,7 +3667,12 @@ fn generate_guest_host_contracts_ts(ir: &ValidatedIr) -> Result<String, Polyplug
     let type_imports: BTreeSet<String> = collect_ts_guest_host_contract_type_imports(ir);
     if !type_imports.is_empty() {
         let import_list: String = type_imports.into_iter().collect::<Vec<String>>().join(", ");
-        out.push_str(&format!("import {{ {} }} from './types';\n\n", import_list));
+        let entries: Vec<ImportEntry> = import_list
+            .split(", ")
+            .map(|s: &str| js_named(s, "./types"))
+            .collect();
+        out.push_str(&js_import_block(&[&entries]));
+        out.push('\n');
     }
     emit_ts_utf8_encoder_helper(&mut out)?;
 
@@ -3680,9 +3731,18 @@ fn generate_js_host_interface_factories_ts(ir: &ValidatedIr) -> Result<String, P
          // Runtime: js-quickjs (host-side interface factories)\n\n",
     );
 
-    out.push_str("import { buildHostContractInterface } from 'polyplug';\n");
-    out.push_str("import type { Runtime } from 'polyplug';\n");
-    out.push_str("import type * as contracts from './contracts';\n\n");
+    out.push_str(&js_import_block(&[&[
+        js_named("buildHostContractInterface", "polyplug"),
+        ImportEntry::JsTypeNamed {
+            name: "Runtime".to_string(),
+            source: "polyplug".to_string(),
+        },
+        ImportEntry::JsTypeNamespace {
+            alias: "contracts".to_string(),
+            source: "./contracts".to_string(),
+        },
+    ]]));
+    out.push('\n');
 
     out.push_str("// ABI error codes (match polyplug_abi.AbiErrorCode)\n");
     out.push_str("const AbiErrorCode = {\n");
@@ -3878,7 +3938,12 @@ fn generate_guest_peer_callers_ts(
     }
     if !type_imports.is_empty() {
         let import_list: String = type_imports.into_iter().collect::<Vec<String>>().join(", ");
-        out.push_str(&format!("import {{ {} }} from './types';\n\n", import_list));
+        let entries: Vec<ImportEntry> = import_list
+            .split(", ")
+            .map(|s: &str| js_named(s, "./types"))
+            .collect();
+        out.push_str(&js_import_block(&[&entries]));
+        out.push('\n');
     }
     emit_ts_utf8_encoder_helper(&mut out)?;
 

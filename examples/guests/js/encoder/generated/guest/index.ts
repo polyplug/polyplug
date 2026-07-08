@@ -3,6 +3,5 @@
 // Runtime: js-quickjs
 
 // Main entry point for bundling
+export { ENCODER_INTERFACE, setEncoderFactory } from './contracts';
 export { polyplug_init } from './init';
-export { ENCODER_INTERFACE } from './contracts';
-export { setEncoderFactory } from './contracts';

@@ -3,6 +3,5 @@
 // Runtime: js-quickjs
 
 // Main entry point for bundling
+export { REPORTER_INTERFACE, setReporterFactory } from './contracts';
 export { polyplug_init } from './init';
-export { REPORTER_INTERFACE } from './contracts';
-export { setReporterFactory } from './contracts';

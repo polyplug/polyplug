@@ -3,6 +3,5 @@
 // Runtime: js-quickjs
 
 // Main entry point for bundling
+export { DECODER_INTERFACE, setDecoderFactory } from './contracts';
 export { polyplug_init } from './init';
-export { DECODER_INTERFACE } from './contracts';
-export { setDecoderFactory } from './contracts';

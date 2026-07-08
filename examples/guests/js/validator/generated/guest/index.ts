@@ -3,6 +3,5 @@
 // Runtime: js-quickjs
 
 // Main entry point for bundling
+export { VALIDATOR_INTERFACE, setValidatorFactory } from './contracts';
 export { polyplug_init } from './init';
-export { VALIDATOR_INTERFACE } from './contracts';
-export { setValidatorFactory } from './contracts';

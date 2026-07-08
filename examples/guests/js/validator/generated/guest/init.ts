@@ -2,9 +2,7 @@
 // DO NOT EDIT BY HAND
 // Runtime: js-quickjs
 
-import {
-    VALIDATOR_INTERFACE
-} from './contracts';
+import { VALIDATOR_INTERFACE } from './contracts';
 
 // ABI error codes (match polyplug_abi.AbiErrorCode)
 const AbiErrorCode = {

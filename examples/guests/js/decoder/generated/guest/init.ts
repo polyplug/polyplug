@@ -2,9 +2,7 @@
 // DO NOT EDIT BY HAND
 // Runtime: js-quickjs
 
-import {
-    DECODER_INTERFACE
-} from './contracts';
+import { DECODER_INTERFACE } from './contracts';
 
 // ABI error codes (match polyplug_abi.AbiErrorCode)
 const AbiErrorCode = {
