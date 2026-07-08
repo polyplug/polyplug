@@ -2353,6 +2353,704 @@ fn csharp_scalar_string_enum_arrays_round_trip() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Struct with an `Array<T>` FIELD, returned as `Array<Group>`. Two things are
+// under test: (1) type-emission ORDERING — the synthesized `ArrayOf_StringView`
+// wrapper must be declared before `Group`, which embeds it, or the C-family type
+// headers (Lua `ffi.cdef`, C++, Python `ctypes`) fail to load/compile (fixed by
+// the topological sort in parser.rs); (2) the nested marshaling recursion —
+// array-of-struct-that-contains-an-array-of-string, incl. an EMPTY nested array.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const GROUPS_API_TOML: &str = r#"
+[[types]]
+name = "Group"
+fields = [
+    { name = "id",   type = "u32" },
+    { name = "tags", type = "Array<StringView>" },
+]
+
+[[plugin_contract]]
+name = "sys.Groups"
+version = "1.0.0"
+
+[[plugin_contract.functions]]
+name = "groups"
+return = "Array<Group>"
+"#;
+
+const GROUPS_BUNDLE_TOML: &str = r#"
+[bundle]
+name = "sys_groups"
+version = "1.0.0"
+api = "api.toml"
+loader = "native"
+
+[bundle.file]
+linux.x86_64 = "libgroups.so"
+
+[[plugin]]
+name = "groups"
+implements = ["sys.Groups@1.0"]
+"#;
+
+/// Rust driver: builds each group's nested `tags` array into the arena first,
+/// then the `Group` array, then reads it all back through `as_slice`.
+const GROUPS_MAIN_RS: &str = r##"#[path = "../gen/guest/mod.rs"]
+mod generated;
+
+use core::slice;
+use core::str;
+use std::sync::Mutex;
+
+use generated::contracts::SysGroupsGuestContract;
+use generated::types::{ArrayOf_Group, ArrayOf_StringView, Group};
+use polyplug_abi::StringView;
+use polyplug_guest::{GuestError, HostContext, ReturnArena};
+
+struct Plugin {
+    arena: Mutex<ReturnArena>,
+}
+
+impl SysGroupsGuestContract for Plugin {
+    fn groups(&self) -> Result<ArrayOf_Group, GuestError> {
+        let mut arena = self.arena.lock().expect("arena lock");
+        arena.reset();
+        let g0_tags: [StringView; 2] = [arena.alloc_str("alpha"), arena.alloc_str("beta")];
+        let (t0_items, t0_len) = arena.alloc_array(&g0_tags);
+        let empty: [StringView; 0] = [];
+        let (t1_items, t1_len) = arena.alloc_array(&empty);
+        let groups: [Group; 2] = [
+            Group {
+                id: 10,
+                tags: ArrayOf_StringView { items: t0_items, len: t0_len },
+            },
+            Group {
+                id: 20,
+                tags: ArrayOf_StringView { items: t1_items, len: t1_len },
+            },
+        ];
+        let (items, len) = arena.alloc_array(&groups);
+        Ok(ArrayOf_Group { items, len })
+    }
+}
+
+#[unsafe(no_mangle)]
+pub fn polyplug_create_groups(host: HostContext) -> Box<dyn SysGroupsGuestContract> {
+    Box::new(Plugin {
+        arena: Mutex::new(ReturnArena::new(host, 8192)),
+    })
+}
+
+fn sv_to_string(s: StringView) -> String {
+    if s.ptr.is_null() || s.len == 0 {
+        return String::new();
+    }
+    // SAFETY: `s` came from `alloc_str` (valid UTF-8, still alive; no reset since).
+    let bytes: &[u8] = unsafe { slice::from_raw_parts(s.ptr, s.len) };
+    str::from_utf8(bytes).expect("utf8").to_owned()
+}
+
+fn main() {
+    // SAFETY: null host, never dereferenced (8 KiB buffer never overflows here).
+    let host: HostContext = unsafe { HostContext::new(core::ptr::null()) };
+    let plugin: Box<dyn SysGroupsGuestContract> = polyplug_create_groups(host);
+
+    let w: ArrayOf_Group = plugin.groups().expect("groups must return Ok");
+    // SAFETY: items/len from `alloc_array` on the still-alive arena (no reset since).
+    let gs: &[Group] = unsafe { w.as_slice() };
+    assert_eq!(w.len, 2, "groups len");
+    assert_eq!(gs[0].id, 10, "g0.id");
+    assert_eq!(gs[0].tags.len, 2, "g0.tags len");
+    // SAFETY: nested tags array lives in the same arena, still valid.
+    let t0: &[StringView] = unsafe { gs[0].tags.as_slice() };
+    assert_eq!(sv_to_string(t0[0]), "alpha", "g0.tags[0]");
+    assert_eq!(sv_to_string(t0[1]), "beta", "g0.tags[1]");
+    assert_eq!(gs[1].id, 20, "g1.id");
+    assert_eq!(gs[1].tags.len, 0, "g1.tags empty");
+
+    println!("OK: Array<Group{{Array<StringView>}}> round-tripped byte-correct");
+}
+"##;
+
+#[test]
+fn rust_struct_with_array_field_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("driver");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(project_dir.join("src")).expect("create src dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "rust",
+        GROUPS_API_TOML,
+        GROUPS_BUNDLE_TOML,
+    );
+
+    let cargo_toml: String = format!(
+        "[package]\n\
+         name = \"driver\"\n\
+         version = \"0.1.0\"\n\
+         edition = \"2024\"\n\n\
+         [[bin]]\n\
+         name = \"driver\"\n\
+         path = \"src/main.rs\"\n\n\
+         [dependencies]\n\
+         polyplug_abi = {{ path = \"{}\" }}\n\
+         polyplug_guest = {{ path = \"{}\" }}\n\
+         polyplug_utils = {{ path = \"{}\" }}\n",
+        dep_path(polyplug_abi_path()),
+        dep_path(rust_guest_sdk_path()),
+        dep_path(polyplug_utils_path()),
+    );
+    fs::write(project_dir.join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
+    fs::write(project_dir.join("src/main.rs"), GROUPS_MAIN_RS).expect("write src/main.rs");
+
+    let target_dir: PathBuf = tmp.path().join("target");
+    let run: Output = Command::new(env!("CARGO"))
+        .arg("run")
+        .arg("--manifest-path")
+        .arg(project_dir.join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .output()
+        .expect("failed to spawn cargo run for the groups driver");
+    assert!(
+        run.status.success(),
+        "groups driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+/// C++ driver for struct-with-array-field.
+const CPP_GROUPS_MAIN: &str = r##"#include "guest/init.hpp"
+#include <polyplug/guest.hpp>
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <string>
+
+namespace polyplug_plugin {
+class GroupsImpl : public SysGroupsGuestContract {
+public:
+    GroupsImpl() : arena_(8192) {}
+    polyplug_generated::ArrayOf_Group groups() override {
+        arena_.reset();
+        StringView t0[2];
+        t0[0] = arena_.alloc_str("alpha");
+        t0[1] = arena_.alloc_str("beta");
+        polyplug::ArrayRef r0 = arena_.alloc_array(t0, 2);
+        polyplug::ArrayRef r1 = arena_.alloc_array((StringView*)nullptr, 0);
+        polyplug_generated::Group gs[2];
+        gs[0].id = 10;
+        gs[0].tags = polyplug_generated::ArrayOf_StringView{r0.items, r0.len};
+        gs[1].id = 20;
+        gs[1].tags = polyplug_generated::ArrayOf_StringView{r1.items, r1.len};
+        polyplug::ArrayRef ref = arena_.alloc_array(gs, 2);
+        return polyplug_generated::ArrayOf_Group{ref.items, ref.len};
+    }
+private:
+    polyplug::ReturnArena arena_;
+};
+SysGroupsGuestContract* polyplug_create_groups(const HostApi*) { return new GroupsImpl(); }
+}  // namespace polyplug_plugin
+
+static std::string sv_str(const StringView& s) {
+    if (s.ptr == nullptr || s.len == 0) return std::string();
+    return std::string(reinterpret_cast<const char*>(s.ptr), s.len);
+}
+
+int main() {
+    polyplug_plugin::SysGroupsGuestContract* impl =
+        polyplug_plugin::polyplug_create_groups(nullptr);
+    polyplug_generated::ArrayOf_Group w = impl->groups();
+    assert(w.len == 2);
+    const polyplug_generated::Group* gs = w.elements();
+    assert(gs[0].id == 10);
+    assert(gs[0].tags.len == 2);
+    const StringView* t0 = gs[0].tags.elements();
+    assert(sv_str(t0[0]) == "alpha");
+    assert(sv_str(t0[1]) == "beta");
+    assert(gs[1].id == 20);
+    assert(gs[1].tags.len == 0);
+    std::printf("OK: Array<Group{Array<StringView>}> round-tripped byte-correct\n");
+    delete impl;
+    return 0;
+}
+"##;
+
+#[test]
+fn cpp_struct_with_array_field_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("plugin");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "cpp",
+        GROUPS_API_TOML,
+        GROUPS_BUNDLE_TOML,
+    );
+
+    let main_cpp: PathBuf = project_dir.join("driver.cpp");
+    fs::write(&main_cpp, CPP_GROUPS_MAIN).expect("write driver.cpp");
+    let exe: PathBuf = project_dir.join("driver");
+
+    let build: Output = Command::new("c++")
+        .arg("-std=c++20")
+        .arg("-O0")
+        .arg("-I")
+        .arg(&gen_dir)
+        .arg("-I")
+        .arg(cpp_abi_include())
+        .arg("-I")
+        .arg(cpp_guest_include())
+        .arg(&main_cpp)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("failed to spawn c++ compiler");
+    assert!(
+        build.status.success(),
+        "c++ build of the groups driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        build.status.code(),
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    let run: Output = Command::new(&exe)
+        .output()
+        .expect("failed to run groups driver");
+    assert!(
+        run.status.success(),
+        "C++ groups driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "C++ groups driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+/// LuaJIT driver: the impl returns ergonomic nested tables; the generated glue
+/// recurses (array → struct field → string array), and the type cdef must load
+/// (ordering) before any of it runs.
+const LUA_GROUPS_BODY: &str = r#"
+local ffi = require("ffi")
+require("polyplug_abi")
+require("generated.guest.types")
+local contracts = require("generated.guest.contracts")
+
+local ARENA = ffi.new("uint8_t[?]", 1048576)
+local cursor = 1
+local function arena_alloc(size, _arena)
+    local addr = ffi.cast("uintptr_t", ARENA) + cursor
+    cursor = cursor + tonumber(size)
+    return addr
+end
+
+contracts.set_groups_factory(function(_host)
+    return {
+        groups = function(_self)
+            return {
+                { id = 10, tags = { "alpha", "beta" } },
+                { id = 20, tags = {} },
+            }
+        end,
+    }
+end)
+
+local regs = polyplug_init(1, 1)
+local entry = regs["sys.Groups"]
+assert(entry ~= nil, "sys.Groups must be registered")
+local inst = entry.factory(0)
+
+local out = ffi.new("ArrayOf_Group[1]")
+entry.functions[0](inst, 0, ffi.cast("uintptr_t", out), 0, arena_alloc)
+assert(tonumber(out[0].len) == 2, "groups len")
+local gs = ffi.cast("Group*", out[0].items)
+assert(gs[0].id == 10, "g0.id")
+assert(tonumber(gs[0].tags.len) == 2, "g0.tags len")
+local t0 = ffi.cast("StringView*", gs[0].tags.items)
+assert(ffi.string(t0[0].ptr, t0[0].len) == "alpha", "g0.tags0")
+assert(ffi.string(t0[1].ptr, t0[1].len) == "beta", "g0.tags1")
+assert(gs[1].id == 20, "g1.id")
+assert(tonumber(gs[1].tags.len) == 0, "g1.tags empty")
+
+io.write("OK: Array<Group{Array<StringView>}> round-tripped byte-correct\n")
+"#;
+
+#[test]
+fn lua_struct_with_array_field_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("generated");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "lua",
+        GROUPS_API_TOML,
+        GROUPS_BUNDLE_TOML,
+    );
+
+    let guest_dir: PathBuf = repo_root().join("sdks").join("lua").join("guest");
+    let abi_dir: PathBuf = repo_root().join("sdks").join("lua").join("abi");
+    let project_fwd: String = project_dir.to_string_lossy().replace('\\', "/");
+    let guest_fwd: String = guest_dir.to_string_lossy().replace('\\', "/");
+    let abi_fwd: String = abi_dir.to_string_lossy().replace('\\', "/");
+    let driver: String = format!(
+        "package.path = \"{project_fwd}/?.lua;{guest_fwd}/?.lua;{abi_fwd}/?.lua;\" .. package.path\n{LUA_GROUPS_BODY}"
+    );
+    let driver_path: PathBuf = project_dir.join("driver.lua");
+    fs::write(&driver_path, driver).expect("write driver.lua");
+
+    let run: Output = Command::new("luajit")
+        .arg(&driver_path)
+        .output()
+        .expect("failed to spawn luajit");
+    assert!(
+        run.status.success(),
+        "LuaJIT groups driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "LuaJIT groups driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+/// Deno driver: nested JS objects through the mock bridge; reads `Group` at its C
+/// offsets (id@0, tags.items@8, tags.len@16; sizeof 24) and each tag StringView.
+const JS_GROUPS_DRIVER: &str = r#"import { GROUPS_INTERFACE, setGroupsFactory } from "./generated/guest/contracts.ts";
+
+const MEM = new ArrayBuffer(1 << 20);
+const DV = new DataView(MEM);
+let cursor = 4097;
+const bridge = {
+  writeU32: (p: number, v: number) => DV.setUint32(p, v >>> 0, true),
+  writeI32: (p: number, v: number) => DV.setInt32(p, v | 0, true),
+  writeF32: (p: number, v: number) => DV.setFloat32(p, v, true),
+  writeF64: (p: number, v: number) => DV.setFloat64(p, v, true),
+  writeByte: (p: number, v: number) => DV.setUint8(p, v & 0xff),
+  readU32: (p: number) => DV.getUint32(p, true),
+  arenaAlloc: (size: number, _arena: number) => {
+    const a = cursor;
+    cursor += Number(size);
+    return [a % 4294967296, Math.floor(a / 4294967296)];
+  },
+};
+
+setGroupsFactory(((_b: any, _lo: number, _hi: number) => ({
+  fn0: () => [
+    { id: 10, tags: ["alpha", "beta"] },
+    { id: 20, tags: [] },
+  ],
+})) as any);
+
+const impl = (GROUPS_INTERFACE.factory as any)(bridge, 0, 0);
+const OUT = 16;
+(GROUPS_INTERFACE.functions as any)[0](impl, 0, OUT, 0, bridge);
+const items = DV.getUint32(OUT, true) + DV.getUint32(OUT + 4, true) * 4294967296;
+const len = DV.getUint32(OUT + 8, true);
+if (len !== 2) throw new Error("groups len " + len);
+
+function u64(p: number): number {
+  return DV.getUint32(p, true) + DV.getUint32(p + 4, true) * 4294967296;
+}
+function tag(base: number, i: number): string {
+  const svp = base + i * 16;
+  const ptr = u64(svp);
+  const slen = DV.getUint32(svp + 8, true);
+  let s = "";
+  for (let j = 0; j < slen; j++) s += String.fromCharCode(DV.getUint8(ptr + j));
+  return s;
+}
+
+const g0 = items; // sizeof(Group) == 24
+if (DV.getUint32(g0, true) !== 10) throw new Error("g0.id");
+const g0tItems = u64(g0 + 8);
+const g0tLen = DV.getUint32(g0 + 16, true);
+if (g0tLen !== 2) throw new Error("g0.tags len " + g0tLen);
+if (tag(g0tItems, 0) !== "alpha" || tag(g0tItems, 1) !== "beta") throw new Error("g0.tags vals");
+
+const g1 = items + 24;
+if (DV.getUint32(g1, true) !== 20) throw new Error("g1.id");
+if (DV.getUint32(g1 + 16, true) !== 0) throw new Error("g1.tags not empty");
+
+console.log("OK: Array<Group{Array<StringView>}> round-tripped byte-correct");
+"#;
+
+#[test]
+fn js_struct_with_array_field_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("generated");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "js-quickjs",
+        GROUPS_API_TOML,
+        GROUPS_BUNDLE_TOML,
+    );
+
+    let driver_path: PathBuf = project_dir.join("driver.ts");
+    fs::write(&driver_path, JS_GROUPS_DRIVER).expect("write driver.ts");
+
+    let run: Output = Command::new("deno")
+        .arg("run")
+        .arg("--no-lock")
+        .arg(&driver_path)
+        .output()
+        .expect("failed to spawn deno run");
+    assert!(
+        run.status.success(),
+        "Deno groups driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "Deno groups driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+/// Python driver: nested ergonomic objects; the generated ctypes glue recurses
+/// and the type module must import cleanly (ordering) first.
+const PY_GROUPS_DRIVER: &str = r#"import ctypes
+from types import SimpleNamespace
+from guest.types import ArrayOf_Group, Group
+from guest.contracts import groups_groups_abi
+from polyplug_abi import StringView
+
+BUF = ctypes.create_string_buffer(1 << 20)
+BASE = ctypes.addressof(BUF)
+_cursor = [1]
+
+
+def arena_alloc(size, _arena):
+    a = BASE + _cursor[0]
+    _cursor[0] += int(size)
+    return a
+
+
+impl = SimpleNamespace(groups=lambda: [
+    SimpleNamespace(id=10, tags=["alpha", "beta"]),
+    SimpleNamespace(id=20, tags=[]),
+])
+
+out = ArrayOf_Group()
+groups_groups_abi(impl, 0, ctypes.addressof(out), 0, arena_alloc)
+assert out.len == 2, "groups len=%d" % out.len
+gsize = ctypes.sizeof(Group)
+svsize = ctypes.sizeof(StringView)
+
+
+def group(i):
+    return Group.from_address(out.items + i * gsize)
+
+
+def tag(items, i):
+    s = StringView.from_address(items + i * svsize)
+    return ctypes.string_at(s.ptr, s.len).decode()
+
+
+g0 = group(0)
+assert g0.id == 10, "g0.id"
+assert g0.tags.len == 2, "g0.tags len"
+assert tag(g0.tags.items, 0) == "alpha" and tag(g0.tags.items, 1) == "beta", "g0.tags"
+g1 = group(1)
+assert g1.id == 20 and g1.tags.len == 0, "g1"
+
+print("OK: Array<Group{Array<StringView>}> round-tripped byte-correct")
+"#;
+
+#[test]
+fn python_struct_with_array_field_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "python",
+        GROUPS_API_TOML,
+        GROUPS_BUNDLE_TOML,
+    );
+
+    let driver_path: PathBuf = project_dir.join("driver.py");
+    fs::write(&driver_path, PY_GROUPS_DRIVER).expect("write driver.py");
+
+    let sdk: PathBuf = repo_root().join("sdks").join("python");
+    let shim: PathBuf = project_dir.join("shim");
+    fs::create_dir_all(shim.join("polyplug").join("abi")).expect("create shim polyplug/abi");
+    fs::write(shim.join("polyplug").join("__init__.py"), b"").expect("write polyplug init");
+    fs::write(shim.join("polyplug").join("abi").join("__init__.py"), b"")
+        .expect("write polyplug.abi init");
+    fs::copy(
+        sdk.join("abi").join("abi.py"),
+        shim.join("polyplug").join("abi").join("abi.py"),
+    )
+    .expect("copy polyplug/abi/abi.py");
+
+    let pythonpath: String = env::join_paths([
+        gen_dir.clone(),
+        sdk.join("guest"),
+        sdk.join("polyplug_abi"),
+        shim,
+    ])
+    .expect("join PYTHONPATH")
+    .to_string_lossy()
+    .into_owned();
+
+    let run: Output = Command::new("python3")
+        .arg(&driver_path)
+        .env("PYTHONPATH", &pythonpath)
+        .output()
+        .expect("failed to spawn python3");
+    assert!(
+        run.status.success(),
+        "python3 groups driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "python3 groups driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+/// C# driver: builds nested arrays with `ReturnArena`, reads back through raw
+/// pointers. Also proves the generated `ArrayOf_StringView`/`Group` structs order
+/// correctly (C# is order-independent, but the round trip still exercises the
+/// nested wrapper layout).
+const CS_GROUPS_DRIVER: &str = r####"using System.Text;
+using Polyplug.Abi;
+using Polyplug.Guest;
+
+static unsafe string Sv(StringView s) =>
+    s.Ptr == IntPtr.Zero || s.Len == 0 ? "" : Encoding.UTF8.GetString((byte*)s.Ptr, (int)s.Len);
+static void Check(bool cond, string what) { if (!cond) throw new Exception("mismatch: " + what); }
+
+var plugin = new GroupsPlugin();
+unsafe
+{
+    ArrayOf_Group w = plugin.Groups();
+    Check(w.len == 2, "groups.len");
+    Group* gs = (Group*)(void*)(nuint)w.items;
+    Check(gs[0].id == 10, "g0.id");
+    Check(gs[0].tags.len == 2, "g0.tags.len");
+    StringView* t0 = (StringView*)(void*)(nuint)gs[0].tags.items;
+    Check(Sv(t0[0]) == "alpha" && Sv(t0[1]) == "beta", "g0.tags");
+    Check(gs[1].id == 20 && gs[1].tags.len == 0, "g1");
+}
+Console.WriteLine("OK: Array<Group{Array<StringView>}> round-tripped byte-correct");
+
+sealed class GroupsPlugin : ISysGroupsGuestContract
+{
+    private readonly ReturnArena _arena = new(8192);
+    public ArrayOf_Group Groups()
+    {
+        _arena.Reset();
+        StringView[] t0 = { _arena.AllocString("alpha"), _arena.AllocString("beta") };
+        var (t0Items, t0Len) = _arena.AllocArray<StringView>(t0);
+        var (t1Items, t1Len) = _arena.AllocArray<StringView>(ReadOnlySpan<StringView>.Empty);
+        Group[] gs =
+        {
+            new() { id = 10, tags = new ArrayOf_StringView { items = t0Items, len = t0Len } },
+            new() { id = 20, tags = new ArrayOf_StringView { items = t1Items, len = t1Len } },
+        };
+        var (items, len) = _arena.AllocArray<Group>(gs);
+        return new ArrayOf_Group { items = items, len = len };
+    }
+}
+"####;
+
+#[test]
+fn csharp_struct_with_array_field_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "csharp",
+        GROUPS_API_TOML,
+        GROUPS_BUNDLE_TOML,
+    );
+
+    fs::write(project_dir.join("Program.cs"), CS_GROUPS_DRIVER).expect("write Program.cs");
+
+    let abi_csproj: PathBuf = repo_root().join("sdks/csharp/abi/Polyplug.Abi.csproj");
+    let guest_csproj: PathBuf = repo_root().join("sdks/csharp/guest/Polyplug.Guest.csproj");
+    let csproj: String = format!(
+        "<Project Sdk=\"Microsoft.NET.Sdk\">\n  \
+         <PropertyGroup>\n    \
+         <OutputType>Exe</OutputType>\n    \
+         <TargetFramework>net10.0</TargetFramework>\n    \
+         <Nullable>enable</Nullable>\n    \
+         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n    \
+         <ImplicitUsings>enable</ImplicitUsings>\n  \
+         </PropertyGroup>\n  \
+         <ItemGroup>\n    \
+         <ProjectReference Include=\"{abi}\" />\n    \
+         <ProjectReference Include=\"{guest}\" />\n  \
+         </ItemGroup>\n\
+         </Project>\n",
+        abi = abi_csproj.display(),
+        guest = guest_csproj.display(),
+    );
+    let csproj_path: PathBuf = project_dir.join("groups.csproj");
+    fs::write(&csproj_path, csproj).expect("write groups.csproj");
+
+    let run: Output = Command::new("dotnet")
+        .arg("run")
+        .arg("-c")
+        .arg("Release")
+        .arg("--project")
+        .arg(&csproj_path)
+        .output()
+        .expect("failed to spawn dotnet");
+    assert!(
+        run.status.success(),
+        "dotnet groups driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "dotnet groups driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Buffer regression guard (rust). `Buffer` is an OWNING type — deliberately NOT
 // `Copy` (unlike borrowed `StringView`) — so a struct/arg-pack embedding it must
 // NOT derive `Copy/Clone`, must `use polyplug_abi::Buffer`, and a multi-param

@@ -715,6 +715,66 @@ fn collect_array_wrapper_types(
         .collect()
 }
 
+/// Stable topological sort of `types` so every struct is emitted AFTER the
+/// user-defined types it references by field (nested structs and `ArrayOf_*`
+/// wrappers). Types with no cross-dependency keep their original relative order,
+/// so output for contracts without a struct-embedding-array (or out-of-order
+/// struct) field is byte-identical to the input order. A dependency naming a type
+/// not in the set (a primitive, an enum, an ABI builtin) imposes no ordering.
+/// By-value ABI structs cannot form cycles (infinite size), and the `in_progress`
+/// guard makes a hypothetical cycle terminate rather than recurse forever.
+fn topologically_order_types(types: Vec<ResolvedType>) -> Vec<ResolvedType> {
+    let type_names: HashSet<&str> = types
+        .iter()
+        .map(|t: &ResolvedType| t.name.as_str())
+        .collect();
+    let mut ordered: Vec<ResolvedType> = Vec::with_capacity(types.len());
+    let mut emitted: HashSet<String> = HashSet::new();
+    let mut in_progress: HashSet<String> = HashSet::new();
+    for t in &types {
+        visit_type_deps(
+            &t.name,
+            &types,
+            &type_names,
+            &mut emitted,
+            &mut in_progress,
+            &mut ordered,
+        );
+    }
+    ordered
+}
+
+/// DFS post-order visit for [`topologically_order_types`]: emit `name`'s
+/// user-defined field dependencies (that are themselves in the type set) before
+/// `name` itself. `emitted` skips already-placed types; `in_progress` breaks any
+/// cycle.
+fn visit_type_deps(
+    name: &str,
+    types: &[ResolvedType],
+    type_names: &HashSet<&str>,
+    emitted: &mut HashSet<String>,
+    in_progress: &mut HashSet<String>,
+    ordered: &mut Vec<ResolvedType>,
+) {
+    if emitted.contains(name) || in_progress.contains(name) {
+        return;
+    }
+    let Some(ty) = types.iter().find(|t: &&ResolvedType| t.name == name) else {
+        return;
+    };
+    in_progress.insert(name.to_owned());
+    for f in &ty.fields {
+        if let ResolvedTypeRef::UserDefined(dep) = &f.ty
+            && type_names.contains(dep.as_str())
+        {
+            visit_type_deps(dep, types, type_names, emitted, in_progress, ordered);
+        }
+    }
+    in_progress.remove(name);
+    emitted.insert(name.to_owned());
+    ordered.push(ty.clone());
+}
+
 fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr, PolyplugcError> {
     let known_type_names: Vec<String> = raw.types.iter().map(|t| t.name.clone()).collect();
 
@@ -965,6 +1025,12 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
         &resolved_host_contracts,
     );
     resolved_types.extend(array_wrappers);
+    // Order types so every struct follows the user-defined types it references by
+    // field. The C-family generators (Lua `ffi.cdef`, C++ headers, Python `ctypes`
+    // `_fields_`) require a type to be declared before it is used as a field, and
+    // the desugar appends `ArrayOf_*` wrappers AFTER the user structs — so a struct
+    // with an `Array<T>` field would reference an as-yet-undeclared wrapper.
+    let resolved_types: Vec<ResolvedType> = topologically_order_types(resolved_types);
 
     Ok(ValidatedIr {
         types: resolved_types,

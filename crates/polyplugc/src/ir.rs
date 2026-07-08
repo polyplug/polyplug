@@ -238,13 +238,13 @@ pub struct EnumDef {
 // ─── IR Structs ────────────────────────────────────────────────────────────────
 
 /// A resolved user-defined flat struct.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResolvedType {
     pub name: String,
     pub fields: Vec<ResolvedField>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResolvedField {
     pub name: String,
     pub ty: ResolvedTypeRef,

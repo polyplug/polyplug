@@ -14,6 +14,15 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
 
 ### Fixed
 
+- **A struct with an `Array<T>` field generated type declarations in the wrong
+  order.** The synthesized `ArrayOf_*` wrapper was emitted *after* the struct that
+  embeds it, so the C-family type modules failed before any call ran: the Lua
+  `ffi.cdef` raised "declaration specifier expected", and the C++ / Python type
+  headers referenced an undeclared type. `polyplugc` now emits types in
+  dependency order (a stable topological sort — output for contracts without such
+  a field is unchanged). Covered by a `*_struct_with_array_field_round_trips` test
+  per language (an `Array<Group>` where `Group` embeds an `Array<StringView>`,
+  including an empty nested array).
 - **Guest codegen for non-struct `Array<T>` return elements (Lua, Python).** Only
   `Array<struct>` (the common array-of-records shape) marshaled correctly before;
   arrays whose element is a scalar, a `StringView`, or an enum emitted broken
