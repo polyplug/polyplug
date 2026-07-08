@@ -12,6 +12,7 @@ use crate::ir::EnumVariant;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
+use crate::ir::ResolvedField;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -19,6 +20,7 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use crate::ir::array_element_name;
 use langprint::backends::lua_backend::{
     LuaBackend, LuaEnum, LuaEnumMember, LuaFunction, LuaFunctionRenderOptions,
 };
@@ -341,7 +343,13 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
-                    generate_guest_plugin_interface(&mut out, &plugin.name, contract, &ir.enums)?;
+                    generate_guest_plugin_interface(
+                        &mut out,
+                        &plugin.name,
+                        contract,
+                        &ir.enums,
+                        &ir.types,
+                    )?;
                     registrations.push((plugin.name.as_str(), contract));
                 }
             }
@@ -754,6 +762,7 @@ fn generate_guest_plugin_interface(
     plugin_name: &str,
     contract: &ResolvedContract,
     enums: &[EnumDef],
+    types: &[ResolvedType],
 ) -> Result<(), PolyplugcError> {
     let plugin_var: String = plugin_name.to_uppercase().replace(['.', '-'], "_");
     let contract_name_full: String = format!("{}@{}", contract.name, contract.version.major);
@@ -812,7 +821,7 @@ fn generate_guest_plugin_interface(
         body.push_str(&format!(
             "    functions[{idx}] = function(instance, args_ptr, out_ptr, arena_ptr, arena_alloc)\n"
         ));
-        emit_lua_guest_handler_body(&mut body, func, enums, &contract.name);
+        emit_lua_guest_handler_body(&mut body, func, enums, &contract.name, types);
         body.push_str("    end\n");
     }
     body.push_str(&format!("    registrations[\"{}\"] = {{\n", contract.name));
@@ -844,6 +853,7 @@ fn emit_lua_guest_handler_body(
     func: &ResolvedFunction,
     enums: &[EnumDef],
     contract_name: &str,
+    types: &[ResolvedType],
 ) {
     let method: String = func.name.replace('.', "_");
     // A missing instance or method must NOT fall through to success (the loader
@@ -889,7 +899,7 @@ fn emit_lua_guest_handler_body(
         "        local result = instance:{method}({call_args})\n"
     ));
 
-    emit_lua_guest_marshal_return(out, &func.returns, enums);
+    emit_lua_guest_marshal_return(out, &func.returns, enums, types);
 }
 
 /// Unpack a single guest-handler argument from `args_ptr` and return the Lua
@@ -952,6 +962,7 @@ fn emit_lua_guest_marshal_return(
     out: &mut String,
     returns: &Option<ResolvedTypeRef>,
     enums: &[EnumDef],
+    types: &[ResolvedType],
 ) {
     let Some(ret) = returns else {
         return;
@@ -970,10 +981,165 @@ fn emit_lua_guest_marshal_return(
             None if lua_return_is_scalar(ret) => {
                 emit_lua_guest_marshal_scalar_return(out, &lua_type_name(ret));
             }
-            // Struct-by-value return: a reference cdata, like StringView/Buffer.
-            None => emit_lua_guest_marshal_ref_return(out, &lua_type_name(ret)),
+            // Array-wrapper (`ArrayOf_T`) or struct-by-value: the impl returns an
+            // ergonomic Lua value (an array of tables / a table) and the generated
+            // glue marshals it into the caller's arena field-by-field.
+            None => emit_lua_guest_marshal_composite_return(out, &lua_type_name(ret), types),
         },
     }
+}
+
+/// Marshal an array-wrapper or struct return: the impl returns a plain Lua value
+/// (an array of tables for `ArrayOf_T`, or a table for a struct) and this glue
+/// bump-allocates the elements + their embedded strings into the caller's arena.
+/// A nil result raises (the loader maps it to Generic).
+fn emit_lua_guest_marshal_composite_return(out: &mut String, c_type: &str, types: &[ResolvedType]) {
+    out.push_str("        if out_ptr ~= 0 and result == nil then\n");
+    out.push_str(&format!(
+        "            error(\"polyplug: implementation returned nil for a {c_type}-returning function\")\n"
+    ));
+    out.push_str("        end\n");
+    out.push_str("        if out_ptr ~= 0 then\n");
+    out.push_str(&format!(
+        "            local out_ref = ffi.cast(\"{c_type}*\", ffi.cast(\"uintptr_t\", out_ptr))\n"
+    ));
+    let mut uid: usize = 0;
+    emit_lua_marshal_into(
+        out,
+        "out_ref[0]",
+        "result",
+        c_type,
+        types,
+        "            ",
+        &mut uid,
+    );
+    out.push_str("        end\n");
+}
+
+/// Recursively marshal the Lua value `src` into the cdata lvalue `dest`, which has
+/// C type named `c_type`. Scalars/enums copy directly; `StringView` fields
+/// arena-allocate their bytes; nested structs recurse field-by-field; array
+/// wrappers (`ArrayOf_T`) allocate `#src` elements in the arena and recurse per
+/// element. `uid` names loop-local temporaries uniquely across nesting levels.
+fn emit_lua_marshal_into(
+    out: &mut String,
+    dest: &str,
+    src: &str,
+    c_type: &str,
+    types: &[ResolvedType],
+    indent: &str,
+    uid: &mut usize,
+) {
+    if let Some(element) = array_element_name(c_type) {
+        emit_lua_marshal_array_into(out, dest, src, element, types, indent, uid);
+        return;
+    }
+    // A struct in the type table: marshal each field into the destination cdata.
+    if let Some(ty) = types
+        .iter()
+        .find(|t: &&ResolvedType| t.name.as_str() == c_type)
+    {
+        for field in &ty.fields {
+            emit_lua_marshal_field_into(out, dest, src, field, types, indent, uid);
+        }
+        return;
+    }
+    // Fallback: a bare cdata the impl already produced (e.g. Buffer) — copy it.
+    out.push_str(&format!("{indent}{dest} = {src}\n"));
+}
+
+/// Marshal one struct field `field` of `src` into `dest.<field>`.
+fn emit_lua_marshal_field_into(
+    out: &mut String,
+    dest: &str,
+    src: &str,
+    field: &ResolvedField,
+    types: &[ResolvedType],
+    indent: &str,
+    uid: &mut usize,
+) {
+    let dest_field: String = format!("{dest}.{}", field.name);
+    let src_field: String = format!("{src}.{}", field.name);
+    match &field.ty {
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+            out.push_str(&format!(
+                "{indent}{dest_field} = polyplug_guest.alloc_string_arena(arena_alloc, arena_ptr, {src_field})\n"
+            ));
+        }
+        // A nested struct or array field recurses into its own marshaling.
+        ResolvedTypeRef::UserDefined(name)
+            if array_element_name(name).is_some()
+                || types
+                    .iter()
+                    .any(|t: &ResolvedType| t.name.as_str() == name.as_str()) =>
+        {
+            emit_lua_marshal_into(out, &dest_field, &src_field, name, types, indent, uid);
+        }
+        // Scalars, enums (an integer the impl returns as a number), and Buffer/Ptr
+        // copy directly into the repr-typed cdata field.
+        _ => {
+            out.push_str(&format!("{indent}{dest_field} = {src_field}\n"));
+        }
+    }
+}
+
+/// Marshal a Lua array `src` into the `ArrayOf_<element>` wrapper lvalue `dest`:
+/// allocate `#src` elements in the arena (`arena_alloc` is align-1, so over-
+/// allocate and round the base up to the element alignment), fill each, and set
+/// `items`/`len`.
+fn emit_lua_marshal_array_into(
+    out: &mut String,
+    dest: &str,
+    src: &str,
+    element: &str,
+    types: &[ResolvedType],
+    indent: &str,
+    uid: &mut usize,
+) {
+    let id: usize = *uid;
+    *uid += 1;
+    let n: String = format!("n{id}");
+    let raw: String = format!("raw{id}");
+    let base: String = format!("base{id}");
+    let align: String = format!("al{id}");
+    let elems: String = format!("elems{id}");
+    let i: String = format!("i{id}");
+    let item: String = format!("it{id}");
+    out.push_str(&format!("{indent}local {n} = #{src}\n"));
+    out.push_str(&format!("{indent}if {n} == 0 then\n"));
+    out.push_str(&format!("{indent}    {dest}.items = 0\n"));
+    out.push_str(&format!("{indent}    {dest}.len = 0\n"));
+    out.push_str(&format!("{indent}else\n"));
+    let inner: String = format!("{indent}    ");
+    out.push_str(&format!(
+        "{inner}local {align} = ffi.alignof(\"{element}\")\n"
+    ));
+    out.push_str(&format!(
+        "{inner}local {raw} = ffi.cast(\"uintptr_t\", arena_alloc({n} * ffi.sizeof(\"{element}\") + {align} - 1, arena_ptr))\n"
+    ));
+    out.push_str(&format!(
+        "{inner}local {base} = ({raw} + {align} - 1) - (({raw} + {align} - 1) % {align})\n"
+    ));
+    out.push_str(&format!(
+        "{inner}local {elems} = ffi.cast(\"{element}*\", {base})\n"
+    ));
+    out.push_str(&format!("{inner}for {i} = 0, {n} - 1 do\n"));
+    out.push_str(&format!("{inner}    local {item} = {src}[{i} + 1]\n"));
+    emit_lua_marshal_into(
+        out,
+        &format!("{elems}[{i}]"),
+        &item,
+        element,
+        types,
+        &format!("{inner}    "),
+        uid,
+    );
+    out.push_str(&format!("{inner}end\n"));
+    out.push_str(&format!(
+        "{inner}{dest}.items = ffi.cast(\"uint64_t\", {base})\n"
+    ));
+    out.push_str(&format!("{inner}{dest}.len = {n}\n"));
+    out.push_str(&format!("{indent}end\n"));
 }
 
 /// Marshal a `StringView` return: the impl returns a plain Lua string and the
@@ -4018,7 +4184,7 @@ mod tests {
 
     fn guest_handler(func: &ResolvedFunction, enums: &[EnumDef]) -> String {
         let mut out: String = String::new();
-        emit_lua_guest_handler_body(&mut out, func, enums, "test.add");
+        emit_lua_guest_handler_body(&mut out, func, enums, "test.add", &[]);
         out
     }
 

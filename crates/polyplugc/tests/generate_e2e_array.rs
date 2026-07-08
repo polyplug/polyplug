@@ -322,6 +322,101 @@ fn cpp_array_of_struct_with_string_round_trips() {
     );
 }
 
+/// The LuaJIT driver body (package.path is prepended separately). Sets a factory
+/// whose `enum_procs` returns an array of plain Lua tables, drives the generated
+/// dispatch handler with a mock **align-1** arena allocator starting at an odd
+/// offset (so the marshaler MUST realign for the struct elements), then reads the
+/// arena-filled `ArrayOf_Proc` back and asserts every field/string.
+const LUA_DRIVER_BODY: &str = r#"
+local ffi = require("ffi")
+require("polyplug_abi")
+require("generated.guest.types")
+local contracts = require("generated.guest.contracts")
+
+-- Mock arena: an align-1 bump allocator over a Lua-owned buffer, starting at an
+-- odd offset so a correct marshaler must realign before writing Proc elements.
+local ARENA = ffi.new("uint8_t[?]", 1048576)
+local cursor = 1
+local function arena_alloc(size, _arena)
+    local addr = ffi.cast("uintptr_t", ARENA) + cursor
+    cursor = cursor + tonumber(size)
+    return addr
+end
+
+contracts.set_enumerator_factory(function(_host)
+    return {
+        enum_procs = function(_self)
+            return { { id = 7, name = "cs2.exe" }, { id = 42, name = "game.exe" } }
+        end,
+    }
+end)
+
+local regs = polyplug_init(1, 1)
+local entry = regs["sys.Enumerator"]
+assert(entry ~= nil, "sys.Enumerator must be registered")
+local inst = entry.factory(0)
+local out = ffi.new("ArrayOf_Proc[1]")
+entry.functions[0](inst, 0, ffi.cast("uintptr_t", out), 0, arena_alloc)
+
+assert(tonumber(out[0].len) == 2, "len must be 2")
+local procs = ffi.cast("Proc*", out[0].items)
+assert(procs[0].id == 7, "proc0 id")
+assert(procs[1].id == 42, "proc1 id")
+assert(ffi.string(procs[0].name.ptr, procs[0].name.len) == "cs2.exe", "proc0 name")
+assert(ffi.string(procs[1].name.ptr, procs[1].name.len) == "game.exe", "proc1 name")
+io.write("OK: Array<Proc{StringView}> round-tripped byte-correct\n")
+"#;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Lua: generate → run under LuaJIT a driver that returns Array<Proc> from an
+// ergonomic Lua array-of-tables, and assert the generated glue marshaled it into
+// the (mock) arena byte-correct. luajit is guaranteed by CI.
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn lua_array_of_struct_with_string_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    // Require path `generated.guest.*` → directory named `generated`.
+    let gen_dir: PathBuf = project_dir.join("generated");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_array_bundle(&project_dir, &gen_dir, "lua");
+    assert!(
+        gen_dir.join("guest/contracts.lua").exists(),
+        "generated guest/contracts.lua must exist at {}",
+        gen_dir.join("guest/contracts.lua").display()
+    );
+
+    let guest_dir: PathBuf = repo_root().join("sdks").join("lua").join("guest");
+    let abi_dir: PathBuf = repo_root().join("sdks").join("lua").join("abi");
+    let project_fwd: String = project_dir.to_string_lossy().replace('\\', "/");
+    let guest_fwd: String = guest_dir.to_string_lossy().replace('\\', "/");
+    let abi_fwd: String = abi_dir.to_string_lossy().replace('\\', "/");
+    let driver: String = format!(
+        "package.path = \"{project_fwd}/?.lua;{guest_fwd}/?.lua;{abi_fwd}/?.lua;\" .. package.path\n{LUA_DRIVER_BODY}"
+    );
+    let driver_path: PathBuf = project_dir.join("driver.lua");
+    fs::write(&driver_path, driver).expect("write driver.lua");
+
+    let run: Output = Command::new("luajit")
+        .arg(&driver_path)
+        .output()
+        .expect("failed to spawn luajit");
+    assert!(
+        run.status.success(),
+        "LuaJIT Array<Proc> driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "LuaJIT driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
 #[test]
 fn array_of_struct_with_string_round_trips() {
     let tmp: TempDir = tempdir().expect("tempdir");
