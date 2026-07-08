@@ -29,6 +29,7 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use crate::ir::array_element_name;
 use langprint::backends::rust_backend::{
     RustBackend, RustEnum, RustEnumRenderOptions, RustEnumVariant, RustEnumVariantValue,
     RustExternBlock, RustField, RustFunction, RustParameter, RustSelfKind, RustStruct,
@@ -2309,7 +2310,46 @@ fn generate_rust_type(out: &mut String, ty: &ResolvedType) -> Result<(), Polyplu
         .map(|f: &ResolvedField| (f.name.clone(), rust_type_name(&f.ty)))
         .collect::<Vec<(String, String)>>();
     out.push_str(&render_rust_repr_c_struct(&ty.name, doc, fields)?);
+    // Array wrappers (`ArrayOf_T`, from desugaring `Array<T>`) get a typed
+    // read accessor so the host reads their `items`/`len` back as a `&[T]`
+    // instead of reinterpreting a raw pointer at each call site.
+    if let Some(element) = array_element_name(&ty.name) {
+        emit_array_wrapper_as_slice(out, &ty.name, element);
+    }
     Ok(())
+}
+
+/// Emit `impl ArrayOf_T { unsafe fn as_slice(&self) -> &[T] }` for an array
+/// wrapper struct. The element bytes live in the producing guest's return buffer
+/// (or the caller's arena), so the borrow is tied to that memory's lifetime, not
+/// to the 16-byte wrapper — hence `unsafe` with the valid-until-next-call rule.
+fn emit_array_wrapper_as_slice(out: &mut String, wrapper: &str, element: &str) {
+    out.push_str(&format!("impl {wrapper} {{\n"));
+    out.push_str(&format!(
+        "    /// Borrow this array's elements as `&[{element}]`.\n"
+    ));
+    out.push_str("    ///\n");
+    out.push_str("    /// # Safety\n");
+    out.push_str(&format!(
+        "    /// `items` must point at `len` initialized `{element}` values produced by\n"
+    ));
+    out.push_str("    /// a guest return; the slice is valid only until the next arena-backed\n");
+    out.push_str("    /// call on the caller that produced it. Copy out before the next call.\n");
+    out.push_str(&format!(
+        "    pub unsafe fn as_slice<'a>(&self) -> &'a [{element}] {{\n"
+    ));
+    out.push_str("        if self.items == 0 || self.len == 0 {\n");
+    out.push_str("            return &[];\n");
+    out.push_str("        }\n");
+    out.push_str(&format!(
+        "        // SAFETY: the caller guarantees `items` points at `len` valid `{element}`\n"
+    ));
+    out.push_str("        // values for the borrow's lifetime (see the method contract above).\n");
+    out.push_str(&format!(
+        "        unsafe {{ core::slice::from_raw_parts(self.items as *const {element}, self.len as usize) }}\n"
+    ));
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
 }
 
 fn rust_type_name(ty: &ResolvedTypeRef) -> String {

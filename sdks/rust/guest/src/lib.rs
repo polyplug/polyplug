@@ -60,10 +60,10 @@
 
 use core::error::Error;
 use core::fmt;
-use core::{ptr, slice, str};
+use core::{mem, ptr, slice, str};
 
 use polyplug_abi::types::LogLevel;
-use polyplug_abi::{AbiError, AbiErrorCode, HostApi, StringView};
+use polyplug_abi::{AbiError, AbiErrorCode, CallArena, HostApi, StringView};
 
 /// Per-instance handle to the host runtime that created a plugin instance.
 ///
@@ -167,6 +167,114 @@ impl HostContext {
         // views borrow live UTF-8 Rust string data that outlives the synchronous
         // call, matching the field's documented ownership contract.
         unsafe { ((*self.host).log)(self.host, level as u32, scope_view, message_view) }
+    }
+}
+
+// ─── Return buffer for variable-size native returns ─────────────────────────────
+
+/// A per-instance return-value buffer for a native guest's variable-size returns.
+///
+/// A native guest that returns a `StringView`, `Buffer`, or an `Array<T>` wrapper
+/// must hand back memory that stays valid until the host copies it out. Unlike
+/// [`HostContext::alloc_string`] — which allocates through the host allocator and
+/// relies on the host to free each value — `ReturnArena` owns one reusable buffer
+/// that it rewinds on every call. This is the borrowed-return model: zero
+/// per-call host allocation, zero host free, and every view it hands out is valid
+/// only until the next [`reset`](Self::reset).
+///
+/// Hold one on the plugin impl (behind a `RefCell` or `&mut self`), call
+/// [`reset`](Self::reset) at the start of each method that returns variable-size
+/// data, then use [`alloc_str`](Self::alloc_str) / [`alloc_array`](Self::alloc_array)
+/// to build the return value. Returns larger than the primary buffer spill into
+/// host-allocated overflow blocks that `reset` reclaims, so the capacity is a
+/// tuning hint, not a hard cap.
+pub struct ReturnArena {
+    /// Backing storage for the primary bump region. Boxed so its heap address is
+    /// stable across moves of `ReturnArena` — `arena` caches raw pointers into it.
+    _buf: Box<[u8]>,
+    /// Bump allocator over `_buf`, with the host for overflow reclamation.
+    arena: CallArena,
+}
+
+// SAFETY: `ReturnArena` solely owns its `_buf` and the `CallArena` pointers refer
+// only into that owned buffer (plus a host pointer used solely for overflow
+// alloc/free). No pointer aliases memory owned elsewhere, so moving the whole
+// arena to another thread is sound. It is deliberately NOT `Sync`: concurrent
+// shared access would race the bump cursor — wrap it in a `Mutex`/`RefCell` (a
+// `Mutex<ReturnArena>` is `Sync`) to satisfy a `Send + Sync` guest trait bound.
+unsafe impl Send for ReturnArena {}
+
+impl ReturnArena {
+    /// Create a return buffer with a `capacity`-byte primary region, using `host`
+    /// only to allocate/free overflow blocks for returns that exceed it.
+    pub fn new(host: HostContext, capacity: usize) -> ReturnArena {
+        let mut buf: Box<[u8]> = vec![0_u8; capacity].into_boxed_slice();
+        // `CallArena` stores raw pointers into `buf`. A `Box<[u8]>`'s heap data
+        // keeps its address when the owning `ReturnArena` is moved (only the box
+        // pointer moves), so the cached pointers stay valid for the arena's life.
+        let arena: CallArena = CallArena::new(&mut buf, host.as_ptr());
+        ReturnArena { _buf: buf, arena }
+    }
+
+    /// Rewind the buffer, invalidating every view returned since the last reset
+    /// and reclaiming any overflow blocks. Call at the start of each method that
+    /// returns variable-size data.
+    pub fn reset(&mut self) {
+        self.arena.reset();
+    }
+
+    /// Copy `s` into the buffer and return a `StringView` borrowing it, valid
+    /// until the next [`reset`](Self::reset). An empty string returns an empty
+    /// view without allocating.
+    pub fn alloc_str(&mut self, s: &str) -> StringView {
+        let bytes: &[u8] = s.as_bytes();
+        if bytes.is_empty() {
+            return StringView {
+                ptr: ptr::null(),
+                len: 0,
+            };
+        }
+        let dst: *mut u8 = self.arena.alloc(bytes.len(), 1);
+        if dst.is_null() {
+            return StringView {
+                ptr: ptr::null(),
+                len: 0,
+            };
+        }
+        // SAFETY: `dst` is non-null (checked), came from the arena sized for
+        // `bytes.len()` bytes at align 1; the source is valid for that many bytes
+        // and the regions do not overlap (fresh arena allocation).
+        unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len()) };
+        StringView {
+            ptr: dst as *const u8,
+            len: bytes.len(),
+        }
+    }
+
+    /// Copy `xs` into the buffer as a contiguous array and return
+    /// `(items, len)` for an `ArrayOf_T { items, len }` wrapper — `items` is the
+    /// element pointer as a `u64`, `len` the element count. Valid until the next
+    /// [`reset`](Self::reset). An empty slice returns `(0, 0)`.
+    ///
+    /// Any `StringView` (or nested array) embedded in an element must already
+    /// point at buffer memory from a prior `alloc_str`/`alloc_array` on the same
+    /// `ReturnArena`, so the whole return graph shares one lifetime.
+    pub fn alloc_array<T: Copy>(&mut self, xs: &[T]) -> (u64, u64) {
+        if xs.is_empty() {
+            return (0, 0);
+        }
+        let size: usize = mem::size_of_val(xs);
+        let align: usize = mem::align_of::<T>();
+        let dst: *mut u8 = self.arena.alloc(size, align);
+        if dst.is_null() {
+            return (0, 0);
+        }
+        // SAFETY: `dst` is non-null (checked), came from the arena sized for
+        // `size` bytes at `align_of::<T>()`, so it is aligned for `T` and holds
+        // `xs.len()` elements. `T: Copy`, so the bytewise copy is a valid clone,
+        // and source/destination do not overlap (fresh arena allocation).
+        unsafe { ptr::copy_nonoverlapping(xs.as_ptr(), dst as *mut T, xs.len()) };
+        (dst as u64, xs.len() as u64)
     }
 }
 

@@ -75,11 +75,17 @@ is the one detail the worked example above abstracts over:
   memory, so the loader threads the caller's arena into the dispatch call and the
   generated guest glue **bump-allocates the return directly into the arena.** This
   is the arena's primary reason to exist.
-- **Native guests (Rust / C / C++):** the guest allocates its return through
-  `host->alloc` (the `HostApi` allocator) — e.g. the Rust SDK's
-  `HostContext::alloc_string` — or, when it can, returns a zero-copy **borrowed
-  view** into memory it already owns. Either way the *host* controls the lifetime;
-  the guest never runs a `free_memory_fn` dance.
+- **Native guests (Rust / C / C++):** the guest returns a **borrowed view** into
+  memory it owns and reuses each call. The Rust SDK packages this as
+  `ReturnArena` — a per-instance buffer (built on the same `CallArena`) that the
+  guest resets at the top of each call, then fills with `alloc_str` /
+  `alloc_array`; the returned `StringView` / `ArrayOf_T` borrows that buffer and
+  is valid until the next reset. This is the zero-leak, zero-host-free form of the
+  borrowed-return contract and the native counterpart to the VM arena. A guest
+  *may* instead allocate through `host->alloc` (e.g. `HostContext::alloc_string`),
+  but the host caller returns that view without freeing it, so `host->alloc`
+  returns leak unless the guest reuses/frees them — prefer `ReturnArena`. Either
+  way the guest never runs a `free_memory_fn` dance.
 
 Both families obey the same lifetime rule below, so callers treat every
 variable-size return identically regardless of the plugin's language.
@@ -126,7 +132,7 @@ arena helper.
 | JS (QuickJS) guest returns | Yes | the loader threads a per-call `arena_ptr` + a `bridge` into dispatch; the generated wrapper calls `bridge.arenaAlloc(size, arena_ptr)` (no `globalThis` — Rule 12) |
 | Lua (LuaJIT) guest returns | Yes | the loader threads `(arena_ptr, arena_alloc)` as the final two dispatch args; the generated handler calls `alloc_string_arena(arena_alloc, arena_ptr, s)` in the guest SDK |
 | Rust host callers | Yes | per-caller `CallArena` field threaded into VM dispatch when a return needs it |
-| Native Rust / C++ / C# guest returns | No (host allocator instead) | the guest returns either a zero-copy **borrowed view** into memory it already owns, or memory it obtains from `host->alloc` (e.g. `HostContext::alloc_string`) — the host controls the lifetime, so no per-caller arena is threaded into native dispatch |
+| Native Rust / C++ / C# guest returns | No (guest-owned buffer instead) | the guest returns a **borrowed view** into a reused per-instance buffer (Rust: `ReturnArena`, built on `CallArena`, via `alloc_str` / `alloc_array`) — or, less preferably, memory from `host->alloc` (e.g. `HostContext::alloc_string`). Valid until the next call; no per-caller arena is threaded into native dispatch |
 | Python (CPython) guest returns | Yes | Python guests register **`DispatchType::VirtualMachine`** (`polyplug_python` loader); the loader threads `(arena_ptr, arena_alloc)` as the final two dispatch args (no module-injected bridge — Rule 12) and the generated callable writes returns into the per-call arena |
 
 ## Null-arena fallback
