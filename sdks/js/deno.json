@@ -22,7 +22,7 @@
     "noUnusedParameters": true
   },
   "tasks": {
-    "check": "deno check **/*.ts",
+    "check": "deno check",
     "test": "deno test --allow-ffi --allow-env --allow-read --allow-write"
   },
   "fmt": {
