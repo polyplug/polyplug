@@ -220,6 +220,38 @@ impl CodeGenerator for PythonGenerator {
     }
 }
 
+/// The `polyplug_abi` symbols a python types module must import. `StringView` is
+/// imported unconditionally (it costs nothing at runtime and keeps output stable
+/// for the common case); `Buffer` is added only when a type EMITTED into the
+/// module references it — a user-struct field or an arg-pack parameter. Without
+/// this, a struct carrying a `Buffer` field (e.g. `ReadResult { data: Buffer }`)
+/// emits `("data", Buffer)` with `Buffer` undefined → `NameError` at class
+/// creation.
+fn python_types_abi_imports(ir: &ValidatedIr) -> Vec<ImportEntry> {
+    fn is_buffer(ty: &ResolvedTypeRef) -> bool {
+        matches!(ty, ResolvedTypeRef::AbiType(AbiBuiltin::Buffer))
+    }
+    let field_buffer: bool = ir
+        .types
+        .iter()
+        .any(|t: &ResolvedType| t.fields.iter().any(|f: &ResolvedField| is_buffer(&f.ty)));
+    let param_buffer: bool = ir
+        .contracts
+        .iter()
+        .flat_map(|c: &ResolvedContract| c.functions.iter())
+        .chain(
+            ir.host_contracts
+                .iter()
+                .flat_map(|c: &ResolvedHostContract| c.functions.iter()),
+        )
+        .any(|f: &ResolvedFunction| f.params.iter().any(|p: &ResolvedParam| is_buffer(&p.ty)));
+    if field_buffer || param_buffer {
+        py_from("polyplug_abi", &["Buffer", "StringView"])
+    } else {
+        py_from("polyplug_abi", &["StringView"])
+    }
+}
+
 fn generate_python_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
@@ -231,7 +263,7 @@ fn generate_python_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError
     out.push_str(&python_import_block(&[
         &py_from("__future__", &["annotations"]),
         &stdlib,
-        &py_from("polyplug_abi", &["StringView"]),
+        &python_types_abi_imports(ir),
     ]));
     out.push('\n');
 
@@ -270,7 +302,7 @@ fn generate_python_types_stub(ir: &ValidatedIr) -> Result<String, PolyplugcError
     out.push_str(&python_import_block(&[
         &py_from("__future__", &["annotations"]),
         &stdlib,
-        &py_from("polyplug_abi", &["Buffer", "StringView"]),
+        &python_types_abi_imports(ir),
     ]));
     out.push('\n');
     for e in &ir.enums {
@@ -307,7 +339,7 @@ fn generate_host_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> 
     out.push_str(&python_import_block(&[
         &py_from("__future__", &["annotations"]),
         &stdlib,
-        &py_from("polyplug_abi", &["StringView"]),
+        &python_types_abi_imports(ir),
     ]));
     out.push('\n');
     for e in &ir.enums {
@@ -344,7 +376,7 @@ fn generate_host_types_stub(ir: &ValidatedIr) -> Result<String, PolyplugcError> 
     out.push_str(&python_import_block(&[
         &py_from("__future__", &["annotations"]),
         &stdlib,
-        &py_from("polyplug_abi", &["StringView"]),
+        &python_types_abi_imports(ir),
     ]));
     out.push('\n');
     for e in &ir.enums {

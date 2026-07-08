@@ -14,6 +14,12 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
 
 ### Fixed
 
+- **A Python struct with a `Buffer` field failed to load.** The generated types
+  module hardcoded `from polyplug_abi import StringView` and never imported
+  `Buffer`, so a struct such as `ReadResult { data: Buffer }` emitted
+  `("data", Buffer)` with `Buffer` undefined → `NameError` at class creation. The
+  module now imports `Buffer` whenever an emitted type references it. Covered by
+  `python_buffer_in_struct_types_import`.
 - **A Python guest function taking a single `enum` parameter crashed on
   dispatch.** The generated ABI wrapper read it with `Status.from_address(...)`,
   but a generated enum is an `enum.IntEnum` (no `from_address`), raising

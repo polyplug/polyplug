@@ -3933,3 +3933,73 @@ fn rust_buffer_in_struct_and_param_compiles() {
         String::from_utf8_lossy(&build.stderr),
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Python types module must import `Buffer` when a struct has a `Buffer` field.
+// The `polyplug_abi` imports were hardcoded to `StringView` only, so the `Frame`
+// struct above (`data: Buffer`) emitted `("data", Buffer)` with `Buffer`
+// undefined → `NameError` at class creation. Surfaced generating the CheatGear
+// SDK (its `ReadResult` carries a `Buffer`). Fixed in `python_types_abi_imports`.
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn python_buffer_in_struct_types_import() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_bundle_with(
+        &project_dir,
+        &gen_dir,
+        "python",
+        BUFFER_API_TOML,
+        BUFFER_BUNDLE_TOML,
+    );
+
+    // Instantiating `Frame` (which has a `Buffer` field) fails at class creation
+    // if `Buffer` was not imported into the generated types module.
+    let driver: &str = "from guest.types import Frame\nf = Frame()\nprint('OK: Buffer-field struct imports and instantiates')\n";
+    let driver_path: PathBuf = project_dir.join("driver.py");
+    fs::write(&driver_path, driver).expect("write driver.py");
+
+    let sdk: PathBuf = repo_root().join("sdks").join("python");
+    let shim: PathBuf = project_dir.join("shim");
+    fs::create_dir_all(shim.join("polyplug").join("abi")).expect("create shim polyplug/abi");
+    fs::write(shim.join("polyplug").join("__init__.py"), b"").expect("write polyplug init");
+    fs::write(shim.join("polyplug").join("abi").join("__init__.py"), b"")
+        .expect("write polyplug.abi init");
+    fs::copy(
+        sdk.join("abi").join("abi.py"),
+        shim.join("polyplug").join("abi").join("abi.py"),
+    )
+    .expect("copy polyplug/abi/abi.py");
+
+    let pythonpath: String = env::join_paths([
+        gen_dir.clone(),
+        sdk.join("guest"),
+        sdk.join("polyplug_abi"),
+        shim,
+    ])
+    .expect("join PYTHONPATH")
+    .to_string_lossy()
+    .into_owned();
+
+    let run: Output = Command::new("python3")
+        .arg(&driver_path)
+        .env("PYTHONPATH", &pythonpath)
+        .output()
+        .expect("failed to spawn python3");
+    assert!(
+        run.status.success(),
+        "python3 Buffer-field types import failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("imports and instantiates"),
+        "driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
