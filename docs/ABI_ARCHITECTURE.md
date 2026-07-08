@@ -226,6 +226,34 @@ out-param ABI's type foundation: a mirror cannot quietly change `AbiError`'s
 layout. The out-param *convention* on the function pointers themselves remains
 runtime-proven by the lua-cdef floor and the `just verify-abi` ceiling above.
 
+### Built-in-type marshaling — behavioral proof
+
+The validator pins struct *shapes* statically; the built-in-type *marshaling*
+(the generated code that reads and writes those types across the boundary) is
+proven byte-correct at runtime by `crates/polyplugc/tests/generate_e2e_array.rs`.
+Each test generates guest glue for a contract, then compiles and runs a driver
+under the real language toolchain (rust/cpp/lua/js/python) and asserts the bytes
+that land in memory:
+
+- **Kitchen sink** — `Array<Kitchen>` where `Kitchen` carries one field of every
+  primitive width/signedness/float (`bool, u8, i16, i32, u64, f64, f32`) plus two
+  embedded `StringView`s. Every language marshals the *same* boundary values —
+  `u8::MAX`, `i16`/`i32` MIN & MAX, `u64::MAX`, a unicode string, an **empty**
+  string — so every distinct field-writer branch and the arena realign/stride
+  math is exercised, not just the `u32 + StringView` shape. A companion `empty()`
+  return proves the `len == 0` path (no element alloc, no string loop).
+- **Buffer regression guard** — a contract with `Buffer` (an *owning*, non-`Copy`
+  type) as a struct field and as a standalone param must generate rust glue that
+  compiles: it locks in that such structs/arg-packs do **not** derive `Copy`,
+  `use polyplug_abi::Buffer`, and unpack the POD pack by value. (`Buffer` is not
+  a valid `Array<T>` element precisely because `alloc_array` requires `T: Copy`.)
+
+The golden helper set in `checks/sdk_validator.yaml` covers `StringView`
+(`to_str`/`starts_with`/…) and the contract-ID hashers; `Buffer`/`Array` are
+pinned as struct shapes only (no ergonomic helper method exists in any language,
+so there is none to validate), while their marshaling correctness is covered by
+the e2e matrix above.
+
 Import hygiene across the workspace (no inline fully-qualified paths at use-sites)
 is enforced by a separate guard — `just verify-no-fq-paths` / `checks/no_inline_fq_paths.yaml`
 — also in the SDK Consistency CI job. See `docs/WORKFLOW.md` § "Import hygiene".
