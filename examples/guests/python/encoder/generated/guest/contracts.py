@@ -3,10 +3,12 @@
 # Re-generate with: polyplugc generate --api api.toml --lang python --out <dir>
 
 from __future__ import annotations
+
 import ctypes
-from polyplug_abi import StringView, to_str
 from typing import Any, Callable
-from polyplug_guest import register_contract, alloc_string_arena, AbiError, AbiErrorCode
+
+from polyplug_abi import StringView, to_str
+from polyplug_guest import AbiError, AbiErrorCode, alloc_string_arena, register_contract
 
 POLYPLUG_ABI_VERSION: int = 1
 

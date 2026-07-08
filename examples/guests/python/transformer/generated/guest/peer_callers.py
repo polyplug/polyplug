@@ -2,21 +2,11 @@
 # Re-generate with: polyplugc generate --bundle bundle.toml --lang python --out <dir>
 
 from __future__ import annotations
+
 import ctypes
 from typing import Any, Optional
 
-from polyplug_abi import (
-    AbiError,
-    AbiErrorCode,
-    ArenaOverflowBlock,
-    CallArena,
-    DispatchType,
-    GuestContractHandle,
-    GuestContractInstance,
-    GuestContractInterface,
-    HostApi,
-    StringView,
-)
+from polyplug_abi import AbiError, AbiErrorCode, ArenaOverflowBlock, CallArena, DispatchType, GuestContractHandle, GuestContractInstance, GuestContractInterface, HostApi, StringView
 
 CALL_ARENA_BUF_LEN: int = 512
 _OVERFLOW_BLOCK_ALIGN: int = ctypes.sizeof(ctypes.c_void_p)

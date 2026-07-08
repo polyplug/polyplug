@@ -3,7 +3,9 @@
 # Re-generate with: polyplugc generate --api api.toml --lang python --out <dir>
 
 from __future__ import annotations
+
 from typing import Any, Callable
+
 from polyplug_guest import AbiError
 
 POLYPLUG_ABI_VERSION: int

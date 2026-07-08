@@ -3,6 +3,7 @@
 # Re-generate with: polyplugc generate --api api.toml --lang python --out <dir>
 
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
 
 class HostLogger(ABC):

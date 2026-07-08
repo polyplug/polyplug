@@ -3,9 +3,11 @@
 # Re-generate with: polyplugc generate --api api.toml --lang python --out <dir>
 
 from __future__ import annotations
+
 import ctypes
 from typing import Any, Self
-from polyplug_abi import AbiErrorCode, AbiError, Buffer, DispatchType, GuestContractInstance, HostContractInstance, HostContractInterface, HostApi, StringView
+
+from polyplug_abi import AbiError, AbiErrorCode, Buffer, DispatchType, GuestContractInstance, HostApi, HostContractInstance, HostContractInterface, StringView
 
 from guest.types import LogLevel
 

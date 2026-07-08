@@ -1218,9 +1218,7 @@ dependencies = [
 
 [[package]]
 name = "langprint"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75a84a69391f35b7fb2125878ea97e031a3140a7dfd0ebff41550376020c851a"
+version = "0.2.3"
 dependencies = [
  "thiserror",
 ]

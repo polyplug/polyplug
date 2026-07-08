@@ -3,7 +3,9 @@
 # Re-generate with: polyplugc generate --api api.toml --lang python --out <dir>
 
 from __future__ import annotations
+
 from typing import Any, Self
+
 from polyplug_abi import HostContractInstance
 
 from guest.types import LogLevel

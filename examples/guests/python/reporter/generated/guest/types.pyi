@@ -3,11 +3,12 @@
 # Re-generate with: polyplugc generate --api api.toml --lang python --out <dir>
 
 from __future__ import annotations
-import ctypes
-from typing import ClassVar
-from polyplug_abi import Buffer, StringView
 
+import ctypes
 import enum
+from typing import ClassVar
+
+from polyplug_abi import Buffer, StringView
 
 class LogLevel(enum.IntEnum):
     DEBUG = 0

@@ -2,6 +2,7 @@
 # Re-generate with: polyplugc generate --bundle bundle.toml --lang python --out <dir>
 
 from __future__ import annotations
+
 from typing import Optional
 
 from polyplug_abi import GuestContractInstance, StringView
