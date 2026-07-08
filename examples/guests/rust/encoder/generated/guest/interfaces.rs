@@ -4,8 +4,9 @@
 #![allow(dead_code)]
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
-#![allow(clippy::eq_op)]
-#![allow(clippy::identity_op)]
+#![allow(clippy::all)]
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
 
 use core::ffi::c_void;
 

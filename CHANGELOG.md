@@ -14,6 +14,18 @@ and are called out explicitly below. The ABI freezes at 1.0 — see
 
 ### Fixed
 
+- **Generated Rust code failed a strict host's `clippy` gate.** The Rust host and
+  guest SDKs emitted only a handful of `#![allow]`s (`dead_code`, `eq_op`,
+  `identity_op`, …), so including the generated module into a crate that runs
+  `cargo clippy -- -D warnings` with `clippy::pedantic`/`clippy::nursery` enabled
+  broke the build — a multi-argument guest method emits an arg-pack literal
+  (`Args { key: key, value: value }`) that trips the default-warn
+  `redundant_field_names`, and contract-id constants trip `unreadable_literal`.
+  polyplug's own examples never hit this (no multi-argument guest method, no
+  pedantic profile); it surfaced integrating a real pedantic host. Generated code
+  is machine output that a consumer includes verbatim, so it must suppress its own
+  lints: the headers now emit `#![allow(clippy::all)]`, `#![allow(clippy::pedantic)]`,
+  and `#![allow(clippy::nursery)]`. Bodies are unchanged.
 - **The C++ guest SDK headers were not relocatable.** `sdks/cpp/guest/polyplug/`
   `guest.hpp` and `contract.hpp` included the ABI header by a source-tree-relative
   path (`../../abi/polyplug/abi.hpp`), so vendoring the SDK into another project
