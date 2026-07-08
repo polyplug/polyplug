@@ -15,6 +15,7 @@ use serde::Deserialize;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
+use crate::ir::PrimitiveType;
 use crate::ir::ReprType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
@@ -28,6 +29,7 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use crate::ir::Version;
+use crate::ir::array_element_name;
 use crate::ir::resolve_type_ref;
 use polyplug_codegen::PlatformKey;
 use polyplug_codegen::PolyplugcError;
@@ -650,6 +652,69 @@ fn validate_contract_members(
     Ok(())
 }
 
+/// Synthesize the `{ items: u64, len: u64 }` wrapper struct for every `ArrayOf_*`
+/// reference the `Array<T>` desugar produced (fields, params, returns). `items` is
+/// the arena address of the element block, `len` the element count. Deterministic
+/// first-seen order; each wrapper emitted once and never for a name a user already
+/// defined.
+fn collect_array_wrapper_types(
+    types: &[ResolvedType],
+    contracts: &[ResolvedContract],
+    host_contracts: &[ResolvedHostContract],
+) -> Vec<ResolvedType> {
+    fn note(names: &mut Vec<String>, ty: &ResolvedTypeRef) {
+        if let ResolvedTypeRef::UserDefined(n) = ty
+            && array_element_name(n).is_some()
+            && !names.contains(n)
+        {
+            names.push(n.clone());
+        }
+    }
+    let mut names: Vec<String> = Vec::new();
+    for t in types {
+        for f in &t.fields {
+            note(&mut names, &f.ty);
+        }
+    }
+    for c in contracts {
+        for f in &c.functions {
+            for p in &f.params {
+                note(&mut names, &p.ty);
+            }
+            if let Some(r) = &f.returns {
+                note(&mut names, r);
+            }
+        }
+    }
+    for c in host_contracts {
+        for f in &c.functions {
+            for p in &f.params {
+                note(&mut names, &p.ty);
+            }
+            if let Some(r) = &f.returns {
+                note(&mut names, r);
+            }
+        }
+    }
+    names
+        .into_iter()
+        .filter(|n| !types.iter().any(|t| &t.name == n))
+        .map(|name| ResolvedType {
+            name,
+            fields: vec![
+                ResolvedField {
+                    name: "items".to_owned(),
+                    ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
+                },
+                ResolvedField {
+                    name: "len".to_owned(),
+                    ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
+                },
+            ],
+        })
+        .collect()
+}
+
 fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr, PolyplugcError> {
     let known_type_names: Vec<String> = raw.types.iter().map(|t| t.name.clone()).collect();
 
@@ -889,6 +954,17 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
         }
         seen_host_names.push(&raw_host_contract.name);
     }
+
+    // Emit the synthesized `{ items, len }` wrapper struct for each `Array<T>`
+    // the desugar referenced (see `array_wrapper_name`). Appended after the
+    // user types so generators see them as ordinary structs; the arena element
+    // marshaling is emitted at the return boundary.
+    let array_wrappers: Vec<ResolvedType> = collect_array_wrapper_types(
+        &resolved_types,
+        &resolved_contracts,
+        &resolved_host_contracts,
+    );
+    resolved_types.extend(array_wrappers);
 
     Ok(ValidatedIr {
         types: resolved_types,
@@ -1532,5 +1608,57 @@ mod tests {
         // This is intentional — "i32" could be a signed-integer mistake.
         let suggestion: Option<String> = nearest_repr_suggestion("i32");
         assert!(suggestion.is_some(), "expected suggestion for i32");
+    }
+
+    #[test]
+    fn array_return_desugars_to_wrapper_struct() {
+        // `Array<Foo>` desugars to a synthesized `ArrayOf_Foo { items, len }` struct
+        // and the return resolves to that wrapper. The element marshaling is emitted
+        // by the generators at the return boundary.
+        let api: &str = "[[types]]\nname = \"Foo\"\nfields = [{ name = \"a\", type = \"u32\" }, { name = \"s\", type = \"StringView\" }]\n\n[[plugin_contract]]\nname = \"x.C\"\nversion = \"1.0.0\"\n\n[[plugin_contract.functions]]\nname = \"list\"\nreturn = \"Array<Foo>\"";
+        let ir: ValidatedIr = parse_api_str(api).expect("parse Array<Foo>");
+        let wrapper: &ResolvedType = ir
+            .types
+            .iter()
+            .find(|t: &&ResolvedType| t.name == "ArrayOf_Foo")
+            .expect("ArrayOf_Foo wrapper synthesized");
+        assert_eq!(wrapper.fields.len(), 2, "wrapper has items + len");
+        assert_eq!(wrapper.fields[0].name, "items");
+        assert_eq!(wrapper.fields[1].name, "len");
+        let returns: &Option<ResolvedTypeRef> = &ir.contracts[0].functions[0].returns;
+        assert!(
+            matches!(returns, Some(ResolvedTypeRef::UserDefined(n)) if n == "ArrayOf_Foo"),
+            "return resolves to the wrapper: {returns:?}"
+        );
+    }
+
+    #[test]
+    fn array_wrapper_emitted_once_across_multiple_uses() {
+        let api: &str = "[[types]]\nname = \"Foo\"\nfields = [{ name = \"a\", type = \"u32\" }]\n\n[[plugin_contract]]\nname = \"x.C\"\nversion = \"1.0.0\"\n\n[[plugin_contract.functions]]\nname = \"a\"\nreturn = \"Array<Foo>\"\n\n[[plugin_contract.functions]]\nname = \"b\"\nreturn = \"Array<Foo>\"";
+        let ir: ValidatedIr = parse_api_str(api).expect("parse");
+        let count: usize = ir
+            .types
+            .iter()
+            .filter(|t: &&ResolvedType| t.name == "ArrayOf_Foo")
+            .count();
+        assert_eq!(count, 1, "wrapper struct emitted exactly once");
+    }
+
+    #[test]
+    fn array_of_unknown_element_is_rejected() {
+        let api: &str = "[[plugin_contract]]\nname = \"x.C\"\nversion = \"1.0.0\"\n\n[[plugin_contract.functions]]\nname = \"list\"\nreturn = \"Array<Nope>\"";
+        assert!(
+            parse_api_str(api).is_err(),
+            "Array<Unknown> must be rejected"
+        );
+    }
+
+    #[test]
+    fn nested_array_is_rejected() {
+        let api: &str = "[[types]]\nname = \"Foo\"\nfields = [{ name = \"a\", type = \"u32\" }]\n\n[[plugin_contract]]\nname = \"x.C\"\nversion = \"1.0.0\"\n\n[[plugin_contract.functions]]\nname = \"list\"\nreturn = \"Array<Array<Foo>>\"";
+        assert!(
+            parse_api_str(api).is_err(),
+            "nested arrays must be rejected"
+        );
     }
 }

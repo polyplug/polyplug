@@ -354,12 +354,46 @@ pub fn resolve_type_ref(
     if known_types.contains(&type_str.to_owned()) {
         return Ok(ResolvedTypeRef::UserDefined(type_str.to_owned()));
     }
+    // `Array<Inner>` desugars to a synthesized `{ items, len }` wrapper struct
+    // (see `array_wrapper_name`); the element marshaling is arena-backed and
+    // emitted at the return boundary by each generator. The element must itself
+    // resolve; nested arrays are not supported.
+    if let Some(inner) = type_str
+        .strip_prefix("Array<")
+        .and_then(|s| s.strip_suffix('>'))
+    {
+        let inner: &str = inner.trim();
+        if inner.starts_with("Array<") {
+            return Err(PolyplugcError::UnknownType {
+                type_ref: type_str.to_owned(),
+                contract: contract.to_owned(),
+                location: None,
+                suggestion: Some("nested arrays are not supported".to_owned()),
+            });
+        }
+        // Validate the element type resolves (rejects `Array<Unknown>`).
+        resolve_type_ref(inner, contract, known_types)?;
+        return Ok(ResolvedTypeRef::UserDefined(array_wrapper_name(inner)));
+    }
     Err(PolyplugcError::UnknownType {
         type_ref: type_str.to_owned(),
         contract: contract.to_owned(),
         location: None,
         suggestion: None,
     })
+}
+
+/// Name of the synthesized wrapper struct for `Array<inner>` — the desugar target.
+/// Emitted as a `{ items: ptr, len: u64 }` struct; generators fill it via the
+/// arena at the return boundary. e.g. `Array<Process>` → `ArrayOf_Process`.
+pub(crate) fn array_wrapper_name(inner: &str) -> String {
+    format!("ArrayOf_{inner}")
+}
+
+/// If `name` is a synthesized array-wrapper struct name, return its element type
+/// name (`ArrayOf_Process` → `Process`); otherwise `None`.
+pub(crate) fn array_element_name(name: &str) -> Option<&str> {
+    name.strip_prefix("ArrayOf_")
 }
 
 #[cfg(test)]
