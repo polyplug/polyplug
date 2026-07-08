@@ -2,9 +2,10 @@
 // Re-generate with: polyplugc generate --api api.toml --lang csharp --out <dir>
 
 using System.Runtime.CompilerServices;
-using Polyplug.Guest;
-using Polyplug.Abi;
 using System.Runtime.InteropServices;
+
+using Polyplug.Abi;
+using Polyplug.Guest;
 
 // Plugin: transformer
 public static class TransformerInterfaces {

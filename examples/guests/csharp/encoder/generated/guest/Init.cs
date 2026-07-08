@@ -3,8 +3,9 @@
 
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using Polyplug.Guest;
+
 using Polyplug.Abi;
+using Polyplug.Guest;
 
 namespace encoder;
 

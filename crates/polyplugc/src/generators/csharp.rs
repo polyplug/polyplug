@@ -25,9 +25,35 @@ use langprint::backends::csharp_backend::{
     CSharpMethodRenderOptions, CSharpParameter, CSharpType, CSharpTypeKind, CSharpVisibility,
 };
 use langprint::renderers::{EnumRenderer, FunctionRenderer, StructRenderer};
+use langprint::{ImportEntry, ImportSet, TargetLanguage};
 use polyplug_codegen::PolyplugcError;
 use polyplug_codegen::ResolvedBundleFile;
 use std::io;
+
+/// Render grouped C# `using` blocks through langprint's [`ImportSet`] so the
+/// `using …;` syntax + dedup + sorting live in one place rather than in
+/// hand-written `push_str("using …;")` sequences. Each inner slice is one
+/// namespace group (deduped + sorted alphabetically by [`ImportSet`]); non-empty
+/// groups are blank-line separated and empty groups are skipped (so a caller can
+/// pass an always-`System.*`-then-`Polyplug.*` shape even when one is empty).
+/// Convention here: `System.*` framework namespaces form the first group and
+/// `Polyplug.*` project namespaces the second, matching the common .NET/StyleCop
+/// ordering. The result ends in a single newline; callers append a blank line
+/// before the code body.
+fn csharp_using_block(groups: &[&[&str]]) -> String {
+    let mut blocks: Vec<String> = Vec::new();
+    for group in groups {
+        let mut set: ImportSet = ImportSet::new(TargetLanguage::CSharp);
+        for ns in *group {
+            set.add(ImportEntry::Using((*ns).to_string()));
+        }
+        let rendered: String = set.render();
+        if !rendered.is_empty() {
+            blocks.push(rendered);
+        }
+    }
+    blocks.join("\n")
+}
 
 /// The C# code generator.
 pub(crate) struct CSharpGenerator;
@@ -367,9 +393,11 @@ fn cs_return_type(func: &ResolvedFunction) -> String {
 fn generate_cs_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
-    out.push_str("using Polyplug.Guest;\n");
-    out.push_str("using Polyplug.Abi;\n");
-    out.push_str("using System.Runtime.InteropServices;\n\n");
+    out.push_str(&csharp_using_block(&[
+        &["System.Runtime.InteropServices"],
+        &["Polyplug.Guest", "Polyplug.Abi"],
+    ]));
+    out.push('\n');
 
     // Emit enums before struct types
     for e in &ir.enums {
@@ -401,9 +429,11 @@ fn generate_cs_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
 fn generate_cs_host_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
-    out.push_str("using Polyplug.Host;\n");
-    out.push_str("using Polyplug.Abi;\n");
-    out.push_str("using System.Runtime.InteropServices;\n\n");
+    out.push_str(&csharp_using_block(&[
+        &["System.Runtime.InteropServices"],
+        &["Polyplug.Host", "Polyplug.Abi"],
+    ]));
+    out.push('\n');
     out.push_str("namespace Polyplug.Generated;\n\n");
     out.push_str("public static class ContractIds {\n");
 
@@ -436,8 +466,11 @@ fn generate_cs_host_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcErro
 fn generate_cs_guest_contracts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
-    out.push_str("using Polyplug.Guest;\n");
-    out.push_str("using Polyplug.Abi;\n\n");
+    out.push_str(&csharp_using_block(&[
+        &[],
+        &["Polyplug.Guest", "Polyplug.Abi"],
+    ]));
+    out.push('\n');
 
     for contract in &ir.contracts {
         let iface_name: String = contract_name_to_cs_interface(&contract.name);
@@ -652,10 +685,14 @@ fn render_cs_host_method(
 fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
-    out.push_str("using System.Runtime.CompilerServices;\n");
-    out.push_str("using Polyplug.Guest;\n");
-    out.push_str("using Polyplug.Abi;\n");
-    out.push_str("using System.Runtime.InteropServices;\n\n");
+    out.push_str(&csharp_using_block(&[
+        &[
+            "System.Runtime.CompilerServices",
+            "System.Runtime.InteropServices",
+        ],
+        &["Polyplug.Guest", "Polyplug.Abi"],
+    ]));
+    out.push('\n');
 
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
@@ -1172,10 +1209,14 @@ fn emit_cs_guest_dispatch_body(
 fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
-    out.push_str("using System.Runtime.CompilerServices;\n");
-    out.push_str("using System.Runtime.InteropServices;\n");
-    out.push_str("using Polyplug.Guest;\n");
-    out.push_str("using Polyplug.Abi;\n\n");
+    out.push_str(&csharp_using_block(&[
+        &[
+            "System.Runtime.CompilerServices",
+            "System.Runtime.InteropServices",
+        ],
+        &["Polyplug.Guest", "Polyplug.Abi"],
+    ]));
+    out.push('\n');
 
     // The dotnet loader resolves the entry point as the managed type
     // `{assembly}.Plugin, {assembly}`, where `{assembly}` is the .dll file stem
@@ -1354,11 +1395,15 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
 fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
-    out.push_str("using Polyplug.Host;\n");
-    out.push_str("using Polyplug.Abi;\n");
-    out.push_str("using System;\n");
-    out.push_str("using System.Runtime.CompilerServices;\n");
-    out.push_str("using System.Runtime.InteropServices;\n\n");
+    out.push_str(&csharp_using_block(&[
+        &[
+            "System",
+            "System.Runtime.CompilerServices",
+            "System.Runtime.InteropServices",
+        ],
+        &["Polyplug.Host", "Polyplug.Abi"],
+    ]));
+    out.push('\n');
     out.push_str("namespace Polyplug.Generated;\n\n");
 
     // Emit the inline call-arena helpers once if any contract needs an arena.
@@ -2334,10 +2379,14 @@ fn emit_cs_log_call_failure_helper(out: &mut String) {
 fn generate_cs_guest_host_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
-    out.push_str("using Polyplug.Guest;\n");
-    out.push_str("using Polyplug.Abi;\n");
-    out.push_str("using System.Runtime.CompilerServices;\n");
-    out.push_str("using System.Runtime.InteropServices;\n\n");
+    out.push_str(&csharp_using_block(&[
+        &[
+            "System.Runtime.CompilerServices",
+            "System.Runtime.InteropServices",
+        ],
+        &["Polyplug.Guest", "Polyplug.Abi"],
+    ]));
+    out.push('\n');
 
     emit_cs_log_call_failure_helper(&mut out);
 
@@ -2613,8 +2662,11 @@ fn generate_cs_host_contract_interface(out: &mut String, contract: &ResolvedHost
 fn generate_cs_host_contracts_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
-    out.push_str("using Polyplug.Host;\n");
-    out.push_str("using Polyplug.Abi;\n\n");
+    out.push_str(&csharp_using_block(&[
+        &[],
+        &["Polyplug.Host", "Polyplug.Abi"],
+    ]));
+    out.push('\n');
     out.push_str("namespace Polyplug.Generated;\n\n");
 
     for contract in &ir.host_contracts {
@@ -2649,11 +2701,15 @@ fn generate_cs_host_contracts_file(ir: &ValidatedIr) -> String {
 fn generate_cs_host_interface_factories_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
-    out.push_str("using Polyplug.Host;\n");
-    out.push_str("using Polyplug.Abi;\n");
-    out.push_str("using System;\n");
-    out.push_str("using System.Runtime.CompilerServices;\n");
-    out.push_str("using System.Runtime.InteropServices;\n\n");
+    out.push_str(&csharp_using_block(&[
+        &[
+            "System",
+            "System.Runtime.CompilerServices",
+            "System.Runtime.InteropServices",
+        ],
+        &["Polyplug.Host", "Polyplug.Abi"],
+    ]));
+    out.push('\n');
     out.push_str("namespace Polyplug.Generated;\n\n");
     out.push_str("public static class InterfaceFactories {\n");
 
@@ -3102,11 +3158,15 @@ fn cs_enum_for_type<'a>(ty: &ResolvedTypeRef, enums: &'a [EnumDef]) -> Option<&'
 fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
-    out.push_str("using Polyplug.Guest;\n");
-    out.push_str("using Polyplug.Abi;\n");
-    out.push_str("using System;\n");
-    out.push_str("using System.Runtime.CompilerServices;\n");
-    out.push_str("using System.Runtime.InteropServices;\n\n");
+    out.push_str(&csharp_using_block(&[
+        &[
+            "System",
+            "System.Runtime.CompilerServices",
+            "System.Runtime.InteropServices",
+        ],
+        &["Polyplug.Guest", "Polyplug.Abi"],
+    ]));
+    out.push('\n');
     out.push_str("namespace Polyplug.Generated;\n\n");
 
     let any_needs_arena: bool = peers
