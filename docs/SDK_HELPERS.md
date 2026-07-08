@@ -46,20 +46,23 @@ those bytes **raw** — the byte counterpart to `to_str`'s decoding:
 
 | Method | Contract |
 |---|---|
-| `as_bytes` | Borrow the buffer's `len` bytes. **Never decodes** — byte-exact, so interior NULs and non-UTF-8 bytes are preserved (it is the byte primitive, like C++ `to_string_view` is for text). A null pointer or zero length yields an empty view without dereferencing. |
+| `as_bytes` | Borrow the buffer's `len` bytes as a **read-only** view. **Never decodes** — byte-exact, so interior NULs and non-UTF-8 bytes are preserved (it is the byte primitive, like C++ `to_string_view` is for text). Being a *read* primitive, the view forbids writing back into the buffer's memory. A null pointer or zero length yields an empty view without dereferencing. |
 
 **Zero-copy where the runtime allows it.** `as_bytes` returns a view aliasing the
 buffer's own memory (no allocation), valid only while the buffer's allocation is
 live:
 
-| Language | Return | Copy? |
-|---|---|---|
-| Rust (`sdks/rust/guest`) | `&[u8]` | zero-copy |
-| C++ (`sdks/cpp/abi`) | `std::basic_string_view<uint8_t>` | zero-copy |
-| C# (`sdks/csharp/abi`) | `ReadOnlySpan<byte>` | zero-copy |
-| Python (`sdks/python`) | `memoryview` | zero-copy |
-| Lua (`sdks/lua/abi`) | `(const uint8_t* cdata, len)` pair | zero-copy |
-| JS (`sdks/js/abi` Deno, `sdks/js/guest` QuickJS) | `Uint8Array` | **copies** — the Deno FFI pointer view and the QuickJS bridge cannot view host memory, so the bytes are materialized |
+Every return type is **read-only** — `as_bytes` is a read primitive, so the view
+cannot be used to mutate the buffer's bytes:
+
+| Language | Return | Copy? | Read-only enforced by |
+|---|---|---|---|
+| Rust (`sdks/rust/guest`) | `&[u8]` | zero-copy | immutable borrow (`&`, not `&mut`) |
+| C++ (`sdks/cpp/abi`) | `std::basic_string_view<uint8_t>` | zero-copy | `string_view` has no mutating ops |
+| C# (`sdks/csharp/abi`) | `ReadOnlySpan<byte>` | zero-copy | `ReadOnlySpan`, not `Span` |
+| Python (`sdks/python`) | `memoryview` (`.toreadonly()`) | zero-copy | `.readonly == True` (writes raise) |
+| Lua (`sdks/lua/abi`) | `(const uint8_t* cdata, len)` pair | zero-copy | `const`-qualified cdata (LuaJIT errors on write) |
+| JS (`sdks/js/abi` Deno, `sdks/js/guest` QuickJS) | `Uint8Array` | **copies** — the Deno FFI pointer view and the QuickJS bridge cannot view host memory, so the bytes are materialized | copy — writes don't reach the source buffer |
 
 Runtime proof: `examples/verify_as_bytes.sh` (`just verify-as-bytes`) executes
 every SDK's real `as_bytes` against a buffer of `{0x00, 0xFF, 0x41}` (interior

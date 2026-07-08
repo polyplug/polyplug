@@ -99,6 +99,12 @@ def as_bytes(buf: Buffer) -> memoryview:
     overlays the buffer's own memory (no copy); the caller must keep the
     buffer's allocation alive for as long as the view is read.
 
+    The view is **read-only** (``.toreadonly()``), matching the read-only
+    contract of every other language's ``as_bytes`` (Rust ``&[u8]``, C#
+    ``ReadOnlySpan<byte>``, C++ ``basic_string_view``): ``as_bytes`` is a read
+    primitive, so a caller must not scribble back into the buffer's memory
+    through it.
+
     A null pointer or zero length yields an empty view without dereferencing
     the pointer.
 
@@ -106,14 +112,15 @@ def as_bytes(buf: Buffer) -> memoryview:
         buf: Buffer from polyplug ABI.
 
     Returns:
-        A zero-copy ``memoryview`` over ``buf``'s ``len`` bytes.
+        A read-only, zero-copy ``memoryview`` over ``buf``'s ``len`` bytes.
     """
     if not buf.ptr or buf.len == 0:
         return memoryview(b"")
     # from_address overlays existing memory (no copy); memoryview roots the
-    # ctypes array so it lives as long as the view.
+    # ctypes array so it lives as long as the view. toreadonly() keeps the same
+    # zero-copy overlay but forbids writes, matching every other language.
     overlay = (ctypes.c_char * buf.len).from_address(buf.ptr)
-    return memoryview(overlay)
+    return memoryview(overlay).toreadonly()
 
 
 def bytes_as_view(data: bytes) -> StringView:

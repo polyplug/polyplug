@@ -71,7 +71,12 @@ from polyplug_abi.abi import Buffer
 data = (ctypes.c_ubyte * 3)(0x00, 0xff, 0x41)
 addr = ctypes.cast(data, ctypes.c_void_p).value
 buf = Buffer(ptr=addr, len=3, cap=3)
-hx = bytes(as_bytes(buf)).hex()
+mv = as_bytes(buf)
+# as_bytes is a read primitive: the view must be read-only, like Rust &[u8] /
+# C# ReadOnlySpan<byte> / C++ basic_string_view. A writable view would let a
+# caller scribble back into the buffer's memory.
+assert mv.readonly, 'as_bytes memoryview must be read-only'
+hx = bytes(mv).hex()
 z = Buffer(ptr=addr, len=0, cap=3)
 print(hx, len(as_bytes(z)))" 2>/dev/null)"
     check python "$OUT"
