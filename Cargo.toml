@@ -67,12 +67,10 @@ serde_json = { version = "1.0" }
 syn = { version = "2", features = ["full", "parsing", "extra-traits"] }
 quote = "1"
 
-# Cross-language FORM emitter (co-developed sibling crate). DEV path-pin to the
-# sibling checkout carrying the import-model extension (TS type/reexport/namespace
-# variants + grouped Python froms) needed to route python/js generator imports
-# through ImportSet. FLIP BACK to `{ version = "0.2.3" }` once langprint 0.2.3 is
-# published to crates.io (release step, owner-triggered via tag→CI).
-langprint = { path = "../langprint" }
+# Cross-language FORM emitter (co-developed sibling crate). Pinned to the crates.io
+# release carrying the import-model extension (TS type/reexport/namespace variants +
+# grouped Python froms) that routes python/js generator imports through ImportSet.
+langprint = { version = "0.2.3" }
 
 # Dynamic loading
 libloading = { version = "0.9" }
