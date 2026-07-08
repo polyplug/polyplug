@@ -22,6 +22,7 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use crate::ir::array_element_name;
 use langprint::backends::python_backend::{
     PythonBackend, PythonEnum, PythonEnumMember, PythonFunction, PythonFunctionRenderOptions,
     PythonParameter,
@@ -492,10 +493,18 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
         .contracts
         .iter()
         .any(|c: &ResolvedContract| c.functions.iter().any(fn_has_stringview_arg));
-    let any_string_ret: bool = ir
-        .contracts
-        .iter()
-        .any(|c: &ResolvedContract| c.functions.iter().any(fn_returns_stringview));
+    // `alloc_string_arena` is used for a StringView return AND for any struct or
+    // array return, whose marshaler allocates embedded strings from the arena.
+    let any_string_ret: bool = ir.contracts.iter().any(|c: &ResolvedContract| {
+        c.functions.iter().any(|f: &ResolvedFunction| {
+            fn_returns_stringview(f)
+                || matches!(
+                    &f.returns,
+                    Some(ResolvedTypeRef::UserDefined(name))
+                        if !ir.enums.iter().any(|e: &EnumDef| &e.name == name)
+                )
+        })
+    });
     // polyplug_abi imports: StringView (to view args) and to_str (to transcode a
     // StringView arg to `str`) are only needed when a function takes a StringView.
     if any_string_arg {
@@ -551,7 +560,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
                     &contract_full == contract_impl
                 }) {
                     generate_guest_plugin_trait(&mut out, &plugin.name, contract)?;
-                    generate_guest_plugin_interface(&mut out, &plugin.name, contract)?;
+                    generate_guest_plugin_interface(&mut out, &plugin.name, contract, ir)?;
                     let plugin_lower: String = plugin.name.to_lowercase().replace('.', "_");
                     registrations.push((
                         plugin.name.clone(),
@@ -565,7 +574,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
     } else {
         for contract in &ir.contracts {
             generate_guest_contract_trait(&mut out, contract)?;
-            generate_guest_contract_interface(&mut out, contract)?;
+            generate_guest_contract_interface(&mut out, contract, ir)?;
             let lower: String = contract.name.replace('.', "_");
             let upper: String = contract_name_to_upper_snake(&contract.name);
             registrations.push((contract.name.clone(), lower, upper, contract));
@@ -1615,6 +1624,7 @@ fn python_guest_impl_return_type(returns: &Option<ResolvedTypeRef>) -> String {
 fn generate_guest_contract_interface(
     out: &mut String,
     contract: &ResolvedContract,
+    ir: &ValidatedIr,
 ) -> Result<(), PolyplugcError> {
     // Non-bundle path: factory registered under `_<UPPER_SNAKE>_FACTORY`, callables
     // named `<lower>_<fn>_abi` (see generate_guest_contract_trait). The instance
@@ -1622,13 +1632,14 @@ fn generate_guest_contract_interface(
     let lower: String = contract.name.replace('.', "_");
     let trait_name: String = contract_name_to_guest_trait(&contract.name);
     let struct_name: String = contract_name_to_struct(&contract.name);
-    emit_guest_function_callables(out, contract, &lower, &trait_name, &struct_name)
+    emit_guest_function_callables(out, contract, &lower, &trait_name, &struct_name, ir)
 }
 
 fn generate_guest_plugin_interface(
     out: &mut String,
     plugin_name: &str,
     contract: &ResolvedContract,
+    ir: &ValidatedIr,
 ) -> Result<(), PolyplugcError> {
     // Bundle path: factory registered under `_<plugin_lower>_FACTORY`, callables
     // named `<plugin_lower>_<fn>_abi` (see generate_guest_plugin_trait). The
@@ -1637,7 +1648,14 @@ fn generate_guest_plugin_interface(
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
     let plugin_class: String = plugin_guest_trait_name(plugin_name, &contract.name);
     let struct_name: String = contract_name_to_struct(&contract.name);
-    emit_guest_function_callables(out, contract, &plugin_lower, &plugin_class, &struct_name)
+    emit_guest_function_callables(
+        out,
+        contract,
+        &plugin_lower,
+        &plugin_class,
+        &struct_name,
+        ir,
+    )
 }
 
 /// Emit the per-function VM-dispatch callables for one contract.
@@ -1657,6 +1675,7 @@ fn emit_guest_function_callables(
     fn_prefix: &str,
     impl_class: &str,
     struct_name: &str,
+    ir: &ValidatedIr,
 ) -> Result<(), PolyplugcError> {
     for func in &contract.functions {
         emit_guest_struct_consts(out, func, fn_prefix, struct_name);
@@ -1684,9 +1703,12 @@ fn emit_guest_function_callables(
         // `alloc_string_arena` only for StringView returns; every other shape
         // ignores them, so silence the unused bindings exactly when the body never
         // reads them.
+        // StringView, and any struct/array return (which may embed strings), pull
+        // from the call arena via the loader-supplied `arena_alloc`.
         let uses_arena: bool = matches!(
             &func.returns,
             Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView))
+                | Some(ResolvedTypeRef::UserDefined(_))
         );
         if !uses_arena {
             body.push_str("    _ = arena_ptr\n");
@@ -1694,7 +1716,7 @@ fn emit_guest_function_callables(
         }
         emit_guest_abi_args_unpack(&mut body, func, fn_prefix, struct_name);
         emit_guest_abi_call(&mut body, func);
-        emit_guest_abi_return(&mut body, func, fn_prefix);
+        emit_guest_abi_return(&mut body, func, fn_prefix, ir);
         if body.ends_with('\n') {
             body.pop();
         }
@@ -1826,7 +1848,12 @@ fn emit_guest_abi_call(out: &mut String, func: &ResolvedFunction) {
     out.push_str(&format!("{call_prefix}impl.{}({})\n", func.name, args_str));
 }
 
-fn emit_guest_abi_return(out: &mut String, func: &ResolvedFunction, fn_prefix: &str) {
+fn emit_guest_abi_return(
+    out: &mut String,
+    func: &ResolvedFunction,
+    fn_prefix: &str,
+    ir: &ValidatedIr,
+) {
     if !has_return_value(&func.returns) {
         return;
     }
@@ -1857,10 +1884,145 @@ fn emit_guest_abi_return(out: &mut String, func: &ResolvedFunction, fn_prefix: &
         );
         return;
     }
-    // Buffer / user-defined return: the impl returns the matching ctypes
-    // structure; copy its bytes into the caller's out slot.
+    // Array or struct return: the impl returns an ergonomic Python value (a list
+    // of element objects, or an object with attributes) and this glue marshals it
+    // into the caller's out slot, allocating variable-size parts (embedded
+    // strings, nested arrays) from the call arena. ctypes handles field layout, so
+    // there is no manual offset arithmetic.
+    if let ResolvedTypeRef::UserDefined(name) = returns {
+        if let Some(element) = array_element_name(name) {
+            out.push_str(&format!("    _out_arr = {name}.from_address(out_ptr)\n"));
+            let mut uid: usize = 0;
+            emit_py_marshal_array(out, "    ", "_out_arr", "result", element, ir, &mut uid);
+            return;
+        }
+        if let Some(s) = ir.types.iter().find(|t: &&ResolvedType| &t.name == name) {
+            out.push_str(&format!("    _out_struct = {name}.from_address(out_ptr)\n"));
+            let mut uid: usize = 0;
+            emit_py_marshal_struct(out, "    ", "_out_struct", "result", s, ir, &mut uid);
+            return;
+        }
+    }
+    // Buffer (or an enum that reached here): the impl returns the matching ctypes
+    // value; copy its bytes into the caller's out slot.
     let _ = returns;
     out.push_str("    ctypes.memmove(out_ptr, ctypes.addressof(result), ctypes.sizeof(result))\n");
+}
+
+/// Element `ResolvedTypeRef` for an `ArrayOf_<element>` wrapper's element name.
+fn py_element_type_ref(name: &str) -> ResolvedTypeRef {
+    if let Some(p) = PrimitiveType::parse(name) {
+        ResolvedTypeRef::Primitive(p)
+    } else if let Some(b) = AbiBuiltin::parse(name) {
+        ResolvedTypeRef::AbiType(b)
+    } else {
+        ResolvedTypeRef::UserDefined(name.to_owned())
+    }
+}
+
+/// Marshal the ergonomic Python value `src` into the ctypes struct lvalue `dest`
+/// (already overlaid on the out/arena memory), field by field. Scalars/enums
+/// assign directly (ctypes coerces), `StringView` fields arena-allocate their
+/// bytes, nested structs recurse (ctypes handles the nested layout), and array
+/// fields allocate their elements in the arena.
+fn emit_py_marshal_struct(
+    out: &mut String,
+    indent: &str,
+    dest: &str,
+    src: &str,
+    struct_ty: &ResolvedType,
+    ir: &ValidatedIr,
+    uid: &mut usize,
+) {
+    for field in &struct_ty.fields {
+        let d: String = format!("{dest}.{}", field.name);
+        let s: String = format!("{src}.{}", field.name);
+        match &field.ty {
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                out.push_str(&format!(
+                    "{indent}{d} = alloc_string_arena(arena_alloc, arena_ptr, {s})\n"
+                ));
+            }
+            ResolvedTypeRef::UserDefined(name) if array_element_name(name).is_some() => {
+                let element: &str = array_element_name(name).unwrap_or(name);
+                emit_py_marshal_array(out, indent, &d, &s, element, ir, uid);
+            }
+            ResolvedTypeRef::UserDefined(name)
+                if ir.types.iter().any(|t: &ResolvedType| &t.name == name) =>
+            {
+                let nested: &ResolvedType = ir
+                    .types
+                    .iter()
+                    .find(|t: &&ResolvedType| &t.name == name)
+                    .unwrap_or_else(|| unreachable!());
+                emit_py_marshal_struct(out, indent, &d, &s, nested, ir, uid);
+            }
+            // Scalars, enums, Buffer, Ptr: ctypes coerces the assignment.
+            _ => {
+                out.push_str(&format!("{indent}{d} = {s}\n"));
+            }
+        }
+    }
+}
+
+/// Marshal a Python list `src` into the `ArrayOf_<element>` lvalue `dest`:
+/// allocate `len(src)` elements from the arena (align-1 allocator, so round the
+/// base up to the element alignment), overlay each with `Element.from_address`,
+/// marshal it, then set `items`/`len`.
+fn emit_py_marshal_array(
+    out: &mut String,
+    indent: &str,
+    dest: &str,
+    src: &str,
+    element: &str,
+    ir: &ValidatedIr,
+    uid: &mut usize,
+) {
+    let id: usize = *uid;
+    *uid += 1;
+    let n: String = format!("_n{id}");
+    let base: String = format!("_base{id}");
+    let i: String = format!("_i{id}");
+    let el: String = format!("_el{id}");
+    let ep: String = format!("_ep{id}");
+    let elem_ref: ResolvedTypeRef = py_element_type_ref(element);
+    let elem_ct: String = python_type_name(&elem_ref);
+    out.push_str(&format!("{indent}{n} = len({src})\n"));
+    out.push_str(&format!("{indent}if {n} == 0:\n"));
+    out.push_str(&format!("{indent}    {dest}.items = 0\n"));
+    out.push_str(&format!("{indent}    {dest}.len = 0\n"));
+    out.push_str(&format!("{indent}else:\n"));
+    let inner: String = format!("{indent}    ");
+    out.push_str(&format!("{inner}_es{id} = ctypes.sizeof({elem_ct})\n"));
+    out.push_str(&format!("{inner}_ea{id} = ctypes.alignment({elem_ct})\n"));
+    out.push_str(&format!(
+        "{inner}_raw{id} = arena_alloc({n} * _es{id} + _ea{id} - 1, arena_ptr)\n"
+    ));
+    out.push_str(&format!(
+        "{inner}{base} = (_raw{id} + _ea{id} - 1) & ~(_ea{id} - 1)\n"
+    ));
+    out.push_str(&format!("{inner}for {i} in range({n}):\n"));
+    out.push_str(&format!("{inner}    {el} = {src}[{i}]\n"));
+    out.push_str(&format!(
+        "{inner}    {ep} = {elem_ct}.from_address({base} + {i} * _es{id})\n"
+    ));
+    // Element marshaling: a struct element recurses (ctypes handles its layout);
+    // a StringView element copies the arena-allocated view into the slot; a scalar
+    // element is assigned via the overlay's `.value`.
+    if let Some(s) = ir.types.iter().find(|t: &&ResolvedType| t.name == element) {
+        emit_py_marshal_struct(out, &format!("{inner}    "), &ep, &el, s, ir, uid);
+    } else if matches!(elem_ref, ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) {
+        out.push_str(&format!(
+            "{inner}    _sv{id} = alloc_string_arena(arena_alloc, arena_ptr, {el})\n"
+        ));
+        out.push_str(&format!(
+            "{inner}    ctypes.memmove(ctypes.addressof({ep}), ctypes.addressof(_sv{id}), ctypes.sizeof(_sv{id}))\n"
+        ));
+    } else {
+        out.push_str(&format!("{inner}    {ep}.value = {el}\n"));
+    }
+    out.push_str(&format!("{inner}{dest}.items = {base}\n"));
+    out.push_str(&format!("{inner}{dest}.len = {n}\n"));
 }
 
 fn needs_arg_pack(params: &[ResolvedParam]) -> bool {

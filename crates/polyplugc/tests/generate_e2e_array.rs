@@ -20,6 +20,7 @@
 
 #![allow(clippy::expect_used)]
 
+use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
@@ -507,6 +508,116 @@ fn js_array_of_struct_with_string_round_trips() {
     assert!(
         String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
         "Deno driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
+
+/// Python driver: mocks the loader's `arena_alloc` over a ctypes buffer (align-1,
+/// odd start → forces the marshaler's realign), calls the generated dispatch
+/// callable with an impl whose `enum_procs` returns a list of ergonomic objects,
+/// then reads the arena-filled `ArrayOf_Proc` back and asserts each field/string.
+const PY_DRIVER: &str = r#"import ctypes
+from types import SimpleNamespace
+from guest.types import ArrayOf_Proc, Proc
+from guest.contracts import enumerator_enum_procs_abi
+
+BUF = ctypes.create_string_buffer(1 << 20)
+BASE = ctypes.addressof(BUF)
+_cursor = [1]  # odd start → forces element realignment
+
+
+def arena_alloc(size, _arena):
+    a = BASE + _cursor[0]
+    _cursor[0] += int(size)
+    return a
+
+
+impl = SimpleNamespace(enum_procs=lambda: [
+    SimpleNamespace(id=7, name="cs2.exe"),
+    SimpleNamespace(id=42, name="game.exe"),
+])
+
+out = ArrayOf_Proc()
+enumerator_enum_procs_abi(impl, 0, ctypes.addressof(out), 0, arena_alloc)
+
+assert out.len == 2, "len=%d" % out.len
+esize = ctypes.sizeof(Proc)
+
+
+def read_proc(i):
+    p = Proc.from_address(out.items + i * esize)
+    return (p.id, ctypes.string_at(p.name.ptr, p.name.len).decode())
+
+
+assert read_proc(0) == (7, "cs2.exe"), read_proc(0)
+assert read_proc(1) == (42, "game.exe"), read_proc(1)
+print("OK: Array<Proc{StringView}> round-tripped byte-correct")
+"#;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Python: generate → run under python3 a driver that returns Array<Proc> from an
+// ergonomic list of objects, and assert the generated ctypes glue marshaled it
+// into the (mock) arena byte-correct. python3 is guaranteed by CI.
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn python_array_of_struct_with_string_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("bundle");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_array_bundle(&project_dir, &gen_dir, "python");
+    assert!(
+        gen_dir.join("guest/contracts.py").exists(),
+        "generated guest/contracts.py must exist at {}",
+        gen_dir.join("guest/contracts.py").display()
+    );
+
+    let driver_path: PathBuf = project_dir.join("driver.py");
+    fs::write(&driver_path, PY_DRIVER).expect("write driver.py");
+
+    // `polyplug_abi.abi` re-exports `polyplug.abi.abi`, so provision that shim
+    // package (as examples/build_all.sh and the PythonLoader do).
+    let sdk: PathBuf = repo_root().join("sdks").join("python");
+    let shim: PathBuf = project_dir.join("shim");
+    fs::create_dir_all(shim.join("polyplug").join("abi")).expect("create shim polyplug/abi");
+    fs::write(shim.join("polyplug").join("__init__.py"), b"").expect("write polyplug init");
+    fs::write(shim.join("polyplug").join("abi").join("__init__.py"), b"")
+        .expect("write polyplug.abi init");
+    fs::copy(
+        sdk.join("abi").join("abi.py"),
+        shim.join("polyplug").join("abi").join("abi.py"),
+    )
+    .expect("copy polyplug/abi/abi.py");
+
+    // `polyplug_abi` / `polyplug_guest` resolve from the in-tree SDK source dirs;
+    // `guest.*` from the generated dir; `polyplug.abi` from the shim.
+    let pythonpath: String = env::join_paths([
+        gen_dir.clone(),
+        sdk.join("guest"),
+        sdk.join("polyplug_abi"),
+        shim,
+    ])
+    .expect("join PYTHONPATH")
+    .to_string_lossy()
+    .into_owned();
+
+    let run: Output = Command::new("python3")
+        .arg(&driver_path)
+        .env("PYTHONPATH", &pythonpath)
+        .output()
+        .expect("failed to spawn python3");
+    assert!(
+        run.status.success(),
+        "python3 Array<Proc> driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "python3 driver must report success, got:\n{}",
         String::from_utf8_lossy(&run.stdout),
     );
 }
