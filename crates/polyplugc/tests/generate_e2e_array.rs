@@ -52,6 +52,14 @@ fn polyplug_utils_path() -> PathBuf {
     repo_root().join("crates").join("polyplug_utils")
 }
 
+fn cpp_abi_include() -> PathBuf {
+    repo_root().join("sdks").join("cpp").join("abi")
+}
+
+fn cpp_guest_include() -> PathBuf {
+    repo_root().join("sdks").join("cpp").join("guest")
+}
+
 /// Run the `polyplugc` binary with `args`, returning the captured output.
 fn run_polyplugc(args: &[&OsStr]) -> Output {
     let bin: &str = env!("CARGO_BIN_EXE_polyplugc");
@@ -176,6 +184,143 @@ fn main() {
     println!("OK: Array<Proc{{StringView}}> round-tripped byte-correct");
 }
 "##;
+
+/// The only hand-written C++ source: implements the guest trait with the SDK's
+/// `polyplug::ReturnArena`, then in `main` calls the method and reads the array
+/// back through the generated `ArrayOf_Proc::elements()`, asserting every field.
+const CPP_MAIN: &str = r##"#include "guest/init.hpp"
+#include <polyplug/guest.hpp>
+#include <cassert>
+#include <cstdio>
+#include <string>
+
+namespace polyplug_plugin {
+class EnumImpl : public SysEnumeratorGuestContract {
+public:
+    EnumImpl() : arena_(4096) {}
+    polyplug_generated::ArrayOf_Proc enum_procs() override {
+        arena_.reset();
+        polyplug_generated::Proc procs[2];
+        procs[0].id = 7;
+        procs[0].name = arena_.alloc_str("cs2.exe");
+        procs[1].id = 42;
+        procs[1].name = arena_.alloc_str("game.exe");
+        polyplug::ArrayRef ref = arena_.alloc_array(procs, 2);
+        return polyplug_generated::ArrayOf_Proc{ref.items, ref.len};
+    }
+private:
+    polyplug::ReturnArena arena_;
+};
+SysEnumeratorGuestContract* polyplug_create_enumerator(const HostApi*) { return new EnumImpl(); }
+}  // namespace polyplug_plugin
+
+static std::string sv_str(const StringView& s) {
+    if (s.ptr == nullptr || s.len == 0) return std::string();
+    return std::string(reinterpret_cast<const char*>(s.ptr), s.len);
+}
+
+int main() {
+    polyplug_plugin::SysEnumeratorGuestContract* impl =
+        polyplug_plugin::polyplug_create_enumerator(nullptr);
+    polyplug_generated::ArrayOf_Proc arr = impl->enum_procs();
+    assert(arr.len == 2);
+    const polyplug_generated::Proc* els = arr.elements();
+    assert(els[0].id == 7);
+    assert(els[1].id == 42);
+    assert(sv_str(els[0].name) == "cs2.exe");
+    assert(sv_str(els[1].name) == "game.exe");
+    std::printf("OK: Array<Proc{StringView}> round-tripped byte-correct\n");
+    delete impl;
+    return 0;
+}
+"##;
+
+/// Write `api.toml` + `bundle.toml` into `project_dir` and generate the guest
+/// glue for `lang` into `gen_dir`, asserting the CLI succeeds.
+fn generate_array_bundle(project_dir: &Path, gen_dir: &Path, lang: &str) {
+    fs::write(project_dir.join("api.toml"), API_TOML).expect("write api.toml");
+    fs::write(project_dir.join("bundle.toml"), BUNDLE_TOML).expect("write bundle.toml");
+    let output: Output = run_polyplugc(&[
+        "generate".as_ref(),
+        "--bundle".as_ref(),
+        project_dir.join("bundle.toml").as_os_str(),
+        "--lang".as_ref(),
+        lang.as_ref(),
+        "--out".as_ref(),
+        gen_dir.as_os_str(),
+    ]);
+    assert!(
+        output.status.success(),
+        "polyplugc generate --lang {lang} failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// C++: generate → compile an executable that returns Array<Proc> and reads it
+// back through the generated `elements()` accessor → run → assert byte-correct.
+// `c++` is guaranteed by CI (examples/build_all.sh), so a missing toolchain is a
+// hard failure, matching generate_e2e_native.rs.
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn cpp_array_of_struct_with_string_round_trips() {
+    let tmp: TempDir = tempdir().expect("tempdir");
+    let project_dir: PathBuf = tmp.path().join("plugin");
+    let gen_dir: PathBuf = project_dir.join("gen");
+    fs::create_dir_all(&project_dir).expect("create project dir");
+
+    generate_array_bundle(&project_dir, &gen_dir, "cpp");
+    assert!(
+        gen_dir.join("guest/types.hpp").exists(),
+        "generated guest/types.hpp must exist at {}",
+        gen_dir.join("guest/types.hpp").display()
+    );
+
+    let main_cpp: PathBuf = project_dir.join("driver.cpp");
+    fs::write(&main_cpp, CPP_MAIN).expect("write driver.cpp");
+    let exe: PathBuf = project_dir.join("driver");
+
+    let build: Output = Command::new("c++")
+        .arg("-std=c++20")
+        .arg("-O0")
+        .arg("-I")
+        .arg(&gen_dir)
+        .arg("-I")
+        .arg(cpp_abi_include())
+        .arg("-I")
+        .arg(cpp_guest_include())
+        .arg(&main_cpp)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("failed to spawn c++ compiler");
+    assert!(
+        build.status.success(),
+        "c++ build of the array driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        build.status.code(),
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    let run: Output = Command::new(&exe)
+        .output()
+        .expect("failed to run the compiled array driver");
+    assert!(
+        run.status.success(),
+        "C++ Array<Proc> driver failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("round-tripped byte-correct"),
+        "C++ driver must report success, got:\n{}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+}
 
 #[test]
 fn array_of_struct_with_string_round_trips() {

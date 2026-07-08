@@ -38,7 +38,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <string>
+#include <vector>
 
 static_assert(POLYPLUG_ABI_VERSION == 1,
     "polyplug header version mismatch — recompile against updated headers");
@@ -67,6 +69,115 @@ inline StringView alloc_string(const HostApi* host, const std::string& s) {
     std::memcpy(ptr, s.data(), s.size());
     return StringView{ptr, s.size()};
 }
+
+/// `(items, len)` pair for building an `ArrayOf_<T> { items, len }` wrapper —
+/// what `ReturnArena::alloc_array` returns.
+struct ArrayRef {
+    uint64_t items;
+    uint64_t len;
+};
+
+/// A per-instance return buffer for a native guest's variable-size returns.
+///
+/// A native guest that returns a `StringView`, `Buffer`, or an `ArrayOf_<T>`
+/// wrapper must hand back memory that stays valid until the host copies it out.
+/// `ReturnArena` owns one reusable, retain-and-rewind buffer: `reset()` at the
+/// start of each call, then `alloc_str` / `alloc_array` fill it, and the returned
+/// view borrows it until the next reset. Zero per-call host allocation, zero host
+/// free — the borrowed-return model, unlike `alloc_string` (which allocates
+/// through the host and the host caller never frees).
+///
+/// Hold one on the plugin impl and reset it at the top of each method that
+/// returns variable-size data. Its blocks are plain C++ heap (guest-internal,
+/// never crossing the ABI), so the host never frees them.
+class ReturnArena {
+public:
+    explicit ReturnArena(std::size_t capacity) {
+        add_block(capacity == 0 ? kMinBlock : capacity);
+    }
+
+    ReturnArena(const ReturnArena&) = delete;
+    ReturnArena& operator=(const ReturnArena&) = delete;
+
+    /// Rewind to the first block (retaining all blocks for reuse); invalidates
+    /// every view returned since the last reset.
+    void reset() {
+        cur_block_ = 0;
+        cursor_ = 0;
+    }
+
+    /// Copy `s` into the buffer; the returned view is valid until `reset()`. An
+    /// empty string returns an empty view without allocating.
+    StringView alloc_str(const std::string& s) {
+        if (s.empty()) {
+            return StringView{nullptr, 0};
+        }
+        void* p = alloc(s.size(), 1);
+        if (p == nullptr) {
+            return StringView{nullptr, 0};
+        }
+        std::memcpy(p, s.data(), s.size());
+        return StringView{static_cast<uint8_t*>(p), s.size()};
+    }
+
+    /// Copy `count` `T` elements into the buffer and return `(items, len)` for an
+    /// `ArrayOf_<T>` wrapper. Valid until `reset()`. Any `StringView` embedded in
+    /// an element must already point at this arena (from a prior `alloc_str`), so
+    /// the whole return shares one lifetime. `count == 0` returns `{0, 0}`.
+    template <class T>
+    ArrayRef alloc_array(const T* data, std::size_t count) {
+        if (count == 0) {
+            return ArrayRef{0, 0};
+        }
+        void* p = alloc(sizeof(T) * count, alignof(T));
+        if (p == nullptr) {
+            return ArrayRef{0, 0};
+        }
+        std::memcpy(p, data, sizeof(T) * count);
+        return ArrayRef{static_cast<uint64_t>(reinterpret_cast<uintptr_t>(p)), count};
+    }
+
+private:
+    static constexpr std::size_t kMinBlock = 4096;
+
+    void add_block(std::size_t cap) {
+        blocks_.push_back(std::make_unique<std::byte[]>(cap));
+        caps_.push_back(cap);
+    }
+
+    /// Bump-allocate `size` bytes at `align` from the current block, advancing to
+    /// (or allocating) a retained block on exhaustion. Retained blocks keep prior
+    /// views valid across `reset()`.
+    void* alloc(std::size_t size, std::size_t align) {
+        if (size == 0) {
+            return nullptr;
+        }
+        for (;;) {
+            std::byte* base = blocks_[cur_block_].get();
+            std::size_t cap = caps_[cur_block_];
+            std::size_t aligned = (cursor_ + (align - 1)) & ~(align - 1);
+            if (aligned <= cap && cap - aligned >= size) {
+                cursor_ = aligned + size;
+                return base + aligned;
+            }
+            if (cur_block_ + 1 < blocks_.size()) {
+                ++cur_block_;
+                cursor_ = 0;
+                continue;
+            }
+            std::size_t grown = caps_.back() * 2;
+            std::size_t needed = size + align;
+            add_block(grown > needed ? grown : needed);
+            cur_block_ = blocks_.size() - 1;
+            cursor_ = 0;
+        }
+    }
+
+    std::vector<std::unique_ptr<std::byte[]>> blocks_;
+    std::vector<std::size_t> caps_;
+    std::size_t cur_block_ = 0;
+    std::size_t cursor_ = 0;
+};
 
 }  // namespace polyplug
 

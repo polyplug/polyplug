@@ -76,11 +76,12 @@ is the one detail the worked example above abstracts over:
   generated guest glue **bump-allocates the return directly into the arena.** This
   is the arena's primary reason to exist.
 - **Native guests (Rust / C / C++):** the guest returns a **borrowed view** into
-  memory it owns and reuses each call. The Rust SDK packages this as
-  `ReturnArena` — a per-instance buffer (built on the same `CallArena`) that the
-  guest resets at the top of each call, then fills with `alloc_str` /
-  `alloc_array`; the returned `StringView` / `ArrayOf_T` borrows that buffer and
-  is valid until the next reset. This is the zero-leak, zero-host-free form of the
+  memory it owns and reuses each call. Both SDKs package this as a `ReturnArena`
+  — a per-instance buffer (Rust: built on the same `CallArena`; C++:
+  `polyplug::ReturnArena`, a header-only retain-and-rewind buffer) that the guest
+  resets at the top of each call, then fills with `alloc_str` / `alloc_array`; the
+  returned `StringView` / `ArrayOf_T` borrows that buffer and is valid until the
+  next reset. This is the zero-leak, zero-host-free form of the
   borrowed-return contract and the native counterpart to the VM arena. A guest
   *may* instead allocate through `host->alloc` (e.g. `HostContext::alloc_string`),
   but the host caller returns that view without freeing it, so `host->alloc`

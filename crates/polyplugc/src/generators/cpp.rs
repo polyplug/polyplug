@@ -27,6 +27,7 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use crate::ir::array_element_name;
 use langprint::backends::cpp_backend::{
     CppBackend, CppEnum, CppEnumVariant, CppFunction, CppFunctionRenderOptions, CppParameter,
     CppVisibility, DocsStyle,
@@ -1422,7 +1423,34 @@ fn generate_cpp_type(out: &mut String, ty: &ResolvedType) {
             field.name
         ));
     }
+    // Array wrappers (`ArrayOf_T`, from desugaring `Array<T>`) get a typed
+    // accessor so the host reads their `items`/`len` as `const T*` instead of
+    // reinterpreting the raw pointer at each call site. Non-virtual methods keep
+    // the struct standard-layout, so its ABI representation is unchanged.
+    if let Some(element) = array_element_name(&ty.name) {
+        let element_ty: String = cpp_element_type_name(element);
+        out.push_str(&format!(
+            "    /// Borrow the elements as `const {element_ty}*` (`len` of them). Valid\n"
+        ));
+        out.push_str("    /// only until the next arena-backed call that produced this array.\n");
+        out.push_str(&format!(
+            "    const {element_ty}* elements() const {{ return reinterpret_cast<const {element_ty}*>(items); }}\n"
+        ));
+    }
     out.push_str("};\n\n");
+}
+
+/// C++ type name for an array element referenced by its contract name (the
+/// suffix of an `ArrayOf_<element>` wrapper). Mirrors `cpp_types_hpp_type_name`
+/// for the primitive / ABI-builtin / user-struct cases.
+fn cpp_element_type_name(element: &str) -> String {
+    if let Some(p) = PrimitiveType::parse(element) {
+        return p.cpp_name().to_owned();
+    }
+    match AbiBuiltin::parse(element) {
+        Some(b) => cpp_types_hpp_type_name(&ResolvedTypeRef::AbiType(b)),
+        None => element.to_owned(),
+    }
 }
 
 // ─── Call-arena support ────────────────────────────────────────────────────────
