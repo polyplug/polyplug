@@ -16,9 +16,9 @@ name = "polyplugc"
 path = "src/main.rs"
 
 [dependencies]
-polyplug = { workspace = true }
 polyplug_abi = { workspace = true }
 polyplug_codegen = { workspace = true }
+polyplug_common = { workspace = true }
 polyplug_signing = { workspace = true }
 polyplug_utils = { workspace = true }
 langprint = { workspace = true }

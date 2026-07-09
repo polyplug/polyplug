@@ -1154,6 +1154,7 @@ dependencies = [
  "polyplug",
  "polyplug_abi",
  "polyplug_codegen",
+ "polyplug_common",
  "polyplug_dotnet",
  "polyplug_js",
  "polyplug_lua",
@@ -1683,6 +1684,7 @@ dependencies = [
  "libloading",
  "petgraph",
  "polyplug_abi",
+ "polyplug_common",
  "polyplug_signing",
  "polyplug_utils",
  "serde",
@@ -1710,6 +1712,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "polyplug_common"
+version = "0.1.3"
+dependencies = [
+ "polyplug_abi",
+ "polyplug_utils",
+ "serde",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "polyplug_dotnet"
 version = "0.1.3"
 dependencies = [
@@ -1719,6 +1732,7 @@ dependencies = [
  "pelite",
  "polyplug",
  "polyplug_abi",
+ "polyplug_common",
  "polyplug_utils",
  "serde_json",
  "tempfile",
@@ -1739,6 +1753,7 @@ dependencies = [
  "crossbeam-epoch",
  "polyplug",
  "polyplug_abi",
+ "polyplug_common",
  "polyplug_utils",
  "rquickjs",
  "tempfile",
@@ -1754,6 +1769,7 @@ dependencies = [
  "mlua",
  "polyplug",
  "polyplug_abi",
+ "polyplug_common",
  "polyplug_utils",
  "tempfile",
 ]
@@ -1777,6 +1793,7 @@ dependencies = [
  "libloading",
  "polyplug",
  "polyplug_abi",
+ "polyplug_common",
  "polyplug_utils",
 ]
 
@@ -1788,6 +1805,7 @@ dependencies = [
  "libloading",
  "polyplug",
  "polyplug_abi",
+ "polyplug_common",
  "polyplug_utils",
  "pyo3",
  "pyo3-build-config",
@@ -1820,9 +1838,9 @@ dependencies = [
  "ed25519-dalek",
  "langprint",
  "libloading",
- "polyplug",
  "polyplug_abi",
  "polyplug_codegen",
+ "polyplug_common",
  "polyplug_signing",
  "polyplug_utils",
  "serde",

@@ -41,6 +41,7 @@ categories = ["development-tools", "api-bindings"]
 [workspace.dependencies]
 polyplug_utils = { version = "0.1.3", path = "crates/polyplug_utils" }
 polyplug_abi = { version = "0.1.3", path = "crates/polyplug_abi" }
+polyplug_common = { version = "0.1.3", path = "crates/polyplug_common" }
 polyplug = { version = "0.1.3", path = "crates/polyplug" }
 polyplug_codegen = { version = "0.1.3", path = "crates/polyplug_codegen" }
 polyplug_dotnet = { version = "0.1.3", path = "crates/polyplug_dotnet" }

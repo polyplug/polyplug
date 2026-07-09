@@ -11,10 +11,12 @@ use polyplug_abi::runtime::{Compatibility, ReloadPhase, RuntimeConfig, Signature
 use polyplug_abi::types::{Array, Ed25519PublicKey, LogLevel, StringView};
 use polyplug_abi::{HostApi, SupportedLanguage};
 
+use polyplug_common::ManifestData;
+
 use crate::{
     compatibility::CapabilityGraph,
     error::{GraphError, LoaderError, RuntimeError},
-    loader::{BundleLoader, BundleSource, ManifestData, ScanResult, scan_dirs},
+    loader::{BundleLoader, BundleSource, ScanResult, scan_dirs},
     logger::{LoggerClosure, LoggerHandle},
     runtime::{
         LoadOptions, ReloadCallback, Runtime, host_alloc, host_create_guest_instance,

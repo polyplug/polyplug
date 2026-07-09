@@ -13,7 +13,9 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-use super::{ManifestData, parse_manifest};
+use polyplug_common::ManifestData;
+
+use super::parse_manifest;
 use crate::error::LoaderError;
 
 /// A non-fatal problem encountered while scanning a directory for bundles.

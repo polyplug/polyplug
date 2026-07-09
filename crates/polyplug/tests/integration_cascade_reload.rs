@@ -22,7 +22,6 @@ use core::ptr;
 use polyplug::error::LoaderError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::BundleSource;
-use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug_abi::SupportedLanguage;
 use polyplug_abi::dispatch::VmLoaderData;
@@ -30,6 +29,7 @@ use polyplug_abi::{
     Compatibility, DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface,
     HostApi, NativeDispatch, PluginDescriptor, RuntimeConfig, StringView, Version,
 };
+use polyplug_common::ManifestData;
 use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
 use polyplug_utils::{BundleId, GuestContractId};

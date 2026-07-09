@@ -21,6 +21,9 @@ tempfile = "3.27"
 [dependencies.polyplug]
 path = "../crates/polyplug"
 
+[dependencies.polyplug_common]
+path = "../crates/polyplug_common"
+
 [dependencies.polyplugc]
 path = "../crates/polyplugc"
 

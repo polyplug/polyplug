@@ -18,6 +18,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 polyplug_utils = { workspace = true }
 polyplug_abi = { workspace = true }
+polyplug_common = { workspace = true }
 polyplug_signing = { workspace = true }
 
 thiserror = { workspace = true }

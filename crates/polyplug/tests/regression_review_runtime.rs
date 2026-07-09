@@ -26,7 +26,7 @@ use core::ptr::{NonNull, null, null_mut};
 use polyplug::Runtime;
 use polyplug::compatibility::CapabilityGraph;
 use polyplug::error::{LoaderError, RuntimeError};
-use polyplug::loader::{BundleLoader, BundleSource, ManifestData, RawManifestDependency};
+use polyplug::loader::{BundleLoader, BundleSource};
 use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::runtime::{Compatibility, ReloadPhaseType, RuntimeConfig};
 use polyplug_abi::{
@@ -34,6 +34,7 @@ use polyplug_abi::{
     GuestContractInterface, HostApi, HostContractInstance, HostContractInterface, NativeDispatch,
     PluginDescriptor, StringView, SupportedLanguage, Version,
 };
+use polyplug_common::{ManifestData, ManifestError, RawManifestDependency};
 use polyplug_utils::{BundleId, GuestContractId, HostContractId, bundle_id};
 use tempfile::TempDir;
 
@@ -655,13 +656,13 @@ fn validate_rejects_mismatched_dependency_contract_id() {
         GuestContractId::from_u64(GuestContractId::new("math", 1).id().wrapping_add(7));
     m.dependencies = vec![dep_with_contract_id("math", "1.0", wrong)];
     match m.validate() {
-        Err(LoaderError::ManifestParse { reason, .. }) => {
+        Err(ManifestError::Parse { reason, .. }) => {
             assert!(
                 reason.contains("contract_id"),
                 "mismatch error must mention contract_id: {reason}"
             );
         }
-        other => panic!("expected ManifestParse for mismatched contract_id, got {other:?}"),
+        other => panic!("expected ManifestError::Parse for mismatched contract_id, got {other:?}"),
     }
 }
 

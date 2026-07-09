@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 use polyplug_abi::types::Version;
+use polyplug_common::ManifestError;
 
 /// Top-level runtime error — this is what the public API returns.
 #[derive(Debug, Error)]
@@ -168,6 +169,28 @@ pub enum LoaderError {
         "host trusted-key allowlist contains a malformed Ed25519 key for bundle `{bundle}`: {reason}"
     )]
     MalformedTrustedKey { bundle: String, reason: String },
+}
+
+/// Flatten a `polyplug_common::ManifestError` (from manifest parsing/validation)
+/// into the runtime's `LoaderError`, mapping each variant 1:1 so runtime call
+/// sites and tests keep matching the flat `ManifestParse` / `ManifestMissingFile`
+/// / `BundleTampered` shapes.
+impl From<ManifestError> for LoaderError {
+    fn from(err: ManifestError) -> Self {
+        match err {
+            ManifestError::Parse { path, reason } => LoaderError::ManifestParse { path, reason },
+            ManifestError::MissingFile { bundle } => LoaderError::ManifestMissingFile { bundle },
+            ManifestError::Tampered {
+                bundle,
+                expected,
+                found,
+            } => LoaderError::BundleTampered {
+                bundle,
+                expected,
+                found,
+            },
+        }
+    }
 }
 
 /// Errors from the plugin registry.

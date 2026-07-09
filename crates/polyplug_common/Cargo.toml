@@ -1,0 +1,22 @@
+[package]
+name = "polyplug_common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared polyplug schema types (manifest.toml) and their pure validation — depended on by both the runtime and the polyplugc CLI"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+polyplug_abi = { workspace = true }
+polyplug_utils = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

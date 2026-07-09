@@ -1,12 +1,9 @@
 use polyplug_utils::BundleId;
 
 use polyplug_abi::SupportedLanguage;
+use polyplug_common::ManifestData;
 
-use crate::{
-    error::LoaderError,
-    loader::{bundle_source::BundleSource, manifest::ManifestData},
-    runtime::Runtime,
-};
+use crate::{error::LoaderError, loader::bundle_source::BundleSource, runtime::Runtime};
 
 /// Trait implemented by all bundle loaders (native, python, lua, js, .net).
 ///

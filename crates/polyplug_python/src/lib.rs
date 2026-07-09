@@ -43,12 +43,12 @@ use pyo3::types::PyModule;
 use polyplug::error::LoaderError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::BundleSource;
-use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug_abi::BundleInitContext;
 use polyplug_abi::HostApi;
 use polyplug_abi::StringView;
 use polyplug_abi::SupportedLanguage;
+use polyplug_common::ManifestData;
 use polyplug_utils::BundleId;
 
 use crate::context::acquire_load_lock;

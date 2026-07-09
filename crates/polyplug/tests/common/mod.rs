@@ -35,13 +35,14 @@ use libloading::Library;
 
 use polyplug::Runtime;
 use polyplug::error::LoaderError;
-use polyplug::loader::{BundleLoader, BundleSource, ManifestData};
+use polyplug::loader::{BundleLoader, BundleSource};
 use polyplug_abi::HostApi;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::StringView;
 use polyplug_abi::SupportedLanguage;
 use polyplug_abi::plugin::BundleInitContext;
 use polyplug_abi::types::{AbiError, AbiErrorCode};
+use polyplug_common::ManifestData;
 use polyplug_utils::BundleId;
 
 /// Minimal native (shared library) loader used by the `polyplug` integration

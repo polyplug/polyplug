@@ -12,9 +12,9 @@ use std::sync::Arc;
 use polyplug::error::LoaderError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::BundleSource;
-use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
+use polyplug_common::ManifestData;
 use polyplug_native::NativeConfig;
 use polyplug_native::NativeLoader;
 

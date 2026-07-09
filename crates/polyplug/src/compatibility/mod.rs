@@ -21,7 +21,7 @@ mod tests {
     use crate::compatibility::capability_graph::CapabilityGraph;
     use crate::compatibility::contract_capability::ContractCapability;
     use crate::error::GraphError;
-    use crate::loader::{ManifestData, RawManifestDependency};
+    use polyplug_common::{ManifestData, RawManifestDependency};
 
     fn make_capability(name: &str, major: u32, minor: u32) -> ContractCapability {
         ContractCapability::new(

@@ -47,7 +47,6 @@ use polyplug::Runtime as PolyplugRuntime;
 use polyplug::error::LoaderError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::BundleSource;
-use polyplug::loader::ManifestData;
 use polyplug::logger::LoggerHandle;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
@@ -70,6 +69,7 @@ use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
 use polyplug_abi::types::Array as AbiArray;
 use polyplug_abi::types::LogLevel;
 use polyplug_abi::types::Version;
+use polyplug_common::ManifestData;
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
 

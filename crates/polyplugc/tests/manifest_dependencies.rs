@@ -20,8 +20,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 
-use polyplug::loader::manifest::{ManifestData, ManifestDependency};
 use polyplug_codegen::{GenerateConfig, GenerateOutput, Lang, Side};
+use polyplug_common::{ManifestData, ManifestDependency};
 
 const API_TOML: &str = "\
 [[plugin_contract]]

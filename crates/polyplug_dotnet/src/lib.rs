@@ -21,11 +21,11 @@ use polyplug::Runtime;
 use polyplug::error::LoaderError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::BundleSource;
-use polyplug::loader::ManifestData;
 use polyplug::logger::LoggerHandle;
 use polyplug_abi::HostApi;
 use polyplug_abi::SupportedLanguage;
 use polyplug_abi::types::LogLevel;
+use polyplug_common::ManifestData;
 
 use crate::context::CLR_CONTEXT;
 use crate::context::DotnetContext;

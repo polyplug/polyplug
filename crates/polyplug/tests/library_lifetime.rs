@@ -10,8 +10,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use polyplug::loader::{BundleSource, ManifestData, parse_manifest};
+use polyplug::loader::{BundleSource, parse_manifest};
 use polyplug::runtime::Runtime;
+use polyplug_common::ManifestData;
 use polyplug_utils::bundle_id;
 
 mod common;

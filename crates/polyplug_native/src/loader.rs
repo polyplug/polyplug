@@ -16,13 +16,14 @@ use libloading::{Library, Symbol};
 
 use polyplug::Runtime;
 use polyplug::error::LoaderError;
-use polyplug::loader::{BundleLoader, BundleSource, ManifestData};
+use polyplug::loader::{BundleLoader, BundleSource};
 use polyplug::logger::RecoverPoisoned;
 use polyplug_abi::HostApi;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::SupportedLanguage;
 use polyplug_abi::plugin::BundleInitContext;
 use polyplug_abi::types::{AbiError, AbiErrorCode, StringView};
+use polyplug_common::ManifestData;
 use polyplug_utils::BundleId;
 
 use crate::config::NativeConfig;
@@ -427,7 +428,8 @@ mod unload_tests {
 
     use polyplug::Runtime;
     use polyplug::error::LoaderError;
-    use polyplug::loader::{BundleLoader, BundleSource, ManifestData, parse_manifest};
+    use polyplug::loader::{BundleLoader, BundleSource, parse_manifest};
+    use polyplug_common::ManifestData;
     use polyplug_utils::BundleId;
 
     use crate::config::NativeConfig;

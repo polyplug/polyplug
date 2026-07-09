@@ -22,8 +22,10 @@ use polyplug_abi::runtime::ReloadPhase;
 use polyplug_abi::types::{LogLevel, StringView};
 use polyplug_utils::{BundleId, GuestContractId};
 
+use polyplug_common::ManifestData;
+
 use crate::error::{LoaderError, RegistryError, RuntimeError};
-use crate::loader::{BundleLoader, ManifestData, parse_manifest};
+use crate::loader::{BundleLoader, parse_manifest};
 use crate::logger::{RecoverPoisoned, RecoveringGuard};
 use crate::runtime::Runtime;
 
@@ -124,7 +126,7 @@ impl Runtime {
         // failure: fire the Failed callback so the host learns the active version was
         // kept, mirroring the missing-file and init-failure paths below.
         if let Err(e) = manifest.validate() {
-            let err: RuntimeError = RuntimeError::Loader(e);
+            let err: RuntimeError = RuntimeError::Loader(e.into());
             if let Some(cb) = self.on_reload_cb() {
                 (cb.0)(
                     self.config().on_reload_user_data,

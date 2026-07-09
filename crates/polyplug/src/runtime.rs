@@ -51,12 +51,12 @@ use polyplug_utils::{BundleId, GuestContractId};
 use crate::error::HostContractError;
 use crate::error::LoaderError;
 use crate::error::RegistryError;
+use polyplug_common::{ManifestData, ManifestDependency, ManifestError, RawManifestDependency};
+
 use crate::error::RuntimeError;
 use crate::loader::BundleLoader;
 use crate::loader::BundleSource;
-use crate::loader::ManifestData;
-use crate::loader::ManifestDependency;
-use crate::loader::RawManifestDependency;
+use crate::loader::manifest::{parsed_bundle_dependencies, resolved_dependencies_with_logger};
 use crate::loader::parse_manifest;
 use crate::logger::{LoggerClosure, LoggerHandle, RecoverPoisoned, RecoveringGuard};
 pub use crate::runtime_builder::RuntimeBuilder;
@@ -1028,7 +1028,7 @@ impl Runtime {
         // id == 0 check.
         manifest
             .validate()
-            .map_err(|e: LoaderError| RuntimeError::Loader(e))?;
+            .map_err(|e: ManifestError| RuntimeError::Loader(e.into()))?;
 
         // Enforce the configured bundle signature policy. The verifier picks TOFU
         // vs. key pinning based on whether the host configured a trusted-key
@@ -1120,7 +1120,7 @@ impl Runtime {
             let bundle_name: String = manifest.name.clone();
 
             // Parse bundle dependencies from new bundle-level format
-            let bundle_deps: Vec<BundleDependency> = manifest.parsed_bundle_dependencies();
+            let bundle_deps: Vec<BundleDependency> = parsed_bundle_dependencies(&manifest);
 
             // Parse version from manifest. A malformed version is malformed manifest
             // content — reject it rather than silently coercing to 0.0.0.
@@ -1257,7 +1257,7 @@ pub(crate) fn validate_bundle_compatibility(
 
     for (path, manifest) in manifests {
         // Check version compatibility for each dependency
-        let resolved: Vec<ManifestDependency> = manifest.resolved_dependencies_with_logger(logger);
+        let resolved: Vec<ManifestDependency> = resolved_dependencies_with_logger(manifest, logger);
         for dep in &resolved {
             let (dep_contract, dep_min_version_str): (&str, &str) = match dep {
                 ManifestDependency::ByContract {

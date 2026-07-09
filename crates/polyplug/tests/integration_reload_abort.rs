@@ -20,8 +20,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use polyplug::error::{LoaderError, RuntimeError};
+use polyplug::loader::BundleLoader;
 use polyplug::loader::BundleSource;
-use polyplug::loader::{BundleLoader, ManifestData};
 use polyplug::runtime::Runtime;
 use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::{
@@ -29,6 +29,7 @@ use polyplug_abi::{
     HostApi, NativeDispatch, PluginDescriptor, RuntimeConfig, StringView, SupportedLanguage,
     Version,
 };
+use polyplug_common::ManifestData;
 use polyplug_utils::{BundleId, GuestContractId, bundle_id, guest_contract_id};
 use tempfile::TempDir;
 

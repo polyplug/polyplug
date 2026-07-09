@@ -25,6 +25,7 @@ polyplug is a universal, blazing-fast, cross-language plugin runtime platform wr
 | `polyplug` | Core runtime: `Runtime`, `RuntimeStore`, loader, reload, FFI entry points |
 | `polyplug_abi` | Frozen ABI types: `HostApi`, `BundleInitContext`, `GuestContractInterface`, `AbiError`, etc. |
 | `polyplug_utils` | Shared hash utilities (`fnv1a_64`, `bundle_id`, `contract_id`) |
+| `polyplug_common` | Shared schema TYPES + their pure behaviour (`manifest.toml`: `ManifestData`, `ManifestError`, `parse_from_str`/`validate`). NO I/O, logging, or orchestration. Lets `polyplugc` accept what the runtime accepts without depending on the runtime |
 | `polyplug_native` | Loader for native (`cdylib`) bundles — supports hot-reload (as do the Lua and JS loaders; Python and .NET do not) |
 | `polyplug_python` | Loader for Python bundles |
 | `polyplug_lua` | Loader for Lua bundles |
@@ -787,6 +788,31 @@ Applies to ALL roots — same-crate (`crate::`), cross-crate (`polyplug_abi::`, 
 
 ---
 
+### 21. Crate Layering — Codegen Never Depends On The Runtime
+
+**The code-generation crates MUST NEVER depend on the `polyplug` runtime crate. This is non-negotiable and must be preserved by every future change.**
+
+The layer graph is strict and one-directional:
+
+```
+polyplug_utils (leaf: ids/hashing only)
+    ↑
+polyplug_abi (frozen C ABI types)
+    ↑
+polyplug_common (shared schema TYPES + their pure behaviour)
+    ↑
+{ polyplug runtime, polyplugc, polyplug_codegen }
+```
+
+1. **`polyplug_utils` never depends on the runtime** — it is the leaf (ids/hashing). Keep it dependency-light.
+2. **`polyplug_codegen` and `polyplugc` MUST NEVER depend on `polyplug` (the runtime) — for any reason.** A codegen tool that pulls in the runtime drags the runtime `cdylib` into every consumer's build graph, which collides (`libpolyplug.so`, cargo #6313/E0460) and defeats using the CLI from a plugin's `build.rs`. If the CLI needs a runtime type, that type belongs in `polyplug_common`, not in a runtime dependency. Verify with `cargo tree -p polyplugc -e normal` — the `polyplug` runtime crate must not appear.
+3. **`polyplug_common` holds shared TYPES and their intrinsic, pure, self-contained behaviour only** — deserialization, self-validation, pure resolution. **NO I/O, NO logging, NO runtime orchestration.** Filesystem reads, logger-aware diagnostics, and dependency-resolution-with-side-effects stay in the runtime as thin wrappers over the pure `polyplug_common` operations.
+4. **`polyplugc` is a bin-only CLI — it exports nothing.** There is no `polyplugc` library API; consumers invoke the compiled binary (`polyplugc generate …`). Do not add a `[lib]` or `pub` surface to it.
+
+**Why this matters:** the migration proof (a real host embedding polyplug) requires that a plugin's `build.rs` can run `polyplugc` without the runtime entering its build graph. Breaking any rule above reintroduces the `cdylib` collision and makes the CLI unusable as a build-time tool.
+
+---
+
 ## Project Structure
 
 ```
@@ -822,6 +848,8 @@ polyplug/
 │   │       ├── runtime/             compatibility.rs, reload_phase.rs, runtime_config.rs
 │   │       └── types/               abi_error.rs, error_code.rs, array.rs, string_view.rs, version.rs, …
 │   ├── polyplug_utils/              fnv1a_64, bundle_id, contract_id
+│   ├── polyplug_common/             shared schema TYPES + pure behaviour (manifest.rs)
+│   │   └── src/  lib.rs, manifest.rs
 │   ├── polyplug_native/             native cdylib loader (supports hot-reload)
 │   │   └── src/  config.rs, ffi.rs, lib.rs, loader.rs
 │   ├── polyplug_python/             Python loader

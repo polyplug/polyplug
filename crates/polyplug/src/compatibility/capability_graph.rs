@@ -11,9 +11,10 @@ use polyplug_utils::GuestContractId;
 
 use crate::compatibility::contract_capability::ContractCapability;
 use crate::compatibility::{bundle_node::BundleNode, dependency_edge::DependencyEdge};
+use polyplug_common::{ManifestData, ManifestDependency};
+
 use crate::error::GraphError;
-use crate::loader::ManifestData;
-use crate::loader::ManifestDependency;
+use crate::loader::manifest::resolved_dependencies_with_logger;
 use crate::logger::LoggerHandle;
 
 /// The capability dependency graph for all bundles.
@@ -222,7 +223,7 @@ impl CapabilityGraph {
 
             // Build requires capabilities from resolved dependencies
             let resolved: Vec<ManifestDependency> =
-                manifest.resolved_dependencies_with_logger(logger);
+                resolved_dependencies_with_logger(manifest, logger);
             let mut requires_caps: Vec<ContractCapability> = Vec::new();
             for dep in &resolved {
                 match dep {

@@ -1,7 +1,8 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use polyplug::loader::{parse_manifest, ManifestData};
+use polyplug::loader::parse_manifest;
+use polyplug_common::ManifestData;
 
 // Fuzzes the runtime manifest parser (`polyplug::loader::parse_manifest`) and,
 // on a successful parse, the `.validate()` path. `parse_manifest` reads a

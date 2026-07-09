@@ -24,7 +24,7 @@ use std::sync::Mutex;
 
 use polyplug::Runtime;
 use polyplug::error::{LoaderError, RegistryError, RuntimeError};
-use polyplug::loader::{BundleLoader, BundleSource, ManifestData};
+use polyplug::loader::{BundleLoader, BundleSource};
 use polyplug_abi::HostApi;
 use polyplug_abi::SupportedLanguage;
 use polyplug_abi::dispatch::VmLoaderData;
@@ -33,6 +33,7 @@ use polyplug_abi::guest::{GuestContractInstance, GuestContractInterface};
 use polyplug_abi::plugin::PluginDescriptor;
 use polyplug_abi::runtime::{Compatibility, RuntimeConfig};
 use polyplug_abi::types::{LogLevel, StringView, Version};
+use polyplug_common::ManifestData;
 use polyplug_utils::bundle_id as compute_bundle_id;
 use polyplug_utils::{BundleId, GuestContractId};
 
