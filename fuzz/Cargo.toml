@@ -24,8 +24,12 @@ path = "../crates/polyplug"
 [dependencies.polyplug_common]
 path = "../crates/polyplug_common"
 
-[dependencies.polyplugc]
-path = "../crates/polyplugc"
+# NOTE: no polyplugc dependency — it is a bin-only CLI and exports no library.
+# The former `fuzz_contract` target fuzzed polyplugc's internal contract-`.toml`
+# parser in-process; that surface is no longer linkable. Its malformed-input
+# robustness is covered by the crate-internal `parser_errors` / `toml_malformed`
+# negative tests. Re-add in-process contract fuzzing if the contract parser is
+# ever extracted into a library crate.
 
 [dependencies.polyplug_abi]
 path = "../crates/polyplug_abi"
@@ -33,13 +37,6 @@ path = "../crates/polyplug_abi"
 [[bin]]
 name = "fuzz_manifest"
 path = "fuzz_targets/fuzz_manifest.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "fuzz_contract"
-path = "fuzz_targets/fuzz_contract.rs"
 test = false
 doc = false
 bench = false

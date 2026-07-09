@@ -1,4 +1,4 @@
-//! Incremental-write behaviour of `polyplugc::write_output`.
+//! Incremental-write behaviour of `crate::codegen::write_output`.
 //!
 //! Every generator stamps `GeneratedFile::force_regenerate` — `true` for files like
 //! `manifest.toml` whose ids must always reflect the current contract, `false` for
@@ -10,15 +10,14 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplugc::WriteSummary;
-use polyplugc::generate;
-use polyplugc::write_output;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process;
 
 use polyplug_codegen::{GenerateConfig, GenerateOutput, Lang, Side};
+
+use crate::codegen::{WriteSummary, generate, write_output};
 
 const API_TOML: &str = "\
 [[plugin_contract]]

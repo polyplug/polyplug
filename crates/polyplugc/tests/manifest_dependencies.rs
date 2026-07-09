@@ -14,7 +14,6 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplugc::generate;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -22,6 +21,9 @@ use std::process;
 
 use polyplug_codegen::{GenerateConfig, GenerateOutput, Lang, Side};
 use polyplug_common::{ManifestData, ManifestDependency};
+
+mod cli_support;
+use cli_support::cli_generate;
 
 const API_TOML: &str = "\
 [[plugin_contract]]
@@ -96,7 +98,7 @@ fn generate_manifest_for_lang(lang: Lang) -> String {
         side: Side::Guest,
         out_dir: tmp_dir.join("out"),
     };
-    let output: GenerateOutput = generate(config).expect("generate guest");
+    let output: GenerateOutput = cli_generate(&config).expect("generate guest");
 
     let manifest_file = output
         .files

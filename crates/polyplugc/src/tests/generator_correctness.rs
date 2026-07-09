@@ -12,13 +12,14 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{GenerateConfig, GenerateOutput, GeneratedFile, Lang, Side};
-use polyplug_utils::guest_contract_id as fnv_contract_id;
-use polyplugc::generate;
-use polyplugc::ir::{
+use crate::codegen::generate;
+use crate::ir::{
     AbiBuiltin, PrimitiveType, ResolvedContract, ResolvedField, ResolvedFunction, ResolvedParam,
     ResolvedTypeRef, ValidatedIr, Version,
 };
+use polyplug_codegen::{GenerateConfig, GenerateOutput, GeneratedFile, Lang, Side};
+use polyplug_utils::guest_contract_id as fnv_contract_id;
+use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::PathBuf;
@@ -87,9 +88,7 @@ fn generate_guest_contracts(ir: ValidatedIr, test_tag: &str) -> String {
 /// the content of the generated file whose name ends with `file_suffix`.
 fn run_guest_generator(ir: ValidatedIr, test_tag: &str, file_suffix: &str) -> String {
     // Each test gets its own sub-directory to avoid races between parallel tests.
-    let tmp_dir: PathBuf = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("gen_correctness")
-        .join(test_tag);
+    let tmp_dir: PathBuf = env::temp_dir().join("gen_correctness").join(test_tag);
     fs::create_dir_all(&tmp_dir).expect("create tmp dir");
 
     // Serialise IR to TOML and write it next to the output directory.

@@ -43,6 +43,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+mod cli_support;
+use cli_support::cli_generate;
+
 /// Records the message the host `log` thunk received from the guest.
 static LOGGED_MESSAGE: Mutex<Option<String>> = Mutex::new(None);
 
@@ -177,7 +180,7 @@ fn build_lua_bundle(tmp: &Path) -> PathBuf {
         side: Side::Guest,
         out_dir: gen_dir.clone(),
     };
-    let output: GenerateOutput = polyplugc::generate(config).expect("polyplugc generate (lua)");
+    let output: GenerateOutput = cli_generate(&config).expect("polyplugc generate (lua)");
     for file in &output.files {
         let file_path: PathBuf = gen_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {

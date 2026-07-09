@@ -13,6 +13,9 @@
 
 #![allow(clippy::expect_used)]
 
+mod cli_support;
+use cli_support::cli_generate;
+
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -96,7 +99,7 @@ fn generated_deno_caller_dispatches_struct_param_through_native_guest() {
         out_dir: gen_dir.clone(),
     };
     let output: GenerateOutput =
-        polyplugc::generate(config).expect("polyplugc generate (js-quickjs host)");
+        cli_generate(&config).expect("polyplugc generate (js-quickjs host)");
     for file in &output.files {
         let file_path: PathBuf = gen_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {

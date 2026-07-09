@@ -31,6 +31,9 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
+mod cli_support;
+use cli_support::cli_generate;
+
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
@@ -135,7 +138,7 @@ fn build_csharp_consumer(tmp_root: &Path) -> PathBuf {
         side: Side::Guest,
         out_dir: gen_dir.clone(),
     };
-    let output: GenerateOutput = polyplugc::generate(config).expect("polyplugc generate (csharp)");
+    let output: GenerateOutput = cli_generate(&config).expect("polyplugc generate (csharp)");
     for file in &output.files {
         let file_path: PathBuf = gen_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {

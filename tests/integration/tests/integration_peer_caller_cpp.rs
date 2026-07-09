@@ -30,6 +30,9 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
+mod cli_support;
+use cli_support::cli_generate;
+
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
@@ -129,7 +132,7 @@ fn build_cpp_consumer(tmp: &Path) -> PathBuf {
         side: Side::Guest,
         out_dir: gen_dir.clone(),
     };
-    let output: GenerateOutput = polyplugc::generate(config).expect("polyplugc generate (cpp)");
+    let output: GenerateOutput = cli_generate(&config).expect("polyplugc generate (cpp)");
     for file in &output.files {
         let file_path: PathBuf = gen_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {

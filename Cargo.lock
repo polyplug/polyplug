@@ -1161,7 +1161,6 @@ dependencies = [
  "polyplug_native",
  "polyplug_python",
  "polyplug_utils",
- "polyplugc",
  "tempfile",
  "toml",
 ]

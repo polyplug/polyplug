@@ -4,10 +4,12 @@
 #![allow(clippy::expect_used)]
 
 use polyplug_codegen::{GenerateConfig, Lang, Side};
-use polyplugc::generate;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+
+mod cli_support;
+use cli_support::cli_generate;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -30,7 +32,7 @@ fn generate_csharp_bindings(bundle_toml: &Path, out_dir: &Path) {
         out_dir: out_dir.to_path_buf(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     // Write generated files to disk
     for file in &output.files {
@@ -98,7 +100,7 @@ fn test_csharp_codegen_generates_enum_types() {
         out_dir: out_dir.to_path_buf(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = out_dir.join(&file.path);

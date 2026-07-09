@@ -1,10 +1,12 @@
 #![allow(clippy::expect_used)]
 
 use polyplug_codegen::{GenerateConfig, Lang, Side};
-use polyplugc::generate;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+
+mod cli_support;
+use cli_support::cli_generate;
 
 fn create_test_api_with_host_contracts(tmp_dir: &Path) -> PathBuf {
     fs::create_dir_all(tmp_dir).expect("create tmp_dir");
@@ -45,7 +47,7 @@ fn test_rust_host_contract_generates_host_contracts_file() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -89,7 +91,7 @@ fn test_rust_host_contract_guest_generates_caller() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -130,7 +132,7 @@ fn test_cpp_host_contract_generates_host_contracts_file() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -175,7 +177,7 @@ fn test_cpp_host_contract_guest_generates_caller() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -213,7 +215,7 @@ fn test_csharp_host_contract_generates_contracts_file() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -254,7 +256,7 @@ fn test_csharp_host_contract_guest_generates_caller() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -285,7 +287,7 @@ fn generate_csharp_host_side(tmp_dir: &Path) -> (String, String) {
         side: Side::Host,
         out_dir: tmp_dir.to_path_buf(),
     };
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
@@ -392,7 +394,7 @@ fn generate_csharp_guest_host_contracts(tmp_dir: &Path) -> String {
         side: Side::Guest,
         out_dir: tmp_dir.to_path_buf(),
     };
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
@@ -478,7 +480,7 @@ fn test_python_host_contract_generates_contracts_file() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -520,7 +522,7 @@ fn test_python_host_contract_guest_generates_caller() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -562,7 +564,7 @@ fn test_python_host_caller_branches_on_dispatch_type() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -618,7 +620,7 @@ fn test_lua_host_contract_generates_contracts_file() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -659,7 +661,7 @@ fn test_lua_host_contract_guest_generates_caller() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -731,7 +733,7 @@ fn test_js_quickjs_host_contract_generates_contracts_file() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -772,7 +774,7 @@ fn test_js_quickjs_host_contract_guest_generates_caller() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);

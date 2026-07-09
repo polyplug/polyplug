@@ -16,7 +16,8 @@ polyplug_python = { workspace = true }
 polyplug_lua = { workspace = true }
 polyplug_js = { workspace = true }
 polyplug_utils = { workspace = true }
-polyplugc = { workspace = true }
+# polyplugc is a bin-only CLI (no lib); tests drive the built binary via the
+# `cli_support` helper instead of depending on it as a library.
 polyplug_codegen = { workspace = true }
 tempfile = { workspace = true }
 libloading = { workspace = true }

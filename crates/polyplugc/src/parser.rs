@@ -329,6 +329,7 @@ pub fn parse_api(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
     parse_api_str_with_file(&content, &path.to_string_lossy())
 }
 
+#[allow(dead_code)]
 pub fn parse_api_str(content: &str) -> Result<ValidatedIr, PolyplugcError> {
     parse_api_str_with_file(content, "<input>")
 }

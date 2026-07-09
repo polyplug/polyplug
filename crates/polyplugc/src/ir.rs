@@ -293,6 +293,9 @@ pub struct ResolvedHostContract {
 pub struct ResolvedPlugin {
     pub name: String,
     pub implements: Vec<String>,
+    // Parsed from `[[plugin]] optional = [...]`; carried on the resolved model for
+    // completeness. Not yet consumed by any generator.
+    #[allow(dead_code)]
     pub optional: Vec<String>,
 }
 

@@ -1,7 +1,8 @@
-pub mod generators;
-pub mod ir;
-pub mod parser;
-pub mod validate;
+//! Codegen — the CLI's internal generate/write pipeline.
+//!
+//! This is a PRIVATE module of the `polyplugc` binary. `polyplugc` deliberately
+//! has no library target and exports nothing (CLAUDE.md Rule 21) — consumers
+//! invoke the compiled binary. These functions are the binary's own plumbing.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -11,18 +12,20 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process;
 
-use crate::ir::ValidatedIr;
-use generators::cpp::CppGenerator;
-use generators::csharp::CSharpGenerator;
-use generators::js_quickjs::JsQuickjsGenerator;
-use generators::lua::LuaGenerator;
-use generators::python::PythonGenerator;
-use generators::rust::RustGenerator;
-use generators::{CodeGenerator, GeneratedFile as InternalGeneratedFile, GeneratedFiles};
 use polyplug_codegen::{
     GenerateConfig, GenerateOutput, GeneratedFile as PublicGeneratedFile, Lang, PolyplugcError,
     Side,
 };
+
+use crate::generators::cpp::CppGenerator;
+use crate::generators::csharp::CSharpGenerator;
+use crate::generators::js_quickjs::JsQuickjsGenerator;
+use crate::generators::lua::LuaGenerator;
+use crate::generators::python::PythonGenerator;
+use crate::generators::rust::RustGenerator;
+use crate::generators::{CodeGenerator, GeneratedFile as InternalGeneratedFile, GeneratedFiles};
+use crate::ir::ValidatedIr;
+use crate::parser;
 
 pub fn generate(config: GenerateConfig) -> Result<GenerateOutput, PolyplugcError> {
     let file_content: String = fs::read_to_string(&config.api_toml).map_err(|e: io::Error| {

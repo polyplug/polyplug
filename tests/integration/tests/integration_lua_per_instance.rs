@@ -45,6 +45,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+mod cli_support;
+use cli_support::cli_generate;
+
 const BUNDLE_NAME: &str = "iso_counter_lua";
 
 fn workspace_root() -> PathBuf {
@@ -100,7 +103,7 @@ fn write_counter_bundle(tmp: &Path, dir_name: &str) -> PathBuf {
         side: Side::Guest,
         out_dir: gen_dir.clone(),
     };
-    let output: GenerateOutput = polyplugc::generate(config).expect("polyplugc generate (lua)");
+    let output: GenerateOutput = cli_generate(&config).expect("polyplugc generate (lua)");
     for file in &output.files {
         let file_path: PathBuf = gen_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {

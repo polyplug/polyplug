@@ -57,6 +57,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+mod cli_support;
+use cli_support::cli_generate;
+
 /// Both bundles deliberately share this name so their `bundle_id` name-hash
 /// collides — the per-load `ISOLATION_NONCE` is then the *only* thing keeping
 /// their generated modules distinct in the shared `sys.modules`.
@@ -116,7 +119,7 @@ fn write_probe_bundle(tmp: &Path, dir_name: &str, return_value: i32) -> PathBuf 
         side: Side::Guest,
         out_dir: gen_dir.clone(),
     };
-    let output: GenerateOutput = polyplugc::generate(config).expect("polyplugc generate (python)");
+    let output: GenerateOutput = cli_generate(&config).expect("polyplugc generate (python)");
     for file in &output.files {
         let file_path: PathBuf = gen_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {

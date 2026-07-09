@@ -12,11 +12,13 @@
 #![allow(clippy::expect_used)]
 
 use polyplug_codegen::{GenerateConfig, GeneratedFile, Lang, Side};
-use polyplugc::generate;
 use std::io::Write as _;
 use std::path::PathBuf;
 use tempfile::Builder;
 use tempfile::NamedTempFile;
+
+mod cli_support;
+use cli_support::cli_generate;
 
 // ─── TOML helpers ─────────────────────────────────────────────────────────────
 
@@ -61,13 +63,17 @@ return = "TimestampPair"
 /// specified language / side combination.
 fn run_generate(toml_content: &str, lang: Lang, side: Side) -> Vec<GeneratedFile> {
     let tmp: NamedTempFile = write_temp_toml(toml_content);
+    // Per-call unique out_dir: `cli_generate` collects EVERY file under out_dir,
+    // so a shared dir would let parallel tests clobber/read each other's output.
+    // Derive from the already-unique temp file path to guarantee isolation.
+    let out_dir: PathBuf = tmp.path().with_extension("out_dir");
     let config: GenerateConfig = GenerateConfig {
         api_toml: tmp.path().to_path_buf(),
         lang,
         side,
-        out_dir: PathBuf::from("/tmp/polyplug_type_mapping_edge_cases"),
+        out_dir,
     };
-    generate(config)
+    cli_generate(&config)
         .expect("generate() must not fail for valid API TOML")
         .files
 }

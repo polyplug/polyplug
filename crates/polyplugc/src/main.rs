@@ -14,7 +14,19 @@ use polyplug_signing::{
     SigError, VerifiedBundle, generate_keypair, load_signing_key, save_signing_key,
     save_verifying_key, sign_bundle, verify_bundle,
 };
-use polyplugc::{WriteSummary, generate, parse_lang, parser, validate, write_output};
+
+mod codegen;
+mod generators;
+mod ir;
+mod parser;
+mod validate;
+
+// In-crate tests that exercise private surfaces the bin-only crate cannot expose
+// as a library (parser/IR internals, write_output/force_regenerate semantics).
+#[cfg(test)]
+mod tests;
+
+use crate::codegen::{WriteSummary, generate, parse_lang, write_output};
 
 /// polyplugc — code generator for the polyplug plugin runtime.
 #[derive(Debug, Parser)]

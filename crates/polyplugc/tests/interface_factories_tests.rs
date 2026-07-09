@@ -10,9 +10,11 @@
 
 use polyplug_codegen::{GenerateConfig, Lang, Side};
 use polyplug_utils::host_contract_id;
-use polyplugc::generate;
 use std::fs;
 use std::path::PathBuf;
+
+mod cli_support;
+use cli_support::cli_generate;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -63,7 +65,7 @@ fn generate_host_interface_factories(tmp_dir: &PathBuf) -> String {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     // Write all generated files to disk
     for file in &output.files {
@@ -322,8 +324,14 @@ fn test_interface_factory_header_has_correct_version() {
     let interfaces: String = generate_host_interface_factories(&tmp_dir);
 
     // host.logger@1.0.0 -> major=1, minor=0, patch=0
+    // Whitespace-normalized: the CLI runs rustfmt on generated `.rs`, which wraps
+    // the `Version { .. }` struct literal across multiple lines.
+    let normalized: String = interfaces
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join(" ");
     assert!(
-        interfaces.contains("contract_version: Version { major: 1, minor: 0, patch: 0 }"),
+        normalized.contains("contract_version: Version { major: 1, minor: 0, patch: 0"),
         "interface must have contract_version with major=1, minor=0, patch=0:\n{interfaces}"
     );
 }

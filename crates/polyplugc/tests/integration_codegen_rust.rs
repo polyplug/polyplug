@@ -34,7 +34,9 @@ use polyplug_abi::ffi as abi_ffi;
 use polyplug_abi::string_view_null;
 use polyplug_codegen::{GenerateConfig, Lang, Side};
 use polyplug_utils::BundleId;
-use polyplugc::generate;
+
+mod cli_support;
+use cli_support::cli_generate;
 
 // ─── Helper: compile target dir ──────────────────────────────────────────────
 
@@ -70,7 +72,7 @@ fn generate_rust_bindings(api_toml: &Path, out_dir: &Path, side: Side) {
         out_dir: out_dir.to_path_buf(),
     };
 
-    let output = generate(config).expect("polyplugc::generate failed");
+    let output = cli_generate(&config).expect("polyplugc::generate failed");
 
     // Write generated files to disk
     for file in &output.files {
