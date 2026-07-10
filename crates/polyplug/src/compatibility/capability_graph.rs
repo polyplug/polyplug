@@ -154,7 +154,7 @@ impl CapabilityGraph {
     ///
     /// Diagnostics go to the default logger (stderr, Error/Warn). Internal
     /// callers with a host logger use
-    /// [`CapabilityGraph::from_manifests_with_logger`].
+    /// `CapabilityGraph::from_manifests_with_logger`.
     pub fn from_manifests(
         manifests: &[(PathBuf, ManifestData)],
     ) -> Result<CapabilityGraph, GraphError> {

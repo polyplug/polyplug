@@ -85,7 +85,7 @@ impl LoggerHandle {
     /// Emit a log message.
     ///
     /// `message` is a lazy producer: it is only invoked when `level` passes
-    /// the [`LoggerHandle::enabled`] filter, so disabled levels pay zero
+    /// the internal `enabled` filter, so disabled levels pay zero
     /// formatting cost.
     ///
     /// Must NEVER be called while any runtime lock guard is held — the host

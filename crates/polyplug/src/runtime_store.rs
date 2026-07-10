@@ -1494,7 +1494,7 @@ impl RuntimeStore {
     /// from every index structure.
     ///
     /// This is the invalidate-only unload primitive. Each owned slot is torn down via
-    /// the canonical [`RuntimeStoreData::vacate_slot`] helper, which:
+    /// the canonical `RuntimeStoreData::vacate_slot` helper, which:
     /// - bumps `slot.generation` (so every handle minted against the old generation now
     ///   resolves to [`RegistryError::StaleHandle`]);
     /// - drops the slot's interface `Arc`. The published epoch snapshot owns its clone
