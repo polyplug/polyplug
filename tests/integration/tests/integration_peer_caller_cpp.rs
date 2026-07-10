@@ -182,6 +182,10 @@ fn build_cpp_consumer(tmp: &Path) -> PathBuf {
     let out_lib: PathBuf = bundle_dir.join(consumer_lib_filename());
 
     let mut command = Command::new("c++");
+    #[cfg(target_os = "windows")]
+    // MinGW's default DLL link imports its C++, GCC, and pthread runtimes.
+    // `-static` selects their archive libraries, eliminating a compiler-PATH dependency.
+    command.arg("-static");
     command
         .arg("-std=c++20")
         .arg("-fPIC")
@@ -196,10 +200,6 @@ fn build_cpp_consumer(tmp: &Path) -> PathBuf {
         .arg(&consumer_src)
         .arg("-o")
         .arg(&out_lib);
-    #[cfg(target_os = "windows")]
-    // MinGW's default DLL link imports libstdc++-6.dll and libgcc_s_seh-1.dll.
-    // Link both runtimes into the generated guest instead of relying on a PATH entry.
-    command.args(["-static-libgcc", "-static-libstdc++"]);
     let build = command.output().expect("failed to spawn c++ compiler");
     assert!(
         build.status.success(),
