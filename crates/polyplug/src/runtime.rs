@@ -1414,7 +1414,7 @@ fn supported_language_from_str(s: &str) -> SupportedLanguage {
         "native" | "rust" => SupportedLanguage::Rust,
         "python" => SupportedLanguage::Python,
         "lua" => SupportedLanguage::Lua,
-        "javascript" | "js" => SupportedLanguage::JavaScript,
+        "javascript" | "js" | "js-quickjs" => SupportedLanguage::JavaScript,
         "dotnet" | "csharp" => SupportedLanguage::Dotnet,
         "cpp" => SupportedLanguage::Cpp,
         _ => SupportedLanguage::Rust,
@@ -1427,7 +1427,16 @@ fn supported_language_from_str(s: &str) -> SupportedLanguage {
 fn is_known_runtime_language(s: &str) -> bool {
     matches!(
         s,
-        "native" | "rust" | "python" | "lua" | "javascript" | "js" | "dotnet" | "csharp" | "cpp"
+        "native"
+            | "rust"
+            | "python"
+            | "lua"
+            | "javascript"
+            | "js"
+            | "js-quickjs"
+            | "dotnet"
+            | "csharp"
+            | "cpp"
     )
 }
 
@@ -2702,6 +2711,15 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn quickjs_loader_maps_to_javascript_language() {
+        assert_eq!(
+            supported_language_from_str("js-quickjs"),
+            SupportedLanguage::JavaScript
+        );
+        assert!(is_known_runtime_language("js-quickjs"));
+    }
 
     /// `HostApi.log` stub for test hosts — drops the record.
     unsafe extern "C" fn stub_host_log(

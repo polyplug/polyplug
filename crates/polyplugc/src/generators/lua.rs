@@ -265,6 +265,11 @@ fn generate_lua_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     for ty in &ir.types {
         out.push_str(&format!("ffi.metatype(\"{}\", {{}})\n", ty.name));
     }
+    out.push_str("\nreturn {\n");
+    for e in &ir.enums {
+        out.push_str(&format!("    {} = {},\n", e.name, e.name));
+    }
+    out.push_str("}\n");
     Ok(out)
 }
 
@@ -3136,6 +3141,31 @@ mod tests {
         assert!(
             out.contains("bit.bor("),
             "missing bit.bor for CompressedHdr: {out}"
+        );
+    }
+
+    #[test]
+    fn lua_types_module_exports_enum_tables() {
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![EnumDef {
+                name: "PixelFormat".to_owned(),
+                repr: ReprType::U32,
+                bitflag: false,
+                variants: vec![EnumVariant {
+                    name: "Rgba8".to_owned(),
+                    value: "1".to_owned(),
+                }],
+            }],
+            contracts: vec![],
+            host_contracts: vec![],
+            bundle: None,
+        };
+
+        let out = generate_lua_types_file(&ir).expect("generate Lua types module");
+        assert!(
+            out.contains("return {\n    PixelFormat = PixelFormat,\n}"),
+            "enum table must be available to require('guest.types'): {out}"
         );
     }
 

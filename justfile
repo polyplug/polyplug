@@ -100,7 +100,7 @@ _build-host-cpp:
         echo "  [host-cpp] SKIPPED (previously failed)"; \
         exit 0; \
     fi
-    @if g++ -std=c++17 -fsyntax-only -I{{sdks_dir}}/cpp/host \
+    @if g++ -std=c++17 -fsyntax-only -I{{sdks_dir}}/cpp/host -I{{sdks_dir}}/cpp/abi \
         {{sdks_dir}}/cpp/host/polyplug.hpp >{{marker_dir}}/host-cpp.log 2>&1; then \
         echo "  [host-cpp] ✓ Headers valid"; \
     else \
@@ -218,7 +218,7 @@ _build-guest-cpp:
         echo "  [guest-cpp] SKIPPED (previously failed)"; \
         exit 0; \
     fi
-    @if g++ -std=c++17 -fsyntax-only -I{{sdks_dir}}/cpp/guest \
+    @if g++ -std=c++17 -fsyntax-only -I{{sdks_dir}}/cpp/guest -I{{sdks_dir}}/cpp/abi \
         {{sdks_dir}}/cpp/guest/polyplug_guest.hpp 2>/dev/null; then \
         echo "  [guest-cpp] ✓ Headers valid"; \
     else \

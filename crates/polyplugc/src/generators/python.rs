@@ -2097,6 +2097,16 @@ fn emit_guest_abi_return(
         );
         return;
     }
+    // Generated enums are `enum.IntEnum`, not ctypes values. Write their numeric
+    // value through the declared repr ctype instead of calling `ctypes.addressof`.
+    if let Some(e) = python_enum_for_type(returns, &ir.enums) {
+        let raw_ctype = python_ctype_for_repr(&e.repr);
+        out.push_str(&format!(
+            "    _out_enum = {raw_ctype}.from_address(out_ptr)\n"
+        ));
+        out.push_str("    _out_enum.value = int(result)\n");
+        return;
+    }
     // Array or struct return: the impl returns an ergonomic Python value (a list
     // of element objects, or an object with attributes) and this glue marshals it
     // into the caller's out slot, allocating variable-size parts (embedded
@@ -2116,9 +2126,8 @@ fn emit_guest_abi_return(
             return;
         }
     }
-    // Buffer (or an enum that reached here): the impl returns the matching ctypes
-    // value; copy its bytes into the caller's out slot.
-    let _ = returns;
+    // Buffer return: the impl returns the matching ctypes value; copy its bytes
+    // into the caller's out slot.
     out.push_str("    ctypes.memmove(out_ptr, ctypes.addressof(result), ctypes.sizeof(result))\n");
 }
 
@@ -5446,6 +5455,47 @@ mod tests {
         assert!(
             ret.contains("return PixelFormat(result.value)"),
             "the raw repr integer must convert back into the IntEnum: {ret}"
+        );
+    }
+
+    #[test]
+    fn python_guest_enum_return_writes_through_repr_ctype() {
+        let func = ResolvedFunction {
+            name: "engine_type".to_owned(),
+            function_id: 6,
+            params: vec![],
+            returns: Some(ResolvedTypeRef::UserDefined("GameEngineType".to_owned())),
+        };
+        let ir = ValidatedIr {
+            types: vec![],
+            enums: vec![EnumDef {
+                name: "GameEngineType".to_owned(),
+                repr: ReprType::U8,
+                bitflag: false,
+                variants: vec![EnumVariant {
+                    name: "Unity".to_owned(),
+                    value: "1".to_owned(),
+                }],
+            }],
+            contracts: vec![],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let mut out = String::new();
+
+        emit_guest_abi_return(&mut out, &func, "GameEnginePluginContract", &ir);
+
+        assert!(
+            out.contains("_out_enum = ctypes.c_uint8.from_address(out_ptr)"),
+            "enum return must use its declared repr ctype: {out}"
+        );
+        assert!(
+            out.contains("_out_enum.value = int(result)"),
+            "IntEnum must be converted to its numeric value: {out}"
+        );
+        assert!(
+            !out.contains("ctypes.addressof(result)"),
+            "ctypes.addressof(IntEnum) is a TypeError: {out}"
         );
     }
 
