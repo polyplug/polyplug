@@ -181,7 +181,8 @@ fn build_cpp_consumer(tmp: &Path) -> PathBuf {
     let cpp_guest_include: PathBuf = workspace_root().join("sdks").join("cpp").join("guest");
     let out_lib: PathBuf = bundle_dir.join(consumer_lib_filename());
 
-    let build: std::process::Output = Command::new("c++")
+    let mut command = Command::new("c++");
+    command
         .arg("-std=c++20")
         .arg("-fPIC")
         .arg("-shared")
@@ -194,9 +195,12 @@ fn build_cpp_consumer(tmp: &Path) -> PathBuf {
         .arg(&cpp_guest_include)
         .arg(&consumer_src)
         .arg("-o")
-        .arg(&out_lib)
-        .output()
-        .expect("failed to spawn c++ compiler");
+        .arg(&out_lib);
+    #[cfg(target_os = "windows")]
+    // MinGW's default DLL link imports libstdc++-6.dll and libgcc_s_seh-1.dll.
+    // Link both runtimes into the generated guest instead of relying on a PATH entry.
+    command.args(["-static-libgcc", "-static-libstdc++"]);
+    let build = command.output().expect("failed to spawn c++ compiler");
     assert!(
         build.status.success(),
         "c++ build of cpp peer consumer failed (status {:?})\n--- stdout ---\n{}\n--- stderr ---\n{}",
