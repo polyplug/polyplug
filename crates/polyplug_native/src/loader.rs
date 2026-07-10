@@ -12,6 +12,10 @@ use std::sync::Mutex;
 #[cfg(test)]
 use std::sync::PoisonError;
 
+#[cfg(windows)]
+use libloading::os::windows::{
+    LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, Library as WindowsLibrary,
+};
 use libloading::{Library, Symbol};
 
 use polyplug::Runtime;
@@ -27,6 +31,25 @@ use polyplug_common::ManifestData;
 use polyplug_utils::BundleId;
 
 use crate::config::NativeConfig;
+
+#[cfg(windows)]
+const NATIVE_LOAD_FLAGS: u32 = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+
+#[cfg(windows)]
+unsafe fn load_native_library(path: &Path) -> Result<Library, libloading::Error> {
+    // SAFETY: the caller guarantees `path` names the native bundle artifact.
+    // DLL_LOAD_DIR scopes dependency lookup to the artifact's directory, while
+    // DEFAULT_DIRS retains the secure application/system/user search set.
+    let library: WindowsLibrary =
+        unsafe { WindowsLibrary::load_with_flags(path, NATIVE_LOAD_FLAGS)? };
+    Ok(library.into())
+}
+
+#[cfg(not(windows))]
+unsafe fn load_native_library(path: &Path) -> Result<Library, libloading::Error> {
+    // SAFETY: the caller guarantees `path` names the native bundle artifact.
+    unsafe { Library::new(path) }
+}
 
 /// Native (shared library) plugin loader.
 ///
@@ -185,9 +208,11 @@ impl NativeLoader {
 
         let path_str: String = bundle_path.to_string_lossy().into_owned();
 
-        // SAFETY: path points to a compiled plugin bundle; libloading validates the shared library.
+        // SAFETY: path points to a compiled plugin bundle; libloading validates
+        // the shared library. On Windows, dependency lookup also includes the
+        // artifact's bundle directory without changing process-global search state.
         let library: Library = unsafe {
-            Library::new(&bundle_path).map_err(|e| LoaderError::InitFailed {
+            load_native_library(&bundle_path).map_err(|e| LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
                 error: format!("failed to load plugin library at {}: {}", path_str, e),
             })?
@@ -413,6 +438,23 @@ impl NativeLoader {
     pub(crate) fn scheduled_reclaim_count(&self) -> u64 {
         self.scheduled_reclaims.load(Ordering::Relaxed)
     }
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn windows_load_flags_include_bundle_directory_and_secure_defaults() {
+    use libloading::os::windows::{
+        LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+    };
+
+    assert_eq!(
+        NATIVE_LOAD_FLAGS & LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
+    );
+    assert_eq!(
+        NATIVE_LOAD_FLAGS & LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+        LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
+    );
 }
 
 #[cfg(test)]
