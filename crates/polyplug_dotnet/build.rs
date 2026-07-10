@@ -87,12 +87,14 @@ fn main() {
     );
 }
 
-/// Build the managed bridge with `dotnet build -c Release`. Returns `true` on success.
+/// Build the managed bridge with `dotnet build -c Release -p:Platform=AnyCPU`. Returns `true`
+/// on success.
 fn build_bridge(bridge_dir: &Path) -> bool {
     let status: Result<ExitStatus, IoError> = Command::new("dotnet")
         .arg("build")
         .arg("-c")
         .arg("Release")
+        .arg("-p:Platform=AnyCPU")
         .arg("--nologo")
         .arg(bridge_dir)
         .status();

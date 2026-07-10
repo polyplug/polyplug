@@ -679,3 +679,25 @@ fn highest_version_hostfxr(dotnet_root: &Path, logger: LoggerHandle) -> Option<P
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::BYTE_BRIDGE_DLL;
+    use std::process::Command;
+
+    #[test]
+    fn byte_bridge_is_staged_as_a_dll_when_dotnet_sdk_is_available() {
+        let sdk_available: bool = Command::new("dotnet")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success());
+        if !sdk_available {
+            return;
+        }
+
+        assert!(
+            BYTE_BRIDGE_DLL.starts_with(b"MZ"),
+            "the staged managed byte bridge must be a PE DLL"
+        );
+    }
+}
