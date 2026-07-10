@@ -16,7 +16,9 @@ use core::array::TryFromSliceError;
 
 use ed25519_dalek::{SignatureError, SigningKey, VerifyingKey};
 use rand_core::OsRng;
-use std::fs::{self, File, OpenOptions, Permissions};
+use std::fs;
+#[cfg(unix)]
+use std::fs::{File, OpenOptions, Permissions};
 use std::io::Error as IoError;
 #[cfg(unix)]
 use std::io::Write;
