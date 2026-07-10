@@ -23,12 +23,21 @@ name = "polyplug_lua"
 path = "src/lib.rs"
 crate-type = ["rlib", "cdylib"]
 
+[features]
+# Native builds carry a self-contained LuaJIT, including its FFI module.
+default = ["vendored-luajit"]
+vendored-luajit = ["mlua/vendored"]
+# Link a target-provided LuaJIT. Cross builds must replace the default with this
+# feature because Cargo features are additive.
+external-luajit = []
+
+
 [dependencies]
 polyplug = { workspace = true }
 polyplug_common = { workspace = true }
 polyplug_abi = { workspace = true }
 polyplug_utils = { workspace = true }
-mlua = { workspace = true, features = ["luajit", "vendored", "send"] }
+mlua = { workspace = true, features = ["luajit", "send"] }
 crossbeam-epoch = { workspace = true }
 
 

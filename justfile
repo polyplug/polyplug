@@ -549,6 +549,24 @@ js-typecheck:
     cd sdks/js && deno task check
 
 # ============================================================================
+# Windows MSVC cross-compilation
+# ============================================================================
+
+# Final-link every loader for x86_64-pc-windows-msvc from Linux. The Lua loader
+# must use the target-built LuaJIT library rather than vendoring one, because
+# vendored LuaJIT invokes the Windows-only MSVC build script.
+check-windows-msvc-loaders:
+    @if [ ! -f "${LUA_LIB:-}/lua51.lib" ]; then \
+        echo "Set LUA_LIB to the directory containing x64 MSVC LuaJIT lua51.lib."; \
+        exit 1; \
+    fi
+    LUA_LIB="$LUA_LIB" LUA_LIB_NAME=lua51 LUA_LINK=static \
+        cargo xwin build --target x86_64-pc-windows-msvc -p polyplug_lua \
+        --no-default-features --features external-luajit
+    cargo xwin build --target x86_64-pc-windows-msvc \
+        -p polyplug_native -p polyplug_python -p polyplug_js -p polyplug_dotnet
+
+# ============================================================================
 # Linting & Formatting
 # ============================================================================
 

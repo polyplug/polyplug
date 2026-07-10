@@ -6,7 +6,7 @@
 /// This enum is kept for future extensibility documentation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LuaVersion {
-    /// LuaJIT (default, vendored via mlua `luajit+vendored` feature).
+    /// LuaJIT (vendored by default; `external-luajit` links target-provided LuaJIT).
     LuaJit,
 }
 

@@ -351,26 +351,20 @@ its own VM. For full isolation with Python or .NET, use separate processes.
 |---|---|
 | Linux (x86_64) | Full |
 | macOS (x86_64 / aarch64) | Full |
-| Windows (x86_64) | In progress — see below |
+| Windows (x86_64) | Full (CI) |
 
-Windows status (honest):
+Windows CI verifies two independent paths:
 
-- The workspace is **Windows-correct at the source level**. All shared-library
-  naming uses the real cdylib convention per OS (`<name>.dll` with no `lib`
-  prefix on Windows, `lib<name>.dylib` on macOS, `lib<name>.so` on Linux); the
-  native loader uses cross-platform `libloading` and `PathBuf::join`;
-  `polyplug_dotnet` hostfxr discovery is OS-aware; `manifest.toml` per-platform
-  `[file]` tables resolve the `windows` key.
-- `cargo check --target x86_64-pc-windows-msvc` is clean for every pure-Rust
-  crate. The only cross-check failures are vendored native C build scripts
-  (`pyo3-ffi`, `rquickjs-sys`, `tree-sitter`) that build natively on a Windows
-  runner.
-- **CI:** a `windows-latest` job builds the full workspace (all six loaders) and
-  runs `cargo test --workspace --lib`.
-- **Pending (separate work item):** native-loader **integration** tests need their
-  pre-built `.so` fixtures rebuilt and committed as Windows `.dll` artifacts (plus
-  per-platform `[file]` manifest tables); only then can the Windows CI job drop
-  the `--lib` scoping and run the fixture-loading suites.
+- The `windows-latest` job builds the full workspace and runs
+  `cargo test --workspace --no-fail-fast` against Windows-native runtimes.
+- The Linux `cargo-xwin` job final-links all five loaders for
+  `x86_64-pc-windows-msvc`. It uses a real x64 MSVC `lua51.lib` built by
+  LuaJIT's `msvcbuild.bat static` in the Windows job; Python targets the stable
+  CPython `python3.dll` ABI at the loader's 3.11 floor without a cross-target
+  interpreter.
+
+See the [Linux-to-Windows MSVC loader build](WORKFLOW.md#maintainer-cross-build-linux-to-windows-msvc-loaders)
+for the local command and its LuaJIT prerequisite.
 
 ---
 

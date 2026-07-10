@@ -10,6 +10,43 @@ verbs for them:
 
 Compiling, linking, and bundling use your own toolchain.
 
+## Maintainer cross-build: Linux to Windows MSVC loaders
+
+Build and final-link every loader for `x86_64-pc-windows-msvc` from a Linux
+checkout:
+
+```sh
+cargo install cargo-xwin --locked
+cargo install just --locked
+LUA_LIB=/absolute/path/to/windows-luajit/lib just check-windows-msvc-loaders
+```
+
+This requires a Linux x86_64 Rust toolchain with the
+`x86_64-pc-windows-msvc` target installed, `cargo-xwin`, `just`, and a real
+x64 MSVC/COFF static `lua51.lib` in `LUA_LIB`. Build that library from the
+matching LuaJIT source with `msvcbuild.bat static`; the CI Windows job produces
+and passes this exact artifact to the Linux cross-build job. On its first run,
+`cargo-xwin` downloads the Windows SDK/CRT sysroot it uses for MSVC linking.
+
+The recipe runs `cargo xwin build`, not merely `check`, so the five loaders
+(native, Python, Lua, QuickJS, and .NET) are final-linked for the Windows
+target. Python uses CPython's stable `python3.dll` ABI at the loader's 3.11
+floor, so compilation needs neither a target interpreter nor `PYO3_CROSS_*`
+variables. A deployed Windows host still needs a compatible CPython
+`python3.dll` on `PATH`.
+
+The Lua command replaces the default vendored LuaJIT with `external-luajit`.
+Cargo features unify across the dependency graph: another dependency enabling
+`mlua/vendored` would reactivate `luajit-src`, whose MSVC build script cannot
+run on Linux. Keep the cross-build graph free of that feature; inspect it with:
+
+```sh
+cargo tree -e features --target x86_64-pc-windows-msvc \
+  -p polyplug_lua --no-default-features --features external-luajit
+```
+
+The output must not contain `mlua-sys`'s `vendored` feature or `luajit-src`.
+
 ---
 
 ## Pipeline 1 — App developer (adding plugin support to an app)

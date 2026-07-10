@@ -47,6 +47,7 @@ pub(crate) fn acquire_load_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+#[cfg(unix)]
 /// The CPython link library name pyo3 was built against (e.g. `python3.14`),
 /// captured at build time. Empty when the build config could not resolve it.
 const PYTHON_LIB_NAME: &str = env!("POLYPLUG_PYTHON_LIB_NAME");

@@ -43,6 +43,8 @@ Each language is a first-class **host** (embed the runtime, load and call plugin
 - **Embedding polyplug?** Read the [Architecture Overview](docs/ARCHITECTURE.md).
 - **Weighing the trade-off?** Read the [Trust Model](docs/TRUST_MODEL.md).
 - **Reading the whole book?** The full docs tree is published at <https://polyplug.github.io/polyplug/>, built from `docs/` with mdBook.
+- **Maintaining polyplug?** The [development workflow](docs/WORKFLOW.md) includes the Linux-to-Windows MSVC loader build.
+
 
 ## Status
 

@@ -28,7 +28,9 @@ polyplug = { workspace = true }
 polyplug_common = { workspace = true }
 polyplug_abi = { workspace = true }
 polyplug_utils = { workspace = true }
-pyo3 = { workspace = true }
+# The stable CPython ABI matches the loader's 3.11 runtime floor and supplies
+# PyO3's Windows cross-target version without a target interpreter.
+pyo3 = { workspace = true, features = ["abi3-py311"] }
 
 [target.'cfg(unix)'.dependencies]
 libloading = { workspace = true }

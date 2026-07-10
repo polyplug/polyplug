@@ -247,7 +247,14 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/LuaJIT/LuaJIT.git %RUNNER_TEMP%\LuaJIT
           cd /d %RUNNER_TEMP%\LuaJIT\src
-          msvcbuild.bat
+          msvcbuild.bat static
+      - name: Upload LuaJIT static library
+        uses: actions/upload-artifact@v4
+        with:
+          name: luajit-x86_64-pc-windows-msvc
+          path: ${{ runner.temp }}\LuaJIT\src\lua51.lib
+          if-no-files-found: error
+          retention-days: 1
       - name: Add LuaJIT to PATH
         shell: bash
         run: |
@@ -263,6 +270,35 @@ jobs:
       # we want every failure surfaced in a single run.
       - name: Run tests
         run: cargo test --workspace --no-fail-fast
+
+  windows-cross:
+    name: Windows MSVC cross-build (all loaders)
+    needs: [windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-cross
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install cargo-xwin
+        run: cargo install cargo-xwin --locked
+      - name: Install just
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - name: Download LuaJIT static library
+        uses: actions/download-artifact@v4
+        with:
+          name: luajit-x86_64-pc-windows-msvc
+          path: target/luajit-x86_64-pc-windows-msvc
+      - name: Final-link Windows MSVC loaders
+        run: just check-windows-msvc-loaders
+        env:
+          LUA_LIB: ${{ github.workspace }}/target/luajit-x86_64-pc-windows-msvc
 
   external-toolchains:
     name: External ${{ matrix.toolchain }}
@@ -395,7 +431,7 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [fmt, clippy, sdk_validator, test, windows, cli-packages]
+    needs: [fmt, clippy, sdk_validator, test, windows, windows-cross, cli-packages]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs passed
