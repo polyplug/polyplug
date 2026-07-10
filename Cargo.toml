@@ -82,7 +82,7 @@ petgraph = { version = "0.8", default-features = false, features = [
 ] }
 
 # Lock-free epoch reclamation
-crossbeam-epoch = { version = "0.9" }
+crossbeam-epoch = { version = "0.9.20" }
 
 # Model checker for the epoch publish/reclaim protocol (loom_epoch_model crate,
 # pulled in only under `--cfg loom`).

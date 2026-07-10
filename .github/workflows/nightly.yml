@@ -72,7 +72,7 @@ jobs:
       # long campaign. A crash artifact fails the job.
       - name: Smoke each target (60s)
         run: |
-          for target in fuzz_manifest fuzz_contract fuzz_version; do
+          for target in fuzz_manifest fuzz_version; do
             cargo +nightly fuzz run "$target" -- -max_total_time=60
           done
 

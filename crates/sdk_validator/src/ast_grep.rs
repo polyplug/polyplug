@@ -5,7 +5,7 @@
 
 use core::str::{Chars, FromStr};
 use std::borrow::Cow;
-use std::io::ErrorKind;
+use std::io;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -236,7 +236,7 @@ impl AstGrepRunner {
             .arg(file_path)
             .output()
             .map_err(|e| {
-                if e.kind() == ErrorKind::NotFound {
+                if e.kind() == io::ErrorKind::NotFound {
                     AstGrepError::CliNotFound
                 } else {
                     AstGrepError::ExecutionFailed {
