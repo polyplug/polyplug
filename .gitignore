@@ -511,4 +511,4 @@ sdks/cpp/build/
 **/.pytest_cache/
 
 # mdBook documentation site build output
-/book
+/book/
