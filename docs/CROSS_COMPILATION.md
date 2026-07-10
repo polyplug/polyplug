@@ -25,7 +25,16 @@ bundles, assemble a host application, or execute the target DLLs.
 
 ## Prerequisites on the Linux host
 
-Run these commands from the repository root on an x86_64 Linux machine:
+On Ubuntu, install the LLVM MSVC cross-link tools before building:
+
+```sh
+sudo apt-get update
+sudo apt-get install --yes clang-tools lld llvm
+export PATH="$(llvm-config --bindir):$PATH"
+command -v clang-cl lld-link llvm-lib
+```
+
+Then run these commands from the repository root on an x86_64 Linux machine:
 
 ```sh
 rustup target add x86_64-pc-windows-msvc
@@ -34,7 +43,9 @@ cargo install just --locked
 ```
 
 `cargo-xwin` obtains the Windows SDK/CRT sysroot it needs for MSVC linking on
-its first use. The Lua loader has one additional, target-specific input:
+its first use; it does not provide `clang-cl`, `lld-link`, or `llvm-lib`. The
+Ubuntu packages above provide those LLVM tools. The Lua loader has one
+additional, target-specific input:
 `LUA_LIB` must name a Linux-visible directory containing an x64 MSVC/COFF
 **static** LuaJIT library named `lua51.lib`.
 
@@ -181,6 +192,19 @@ build-and-test job is the separate Windows execution/test proof; release
 validation still needs a Windows deployment test of the actual host and bundles.
 
 ## Troubleshooting
+
+### `llvm-lib` is missing
+
+`cargo-xwin` supplies the Windows SDK/CRT sysroot, not the LLVM MSVC
+compiler/linker/librarian tools. On Ubuntu, install the same packages as CI,
+then confirm that the unversioned commands are on `PATH`:
+
+```sh
+sudo apt-get update
+sudo apt-get install --yes clang-tools lld llvm
+export PATH="$(llvm-config --bindir):$PATH"
+command -v clang-cl lld-link llvm-lib
+```
 
 ### `luajit-src` or `vendored` appears in the feature tree
 

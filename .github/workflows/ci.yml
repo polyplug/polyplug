@@ -284,6 +284,20 @@ jobs:
         with:
           key: windows-cross
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install LLVM MSVC cross-link tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang-tools lld llvm
+          echo "$(llvm-config --bindir)" >> "$GITHUB_PATH"
+      - name: Verify LLVM MSVC cross-link tools
+        shell: bash
+        run: |
+          for tool in clang-cl lld-link llvm-lib; do
+            if ! command -v "$tool" >/dev/null; then
+              echo "::error::Missing $tool. Install the Ubuntu clang-tools, lld, and llvm packages and add llvm-config --bindir to PATH."
+              exit 1
+            fi
+          done
       - name: Install cargo-xwin
         run: cargo install cargo-xwin --locked
       - name: Install just
