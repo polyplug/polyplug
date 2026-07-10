@@ -1072,12 +1072,17 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
         ("polyplug/guest.hpp", false),
     ]]));
     out.push('\n');
+    out.push_str("#if defined(_WIN32)\n");
+    out.push_str("#define POLYPLUG_ENTRYPOINT_EXPORT __declspec(dllexport)\n");
+    out.push_str("#else\n");
+    out.push_str("#define POLYPLUG_ENTRYPOINT_EXPORT __attribute__((visibility(\"default\")))\n");
+    out.push_str("#endif\n\n");
 
     // polyplug_abi_version
-    out.push_str("extern \"C\" uint32_t polyplug_abi_version() { return 1U; }\n\n");
+    out.push_str("extern \"C\" POLYPLUG_ENTRYPOINT_EXPORT uint32_t polyplug_abi_version() { return 1U; }\n\n");
 
     // polyplug_init
-    out.push_str("extern \"C\" AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx) {\n");
+    out.push_str("extern \"C\" POLYPLUG_ENTRYPOINT_EXPORT AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx) {\n");
     out.push_str("    if (!host || !ctx) {\n");
     let init_err_msg: &str = "null parameter in polyplug_init";
     out.push_str(&format!(
@@ -3969,6 +3974,39 @@ mod tests {
         assert!(names.contains(&"guest/contracts.hpp".to_owned()));
         assert!(names.contains(&"guest/interfaces.hpp".to_owned()));
         assert!(names.contains(&"guest/init.hpp".to_owned()));
+    }
+
+    #[test]
+    fn generated_init_entrypoints_have_export_declarations() {
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let out: String = generate_init_hpp(&ir).expect("generate_init_hpp");
+
+        assert!(
+            out.contains("#define POLYPLUG_ENTRYPOINT_EXPORT __declspec(dllexport)"),
+            "generated init.hpp must use __declspec(dllexport) on Windows:\n{out}"
+        );
+        assert!(
+            out.contains(
+                "#define POLYPLUG_ENTRYPOINT_EXPORT __attribute__((visibility(\"default\")))"
+            ),
+            "generated init.hpp must use default visibility outside Windows:\n{out}"
+        );
+        assert!(
+            out.contains("extern \"C\" POLYPLUG_ENTRYPOINT_EXPORT uint32_t polyplug_abi_version()"),
+            "polyplug_abi_version must retain extern \"C\" and carry the export declaration:\n{out}"
+        );
+        assert!(
+            out.contains(
+                "extern \"C\" POLYPLUG_ENTRYPOINT_EXPORT AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx)"
+            ),
+            "polyplug_init must retain its extern \"C\" ABI signature and carry the export declaration:\n{out}"
+        );
     }
 
     #[test]
