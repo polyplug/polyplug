@@ -353,18 +353,14 @@ its own VM. For full isolation with Python or .NET, use separate processes.
 | macOS (x86_64 / aarch64) | Full |
 | Windows (x86_64) | Full (CI) |
 
-Windows CI verifies two independent paths:
+The native Windows CI job builds the workspace and runs its Windows test suite.
+The separate Linux cross-build job final-links all five loaders for
+`x86_64-pc-windows-msvc` using an x64 MSVC LuaJIT static library handed off
+from the Windows job.
 
-- The `windows-latest` job builds the full workspace and runs
-  `cargo test --workspace --no-fail-fast` against Windows-native runtimes.
-- The Linux `cargo-xwin` job final-links all five loaders for
-  `x86_64-pc-windows-msvc`. It uses a real x64 MSVC `lua51.lib` built by
-  LuaJIT's `msvcbuild.bat static` in the Windows job; Python targets the stable
-  CPython `python3.dll` ABI at the loader's 3.11 floor without a cross-target
-  interpreter.
-
-See the [Linux-to-Windows MSVC loader build](WORKFLOW.md#maintainer-cross-build-linux-to-windows-msvc-loaders)
-for the local command and its LuaJIT prerequisite.
+See the canonical [Linux-to-Windows MSVC cross-compilation
+guide](CROSS_COMPILATION.md) for the supported build matrix, prerequisites,
+runtime requirements, output deployment, CI boundaries, and troubleshooting.
 
 ---
 

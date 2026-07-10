@@ -7,6 +7,7 @@
 - [Quick Start](QUICKSTART.md)
 - [Examples](EXAMPLES.md)
 - [Development Workflow](WORKFLOW.md)
+- [Linux-to-Windows MSVC Cross-Compilation](CROSS_COMPILATION.md)
 
 # Languages
 
