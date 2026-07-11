@@ -66,9 +66,11 @@ echo ""
 # Run Lua host
 echo "=== Lua Host ==="
 if command -v luajit &> /dev/null && [ -f "hosts/lua/host.lua" ]; then
-    if LUA_PATH="$LUA_HOST_PATH" luajit hosts/lua/host.lua 2>&1; then
+    if LUA_OUTPUT=$(LUA_PATH="$LUA_HOST_PATH" luajit hosts/lua/host.lua 2>&1); then
+        printf '%s\n' "$LUA_OUTPUT"
         echo "✓ lua host passed"
     else
+        printf '%s\n' "$LUA_OUTPUT"
         echo "✗ lua host failed"
         FAILED=$((FAILED + 1))
     fi
@@ -175,9 +177,8 @@ if command -v python3 &> /dev/null && [ -f "hosts/python/main.py" ]; then
     fi
 fi
 
-if command -v luajit &> /dev/null && [ -f "hosts/lua/host.lua" ]; then
-    OUTPUT=$(LUA_PATH="$LUA_HOST_PATH" luajit hosts/lua/host.lua 2>&1)
-    if echo "$OUTPUT" | grep -qE "provides.*Decoder|\[decoder\] decode" && echo "$OUTPUT" | grep -qE "provides.*Transformer|\[transformer\] transform"; then
+if [ -n "${LUA_OUTPUT:-}" ]; then
+    if echo "$LUA_OUTPUT" | grep -qE "provides.*Decoder|\[decoder\] decode" && echo "$LUA_OUTPUT" | grep -qE "provides.*Transformer|\[transformer\] transform"; then
         echo "✓ lua host: full pipeline executed"
         PIPELINE_OK=$((PIPELINE_OK + 1))
     else

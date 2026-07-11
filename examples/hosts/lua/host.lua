@@ -25,9 +25,6 @@ end
 
 local native_loader = require('polyplug.loaders.native')
 local lua_loader = require('polyplug.loaders.lua')
-local js_loader = require('polyplug.loaders.js')
-local python_loader = require('polyplug.loaders.python')
-local dotnet_loader = require('polyplug.loaders.dotnet')
 
 --- Resolve the plugin directory from the environment or a few fallbacks.
 -- @return string Path to the directory containing plugin bundles.
@@ -108,14 +105,11 @@ local rt = polyplug.Runtime.new({
     log_max_level = polyplug.LogLevel.Info,
 })
 
--- Register loaders for every runtime the example plugins may use. Loaders whose
--- backing cdylib is unavailable are skipped so the host still runs for the rest.
+-- Register the loaders exercised by this host pipeline. An unavailable backing
+-- cdylib is skipped so the remaining providers can still run.
 local loaders = {
     { name = 'native', register = function() native_loader.register(rt) end },
     { name = 'lua', register = function() lua_loader.register(rt) end },
-    { name = 'js-quickjs', register = function() js_loader.register(rt) end },
-    { name = 'python', register = function() python_loader.register(rt) end },
-    { name = 'dotnet', register = function() dotnet_loader.register(rt) end },
 }
 for _, loader in ipairs(loaders) do
     local ok, err = pcall(loader.register)
@@ -161,12 +155,14 @@ io.stderr:write('discovered ' .. #bundle_dirs .. ' bundles\n\n')
 local loaded = {}
 for _, dir in ipairs(bundle_dirs) do
     local name, provides = parse_manifest(dir .. '/manifest.toml')
-    local ok, err = pcall(function() rt:load_bundle(dir) end)
-    if ok then
-        loaded[#loaded + 1] = { name = name or 'unknown', provides = provides }
-        io.stderr:write('  loaded: ' .. (name or 'unknown') .. '\n')
-    else
-        io.stderr:write('  skipped ' .. (name or dir) .. ': ' .. tostring(err):gsub('\n.*', '') .. '\n')
+    if name and name:match('^cpp_') then
+        local ok, err = pcall(function() rt:load_bundle(dir) end)
+        if ok then
+            loaded[#loaded + 1] = { name = name, provides = provides }
+            io.stderr:write('  loaded: ' .. name .. '\n')
+        else
+            io.stderr:write('  skipped ' .. name .. ': ' .. tostring(err):gsub('\n.*', '') .. '\n')
+        end
     end
 end
 
