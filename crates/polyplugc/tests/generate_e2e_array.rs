@@ -40,6 +40,21 @@ fn repo_root() -> PathBuf {
         .expect("crate manifest dir must have a grandparent (the repo root)")
         .to_path_buf()
 }
+fn canonicalize_for_toolchain(path: &Path) -> PathBuf {
+    let canonical: PathBuf = path.canonicalize().expect("canonicalize tempdir");
+    if cfg!(windows) {
+        let path: String = canonical.to_string_lossy().into_owned();
+        if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+            PathBuf::from(format!(r"\\{rest}"))
+        } else if let Some(rest) = path.strip_prefix(r"\\?\") {
+            PathBuf::from(rest)
+        } else {
+            canonical
+        }
+    } else {
+        canonical
+    }
+}
 
 fn rust_guest_sdk_path() -> PathBuf {
     repo_root().join("sdks").join("rust").join("guest")
@@ -1532,7 +1547,7 @@ sealed class KitchenPlugin : ISysKitchenGuestContract
 #[test]
 fn csharp_kitchen_all_widths_round_trips() {
     let tmp: TempDir = tempdir().expect("tempdir");
-    let project_dir: PathBuf = tmp.path().join("bundle");
+    let project_dir: PathBuf = canonicalize_for_toolchain(tmp.path()).join("bundle");
     let gen_dir: PathBuf = project_dir.join("gen");
     fs::create_dir_all(&project_dir).expect("create project dir");
 
@@ -2294,7 +2309,7 @@ sealed class GapsPlugin : ISysGapsGuestContract
 #[test]
 fn csharp_scalar_string_enum_arrays_round_trip() {
     let tmp: TempDir = tempdir().expect("tempdir");
-    let project_dir: PathBuf = tmp.path().join("bundle");
+    let project_dir: PathBuf = canonicalize_for_toolchain(tmp.path()).join("bundle");
     let gen_dir: PathBuf = project_dir.join("gen");
     fs::create_dir_all(&project_dir).expect("create project dir");
 
@@ -2992,7 +3007,7 @@ sealed class GroupsPlugin : ISysGroupsGuestContract
 #[test]
 fn csharp_struct_with_array_field_round_trips() {
     let tmp: TempDir = tempdir().expect("tempdir");
-    let project_dir: PathBuf = tmp.path().join("bundle");
+    let project_dir: PathBuf = canonicalize_for_toolchain(tmp.path()).join("bundle");
     let gen_dir: PathBuf = project_dir.join("gen");
     fs::create_dir_all(&project_dir).expect("create project dir");
 
@@ -3599,7 +3614,7 @@ sealed class RecsPlugin : ISysRecsGuestContract
 #[test]
 fn csharp_struct_with_enum_field_round_trips() {
     let tmp: TempDir = tempdir().expect("tempdir");
-    let project_dir: PathBuf = tmp.path().join("bundle");
+    let project_dir: PathBuf = canonicalize_for_toolchain(tmp.path()).join("bundle");
     let gen_dir: PathBuf = project_dir.join("gen");
     fs::create_dir_all(&project_dir).expect("create project dir");
 
