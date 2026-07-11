@@ -36,7 +36,7 @@ use polyplug_abi::runtime::Compatibility;
 use polyplug_abi::runtime::RuntimeConfig;
 use polyplug_abi::types::LogLevel;
 use polyplug_common::ManifestData;
-use polyplug_lua::LuaConfig;
+
 use polyplug_lua::LuaLoader;
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
@@ -47,7 +47,7 @@ use polyplug_utils::guest_contract_id;
 
 fn make_runtime() -> Arc<Runtime> {
     RuntimeBuilder::new()
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(LuaLoader::new())
         .build()
         .expect("runtime build must succeed")
 }
@@ -65,6 +65,7 @@ fn write_temp_bundle(name: &str, content: &[u8]) -> (tempfile::TempDir, PathBuf)
 name = "{}"
 loader = "lua"
 file = "bundle.lua"
+provides = ["test.loader@1"]
 "#,
         bundle_id, name
     );
@@ -167,7 +168,7 @@ fn make_manifest(path: &Path, name: &str) -> ManifestData {
 
 /// Load the supplied Lua source via `LuaLoader::load` and return the result.
 fn load_script(path: &Path, name: &str) -> Result<(), LoaderError> {
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let loader: LuaLoader = LuaLoader::new();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(path, name);
     loader.load(
@@ -183,7 +184,7 @@ fn load_script(path: &Path, name: &str) -> Result<(), LoaderError> {
 
 #[test]
 fn lua_loader_loader_name_is_lua() {
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let loader: LuaLoader = LuaLoader::new();
     assert_eq!(loader.loader_name(), "lua");
 }
 
@@ -306,7 +307,7 @@ fn load_nonexistent_path_returns_script_load_failed() {
 #[test]
 fn vtable_is_registered_after_load() {
     let (_dir, path) = write_temp_bundle("lua_loader_vtable", valid_plugin_script());
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let loader: LuaLoader = LuaLoader::new();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_vtable");
     loader
@@ -346,7 +347,7 @@ fn vtable_is_registered_after_load() {
 #[test]
 fn registrations_attributed_to_real_bundle_id() {
     let (_dir, path) = write_temp_bundle("lua_loader_attribution", valid_plugin_script());
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let loader: LuaLoader = LuaLoader::new();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_attribution");
     let bundle_id: u64 = manifest.id;
@@ -405,6 +406,7 @@ fn assert_function_count(vtable: &GuestContractInterface, expected: u32) {
         // ignore the null args/out pointers.
         unsafe {
             (vtable.dispatch.vm.call)(
+                vtable.adapter_context,
                 vtable.dispatch.vm.loader_data,
                 GuestContractInstance::null(),
                 fn_id,
@@ -424,6 +426,7 @@ fn assert_function_count(vtable: &GuestContractInterface, expected: u32) {
     // SAFETY: dispatch.vm.call is a valid function pointer.
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             expected,
@@ -444,7 +447,7 @@ fn assert_function_count(vtable: &GuestContractInterface, expected: u32) {
 #[test]
 fn vtable_function_count_matches_script() {
     let (_dir, path) = write_temp_bundle("lua_loader_two_fn", two_function_plugin_script());
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let loader: LuaLoader = LuaLoader::new();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_two_fn");
     loader
@@ -473,7 +476,7 @@ fn vtable_function_count_matches_script() {
 #[test]
 fn vtable_contract_id_matches_computed_hash() {
     let (_dir, path) = write_temp_bundle("lua_loader_cid", valid_plugin_script());
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let loader: LuaLoader = LuaLoader::new();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_cid");
     loader
@@ -509,7 +512,7 @@ fn sequential_loads_both_succeed() {
     let (_dir1, path1) = write_temp_bundle("lua_loader_seq1", valid_plugin_script());
     let (_dir2, path2) = write_temp_bundle("lua_loader_seq2", two_function_plugin_script());
 
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let loader: LuaLoader = LuaLoader::new();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest1: ManifestData = make_manifest(&path1, "lua_loader_seq1");
     let manifest2: ManifestData = make_manifest(&path2, "lua_loader_seq2");
@@ -549,7 +552,7 @@ fn sequential_loads_both_succeed() {
 #[test]
 fn multi_contract_bundle_registers_all_contracts() {
     let (_dir, path) = write_temp_bundle("lua_loader_multi", two_contract_plugin_script());
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let loader: LuaLoader = LuaLoader::new();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_multi");
     loader
@@ -611,9 +614,9 @@ fn concurrent_loaders_do_not_race() {
         .map(|_| {
             let p: Arc<PathBuf> = Arc::clone(&path_arc);
             thread::spawn(move || {
-                let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+                let loader: LuaLoader = LuaLoader::new();
                 let runtime: Arc<Runtime> = RuntimeBuilder::new()
-                    .loader(LuaLoader::new(LuaConfig::default()))
+                    .loader(LuaLoader::new())
                     .build()
                     .expect("runtime build must succeed");
                 let manifest: ManifestData = ManifestData {
@@ -664,7 +667,7 @@ fn concurrent_loaders_do_not_race() {
 #[test]
 fn vtable_function_dispatch_returns_abi_ok() {
     let (_dir, path) = write_temp_bundle("lua_loader_dispatch", valid_plugin_script());
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let loader: LuaLoader = LuaLoader::new();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_dispatch");
     loader
@@ -699,6 +702,7 @@ fn vtable_function_dispatch_returns_abi_ok() {
     // and we pass null pointers for args/out which the noop function ignores.
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0, // fn_id = 0 (first function)
@@ -728,7 +732,7 @@ fn make_runtime_with_hot_reload(enabled: bool) -> Arc<Runtime> {
             on_reload_user_data: ptr::null_mut(),
             ..Default::default()
         })
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(LuaLoader::new())
         .build()
         .expect("runtime build must succeed")
 }
@@ -741,7 +745,7 @@ fn make_runtime_with_hot_reload(enabled: bool) -> Arc<Runtime> {
 #[test]
 fn lua_reload_disabled_returns_error() {
     let (_dir, path) = write_temp_bundle("lua_reload_disabled", valid_plugin_script());
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let loader: LuaLoader = LuaLoader::new();
     assert!(
         loader.supports_hot_reload(),
         "the lua loader supports hot-reload; only the config flag must gate it here"
@@ -784,11 +788,7 @@ fn fixture_manifest(path: &Path) -> ManifestData {
         file: "test_plugin.lua".to_owned(),
         path: path.to_path_buf(),
         version: "1.0.0".to_owned(),
-        // Leave `provides` empty so manifest validation skips the per-contract
-        // function-count check; the loader registers test.add@1 from the
-        // registrations the script's `polyplug_init` returns regardless. This
-        // mirrors the other tests' manifests.
-        provides: Vec::new(),
+        provides: vec!["test.add@1".to_owned()],
         function_count: HashMap::new(),
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
@@ -820,6 +820,7 @@ fn dispatch_add(runtime: &Runtime, a: u32, b: u32) -> u32 {
     // contiguous u32 and out at one u32, matching what impl_add reads/writes.
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0,
@@ -1001,7 +1002,7 @@ fn dispatch_failure_is_logged_through_host_logger() {
         .build()
         .expect("runtime build must succeed");
 
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let loader: LuaLoader = LuaLoader::new();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_dispatch_log");
     loader
         .load(
@@ -1028,6 +1029,7 @@ fn dispatch_failure_is_logged_through_host_logger() {
     // and the failing function never reads its (args, out) pointers.
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0,
@@ -1110,7 +1112,7 @@ fn guest_log_bridge_delivers_records_and_clamps_level() {
         .build()
         .expect("runtime build must succeed");
 
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let loader: LuaLoader = LuaLoader::new();
     let manifest: ManifestData = make_manifest(&path, "lua_loader_guest_log");
     loader
         .load(
@@ -1137,6 +1139,7 @@ fn guest_log_bridge_delivers_records_and_clamps_level() {
     // and the logging function never reads its (args, out) pointers.
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0,

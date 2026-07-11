@@ -8,6 +8,12 @@ local polyplug_guest = require("polyplug_guest")
 local M = {}
 
 -- Guest contract: decoder (pipeline.Decoder@1)
+--- Decodes CSV input into the pipeline representation.
+--- Decodes one CSV record.
+--- The CSV record to decode.
+---@param input StringView The CSV record to decode.
+--- The decoded pipeline record.
+---@return StringView The decoded pipeline record.
 --   decode(input: StringView) -> StringView
 local DECODER_FACTORY = nil
 function M.set_decoder_factory(factory)

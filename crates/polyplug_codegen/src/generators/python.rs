@@ -91,6 +91,8 @@ impl CodeGenerator for PythonGenerator {
         let types_pyi: String = generate_host_types_stub(ir)?;
         let callers_py: String = generate_host_callers_file(ir);
         let callers_pyi: String = generate_host_callers_stub(ir);
+        let in_process_py: String = generate_python_in_process_file(ir)?;
+        let in_process_pyi: String = generate_python_in_process_stub(ir);
 
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/types.py"),
@@ -110,6 +112,16 @@ impl CodeGenerator for PythonGenerator {
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/callers.pyi"),
             content: callers_pyi,
+            force_regenerate: false,
+        });
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("host/in_process.py"),
+            content: in_process_py,
+            force_regenerate: false,
+        });
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("host/in_process.pyi"),
+            content: in_process_pyi,
             force_regenerate: false,
         });
 
@@ -404,6 +416,200 @@ fn generate_host_types_stub(ir: &ValidatedIr) -> Result<String, PolyplugcError> 
     Ok(out)
 }
 
+fn generate_python_in_process_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
+    let mut out = String::from(PY_HEADER);
+    out.push_str(r#"from __future__ import annotations
+
+import ctypes
+import inspect
+import struct
+import threading
+from typing import Any, Callable, Self
+
+from polyplug_abi import AbiError, AbiErrorCode, DispatchType, NativeDispatch, PluginDescriptor, StringView, SupportedLanguage, Version, to_str
+from polyplug_abi.abi import InProcessBundleMetadata, InProcessBundleRegistration, InProcessContractRegistration, GuestContractInstance, GuestContractInterface, VmLoaderData
+
+_CREATE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, VmLoaderData, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+_DESTROY = ctypes.CFUNCTYPE(None, ctypes.c_void_p, VmLoaderData, ctypes.c_void_p, GuestContractInstance)
+_DISPATCH = ctypes.CFUNCTYPE(None, ctypes.c_void_p, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+
+class InProcessError(Exception):
+    def __init__(self, message: str, code: int = AbiErrorCode.Generic) -> None:
+        super().__init__(message)
+        self.code = int(code)
+
+def _write_error(out_err: int, error: BaseException) -> None:
+    if out_err:
+        out = AbiError.from_address(out_err)
+        out.code = int(getattr(error, "code", AbiErrorCode.Generic))
+        out.message = StringView()
+
+def _factory(value: Any) -> Callable[[int], Any]:
+    if not isinstance(value, type) and not callable(value):
+        return lambda _host: value
+    def make(host: int) -> Any:
+        try:
+            inspect.signature(value).bind(host)
+        except (TypeError, ValueError):
+            return value()
+        return value(host)
+    return make
+
+class _Adapter:
+    def __init__(self, contract_id: int, version: Version, name: str, value: Any, dispatchers: list[Callable[..., None]]) -> None:
+        self.contract_id = contract_id
+        self._factory = _factory(value)
+        self._instances: dict[int, Any] = {}
+        self._next = 1
+        self._lock = threading.RLock()
+        self._buffers: list[Any] = []
+        self._context = ctypes.c_uint64(contract_id)
+        self.context = ctypes.addressof(self._context)
+        name_bytes = name.encode("utf-8")
+        self._name = ctypes.create_string_buffer(name_bytes)
+
+        @_CREATE
+        def create(context: int, _loader: VmLoaderData, host: int, _args: int, out_instance: int) -> None:
+            if not out_instance:
+                return
+            out = GuestContractInstance.from_address(out_instance)
+            out.data, out.contract_id = None, self.contract_id
+            if context != self.context:
+                return
+            try:
+                implementation = self._factory(host or 0)
+                with self._lock:
+                    token, self._next = self._next, self._next + 1
+                    self._instances[token] = implementation
+                out.data = token
+            except BaseException:
+                return
+
+        @_DESTROY
+        def destroy(context: int, _loader: VmLoaderData, _host: int, instance: GuestContractInstance) -> None:
+            if context == self.context:
+                with self._lock:
+                    self._instances.pop(instance.data or 0, None)
+
+        callbacks: list[Any] = []
+        for dispatcher in dispatchers:
+            @_DISPATCH
+            def dispatch(context: int, instance: GuestContractInstance, args: int, out: int, out_err: int, dispatcher: Callable[..., None] = dispatcher) -> None:
+                if context != self.context:
+                    _write_error(out_err, InProcessError("invalid adapter context", AbiErrorCode.InvalidPointer))
+                    return
+                with self._lock:
+                    implementation = self._instances.get(instance.data or 0)
+                if implementation is None:
+                    _write_error(out_err, InProcessError("instance not found", AbiErrorCode.NotFound))
+                    return
+                try:
+                    dispatcher(implementation, args or 0, out or 0, 0, self._allocate)
+                except BaseException as error:
+                    _write_error(out_err, error)
+            callbacks.append(dispatch)
+
+        self._functions = (ctypes.c_void_p * len(callbacks))(*(ctypes.cast(callback, ctypes.c_void_p).value for callback in callbacks))
+        self.interface = GuestContractInterface()
+        self.interface.contract_id = contract_id
+        self.interface.contract_version = version
+        self.interface.dispatch_type = DispatchType.Native
+        self.interface.adapter_context = self.context
+        self.interface.create_instance = create
+        self.interface.destroy_instance = destroy
+        self.interface.dispatch.native = NativeDispatch(len(callbacks), ctypes.cast(self._functions, ctypes.c_void_p))
+        view = StringView(ctypes.cast(self._name, ctypes.c_void_p), len(name_bytes))
+        self.descriptor = PluginDescriptor(view, view, version)
+        self._keepalive = (create, destroy, callbacks, self._functions, self._context, self._name)
+
+    def _allocate(self, size: int, align: int) -> int:
+        buffer = ctypes.create_string_buffer(size + max(align, 1) - 1)
+        self._buffers.append(buffer)
+        return (ctypes.addressof(buffer) + max(align, 1) - 1) & ~(max(align, 1) - 1)
+
+def alloc_string_arena(allocate: Callable[[int, int], int], _arena: int, value: str) -> StringView:
+    data = value.encode("utf-8")
+    if not data:
+        return StringView()
+    address = allocate(len(data), 1)
+    ctypes.memmove(address, data, len(data))
+    return StringView(address, len(data))
+
+"#);
+    let type_imports = collect_python_type_imports(ir);
+    if !type_imports.is_empty() {
+        let symbols: Vec<&str> = type_imports.iter().map(String::as_str).collect();
+        out.push_str(&python_import_block(&[&py_from("host.types", &symbols)]));
+        out.push('\n');
+    }
+    for contract in &ir.contracts {
+        let lower = contract.name.replace(['.', '-'], "_").to_lowercase();
+        emit_guest_function_callables(
+            &mut out,
+            contract,
+            &format!("_in_process_{lower}"),
+            "Any",
+            &contract_name_to_struct(&contract.name),
+            ir,
+        )?;
+    }
+    out.push_str("class InProcessBundle:\n    def __init__(self, name: str, version: tuple[int, int, int] = (1, 0, 0), dependencies: tuple[int, ...] = ()) -> None:\n        self._name_bytes = name.encode(\"utf-8\")\n        self._name = ctypes.create_string_buffer(self._name_bytes)\n        self._version = Version(*version)\n        self._dependencies = (ctypes.c_uint64 * len(dependencies))(*dependencies)\n        self._adapters: list[_Adapter] = []\n        self._transfer_lock = threading.Lock()\n        self._transferred = False\n\n    def _reserve_transfer(self) -> None:\n        with self._transfer_lock:\n            if self._transferred:\n                raise RuntimeError(\"in-process bundle has already been registered\")\n            self._transferred = True\n\n    def _cancel_transfer(self) -> None:\n        with self._transfer_lock:\n            self._transferred = False\n\n");
+    for contract in &ir.contracts {
+        let lower = contract.name.replace(['.', '-'], "_").to_lowercase();
+        let dispatchers = contract
+            .functions
+            .iter()
+            .map(|f| format!("_in_process_{lower}_{}_abi", f.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!(
+            "    def add_{lower}(self, implementation: Any) -> Self:\n        if any(adapter.contract_id == 0x{:016X} for adapter in self._adapters):\n            raise ValueError(\"duplicate in-process contract\")\n        self._adapters.append(_Adapter(0x{:016X}, Version({}, {}, {}), {:?}, implementation, [{}]))\n        return self\n\n",
+            contract.contract_id, contract.contract_id, contract.version.major, contract.version.minor, contract.version.patch, contract.name, dispatchers
+        ));
+    }
+    out.push_str("    def _in_process_registration(self) -> InProcessBundleRegistration:\n        if not self._adapters:\n            raise ValueError(\"in-process bundle requires at least one contract\")\n        self._contracts = (InProcessContractRegistration * len(self._adapters))(*(InProcessContractRegistration(adapter.descriptor, ctypes.addressof(adapter.interface), adapter.context) for adapter in self._adapters))\n        return InProcessBundleRegistration(InProcessBundleMetadata(StringView(ctypes.cast(self._name, ctypes.c_void_p), len(self._name_bytes)), self._version, SupportedLanguage.Python), ctypes.cast(self._dependencies, ctypes.c_void_p) if self._dependencies else None, len(self._dependencies), ctypes.cast(self._contracts, ctypes.c_void_p), len(self._contracts))\n");
+    Ok(out)
+}
+
+fn generate_python_in_process_stub(ir: &ValidatedIr) -> String {
+    let mut out = String::from(PY_HEADER);
+    out.push_str("from typing import Callable, Protocol, Self\n\nclass InProcessError(Exception):\n    code: int\n\n");
+    let type_imports = collect_python_type_imports(ir);
+    if !type_imports.is_empty() {
+        let symbols: Vec<&str> = type_imports.iter().map(String::as_str).collect();
+        out.push_str(&python_import_block(&[&py_from("host.types", &symbols)]));
+        out.push('\n');
+    }
+    for contract in &ir.contracts {
+        let struct_name = contract_name_to_struct(&contract.name);
+        out.push_str(&format!("class {struct_name}(Protocol):\n"));
+        for function in &contract.functions {
+            let params = function
+                .params
+                .iter()
+                .map(|param| format!("{}: {}", param.name, python_guest_impl_type_name(&param.ty)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let separator = if params.is_empty() { "" } else { ", " };
+            out.push_str(&format!(
+                "    def {}(self{}{}) -> {}: ...\n",
+                function.name,
+                separator,
+                params,
+                python_guest_impl_return_type(&function.returns)
+            ));
+        }
+        out.push('\n');
+    }
+    out.push_str("class InProcessBundle:\n    def __init__(self, name: str, version: tuple[int, int, int] = ..., dependencies: tuple[int, ...] = ...) -> None: ...\n");
+    for contract in &ir.contracts {
+        let lower = contract.name.replace(['.', '-'], "_").to_lowercase();
+        let struct_name = contract_name_to_struct(&contract.name);
+        out.push_str(&format!("    def add_{lower}(self, implementation: {struct_name} | Callable[[], {struct_name}] | Callable[[int], {struct_name}]) -> Self: ...\n"));
+    }
+    out
+}
+
 fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
@@ -525,10 +731,10 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     // reads it back. GuestContractInstance is the canonical type from polyplug_abi so
     // it matches the instance returned by create_instance.
     out.push_str(
-        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)\n",
+        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)\n",
     );
     out.push_str(
-        "_DISPATCH_FN_TYPE: TypeAlias = Callable[[GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], None]\n\n"
+        "_DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], None]\n\n"
     );
 
     for contract in &ir.contracts {
@@ -1078,19 +1284,11 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract, enu
     );
     out.push_str("        self._handle: int = handle\n");
     out.push_str(
-        "        # Fetch the registry revision counter ONCE, then read its current value, so\n",
+        "        # Capture the synchronized registry revision for the resolved interface.\n",
     );
     out.push_str(
-        "        # every later call can detect a reload/unload with a direct atomic load (one\n",
+        "        self._cached_revision: int = host_iface.contents.registry_revision(host)\n",
     );
-    out.push_str(
-        "        # aligned 64-bit load through the cached pointer, no call into the runtime)\n",
-    );
-    out.push_str("        # and re-resolve before dispatching.\n");
-    out.push_str(
-        "        self._revision_ptr: int = host_iface.contents.revision_counter(host) or 0\n",
-    );
-    out.push_str("        self._cached_revision: int = self._live_revision()\n");
     out.push_str(
         "        # Pin the runtime: refcounting then guarantees the owner outlives this\n",
     );
@@ -1202,18 +1400,11 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract, enu
     out.push_str("        \"\"\"Check if this caller holds a resolved contract interface.\"\"\"\n");
     out.push_str("        return bool(getattr(self, \"_interface\", None))\n\n");
 
-    // _live_revision: read the registry revision through the cached pointer.
+    // _live_revision: read the synchronized revision through HostApi.
     out.push_str("    def _live_revision(self) -> int:\n");
-    out.push_str(
-        "        \"\"\"Read the registry revision through the cached pointer — one aligned\n",
-    );
-    out.push_str("        atomic load, no call into the runtime. Returns the cached value (i.e.\n");
-    out.push_str("        \"unchanged\") when there is no counter (null host/runtime), so the\n");
-    out.push_str("        staleness check is then a no-op.\n");
-    out.push_str("        \"\"\"\n");
-    out.push_str("        if not self._revision_ptr:\n");
-    out.push_str("            return self._cached_revision\n");
-    out.push_str("        return ctypes.c_uint64.from_address(self._revision_ptr).value\n\n");
+    out.push_str("        \"\"\"Read the synchronized registry revision through HostApi.\"\"\"\n");
+    out.push_str("        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))\n");
+    out.push_str("        return int(host_iface.contents.registry_revision(self._host))\n\n");
 
     // _revalidate: re-resolve via the retained handle after the registry changed.
     out.push_str("    def _revalidate(self) -> bool:\n");
@@ -1364,7 +1555,7 @@ fn generate_host_caller_method(
     out.push_str(
         "            # to valid args, out_ptr to a valid return-type buffer per the ABI contract.\n",
     );
-    out.push_str("            dispatch_fn(self._instance, args_ptr, out_ptr, ctypes.byref(err))\n");
+    out.push_str("            dispatch_fn(interface.adapter_context, self._instance, args_ptr, out_ptr, ctypes.byref(err))\n");
     out.push_str("        else:\n");
     // VM dispatch: call through interface.dispatch.vm.call with the canonical 6-arg
     // signature (loader_data, instance, fn_id, args, out, arena). Arena-backed
@@ -1380,14 +1571,14 @@ fn generate_host_caller_method(
             "            # are valid per the ABI contract. The arena was reset at call start.\n",
         );
         out.push_str(&format!(
-            "            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))\n"
+            "            interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))\n"
         ));
     } else {
         out.push_str(
             "            # are valid per the ABI contract. The null arena selects the host->alloc fallback.\n",
         );
         out.push_str(&format!(
-            "            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, None, ctypes.byref(err))\n"
+            "            interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, None, ctypes.byref(err))\n"
         ));
     }
     out.push_str("        if err.code != AbiErrorCode.Ok:\n");
@@ -3103,13 +3294,11 @@ fn generate_python_guest_host_contract_method(
         "            dispatch_fn(self._instance.data, args_ptr, out_ptr, ctypes.byref(err))\n",
     );
     out.push_str("        elif dispatch_type == DispatchType.VirtualMachine:\n");
-    // The VM dispatch ABI signature is call(loader_data, instance, fn_id, args, out,
-    // arena). Host contracts carry no guest instance, so a null GuestContractInstance
-    // is passed in the instance slot — matching the canonical rust host-contract
-    // caller (which passes GuestContractInstance::null()). The arena is None: this
-    // caller has no per-caller arena, so the bridge falls back to host->alloc.
+    // The shared VM dispatch ABI receives `user_data` as the host contract's
+    // adapter context. Host contracts carry no guest instance, so pass a null
+    // GuestContractInstance and no arena.
     out.push_str(&format!(
-        "            iface.dispatch.vm.call(iface.dispatch.vm.loader_data, GuestContractInstance(), {fn_id}, args_ptr, out_ptr, None, ctypes.byref(err))\n"
+        "            iface.dispatch.vm.call(iface.user_data, iface.dispatch.vm.loader_data, GuestContractInstance(), {fn_id}, args_ptr, out_ptr, None, ctypes.byref(err))\n"
     ));
     out.push_str("        else:\n");
     if has_return {
@@ -4140,7 +4329,7 @@ fn generate_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract
 
     // Native dispatch function type: fn(instance, args, out, out_err) -> void.
     out.push_str(
-        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)\n\n",
+        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)\n\n",
     );
 
     for contract in peers {
@@ -4242,17 +4431,12 @@ fn generate_peer_caller_class(
         "        # Fetch the registry revision counter ONCE, then read its current value, so\n",
     );
     out.push_str(
-        "        # every later call can detect a reload/unload with a direct atomic load (one\n",
+        "        # Capture the synchronized registry revision for the resolved interface.\n",
     );
-    out.push_str(
-        "        # aligned 64-bit load through the cached pointer, no call into the runtime)\n",
-    );
-    out.push_str("        # and re-resolve before dispatching.\n");
     out.push_str("        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))\n");
     out.push_str(
-        "        self._revision_ptr: int = host.contents.revision_counter(host_ptr) or 0\n",
+        "        self._cached_revision: int = host.contents.registry_revision(host_ptr)\n",
     );
-    out.push_str("        self._cached_revision: int = self._live_revision()\n");
     if needs_arena {
         out.push_str(
             "        # Per-caller call arena backed by C-heap memory (not Python GC heap).\n",
@@ -4352,19 +4536,9 @@ fn generate_peer_caller_class(
 
     // _live_revision: read the registry revision through the cached pointer.
     out.push_str("    def _live_revision(self) -> int:\n");
-    out.push_str(
-        "        \"\"\"Read the registry revision through the cached pointer — one aligned\n",
-    );
-    out.push_str(
-        "        atomic load, no call into the runtime. Returns the cached value (\"unchanged\")\n",
-    );
-    out.push_str(
-        "        when there is no counter (null host/runtime), making the check a no-op.\n",
-    );
-    out.push_str("        \"\"\"\n");
-    out.push_str("        if not self._revision_ptr:\n");
-    out.push_str("            return self._cached_revision\n");
-    out.push_str("        return ctypes.c_uint64.from_address(self._revision_ptr).value\n\n");
+    out.push_str("        \"\"\"Read the synchronized registry revision through HostApi.\"\"\"\n");
+    out.push_str("        host: Any = ctypes.cast(self._host_ptr, ctypes.POINTER(HostApi))\n");
+    out.push_str("        return int(host.contents.registry_revision(self._host_ptr))\n\n");
 
     // _revalidate: re-resolve via the retained handle after the registry changed.
     out.push_str("    def _revalidate(self) -> bool:\n");
@@ -4496,7 +4670,7 @@ fn generate_peer_caller_method(
     out.push_str(
         "            # to valid args, out_ptr to a valid return-type buffer per the ABI contract.\n",
     );
-    out.push_str("            dispatch_fn(self._instance, args_ptr, out_ptr, ctypes.byref(err))\n");
+    out.push_str("            dispatch_fn(interface.adapter_context, self._instance, args_ptr, out_ptr, ctypes.byref(err))\n");
     out.push_str("        else:\n");
     // VM dispatch: call through interface.dispatch.vm.call with the canonical
     // 6-arg signature (loader_data, instance, fn_id, args, out, arena). Arena-
@@ -4510,14 +4684,14 @@ fn generate_peer_caller_method(
             "            # are valid per the ABI contract. The arena was reset at call start.\n",
         );
         out.push_str(&format!(
-            "            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))\n"
+            "            interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))\n"
         ));
     } else {
         out.push_str(
             "            # are valid per the ABI contract. The null arena selects the host->alloc fallback.\n",
         );
         out.push_str(&format!(
-            "            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, None, ctypes.byref(err))\n"
+            "            interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, None, ctypes.byref(err))\n"
         ));
     }
     out.push_str("        if err.code != AbiErrorCode.Ok:\n");
@@ -5540,8 +5714,8 @@ mod tests {
             "Native peer dispatch must call the native function pointer: {result}"
         );
         assert!(
-            result.contains("interface.dispatch.vm.call(interface.dispatch.vm.loader_data"),
-            "VM peer dispatch must route through the vm.call trampoline: {result}"
+            result.contains("interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data"),
+            "VM peer dispatch must route the canonical adapter context through the trampoline: {result}"
         );
         // Correct contract id in find_guest_contract call
         assert!(

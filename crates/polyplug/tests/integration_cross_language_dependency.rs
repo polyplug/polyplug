@@ -17,6 +17,8 @@
 //!       during init (null handle), and a host lookup afterwards fails — the
 //!       missing-provider case is reported, not silently satisfied.
 
+use core::ffi::c_void;
+use core::ptr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -25,10 +27,10 @@ use polyplug::error::LoaderError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::BundleSource;
 use polyplug::runtime::Runtime;
-use polyplug_abi::SupportedLanguage;
+
 use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::{
-    DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInstance,
+    AbiError, DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInstance,
     GuestContractInterface, HostApi, NativeDispatch, PluginDescriptor, StringView, Version,
 };
 use polyplug_common::ManifestData;
@@ -41,6 +43,7 @@ use tempfile::TempDir;
 const MOCK_FNS_EMPTY: [*const (); 0] = [];
 
 unsafe extern "C" fn noop_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -53,6 +56,7 @@ unsafe extern "C" fn noop_create_instance(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -67,10 +71,6 @@ struct RustProviderLoader {
 impl BundleLoader for RustProviderLoader {
     fn loader_name(&self) -> &'static str {
         "rust-provider"
-    }
-
-    fn loader_language(&self) -> SupportedLanguage {
-        SupportedLanguage::Rust
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -92,6 +92,7 @@ impl BundleLoader for RustProviderLoader {
                     patch: 0,
                 },
                 dispatch_type: DispatchType::Native,
+                adapter_context: ptr::null_mut(),
                 create_instance: noop_create_instance,
                 destroy_instance: noop_destroy_instance,
                 dispatch: DispatchMechanisms {
@@ -111,17 +112,26 @@ impl BundleLoader for RustProviderLoader {
             },
         };
         let bundle_id: BundleId = BundleId::new(&manifest.name);
-        // SAFETY: interface is leaked and lives for the process lifetime.
+        runtime.push_init_bundle_id(bundle_id.id());
+        let host: *const HostApi = runtime.host_abi();
+        let mut registration: AbiError = AbiError::ok();
+        // SAFETY: the runtime owns `host`; the descriptor and leaked interface remain
+        // valid for this synchronous registration callback.
         unsafe {
-            runtime.registry().register_guest_contract(
-                descriptor,
-                interface,
-                "provider.contract".to_owned(),
-                bundle_id,
-            )
+            ((*host).register_guest_contract)(host, &descriptor, interface, &mut registration);
         }
-        .expect("provider registration should succeed");
-        Ok(())
+        runtime.pop_init_bundle_id();
+        if registration.is_ok() {
+            Ok(())
+        } else {
+            Err(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!(
+                    "guest registration failed with ABI code {}",
+                    registration.code
+                ),
+            })
+        }
     }
 
     fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
@@ -142,10 +152,6 @@ struct LuaDependerLoader {
 impl BundleLoader for LuaDependerLoader {
     fn loader_name(&self) -> &'static str {
         "lua-depender"
-    }
-
-    fn loader_language(&self) -> SupportedLanguage {
-        SupportedLanguage::Lua
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -184,9 +190,7 @@ impl BundleLoader for LuaDependerLoader {
     }
 }
 
-/// Write a provider bundle (no dependencies) for the `rust-provider` runtime. The
-/// contract is registered by the loader at load time; the depender resolves it by
-/// the declared dependency id, so no `provides` entry is needed here.
+/// Write a provider bundle for the `rust-provider` runtime.
 fn write_provider(temp: &TempDir, bundle_name: &str) -> PathBuf {
     let bundle_dir: PathBuf = temp.path().join(bundle_name);
     fs::create_dir_all(&bundle_dir).expect("create bundle dir");
@@ -197,7 +201,9 @@ fn write_provider(temp: &TempDir, bundle_name: &str) -> PathBuf {
          name = \"{bundle_name}\"\n\
          loader = \"rust-provider\"\n\
          file = \"dummy.so\"\n\
-         version = \"1.0\"\n"
+         version = \"1.0\"\n\
+         provides = [\"provider.contract@1\"]\n\
+         function_count = {{ \"provider.contract@1\" = 0 }}\n"
     );
     fs::write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
     bundle_dir

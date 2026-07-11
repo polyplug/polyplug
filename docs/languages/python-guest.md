@@ -38,8 +38,11 @@ implements = ["pipeline.Decoder@1.0"]
 
 `loader` must be exactly `"python"`. `implements` names each contract as
 `<namespace>.<Name>@<major_version>`. Add one `[[plugin]]` section per plugin in
-the bundle. To declare a runtime dependency on another contract, add a
-`[[dependency]]` section:
+the bundle. `polyplug_init` returns one registration for every declared contract.
+The runtime validates and publishes that complete set atomically; a rejected
+registration never exposes a partial bundle. Logical unload releases the loader's
+Python objects and purges the bundle's isolated module cache. To declare a runtime
+dependency on another contract, add a `[[dependency]]` section:
 
 ```toml
 [[dependency]]

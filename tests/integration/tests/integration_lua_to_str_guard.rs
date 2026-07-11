@@ -24,7 +24,7 @@ use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
-use polyplug_lua::LuaConfig;
+
 use polyplug_lua::LuaLoader;
 use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
@@ -131,7 +131,7 @@ fn lua_to_str_raises_on_plain_string() {
     let bundle_dir: PathBuf = build_probe_bundle(tmp.path());
 
     let rt: Arc<Runtime> = Runtime::builder()
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(LuaLoader::new())
         .build()
         .expect("build runtime");
     rt.load_bundle(&bundle_dir).expect("probe bundle must load");
@@ -152,6 +152,7 @@ fn lua_to_str_raises_on_plain_string() {
     let mut err: AbiError = AbiError::ok();
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0_u32,

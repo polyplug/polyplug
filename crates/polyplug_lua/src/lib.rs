@@ -9,11 +9,7 @@ compile_error!(
 #[cfg(not(any(feature = "vendored-luajit", feature = "external-luajit")))]
 compile_error!("enable exactly one of `vendored-luajit` or `external-luajit`");
 
-pub mod bridge;
-pub mod config;
 pub mod ffi;
 pub mod loader;
 
-pub use bridge::LuaHostBridge;
-pub use config::LuaConfig;
 pub use loader::LuaLoader;

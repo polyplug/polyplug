@@ -29,9 +29,10 @@ FIXTURES_DIR = $(abspath ../../tests/fixtures)
 
 .PHONY: test clean
 
-test: $(BUILD_DIR)/test_layout.o $(BUILD_DIR)/test_signature_policy_config $(BUILD_DIR)/test_reload_runtime
+test: $(BUILD_DIR)/test_layout.o $(BUILD_DIR)/test_signature_policy_config $(BUILD_DIR)/test_in_process_runtime $(BUILD_DIR)/test_reload_runtime
 	@echo "OK: abi/test_layout.cpp compiled - all ABI layout static_asserts hold"
 	$(BUILD_DIR)/test_signature_policy_config
+	$(BUILD_DIR)/test_in_process_runtime
 	$(BUILD_DIR)/test_reload_runtime
 
 $(BUILD_DIR)/test_layout.o: abi/test_layout.cpp | $(BUILD_DIR)
@@ -40,6 +41,11 @@ $(BUILD_DIR)/test_layout.o: abi/test_layout.cpp | $(BUILD_DIR)
 # Builder setter test — defines local create/destroy stubs that capture the
 # marshaled RuntimeConfig, so it needs the host headers but NOT the native lib.
 $(BUILD_DIR)/test_signature_policy_config: host/test_signature_policy_config.cpp | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -Ihost $< -o $@
+
+# In-process registration transaction test — supplies a deterministic HostApi
+# table, so it verifies C++ Runtime ownership without a native runtime library.
+$(BUILD_DIR)/test_in_process_runtime: host/test_in_process_runtime.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -Ihost $< -o $@
 
 $(BUILD_DIR)/test_reload_runtime: host/test_reload_runtime.cpp | $(BUILD_DIR)

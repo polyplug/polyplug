@@ -23,7 +23,7 @@ use polyplug::loader::BundleLoader;
 use polyplug::loader::BundleSource;
 use polyplug::logger::LoggerHandle;
 use polyplug_abi::HostApi;
-use polyplug_abi::SupportedLanguage;
+
 use polyplug_abi::types::LogLevel;
 use polyplug_common::ManifestData;
 
@@ -294,10 +294,6 @@ pub(crate) fn check_version_compatibility(
 impl BundleLoader for DotnetLoader {
     fn loader_name(&self) -> &'static str {
         "dotnet"
-    }
-
-    fn loader_language(&self) -> SupportedLanguage {
-        SupportedLanguage::Dotnet
     }
 
     fn supports_hot_reload(&self) -> bool {

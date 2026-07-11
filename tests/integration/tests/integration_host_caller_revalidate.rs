@@ -3,9 +3,9 @@
 //!
 //! This mirrors the revalidation logic emitted into
 //! `examples/hosts/rust/generated/host/host_callers.rs` (cache the resolved
-//! interface + the runtime revision counter; before each dispatch poll the
-//! counter through `HostApi.revision_counter` and re-resolve on a change) and
-//! drives the real `test.add` native contract through the real `HostApi` FFI.
+//! interface and registry revision value; before each dispatch call
+//! `HostApi.registry_revision` and re-resolve on a change) and drives the real
+//! `test.add` native contract through the real `HostApi` FFI.
 //!
 //! It proves the safety property the auto-cache feature delivers — that a cached
 //! interface pointer never dangles after a reload/unload:
@@ -18,8 +18,7 @@
 
 #![allow(clippy::expect_used)]
 
-use core::sync::atomic::AtomicU64;
-use core::sync::atomic::Ordering;
+use core::ffi::c_void;
 
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
@@ -46,15 +45,15 @@ struct AddArgs {
 
 /// Faithful mirror of the generated rust host→guest caller's revalidation path.
 ///
-/// Caches the resolved interface, instance, contract handle, and the runtime
-/// revision counter pointer. Each dispatch polls the counter (one acquire load)
-/// and re-resolves through the retained handle when it changed.
+/// Caches the resolved interface, instance, contract handle, and the registry
+/// revision value. Each dispatch calls the runtime callback and re-resolves
+/// through the retained handle when the value changed.
 struct RevalidatingAddCaller {
     interface: *const GuestContractInterface,
     instance: GuestContractInstance,
     host: *const HostApi,
     handle: GuestContractHandle,
-    revision_ptr: *const u64,
+    // The runtime-owned callback performs its acquire load before returning.
     cached_revision: u64,
 }
 
@@ -73,21 +72,23 @@ impl RevalidatingAddCaller {
         unsafe {
             (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         }
-        // SAFETY: revision_counter is an ABI fn ptr returning a pointer to the runtime counter.
-        let revision_ptr: *const u64 = unsafe { (host_api.revision_counter)(host) };
-        let cached_revision: u64 = read_revision(revision_ptr, 0);
+        // SAFETY: registry_revision is an ABI callback safe to call with the live host.
+        let cached_revision: u64 = unsafe { (host_api.registry_revision)(host) };
         Some(Self {
             interface,
             instance,
             host,
             handle,
-            revision_ptr,
             cached_revision,
         })
     }
 
     fn live_revision(&self) -> u64 {
-        read_revision(self.revision_ptr, self.cached_revision)
+        // SAFETY: self.host is retained by the runtime for this caller's lifetime.
+        let host_api: &HostApi = unsafe { &*self.host };
+        // SAFETY: the callback belongs to the same retained HostApi and accepts
+        // that table as its self pointer.
+        unsafe { (host_api.registry_revision)(self.host) }
     }
 
     fn cached_revision(&self) -> u64 {
@@ -146,6 +147,7 @@ impl RevalidatingAddCaller {
             } else {
                 let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                 let dispatch_fn: unsafe extern "C" fn(
+                    *mut c_void,
                     GuestContractInstance,
                     *const (),
                     *mut (),
@@ -153,6 +155,7 @@ impl RevalidatingAddCaller {
                 ) = core::mem::transmute(fn_ptr);
                 let mut dispatch_err: AbiError = AbiError::ok();
                 dispatch_fn(
+                    interface.adapter_context,
                     self.instance,
                     args_ptr,
                     out_ptr,
@@ -166,17 +169,6 @@ impl RevalidatingAddCaller {
         }
         Ok(out_val)
     }
-}
-
-/// Read the revision counter through the cached pointer with an acquire load,
-/// returning `fallback` when the pointer is null (no runtime).
-fn read_revision(revision_ptr: *const u64, fallback: u64) -> u64 {
-    if revision_ptr.is_null() {
-        return fallback;
-    }
-    // SAFETY: revision_ptr was returned by HostApi.revision_counter and points to the
-    // runtime's revision counter (an AtomicU64) whose address is stable for the runtime's life.
-    unsafe { (*(revision_ptr as *const AtomicU64)).load(Ordering::Acquire) }
 }
 
 fn hot_reload_runtime() -> &'static Runtime {

@@ -108,6 +108,7 @@ unsafe fn call_vm_function(
     let mut err: AbiError = AbiError::ok();
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             fn_id,

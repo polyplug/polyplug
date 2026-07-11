@@ -30,7 +30,8 @@ struct TransformerInstanceState {
 // Create a new instance: calls the author factory and heap-allocates the payload.
 // Writes a null handle to *out_instance when host is null, the factory returns
 // null, or it throws.
-static void TRANSFORMER_create_instance(VmLoaderData loader_data, const HostApi* host, const void* args, GuestContractInstance* out_instance) noexcept {
+static void TRANSFORMER_create_instance(void* adapter_context, VmLoaderData loader_data, const HostApi* host, const void* args, GuestContractInstance* out_instance) noexcept {
+    (void)adapter_context;
     (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.
     (void)args;  // Contract-specific init args are unused by generated glue.
     if (out_instance == nullptr) return;
@@ -53,19 +54,24 @@ static void TRANSFORMER_create_instance(VmLoaderData loader_data, const HostApi*
 
 // Destroy an instance created by TRANSFORMER_create_instance: deletes the
 // implementation (ownership transferred from the factory) and the payload.
-static void TRANSFORMER_destroy_instance(VmLoaderData loader_data, const HostApi* host, GuestContractInstance instance) noexcept {
+static void TRANSFORMER_destroy_instance(void* adapter_context, VmLoaderData loader_data, const HostApi* host, GuestContractInstance instance) noexcept {
+    (void)adapter_context;
     (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.
     (void)host;  // The payload is guest-owned; no host call is needed to free it.
     if (instance.data == nullptr) {
         return;
     }
-    auto* state = static_cast<TransformerInstanceState*>(instance.data);
-    delete state->impl;
-    delete state;
+    try {
+        auto* state = static_cast<TransformerInstanceState*>(instance.data);
+        delete state->impl;
+        delete state;
+    } catch (...) {
+    }
 }
 
 // ABI wrapper for transform (function_id = 0)
-inline void transformer_transform_abi(GuestContractInstance instance, const void* args, void* out, AbiError* out_err) noexcept {
+inline void transformer_transform_abi(void* adapter_context, GuestContractInstance instance, const void* args, void* out, AbiError* out_err) noexcept {
+    (void)adapter_context;
     if (instance.data == nullptr) {
         static constexpr const char* null_inst_msg = "instance is null";
         *out_err = AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{reinterpret_cast<const uint8_t*>(null_inst_msg), 16}};
@@ -115,6 +121,7 @@ static GuestContractInterface TRANSFORMER_INTERFACE = {
     DATA_TRANSFORMER_CONTRACT_ID,
     Version{ 1U, 0U, 0U },  // contract_version
     DispatchType::Native,
+    nullptr,  // adapter_context
     TRANSFORMER_create_instance,
     TRANSFORMER_destroy_instance,
     DispatchMechanisms{ .native = NativeDispatch{ 1U, TRANSFORMER_FNS } }

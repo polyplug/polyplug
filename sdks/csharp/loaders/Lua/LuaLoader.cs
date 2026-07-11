@@ -13,15 +13,10 @@ public static partial class LuaLoaderExtensions
 {
     private const string NativeLoaderLib = "polyplug_lua";
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct LuaLoaderConfig
-    {
-        public byte Reserved;
-    }
 
     [LibraryImport(NativeLoaderLib, EntryPoint = "polyplug_lua_loader_create")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    private static partial nint PolyplugLuaLoaderCreate(nint cfgPtr);
+    private static partial nint PolyplugLuaLoaderCreate();
 
     /// <summary>
     /// Registers the Lua loader with the runtime.
@@ -35,26 +30,16 @@ public static partial class LuaLoaderExtensions
             throw new ArgumentNullException(nameof(runtime));
         }
 
-        LuaLoaderConfig cfg = new LuaLoaderConfig { Reserved = 0 };
-        nint cfgPtr = Marshal.AllocHGlobal(Marshal.SizeOf<LuaLoaderConfig>());
-        try
+        nint loaderPtr = PolyplugLuaLoaderCreate();
+        if (loaderPtr == nint.Zero)
         {
-            Marshal.StructureToPtr(cfg, cfgPtr, false);
-            nint loaderPtr = PolyplugLuaLoaderCreate(cfgPtr);
-            if (loaderPtr == nint.Zero)
-            {
-                throw new InvalidOperationException("polyplug: lua loader create failed");
-            }
-
-            uint err = runtime.RegisterLoader(loaderPtr);
-            if (err != 0u)
-            {
-                Runtime.ThrowLastError($"polyplug: lua loader register failed: {err}");
-            }
+            throw new InvalidOperationException("polyplug: lua loader create failed");
         }
-        finally
+
+        uint err = runtime.RegisterLoader(loaderPtr);
+        if (err != 0u)
         {
-            Marshal.FreeHGlobal(cfgPtr);
+            Runtime.ThrowLastError($"polyplug: lua loader register failed: {err}");
         }
     }
 }

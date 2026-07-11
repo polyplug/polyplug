@@ -89,6 +89,7 @@ use polyplug_abi::HostContractInstance;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
+use polyplug_abi::in_process::reject_in_process_bundle;
 use polyplug_utils::BundleId;
 
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
@@ -125,6 +126,7 @@ fn inc_native(x: u32) -> u32 {
 /// `out_err` must be non-null and writable.
 #[inline(never)]
 extern "C" fn inc_abi(
+    _adapter_context: *mut c_void,
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
@@ -328,6 +330,7 @@ fn capture_host() -> HostApi {
     HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: capture_register_callback,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find,
@@ -347,7 +350,7 @@ fn capture_host() -> HostApi {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: ptr::null(),
     }
 }
@@ -362,7 +365,8 @@ fn load_dispatch_fn(
     so_path: &str,
 ) -> (
     Library,
-    unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError),
+    unsafe extern "C" fn(*mut c_void, GuestContractInstance, *const (), *mut (), *mut AbiError),
+    *mut c_void,
 ) {
     // SAFETY: so_path is a valid cdylib built by tests/fixtures/build_all.sh.
     let library: Library = unsafe { Library::new(so_path).expect("load test plugin") };
@@ -399,13 +403,16 @@ fn load_dispatch_fn(
     // SAFETY: the registered fn has the native dispatch signature
     // `fn(GuestContractInstance, *const (), *mut (), *mut AbiError)`.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { mem::transmute(fn_ptr) };
-
-    (library, dispatch_fn)
+    ) = {
+        // SAFETY: the pointer comes from the generated dispatch table and is cast to that function's exact ABI.
+        unsafe { mem::transmute(fn_ptr) }
+    };
+    (library, dispatch_fn, interface.adapter_context)
 }
 
 // ─── Benchmarks ──────────────────────────────────────────────────────────────
@@ -427,8 +434,13 @@ fn bench_counter_inc(c: &mut Criterion) {
     });
 
     // ── Arm 2: ABI-shaped call (ptr-in/ptr-out), statically linked ─────────────
-    let abi_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
-        inc_abi;
+    let abi_fn: unsafe extern "C" fn(
+        *mut c_void,
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = inc_abi;
     group.bench_function(BenchmarkId::new("native", "abi_marshalled"), |b| {
         b.iter(|| {
             let mut counter: u32 = 0;
@@ -439,6 +451,7 @@ fn bench_counter_inc(c: &mut Criterion) {
                 // the instance handle is ignored by this stateless arm; err is writable.
                 unsafe {
                     black_box(abi_fn)(
+                        ptr::null_mut(),
                         black_box(GuestContractInstance::null()),
                         black_box(&counter as *const u32 as *const ()),
                         black_box(&mut out as *mut u32 as *mut ()),
@@ -481,9 +494,16 @@ fn bench_counter_inc(c: &mut Criterion) {
 
     // ── Arm 4: polyplug resolved dispatch, dynamically loaded Rust .so ─────────
     {
-        let (library, dispatch_fn): (
+        let (library, dispatch_fn, adapter_context): (
             Library,
-            unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError),
+            unsafe extern "C" fn(
+                *mut c_void,
+                GuestContractInstance,
+                *const (),
+                *mut (),
+                *mut AbiError,
+            ),
+            *mut c_void,
         ) = load_dispatch_fn(TEST_PLUGIN_SO);
 
         group.bench_function(BenchmarkId::new("polyplug", "dispatch"), |b| {
@@ -498,6 +518,7 @@ fn bench_counter_inc(c: &mut Criterion) {
                     // stateless contract ignores the null instance handle; err is writable.
                     unsafe {
                         black_box(dispatch_fn)(
+                            adapter_context,
                             black_box(GuestContractInstance::null()),
                             black_box(&args as *const AddArgs as *const ()),
                             black_box(&mut out as *mut u32 as *mut ()),
@@ -518,9 +539,16 @@ fn bench_counter_inc(c: &mut Criterion) {
     // Same contract, same dispatch path — only the plugin's source language
     // differs. Anchors the native rows of the cross-language dispatch matrix.
     {
-        let (library, dispatch_fn): (
+        let (library, dispatch_fn, adapter_context): (
             Library,
-            unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError),
+            unsafe extern "C" fn(
+                *mut c_void,
+                GuestContractInstance,
+                *const (),
+                *mut (),
+                *mut AbiError,
+            ),
+            *mut c_void,
         ) = load_dispatch_fn(TEST_PLUGIN_CPP_SO);
 
         group.bench_function(BenchmarkId::new("polyplug", "dispatch_cpp"), |b| {
@@ -535,6 +563,7 @@ fn bench_counter_inc(c: &mut Criterion) {
                     // stateless contract ignores the null instance handle; err is writable.
                     unsafe {
                         black_box(dispatch_fn)(
+                            adapter_context,
                             black_box(GuestContractInstance::null()),
                             black_box(&args as *const AddArgs as *const ()),
                             black_box(&mut out as *mut u32 as *mut ()),
@@ -585,6 +614,6 @@ unsafe extern "C" fn stub_destroy_guest_instance(
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
-    ptr::null()
+unsafe extern "C" fn stub_registry_revision(_this: *const HostApi) -> u64 {
+    0
 }

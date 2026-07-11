@@ -107,10 +107,9 @@ is documented **undefined behaviour**. This keeps native dispatch at the speed o
 indirect call.
 
 **Generated cached callers** (the host→guest and guest→guest peer callers emitted by
-`polyplugc`) go further than bare quiescence. They cache the resolved interface but poll
-the registry **revision counter** (one acquire load via `HostApi.revision_counter`)
-before each dispatch and re-resolve when it changed, so a reload never leaves them
-dereferencing a superseded interface. For the peer caller the provider also cannot simply
+`polyplugc`) go further than bare quiescence. They cache the resolved interface but call
+`HostApi.registry_revision` before each dispatch and re-resolve when it changes, so a
+reload never leaves them dereferencing a superseded interface. For the peer caller the
 vanish: a declared dependency makes the runtime **refuse to unload** a bundle while a
 dependent is live (`DependencyInUse`), so the cached interface stays mapped for as long as
 the caller can use it, and the revision check turns a *reload* into a clean re-resolve.
@@ -246,7 +245,7 @@ invalidates handles and reclaims the backing resources.
 | Type | Size | Layout |
 |---|---|---|
 | `GuestContractHandle` | 8 bytes, align 4 | `{ index: u32, generation: u32 }` |
-| `HostApi` | 184 bytes, align 8 | 1 runtime ptr + 21 fn-ptr fields + 1 trailing `reserved` data ptr |
+| `HostApi` | 192 bytes, align 8 | 1 runtime ptr + 22 fn-ptr fields + 1 trailing `reserved` data ptr |
 | `RuntimeConfig` | 72 bytes, align 8 | no unload-mode field |
 
 `ReloadPhaseType::Unloading = 3` with the `ReloadPhase::unloading()` constructor models

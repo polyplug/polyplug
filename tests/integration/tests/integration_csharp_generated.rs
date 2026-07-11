@@ -15,6 +15,7 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
+use core::ffi::c_void;
 use polyplug::error::RuntimeError;
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
@@ -147,13 +148,12 @@ fn generated_csharp_bundle_transform_dispatches() {
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // Native dispatch signature: fn(GuestContractInstance, *const (), *mut (), *mut AbiError).
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
-    ) =
-        // SAFETY: transmute *const () to the canonical native dispatch fn pointer.
-        unsafe { core::mem::transmute(fn_ptr) };
+    ) = unsafe { core::mem::transmute(fn_ptr) };
     // The generated CreateInstance constructs the C# implementation via the
     // author factory and carries it in instance.Data (GCHandle); dispatch
     // requires a real instance.
@@ -163,6 +163,7 @@ fn generated_csharp_bundle_transform_dispatches() {
     let mut instance: GuestContractInstance = GuestContractInstance::null();
     unsafe {
         (vtable.create_instance)(
+            vtable.adapter_context,
             polyplug_abi::VmLoaderData::null(),
             host_abi,
             core::ptr::null(),
@@ -178,6 +179,7 @@ fn generated_csharp_bundle_transform_dispatches() {
     let mut result: AbiError = AbiError::ok();
     unsafe {
         dispatch_fn(
+            vtable.adapter_context,
             instance,
             &input_view as *const StringView as *const (),
             &mut out_view as *mut StringView as *mut (),
@@ -191,7 +193,14 @@ fn generated_csharp_bundle_transform_dispatches() {
     );
     // SAFETY: instance was created by create_instance; destroy exactly once.
     // out_view points to guest/host-owned bytes that outlive the instance.
-    unsafe { (vtable.destroy_instance)(polyplug_abi::VmLoaderData::null(), host_abi, instance) };
+    unsafe {
+        (vtable.destroy_instance)(
+            vtable.adapter_context,
+            polyplug_abi::VmLoaderData::null(),
+            host_abi,
+            instance,
+        )
+    };
 
     // SAFETY: out_view points to out_view.len UTF-8 bytes owned by the guest.
     let out_bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_view.ptr, out_view.len) };

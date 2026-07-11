@@ -7,7 +7,8 @@ local polyplug_abi = require("polyplug_abi")
 
 local function cdef_guarded(decl)
 	local ok, err = pcall(ffi.cdef, decl)
-	if not ok and not string.find(err, "already defined", 1, true) then
+	local in_process_redefinition = string.find(err or "", "attempt to redefine 'PolyplugLuaInProcess", 1, true)
+	if not ok and not string.find(err, "already defined", 1, true) and not in_process_redefinition then
 		error(err, 2)
 	end
 end
@@ -25,6 +26,7 @@ local M = {}
 local DispatchFnType = ffi.typeof("void (*)(const void*, const void*, void*, AbiError*)")
 
 -- Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
+--- Logging service supplied by the host.
 HostLoggerContract = {}
 HostLoggerContract.__index = HostLoggerContract
 
@@ -52,6 +54,11 @@ function HostLoggerContract:is_valid()
     return self._interface ~= nil
 end
 
+--- Writes an informational log message.
+--- Message text to write.
+---@param message string Message text to write.
+--- Logging has no return value.
+---@return nil Logging has no return value.
 function HostLoggerContract:log(message)
     if self._interface == nil then
         return
@@ -77,7 +84,7 @@ function HostLoggerContract:log(message)
         fn(impl_ptr, args_ptr, out_ptr, err)
     elseif dispatch_type == 1 then
         local _null_instance = ffi.new("GuestContractInstance")
-        interface.dispatch.vm.call(interface.dispatch.vm.loader_data, _null_instance, 0, args_ptr, out_ptr, nil, err)
+        interface.dispatch.vm.call(interface.user_data, interface.dispatch.vm.loader_data, _null_instance, 0, args_ptr, out_ptr, nil, err)
     else
         return
     end
@@ -112,7 +119,7 @@ function HostLoggerContract:log_with_level(level, message)
         fn(impl_ptr, args_ptr, out_ptr, err)
     elseif dispatch_type == 1 then
         local _null_instance = ffi.new("GuestContractInstance")
-        interface.dispatch.vm.call(interface.dispatch.vm.loader_data, _null_instance, 1, args_ptr, out_ptr, nil, err)
+        interface.dispatch.vm.call(interface.user_data, interface.dispatch.vm.loader_data, _null_instance, 1, args_ptr, out_ptr, nil, err)
     else
         return
     end

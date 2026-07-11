@@ -9,6 +9,7 @@
 //!            is `pub(crate)` and cannot be accessed from an external crate.
 //!
 
+use core::ffi::c_void;
 use core::ptr;
 use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::{
@@ -21,6 +22,7 @@ use polyplug_utils::GuestContractId;
 
 /// Create a null instance (stub for tests).
 unsafe extern "C" fn null_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -34,6 +36,7 @@ unsafe extern "C" fn null_create_instance(
 
 /// Destroy instance (stub for tests).
 unsafe extern "C" fn null_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -68,6 +71,7 @@ fn make_static_interface_minor(
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance: null_create_instance,
         destroy_instance: null_destroy_instance,
         dispatch: DispatchMechanisms {

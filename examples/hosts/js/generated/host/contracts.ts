@@ -6,7 +6,15 @@
  * Host interface for contract `host.logger` (id=0xF53EB5F2845853BB)
  * Hosts implement this interface to provide functionality to plugins.
  */
+/**
+ * Logging service supplied by the host.
+ */
 export interface HostLogger {
+    /**
+     * Writes an informational log message.
+     * @param message Message text to write.
+     * @returns Logging has no return value.
+     */
     Log(message: string): void;
     LogWithLevel(level: LogLevel, message: string): void;
 }

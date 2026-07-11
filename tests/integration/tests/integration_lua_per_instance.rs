@@ -38,7 +38,7 @@ use polyplug_codegen::GenerateConfig;
 use polyplug_codegen::GenerateOutput;
 use polyplug_codegen::Lang;
 use polyplug_codegen::Side;
-use polyplug_lua::LuaConfig;
+
 use polyplug_lua::LuaLoader;
 use polyplug_utils::guest_contract_id;
 use std::path::Path;
@@ -210,6 +210,7 @@ fn dispatch_no_arg_i32(
     // produced by this contract's create_instance. All outlive the call.
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             instance,
             fn_id,
@@ -237,7 +238,7 @@ fn two_instances_of_one_lua_contract_have_independent_state() {
     let tmp: tempfile::TempDir = tempfile::TempDir::new().expect("tempdir");
     let bundle: PathBuf = write_counter_bundle(tmp.path(), "counter");
 
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let loader: LuaLoader = LuaLoader::new();
     let rt: Arc<Runtime> = Runtime::builder()
         .loader(loader)
         .build()

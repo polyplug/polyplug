@@ -59,6 +59,14 @@ pub enum RuntimeError {
         provider: String,
         dependents: Vec<String>,
     },
+
+    #[error(
+        "cannot unload in-process bundle `{bundle}` while {active_instances} stateful instance(s) are active"
+    )]
+    InProcessBundleInUse {
+        bundle: String,
+        active_instances: u64,
+    },
 }
 
 /// Errors from the bundle loading phase.
@@ -206,17 +214,17 @@ pub enum RegistryError {
     #[error("duplicate provider for contract `{contract}`: `{existing}` already registered")]
     DuplicateProvider { contract: String, existing: String },
 
-    #[error("embedded bundle name must not be empty")]
-    EmptyEmbeddedBundleName,
+    #[error("in-process bundle name must not be empty")]
+    EmptyInProcessBundleName,
 
-    #[error("embedded bundle must provide at least one contract")]
-    EmptyEmbeddedBundle,
+    #[error("in-process bundle must provide at least one contract")]
+    EmptyInProcessBundle,
 
-    #[error("embedded contract at index {index} has an empty contract name")]
-    EmptyEmbeddedContract { index: usize },
+    #[error("in-process contract at index {index} has an empty contract name")]
+    EmptyInProcessContract { index: usize },
 
-    #[error("embedded bundle `{bundle}` derived the reserved bundle ID 0")]
-    ReservedEmbeddedBundleId { bundle: String },
+    #[error("in-process bundle `{bundle}` derived the reserved bundle ID 0")]
+    ReservedInProcessBundleId { bundle: String },
 
     #[error("bundle `{bundle}` is already registered")]
     BundleAlreadyRegistered { bundle: String },
@@ -238,6 +246,9 @@ pub enum RegistryError {
 
     #[error("invalid UTF-8 in plugin-provided data: context={context}")]
     InvalidUtf8 { context: String },
+
+    #[error("invalid pointer in registration input: {context}")]
+    InvalidPointer { context: String },
 }
 
 /// Errors from the capability graph.

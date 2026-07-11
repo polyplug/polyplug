@@ -7,6 +7,7 @@
 //! marshalling benchmark.
 
 use core::mem::align_of;
+use core::{ffi::c_void, ptr};
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::*;
 use polyplug_utils::GuestContractId;
@@ -61,6 +62,7 @@ pub struct ZeroResult {
 /// `args` must point to a valid `FillArgs`. `out` must point to a valid `u32`.
 /// The `buf.ptr` in `FillArgs` must be valid for writes of at least `buf.cap` bytes.
 extern "C" fn memory_fill_preallocated_buffer(
+    _adapter_context: *mut c_void,
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
@@ -120,6 +122,7 @@ extern "C" fn memory_fill_preallocated_buffer(
 /// `args` must point to a valid `AllocArgs`. `out` must point to a valid `Buffer`.
 /// `alloc_args.host` must be a valid `HostApi` pointer.
 extern "C" fn memory_alloc_buffer_via_host(
+    _adapter_context: *mut c_void,
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
@@ -172,6 +175,7 @@ extern "C" fn memory_alloc_buffer_via_host(
 /// `args` must point to a valid `StringView`. `out` must point to a valid `StringView`.
 /// `sv.ptr` must be valid for reads of `sv.len` bytes.
 extern "C" fn memory_echo_string_view(
+    _adapter_context: *mut c_void,
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
@@ -207,6 +211,7 @@ extern "C" fn memory_echo_string_view(
 /// # Safety
 /// `args` must point to a valid `ZeroArgs`. `out` must point to a valid `ZeroResult`.
 extern "C" fn memory_zero_length_roundtrip(
+    _adapter_context: *mut c_void,
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
@@ -240,6 +245,7 @@ extern "C" fn memory_zero_length_roundtrip(
 /// # Safety
 /// `args` must point to a valid `StringView`. `out` must point to a valid `StringView`.
 extern "C" fn memory_return_borrowed(
+    _adapter_context: *mut c_void,
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
@@ -270,6 +276,7 @@ extern "C" fn memory_return_borrowed(
 /// `copy_args.host` must be a valid `HostApi` pointer and `copy_args.sv` must be
 /// valid for reads of `sv.len` bytes.
 extern "C" fn memory_return_owned(
+    _adapter_context: *mut c_void,
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
@@ -315,6 +322,7 @@ extern "C" fn memory_return_owned(
 /// # Safety
 /// Test plugins don't need real instances; dispatch uses global state.
 unsafe extern "C" fn create_instance_stub(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -331,6 +339,7 @@ unsafe extern "C" fn create_instance_stub(
 /// # Safety
 /// Test plugins don't own instance data.
 unsafe extern "C" fn destroy_instance_stub(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -378,6 +387,7 @@ fn memory_test_interface() -> GuestContractInterface {
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance: create_instance_stub,
         destroy_instance: destroy_instance_stub,
         dispatch: DispatchMechanisms {

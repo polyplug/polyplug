@@ -56,6 +56,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::in_process::reject_in_process_bundle;
 use polyplug_utils::BundleId;
 
 use core::ffi::c_void;
@@ -205,6 +206,7 @@ fn arena_host_api() -> HostApi {
     HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: stub_register_guest,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: arena_alloc,
         free: arena_free,
         find_guest_contract: stub_find,
@@ -224,7 +226,7 @@ fn arena_host_api() -> HostApi {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: ptr::null(),
     }
 }
@@ -424,6 +426,6 @@ unsafe extern "C" fn stub_destroy_guest_instance(
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
-    ptr::null()
+unsafe extern "C" fn stub_registry_revision(_this: *const HostApi) -> u64 {
+    0
 }

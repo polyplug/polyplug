@@ -128,25 +128,9 @@ impl LoggerHandle {
     }
 }
 
-/// Internal sink object for the Rust closure installed via
-/// `RuntimeBuilder::logger`.
-///
-/// Every `Fn(LogLevel, &str, &str) + Send + Sync` closure implements this via
-/// the blanket impl below; the trait exists so the boxed host closure has a
-/// simple, nameable object type.
-pub(crate) trait LogSink: Send + Sync {
-    /// Deliver one log record to the host closure.
-    fn emit(&self, level: LogLevel, scope: &str, message: &str);
-}
+pub(crate) trait LoggerCallback: Fn(LogLevel, &str, &str) + Send + Sync {}
 
-impl<F> LogSink for F
-where
-    F: Fn(LogLevel, &str, &str) + Send + Sync,
-{
-    fn emit(&self, level: LogLevel, scope: &str, message: &str) {
-        self(level, scope, message)
-    }
-}
+impl<T> LoggerCallback for T where T: Fn(LogLevel, &str, &str) + Send + Sync {}
 
 /// Boxed Rust logger closure installed via `RuntimeBuilder::logger`.
 ///
@@ -154,7 +138,7 @@ where
 /// runtime keeps alive behind `RuntimeConfig::log_user_data`: the `Runtime`
 /// owns a `Box<LoggerClosure>`, whose stable heap address is the thin pointer
 /// the `extern "C"` trampoline dereferences.
-pub(crate) struct LoggerClosure(pub(crate) Box<dyn LogSink>);
+pub(crate) struct LoggerClosure(pub(crate) Box<dyn LoggerCallback>);
 
 /// Lock guard wrapper that recovers from lock poisoning and defers the
 /// recovery log until AFTER the inner guard has been dropped.

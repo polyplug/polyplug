@@ -10,7 +10,18 @@ namespace Polyplug.Generated;
 /// Host interface for contract `host.logger` (id=0xF53EB5F2845853BB)
 /// Hosts implement this interface to provide functionality to plugins.
 /// </summary>
+/// <summary>
+/// Logging service supplied by the host.
+/// </summary>
 public interface IHostLogger {
+    /// <summary>
+    /// Writes an informational log message.
+    /// </summary>
+    /// <param name="message">Message text to write.
+    /// </param>
+    /// <returns>
+    /// Logging has no return value.
+    /// </returns>
     void Log(string message);
     void LogWithLevel(ref LogLevel level, string message);
 }

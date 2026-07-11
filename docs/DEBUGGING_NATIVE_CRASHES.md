@@ -210,9 +210,9 @@ still pinned. The host-mediated lifecycle calls (`create_guest_instance` /
 
 What is **not** safe — and is documented UB — is caching a *raw* interface pointer and
 calling through it after the owning bundle was unloaded or hot-reloaded. The fix is built
-into the generated callers: they cache the resolved interface but poll the runtime's
-`revision_counter` (one acquire load) before each dispatch and re-resolve when it changes,
-so a cached pointer never dangles. If you hand-rolled a caller and skipped that, you will
+into the generated callers: they cache the resolved interface but call
+`HostApi.registry_revision` before each dispatch and re-resolve when it changes,
+so a cached pointer never dangles. If you hand-roll a caller and skip that, you will
 fault here. **Quiesce first:** stop issuing calls into a bundle before you unload it.
 
 A crash with a reader thread deep in a generated dispatch while another thread is inside

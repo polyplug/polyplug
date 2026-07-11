@@ -22,7 +22,7 @@ use polyplug::runtime::RuntimeBuilder;
 use polyplug_abi::StringView;
 use polyplug_abi::runtime::Compatibility;
 use polyplug_abi::runtime::RuntimeConfig;
-use polyplug_lua::LuaConfig;
+
 use polyplug_lua::LuaLoader;
 use polyplug_lua::ffi::PolyplugLuaLogBridge;
 use polyplug_lua::ffi::polyplug_lua_log_trampoline;
@@ -338,7 +338,7 @@ fn bench_lua_reload(c: &mut Criterion) {
             hot_reload_enabled: true,
             ..Default::default()
         })
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(LuaLoader::new())
         .build()
         .expect("runtime build must succeed");
 

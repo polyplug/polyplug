@@ -13,7 +13,7 @@ interface GuestContractInterfaceView {
 interface Runtime {
     findGuestContract(contractId: bigint, minVersion?: number): number;
     resolveGuestContractInterface(handle: number): GuestContractInterfaceView | null;
-    revisionCounter(): Deno.PointerValue;
+    registryRevision(): bigint;
     alloc(size: number, align?: number): Deno.PointerValue;
     free(ptr: Deno.PointerValue, size: number, align?: number): void;
 }
@@ -40,21 +40,23 @@ export const DATA_REPORTER_CONTRACT_ID = 0x76BB4643A9F5AD68n;
 /** Contract ID for `pipeline.Validator@1` */
 export const PIPELINE_VALIDATOR_CONTRACT_ID = 0x45173A959EEC57C5n;
 
-/** Host caller for contract `pipeline.Decoder` over the Deno FFI SDK. */
+/**
+ * Host caller for contract `pipeline.Decoder` over the Deno FFI SDK.
+ *
+ * Decodes CSV input into the pipeline representation.
+ */
 export class PipelineDecoderContract {
     #rt: Runtime;
     #view: GuestContractInterfaceView;
     #instance: Uint8Array;
     #handle: number;
-    #revisionPtr: Deno.PointerValue;
     #cachedRevision: bigint;
 
-    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, revisionPtr: Deno.PointerValue, cachedRevision: bigint) {
+    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, cachedRevision: bigint) {
         this.#rt = rt;
         this.#view = view;
         this.#instance = instance;
         this.#handle = handle;
-        this.#revisionPtr = revisionPtr;
         this.#cachedRevision = cachedRevision;
     }
 
@@ -66,16 +68,12 @@ export class PipelineDecoderContract {
             return null;
         }
         const instance = view.createInstance();
-        const revisionPtr = rt.revisionCounter();
-        const cachedRevision = revisionPtr === null ? 0n : new Deno.UnsafePointerView(revisionPtr).getBigUint64(0, true);
-        return new PipelineDecoderContract(rt, view, instance, handle, revisionPtr, cachedRevision);
+        const cachedRevision = rt.registryRevision();
+        return new PipelineDecoderContract(rt, view, instance, handle, cachedRevision);
     }
 
     #liveRevision(): bigint {
-        if (this.#revisionPtr === null) {
-            return this.#cachedRevision;
-        }
-        return new Deno.UnsafePointerView(this.#revisionPtr).getBigUint64(0, true);
+        return this.#rt.registryRevision();
     }
 
     #revalidate(): boolean {
@@ -102,7 +100,11 @@ export class PipelineDecoderContract {
         this.#view.destroyInstance(this.#instance);
     }
 
-    /** Call `decode` */
+    /**
+     * Decodes one CSV record.
+     * @param input The CSV record to decode.
+     * @returns The decoded pipeline record.
+     */
     decode(input: string): string {
         if (this.#liveRevision() !== this.#cachedRevision && !this.#revalidate()) {
             throw new Error('call `decode` failed: contract gone after reload/unload');
@@ -154,15 +156,13 @@ export class DataTransformerContract {
     #view: GuestContractInterfaceView;
     #instance: Uint8Array;
     #handle: number;
-    #revisionPtr: Deno.PointerValue;
     #cachedRevision: bigint;
 
-    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, revisionPtr: Deno.PointerValue, cachedRevision: bigint) {
+    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, cachedRevision: bigint) {
         this.#rt = rt;
         this.#view = view;
         this.#instance = instance;
         this.#handle = handle;
-        this.#revisionPtr = revisionPtr;
         this.#cachedRevision = cachedRevision;
     }
 
@@ -174,16 +174,12 @@ export class DataTransformerContract {
             return null;
         }
         const instance = view.createInstance();
-        const revisionPtr = rt.revisionCounter();
-        const cachedRevision = revisionPtr === null ? 0n : new Deno.UnsafePointerView(revisionPtr).getBigUint64(0, true);
-        return new DataTransformerContract(rt, view, instance, handle, revisionPtr, cachedRevision);
+        const cachedRevision = rt.registryRevision();
+        return new DataTransformerContract(rt, view, instance, handle, cachedRevision);
     }
 
     #liveRevision(): bigint {
-        if (this.#revisionPtr === null) {
-            return this.#cachedRevision;
-        }
-        return new Deno.UnsafePointerView(this.#revisionPtr).getBigUint64(0, true);
+        return this.#rt.registryRevision();
     }
 
     #revalidate(): boolean {
@@ -262,15 +258,13 @@ export class PipelineEncoderContract {
     #view: GuestContractInterfaceView;
     #instance: Uint8Array;
     #handle: number;
-    #revisionPtr: Deno.PointerValue;
     #cachedRevision: bigint;
 
-    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, revisionPtr: Deno.PointerValue, cachedRevision: bigint) {
+    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, cachedRevision: bigint) {
         this.#rt = rt;
         this.#view = view;
         this.#instance = instance;
         this.#handle = handle;
-        this.#revisionPtr = revisionPtr;
         this.#cachedRevision = cachedRevision;
     }
 
@@ -282,16 +276,12 @@ export class PipelineEncoderContract {
             return null;
         }
         const instance = view.createInstance();
-        const revisionPtr = rt.revisionCounter();
-        const cachedRevision = revisionPtr === null ? 0n : new Deno.UnsafePointerView(revisionPtr).getBigUint64(0, true);
-        return new PipelineEncoderContract(rt, view, instance, handle, revisionPtr, cachedRevision);
+        const cachedRevision = rt.registryRevision();
+        return new PipelineEncoderContract(rt, view, instance, handle, cachedRevision);
     }
 
     #liveRevision(): bigint {
-        if (this.#revisionPtr === null) {
-            return this.#cachedRevision;
-        }
-        return new Deno.UnsafePointerView(this.#revisionPtr).getBigUint64(0, true);
+        return this.#rt.registryRevision();
     }
 
     #revalidate(): boolean {
@@ -370,15 +360,13 @@ export class DataReporterContract {
     #view: GuestContractInterfaceView;
     #instance: Uint8Array;
     #handle: number;
-    #revisionPtr: Deno.PointerValue;
     #cachedRevision: bigint;
 
-    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, revisionPtr: Deno.PointerValue, cachedRevision: bigint) {
+    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, cachedRevision: bigint) {
         this.#rt = rt;
         this.#view = view;
         this.#instance = instance;
         this.#handle = handle;
-        this.#revisionPtr = revisionPtr;
         this.#cachedRevision = cachedRevision;
     }
 
@@ -390,16 +378,12 @@ export class DataReporterContract {
             return null;
         }
         const instance = view.createInstance();
-        const revisionPtr = rt.revisionCounter();
-        const cachedRevision = revisionPtr === null ? 0n : new Deno.UnsafePointerView(revisionPtr).getBigUint64(0, true);
-        return new DataReporterContract(rt, view, instance, handle, revisionPtr, cachedRevision);
+        const cachedRevision = rt.registryRevision();
+        return new DataReporterContract(rt, view, instance, handle, cachedRevision);
     }
 
     #liveRevision(): bigint {
-        if (this.#revisionPtr === null) {
-            return this.#cachedRevision;
-        }
-        return new Deno.UnsafePointerView(this.#revisionPtr).getBigUint64(0, true);
+        return this.#rt.registryRevision();
     }
 
     #revalidate(): boolean {
@@ -478,15 +462,13 @@ export class PipelineValidatorContract {
     #view: GuestContractInterfaceView;
     #instance: Uint8Array;
     #handle: number;
-    #revisionPtr: Deno.PointerValue;
     #cachedRevision: bigint;
 
-    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, revisionPtr: Deno.PointerValue, cachedRevision: bigint) {
+    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, cachedRevision: bigint) {
         this.#rt = rt;
         this.#view = view;
         this.#instance = instance;
         this.#handle = handle;
-        this.#revisionPtr = revisionPtr;
         this.#cachedRevision = cachedRevision;
     }
 
@@ -498,16 +480,12 @@ export class PipelineValidatorContract {
             return null;
         }
         const instance = view.createInstance();
-        const revisionPtr = rt.revisionCounter();
-        const cachedRevision = revisionPtr === null ? 0n : new Deno.UnsafePointerView(revisionPtr).getBigUint64(0, true);
-        return new PipelineValidatorContract(rt, view, instance, handle, revisionPtr, cachedRevision);
+        const cachedRevision = rt.registryRevision();
+        return new PipelineValidatorContract(rt, view, instance, handle, cachedRevision);
     }
 
     #liveRevision(): bigint {
-        if (this.#revisionPtr === null) {
-            return this.#cachedRevision;
-        }
-        return new Deno.UnsafePointerView(this.#revisionPtr).getBigUint64(0, true);
+        return this.#rt.registryRevision();
     }
 
     #revalidate(): boolean {

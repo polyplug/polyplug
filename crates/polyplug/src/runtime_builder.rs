@@ -23,9 +23,10 @@ use crate::{
         host_destroy_guest_instance, host_find_all_guest_contracts, host_find_guest_contract,
         host_free, host_get_dependencies, host_get_error_len, host_get_host_contract,
         host_get_last_error, host_list_bundles, host_load_bundle, host_log,
-        host_register_guest_contract, host_register_host_contract, host_register_loader,
-        host_reload_bundle, host_resolve_guest_contract, host_resolve_host_contract_interface,
-        host_revision_counter, host_unload_bundle, validate_bundle_compatibility,
+        host_register_guest_contract, host_register_host_contract, host_register_in_process_bundle,
+        host_register_loader, host_registry_revision, host_reload_bundle,
+        host_resolve_guest_contract, host_resolve_host_contract_interface, host_unload_bundle,
+        validate_bundle_compatibility,
     },
     runtime_store::RuntimeStore,
 };
@@ -59,7 +60,7 @@ unsafe extern "C" fn rust_logger_trampoline(
     // SAFETY: the runtime's LoggerHandle built both views from live, UTF-8 Rust
     // string data that outlives this call (documented callback contract).
     let (scope_str, message_str): (&str, &str) = unsafe { (scope.as_str(), message.as_str()) };
-    callback.0.emit(level, scope_str, message_str);
+    (callback.0)(level, scope_str, message_str);
 }
 
 /// Builder for constructing a Runtime.
@@ -267,6 +268,7 @@ impl RuntimeBuilder {
         let host_abi: Box<HostApi> = Box::new(HostApi {
             runtime: ptr::null_mut(),
             register_guest_contract: host_register_guest_contract,
+            register_in_process_bundle: host_register_in_process_bundle,
             alloc: host_alloc,
             free: host_free,
             find_guest_contract: host_find_guest_contract,
@@ -276,7 +278,6 @@ impl RuntimeBuilder {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
-            // Host operations
             load_bundle: host_load_bundle,
             reload_bundle: host_reload_bundle,
             register_host_contract: host_register_host_contract,
@@ -287,7 +288,7 @@ impl RuntimeBuilder {
             log: host_log,
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
-            revision_counter: host_revision_counter,
+            registry_revision: host_registry_revision,
             reserved: ptr::null(),
         });
 
@@ -344,6 +345,7 @@ impl RuntimeBuilder {
             active_init_count: AtomicUsize::new(0),
             reload_serialize: Mutex::new(()),
             instance_counts: Mutex::new(HashMap::new()),
+            in_process_residents: Mutex::new(HashMap::new()),
         };
 
         let runtime: Arc<Runtime> = Arc::new(runtime);

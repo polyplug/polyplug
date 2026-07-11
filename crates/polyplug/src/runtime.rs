@@ -12,6 +12,7 @@
 //!  - find_guest_contract() is a read-only RwLock read guard
 //!  - No locks in the hot path
 
+use core::any::Any;
 use core::ffi::c_void;
 use core::str::FromStr;
 use core::sync::atomic::AtomicUsize;
@@ -39,8 +40,8 @@ use polyplug_abi::runtime::{Compatibility, ReloadPhase, RuntimeConfig, Signature
 use polyplug_abi::types::{Ed25519PublicKey, LogLevel};
 use polyplug_abi::{
     AbiError, AbiErrorCode, Array, DependencyInfo, GuestContractHandle, GuestContractInterface,
-    HostApi, HostContractInstance, HostContractInterface, PluginDescriptor, StringView,
-    SupportedLanguage, types::Version,
+    HostApi, HostContractInstance, HostContractInterface, InProcessBundleRegistration,
+    InProcessContractRegistration, PluginDescriptor, StringView, SupportedLanguage, types::Version,
 };
 use polyplug_signing::{
     BundleVerifier, PinnedKeyVerifier, SigError, verify_bundle as signing_verify_bundle,
@@ -60,10 +61,10 @@ use crate::loader::manifest::{parsed_bundle_dependencies, resolved_dependencies_
 use crate::loader::parse_manifest;
 use crate::logger::{LoggerClosure, LoggerHandle, RecoverPoisoned, RecoveringGuard};
 pub use crate::runtime_builder::RuntimeBuilder;
-pub use crate::runtime_store::{EmbeddedBundle, EmbeddedContract};
 
 use crate::runtime_store::BundleDependency;
 use crate::runtime_store::BundleDescriptor;
+use crate::runtime_store::PreparedGuestContract;
 use crate::runtime_store::RuntimeStore;
 
 // ─── Runtime Configuration ───────────────────────────────────────────────────
@@ -84,6 +85,48 @@ pub(crate) struct LoadOptions {
 }
 
 /// The runtime instance.
+/// Rust-owned in-process registration coupled with its runtime-local resident.
+///
+/// Core reads the C-ABI registration tables synchronously and retains `resident`
+/// until the bundle is logically unloaded. The resident never crosses the ABI.
+pub struct InProcessBundle<R> {
+    registration: InProcessBundleRegistration,
+    _owned_contracts: Option<Box<[InProcessContractRegistration]>>,
+    resident: Box<R>,
+}
+
+impl<R> InProcessBundle<R> {
+    /// Create an in-process bundle registration with a Rust-owned resident.
+    ///
+    /// The pointer-bearing fields in `registration` must remain valid through the
+    /// synchronous `Runtime::register_in_process_bundle` call.
+    pub fn new(registration: InProcessBundleRegistration, resident: R) -> Self {
+        Self {
+            registration,
+            _owned_contracts: None,
+            resident: Box::new(resident),
+        }
+    }
+
+    /// Create an in-process bundle whose registrations borrow its boxed resident.
+    ///
+    /// `contracts` is retained with the bundle so its callback contexts remain valid
+    /// through registration. The runtime copies the tables synchronously.
+    pub fn with_boxed_resident(
+        mut registration: InProcessBundleRegistration,
+        contracts: Box<[InProcessContractRegistration]>,
+        resident: Box<R>,
+    ) -> Self {
+        registration.contracts = contracts.as_ptr();
+        registration.contract_count = contracts.len();
+        Self {
+            registration,
+            _owned_contracts: Some(contracts),
+            resident,
+        }
+    }
+}
+
 pub struct Runtime {
     pub(crate) registry: Arc<RuntimeStore>,
     /// All registered loaders, keyed by loader_name.
@@ -198,6 +241,11 @@ pub struct Runtime {
     /// Instance-owned (Rule 12): each `Runtime` has its own map, so multiple
     /// runtimes in one process never share instance accounting.
     pub(crate) instance_counts: Mutex<HashMap<GuestContractId, u64>>,
+    /// Rust-owned residents for in-process bundles, keyed by derived bundle ID.
+    ///
+    /// A resident is erased only inside Rust. It is never exposed through the C ABI
+    /// and remains available to generated create-instance thunks until unload.
+    pub(crate) in_process_residents: Mutex<HashMap<BundleId, Box<dyn Any + Send + Sync>>>,
     /// The owned HostApi handed to plugins. A `Box` gives it a stable heap
     /// address independent of where the `Runtime` value lives, so the pointer
     /// captured by plugins survives the runtime's move into its `Arc`.
@@ -215,19 +263,54 @@ impl Runtime {
         RuntimeBuilder::new()
     }
 
-    /// Atomically register a statically linked guest bundle.
+    /// Atomically register a complete Rust-owned in-process bundle.
     ///
-    /// The returned ID is derived with the same [`BundleId::new`] semantics as a
-    /// loader-backed bundle and can be passed to [`Runtime::unload_bundle`]. All
-    /// contracts, metadata, and dependency declarations are installed together or
-    /// the runtime remains unchanged. Interface references must remain valid until
-    /// the returned bundle ID is unloaded.
-    pub fn register_embedded_bundle(
+    /// Core copies and validates the ABI registration input before publishing it
+    /// through the same prepared-bundle transaction used by loaders. The resident is
+    /// retained by this runtime until logical unload removes the bundle.
+    pub fn register_in_process_bundle<R>(
         &self,
-        bundle: &EmbeddedBundle,
+        bundle: InProcessBundle<R>,
+    ) -> Result<BundleId, RuntimeError>
+    where
+        R: Any + Send + Sync,
+    {
+        let mut residents: RecoveringGuard<
+            MutexGuard<'_, HashMap<BundleId, Box<dyn Any + Send + Sync>>>,
+        > = self
+            .in_process_residents
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
+        // SAFETY: InProcessBundle::new requires its pointer-bearing fields to remain
+        // valid for this synchronous registration call.
+        let bundle_id: BundleId = unsafe {
+            self.registry
+                .register_in_process_bundle(&bundle.registration)?
+        };
+        let previous: Option<Box<dyn Any + Send + Sync>> =
+            residents.insert(bundle_id, bundle.resident);
+        debug_assert!(
+            previous.is_none(),
+            "logical unload must release the prior in-process resident"
+        );
+        Ok(bundle_id)
+    }
+
+    /// Register ABI tables submitted by a non-Rust host SDK.
+    ///
+    /// That SDK retains its own language-native resident keyed by the returned ID.
+    ///
+    /// # Safety
+    ///
+    /// `registration` and all pointer-bearing contents must satisfy the ABI contract
+    /// for this synchronous call.
+    pub(crate) unsafe fn register_in_process_registration(
+        &self,
+        registration: &InProcessBundleRegistration,
     ) -> Result<BundleId, RuntimeError> {
-        self.registry.register_embedded_bundle(bundle)?;
-        Ok(BundleId::new(bundle.name))
+        // SAFETY: this method's caller guarantees the complete registration and
+        // every pointer-bearing member remain valid for the synchronous copy.
+        unsafe { self.registry.register_in_process_bundle(registration) }.map_err(Into::into)
     }
 
     /// Find the first provider of a contract.
@@ -640,6 +723,40 @@ impl Runtime {
             .unwrap_or(0)
     }
 
+    /// Check an init-time dependency against a staged manifest before falling back
+    /// to a published bundle declaration.
+    fn bundle_declares_dependency(
+        &self,
+        bundle_id: BundleId,
+        contract_id: GuestContractId,
+    ) -> bool {
+        self.registry
+            .prepared_manifest(bundle_id)
+            .is_some_and(|manifest| {
+                manifest
+                    .dependencies
+                    .iter()
+                    .any(|dependency: &RawManifestDependency| dependency.contract_id == contract_id)
+            })
+            || self
+                .registry
+                .is_bundle_dependency_declared(bundle_id, contract_id)
+    }
+
+    /// Return the manifest visible to the bundle currently initializing.
+    fn init_manifest(&self, bundle_id: BundleId) -> Option<ManifestData> {
+        self.registry.prepared_manifest(bundle_id).or_else(|| {
+            let manifests: RecoveringGuard<MutexGuard<'_, HashMap<String, ManifestData>>> = self
+                .bundle_manifests
+                .lock()
+                .recover_poisoned(self.logger, "runtime");
+            manifests
+                .values()
+                .find(|manifest: &&ManifestData| manifest.id == bundle_id.id())
+                .cloned()
+        })
+    }
+
     /// Load a single plugin bundle explicitly by path.
     ///
     /// Reads the companion manifest, finds the matching loader, and dispatches.
@@ -766,10 +883,23 @@ impl Runtime {
         // is owned by `descriptor`, which outlives this synchronous call.
         self.fire_unloading(bundle_id, &descriptor.name);
 
-        // Unload truly frees the bundle's resources, so any still-live guest instance
-        // is a genuine use-after-free hazard. Warn (do not block) before invalidate.
-        let live: u64 = self
-            .live_instance_count_for_contracts(&self.registry.bundle_exported_contracts(bundle_id));
+        // A Rust-owned in-process resident cannot be released while one of its
+        // stateful instances is active. Loader-owned bundles retain their existing
+        // warning-only behavior because their host manages the resident externally.
+        let exported_contracts: Vec<GuestContractId> =
+            self.registry.bundle_exported_contracts(bundle_id);
+        let live: u64 = self.live_instance_count_for_contracts(&exported_contracts);
+        let has_in_process_resident: bool = self
+            .in_process_residents
+            .lock()
+            .recover_poisoned(self.logger, "runtime")
+            .contains_key(&bundle_id);
+        if has_in_process_resident && live > 0 {
+            return Err(RuntimeError::InProcessBundleInUse {
+                bundle: descriptor.name,
+                active_instances: live,
+            });
+        }
         if live > 0 {
             let name: String = descriptor.name.clone();
             self.logger.log(LogLevel::Warn, "runtime", || {
@@ -781,11 +911,17 @@ impl Runtime {
         }
 
         let _count: u32 = self.registry.invalidate_bundle(bundle_id)?;
+        self.forget_bundle_manifest(&descriptor.name);
 
         // Invalidate-then-reclaim: now that the bundle is gone from the registry
         // indices, no new dispatch can reach it. Ask the loader to free its
         // per-bundle resources at a quiescence point (no-op for non-VM loaders).
         self.reclaim_via_loader(bundle_id, loader_name.as_deref())?;
+        let _released: Option<Box<dyn Any + Send + Sync>> = self
+            .in_process_residents
+            .lock()
+            .recover_poisoned(self.logger, "runtime")
+            .remove(&bundle_id);
         Ok(())
     }
 
@@ -820,6 +956,15 @@ impl Runtime {
         manifests
             .get(bundle_name)
             .map(|m: &ManifestData| m.loader.clone())
+    }
+
+    /// Remove the reload recipe after logical unload has invalidated the registry.
+    fn forget_bundle_manifest(&self, bundle_name: &str) {
+        let mut manifests: RecoveringGuard<MutexGuard<'_, HashMap<String, ManifestData>>> = self
+            .bundle_manifests
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
+        manifests.remove(bundle_name);
     }
 
     /// Invoke the loader's `unload` reclaim hook for `bundle_id`.
@@ -917,6 +1062,7 @@ impl Runtime {
         }
 
         let _count: u32 = self.registry.invalidate_bundle(bundle_id)?;
+        self.forget_bundle_manifest(&bundle_name);
 
         self.reclaim_via_loader(bundle_id, loader_name.as_deref())?;
         Ok(())
@@ -1067,40 +1213,6 @@ impl Runtime {
             }
         }
 
-        // Validate function_count entries for this explicit load
-        if !opts.ignore_function_count_mismatch {
-            let major_str: &str = match manifest.version.split_once('.') {
-                Some((maj, _)) => maj,
-                None => "0",
-            };
-            for contract in &manifest.provides {
-                // Extract contract name without version (e.g., "data.Reporter" from "data.Reporter@1.0")
-                let contract_name: &str = match contract.split_once('@') {
-                    Some((name, _)) => name,
-                    None => contract,
-                };
-                let key: String = format!("{}@{}", contract_name, major_str);
-                if !manifest.function_count.contains_key(&key)
-                    && opts.compatibility != Compatibility::Yolo
-                {
-                    let msg: String = format!(
-                        "bundle {:?} provides {:?} but has no function_count entry for key {:?}",
-                        manifest.name, contract, key
-                    );
-                    if opts.compatibility == Compatibility::Strict {
-                        return Err(RuntimeError::Loader(LoaderError::FunctionCountMismatch {
-                            contract: contract.clone(),
-                            // sentinel 0/0: entry is missing entirely; actual count is unknown without loading the .so
-                            expected: 0,
-                            found: 0,
-                        }));
-                    } else {
-                        self.emit_warning(&msg);
-                    }
-                }
-            }
-        }
-
         // Find the loader for this bundle. The lock is released before load() runs
         // (see `loader_for`) so a plugin init that registers a loader cannot deadlock.
         let loader_name: &str = &manifest.loader;
@@ -1111,106 +1223,237 @@ impl Runtime {
             })
         })?;
 
-        // Declare this bundle's dependency contract_ids in the registry BEFORE
-        // calling the loader. The loader runs `polyplug_init`, during which the
-        // plugin may resolve its declared dependencies via `find_guest_contract`.
-        // Dependency enforcement (host_find_guest_contract) consults this set, so
-        // it must be populated before init runs — otherwise even declared lookups
-        // would be denied. See docs/TRUST_MODEL.md §3/§4.
-        let declared_contract_ids: Vec<GuestContractId> = manifest
-            .dependencies
-            .iter()
-            .map(|dep: &RawManifestDependency| dep.contract_id)
-            .collect();
+        // Build the complete metadata before any loader has a chance to allocate
+        // resident state. A malformed version must not turn into a failed partial load.
+        let bundle_version: Version =
+            parse_manifest_version(&manifest.version, &manifest.name, &manifest.path)?;
+        let bundle_dependencies: Vec<BundleDependency> = parsed_bundle_dependencies(&manifest);
         let bundle_id: BundleId = BundleId::new(&manifest.name);
-        if let Err(e) = self
-            .registry
-            .declare_bundle_dependencies(bundle_id, declared_contract_ids)
-        {
-            return Err(RuntimeError::Registry(e));
+        if self.registry.get_bundle_descriptor(bundle_id).is_some() {
+            return Err(RuntimeError::Registry(
+                RegistryError::BundleAlreadyRegistered {
+                    bundle: manifest.name.clone(),
+                },
+            ));
         }
+        if !is_known_runtime_language(&manifest.loader) {
+            self.logger.log(LogLevel::Warn, "runtime", || {
+                format!(
+                    "bundle `{}`: unknown loader `{}`; defaulting SupportedLanguage to Rust",
+                    manifest.name, manifest.loader
+                )
+            });
+        }
+        let runtime_language: SupportedLanguage = supported_language_from_str(&manifest.loader);
 
-        let result: Result<(), RuntimeError> = loader
-            .load(&manifest, &source, self)
-            .map_err(RuntimeError::Loader);
-        if result.is_ok() {
-            let bundle_name: String = manifest.name.clone();
+        // The registry keeps this manifest and every guest registration private until
+        // the loader returns successfully and the exact provider/function sets validate.
+        // Dependency callbacks consult this staged manifest during polyplug_init.
+        self.registry
+            .begin_prepared_bundle(manifest.clone(), runtime_language);
 
-            // Parse bundle dependencies from new bundle-level format
-            let bundle_deps: Vec<BundleDependency> = parsed_bundle_dependencies(&manifest);
+        let result: Result<(), RuntimeError> = (|| {
+            loader
+                .load(&manifest, &source, self)
+                .map_err(RuntimeError::Loader)?;
 
-            // Parse version from manifest. A malformed version is malformed manifest
-            // content — reject it rather than silently coercing to 0.0.0.
-            let bundle_version: Version =
-                parse_manifest_version(&manifest.version, &manifest.name, &manifest.path)?;
-
-            // Convert loader string to SupportedLanguage. An unrecognized loader
-            // string falls back to Rust (see `supported_language_from_str`); surface
-            // that as a warning so a typo'd `loader` field is not silently coerced.
-            if !is_known_runtime_language(&manifest.loader) {
-                self.logger.log(LogLevel::Warn, "runtime", || {
-                    format!(
-                        "bundle `{}`: unknown loader `{}`; defaulting SupportedLanguage to Rust",
-                        manifest.name, manifest.loader
-                    )
-                });
-            }
-            let runtime_lang: SupportedLanguage = supported_language_from_str(&manifest.loader);
-
-            // Register bundle metadata in RuntimeStore. A failure here means the
-            // bundle loaded but its metadata could not be recorded, leaving the
-            // store inconsistent — propagate it instead of silently discarding.
-            self.registry.register_bundle_metadata(
-                bundle_id,
-                manifest.name.clone(),
-                bundle_version,
-                runtime_lang,
-                manifest.path.clone(),
-                bundle_deps,
-            )?;
-
-            // Real function_count validation: now that the bundle is loaded and its
-            // interfaces registered, compare the manifest's declared function counts
-            // against each native interface's actual `dispatch.native.function_count`.
-            // The pre-load presence check above only proves an entry exists; this
-            // proves the declared number matches reality. VM-dispatch interfaces have
-            // no exposed count and are skipped.
+            let prepared = self
+                .registry
+                .take_prepared_bundle(bundle_id)
+                .ok_or_else(|| {
+                    RuntimeError::Registry(RegistryError::MissingBundleMetadata {
+                        bundle_id: bundle_id.id(),
+                    })
+                })?;
+            let (staged_manifest, staged_language, contracts) = prepared.into_parts();
+            self.validate_prepared_provider_set(&staged_manifest, &contracts)?;
             if !opts.ignore_function_count_mismatch && opts.compatibility != Compatibility::Yolo {
-                self.validate_loaded_function_counts(bundle_id, &manifest, opts.compatibility)?;
+                self.validate_prepared_function_counts(
+                    &staged_manifest,
+                    &contracts,
+                    opts.compatibility,
+                )?;
             }
+
+            let declared_contract_ids: HashSet<GuestContractId> = staged_manifest
+                .dependencies
+                .iter()
+                .map(|dependency: &RawManifestDependency| dependency.contract_id)
+                .collect();
+            self.registry.register_prepared_bundle(
+                BundleDescriptor {
+                    id: bundle_id,
+                    name: staged_manifest.name.clone(),
+                    version: bundle_version,
+                    runtime: staged_language,
+                    file_path: staged_manifest.path.clone(),
+                    dependencies: bundle_dependencies,
+                },
+                declared_contract_ids,
+                contracts,
+            )?;
 
             let mut manifests: RecoveringGuard<MutexGuard<'_, HashMap<String, ManifestData>>> =
                 self.bundle_manifests
                     .lock()
                     .recover_poisoned(self.logger, "runtime");
-            manifests.insert(bundle_name, manifest);
+            manifests.insert(staged_manifest.name.clone(), staged_manifest);
+            Ok(())
+        })();
+
+        if result.is_err() {
+            self.registry.discard_prepared_bundle(bundle_id);
+            if let Err(cleanup_error) = loader.unload(bundle_id, self) {
+                self.logger.log(LogLevel::Error, "runtime", || {
+                    format!(
+                        "failed load cleanup for bundle `{}`: {cleanup_error}",
+                        manifest.name
+                    )
+                });
+            }
         }
         result
     }
 
-    /// Compare declared `function_count` entries against the actual native counts of
-    /// the bundle's freshly-registered interfaces.
-    ///
-    /// In `Strict` mode a mismatch is an error; in `Relaxed` mode it emits a warning.
-    /// Only native-dispatch interfaces carry an observable count; VM interfaces are
-    /// skipped (their count is `None`).
-    fn validate_loaded_function_counts(
+    /// Require the staged registrations to match the manifest's provider set exactly.
+    fn validate_prepared_provider_set(
         &self,
-        bundle_id: BundleId,
         manifest: &ManifestData,
+        contracts: &[PreparedGuestContract],
+    ) -> Result<(), RuntimeError> {
+        let expected: Vec<(String, Option<String>)> = manifest
+            .provides
+            .iter()
+            .map(|spec: &String| match spec.split_once('@') {
+                Some((name, version)) => Ok((name.to_owned(), Some(version.to_owned()))),
+                None => Ok((spec.clone(), None)),
+            })
+            .collect::<Result<Vec<(String, Option<String>)>, RuntimeError>>()?;
+        let actual: Vec<(String, Version)> = RuntimeStore::prepared_provider_specs(contracts);
+        if expected.len() != actual.len() {
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!(
+                    "manifest provides {:?}, but loader registered {:?}",
+                    manifest.provides,
+                    actual
+                        .iter()
+                        .map(|(name, version)| format!(
+                            "{name}@{}.{}.{}",
+                            version.major, version.minor, version.patch
+                        ))
+                        .collect::<Vec<String>>()
+                ),
+            }));
+        }
+
+        let mut matched: Vec<bool> = vec![false; expected.len()];
+        for (actual_name, actual_version) in actual {
+            let (provider_name, declared_version): (&str, Option<&str>) = actual_name
+                .split_once('@')
+                .map_or((&actual_name, None), |(name, version)| {
+                    (name, Some(version))
+                });
+            if let Some(declared_version) = declared_version {
+                let declaration_matches: bool = match declared_version.parse::<u32>() {
+                    Ok(major) => major == actual_version.major,
+                    Err(_) => Version::from_str(declared_version)
+                        .map(|declared| declared == actual_version)
+                        .unwrap_or(false),
+                };
+                if !declaration_matches {
+                    return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: manifest.name.clone(),
+                        error: format!(
+                            "loader registered provider `{actual_name}` with version {}.{}.{}",
+                            actual_version.major, actual_version.minor, actual_version.patch
+                        ),
+                    }));
+                }
+            }
+            let expected_index: Option<usize> = expected.iter().enumerate().find_map(
+                |(index, (expected_name, expected_version))| {
+                    let version_matches: bool = match expected_version {
+                        None => true,
+                        Some(version) => match version.parse::<u32>() {
+                            Ok(major) => major == actual_version.major,
+                            Err(_) => Version::from_str(version)
+                                .map(|expected| expected == actual_version)
+                                .unwrap_or(false),
+                        },
+                    };
+                    (!matched[index] && *expected_name == provider_name && version_matches)
+                        .then_some(index)
+                },
+            );
+            match expected_index {
+                Some(index) => matched[index] = true,
+                None => {
+                    return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: manifest.name.clone(),
+                        error: format!(
+                            "loader registered provider `{actual_name}@{}.{}.{}` not declared by manifest provides {:?}",
+                            actual_version.major,
+                            actual_version.minor,
+                            actual_version.patch,
+                            manifest.provides
+                        ),
+                    }));
+                }
+            }
+        }
+        if matched.iter().all(|matched| *matched) {
+            Ok(())
+        } else {
+            Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!(
+                    "manifest provides {:?}, but the loader did not register every declared provider",
+                    manifest.provides
+                ),
+            }))
+        }
+    }
+
+    /// Compare declared `function_count` entries against unpublished native interfaces.
+    fn validate_prepared_function_counts(
+        &self,
+        manifest: &ManifestData,
+        contracts: &[PreparedGuestContract],
         compatibility: Compatibility,
     ) -> Result<(), RuntimeError> {
-        let registered: Vec<(String, u32, Option<u32>)> =
-            self.registry.bundle_native_function_counts(bundle_id);
-        for (contract_name, major, actual_opt) in registered {
+        for (contract_name, major, actual_opt) in
+            RuntimeStore::prepared_native_function_counts(contracts)
+        {
             let actual: u32 = match actual_opt {
-                Some(n) => n,
-                None => continue, // VM dispatch: no observable count.
+                Some(count) => count,
+                None => continue,
             };
-            let key: String = format!("{}@{}", contract_name, major);
+            let bare_name: &str = contract_name
+                .split_once('@')
+                .map_or(contract_name.as_str(), |(name, _version)| name);
+            let key: String = format!("{bare_name}@{major}");
             let declared: u32 = match manifest.function_count.get(&key) {
-                Some(n) => *n,
-                None => continue, // Missing-entry case already handled pre-load.
+                Some(count) => *count,
+                None => match compatibility {
+                    Compatibility::Strict => {
+                        return Err(RuntimeError::Loader(LoaderError::FunctionCountMismatch {
+                            contract: key,
+                            expected: 0,
+                            found: actual,
+                        }));
+                    }
+                    Compatibility::Relaxed => {
+                        self.logger.log(LogLevel::Warn, "runtime", || {
+                            format!(
+                                "bundle `{}` native contract `{}` has no function_count entry; interface exports {}",
+                                manifest.name, key, actual
+                            )
+                        });
+                        continue;
+                    }
+                    Compatibility::Yolo => continue,
+                },
             };
             if declared != actual {
                 match compatibility {
@@ -1329,43 +1572,6 @@ pub(crate) fn validate_bundle_compatibility(
                         });
                     }
                     Compatibility::Yolo => {} // intentionally silent — Yolo mode skips all version checks
-                }
-            }
-        }
-
-        // Check function_count entries for provided contracts
-        for contract in &manifest.provides {
-            // Strip any `@version` suffix from the provides entry so the
-            // function_count key is `bare_name@major`, identical to the key
-            // `load_manifest_with_source` builds and looks up.
-            let bare_contract: &str = match contract.split_once('@') {
-                Some((name, _)) => name,
-                None => contract.as_str(),
-            };
-            let major_str: &str = match manifest.version.split_once('.') {
-                Some((maj, _)) => maj,
-                None => "0",
-            };
-            let key: String = format!("{}@{}", bare_contract, major_str);
-            if !manifest.function_count.contains_key(&key) {
-                match compatibility {
-                    Compatibility::Strict => {
-                        return Err(RuntimeError::Loader(LoaderError::FunctionCountMismatch {
-                            contract: contract.clone(),
-                            // sentinel 0/0: entry is missing entirely; actual count is unknown without loading the .so
-                            expected: 0,
-                            found: 0,
-                        }));
-                    }
-                    Compatibility::Relaxed => {
-                        logger.log(LogLevel::Warn, "runtime", || {
-                            format!(
-                                "bundle `{}` provides `{}` but has no function_count entry for key `{}`",
-                                manifest.name, contract, key
-                            )
-                        });
-                    }
-                    Compatibility::Yolo => {} // intentionally silent — Yolo mode skips all function_count checks
                 }
             }
         }
@@ -1677,10 +1883,9 @@ unsafe fn host_register_guest_contract_impl(
     // SAFETY: this is a valid HostApi pointer passed during polyplug_init.
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-    let registry: &RuntimeStore = &runtime.registry;
     // Raw guest registration is reserved for a loader-owned polyplug_init
-    // invocation. Hosts register static implementations through
-    // Runtime::register_embedded_bundle instead.
+    // invocation. Hosts submit complete static tables through the canonical
+    // in-process registration operation instead.
     let bundle_id: u64 = runtime.current_init_bundle_id();
     if bundle_id == 0 {
         const OUTSIDE_INIT: &[u8] =
@@ -1693,6 +1898,7 @@ unsafe fn host_register_guest_contract_impl(
     }
 
     // SAFETY: descriptor is non-null (checked above) and provided by the plugin's
+
     // polyplug_init function.
     let desc: PluginDescriptor = unsafe { *descriptor };
 
@@ -1720,16 +1926,34 @@ unsafe fn host_register_guest_contract_impl(
         }
     };
 
-    // SAFETY: interface is a valid 'static GuestContractInterface from the plugin binary
-    match unsafe {
-        registry.register_guest_contract(
-            desc,
-            interface,
-            contract_name,
-            BundleId::from_u64(bundle_id),
-        )
-    } {
-        Ok(_handle) => AbiError::ok(),
+    let registration_bundle_id: BundleId = BundleId::from_u64(bundle_id);
+    // Initial loads own a prepared transaction; reloads register their replacement
+    // interfaces into the established reload window for `apply_reload_swap`.
+    let registration: Result<(), RegistryError> = if runtime
+        .registry
+        .prepared_manifest(registration_bundle_id)
+        .is_some()
+    {
+        // SAFETY: interface is valid for the registration lifetime as required by the ABI.
+        unsafe {
+            runtime.registry.stage_guest_contract(
+                registration_bundle_id,
+                desc,
+                interface,
+                contract_name,
+            )
+        }
+    } else {
+        // SAFETY: interface is valid for the registration lifetime as required by the ABI.
+        unsafe {
+            runtime
+                .registry
+                .register_guest_contract(desc, interface, contract_name, registration_bundle_id)
+                .map(|_| ())
+        }
+    };
+    match registration {
+        Ok(()) => AbiError::ok(),
         Err(e) => {
             runtime.logger.log(LogLevel::Error, "registry", || {
                 format!("registration failed for bundle {bundle_id}: {e}")
@@ -1748,6 +1972,81 @@ unsafe fn host_register_guest_contract_impl(
                 message: StringView::null(),
             }
         }
+    }
+}
+
+/// HostApi callback that registers one complete in-process bundle transaction.
+///
+/// The callback accepts metadata and interface tables only. Each host SDK retains its
+/// language-native implementation resident outside this ABI.
+pub(crate) unsafe extern "C" fn host_register_in_process_bundle(
+    this: *const HostApi,
+    registration: *const InProcessBundleRegistration,
+    out_bundle_id: *mut u64,
+    out_err: *mut AbiError,
+) {
+    if !out_bundle_id.is_null() {
+        // SAFETY: out_bundle_id is non-null and writable per the ABI contract.
+        unsafe { out_bundle_id.write(0) };
+    }
+    let result: AbiError = if this.is_null() {
+        AbiError {
+            code: AbiErrorCode::InvalidPointer as u32,
+            message: StringView::from_static(
+                b"register_in_process_bundle: HostApi pointer is null",
+            ),
+        }
+    } else if registration.is_null() {
+        AbiError {
+            code: AbiErrorCode::InvalidPointer as u32,
+            message: StringView::from_static(
+                b"register_in_process_bundle: registration pointer is null",
+            ),
+        }
+    } else if out_bundle_id.is_null() {
+        AbiError {
+            code: AbiErrorCode::InvalidPointer as u32,
+            message: StringView::from_static(
+                b"register_in_process_bundle: bundle ID output pointer is null",
+            ),
+        }
+    } else {
+        // SAFETY: this and registration were checked non-null; the ABI requires the
+        // pointed HostApi and registration graph to remain valid for this call.
+        let runtime_ptr: *const Runtime = unsafe { (*this).runtime.cast::<Runtime>() };
+        if runtime_ptr.is_null() {
+            AbiError {
+                code: AbiErrorCode::InvalidPointer as u32,
+                message: StringView::from_static(
+                    b"register_in_process_bundle: Runtime pointer is null",
+                ),
+            }
+        } else {
+            // SAFETY: HostApi.runtime points at a live Runtime for this call.
+            let runtime: &Runtime = unsafe { &*runtime_ptr };
+            // SAFETY: registration is non-null and valid for the synchronous call.
+            let registration_ref: &InProcessBundleRegistration = unsafe { &*registration };
+            // SAFETY: the non-null registration and every pointer-bearing member
+            // are valid for this synchronous host callback.
+            match unsafe { runtime.register_in_process_registration(registration_ref) } {
+                Ok(bundle_id) => {
+                    // SAFETY: out_bundle_id was checked non-null and is writable.
+                    unsafe { out_bundle_id.write(bundle_id.id()) };
+                    AbiError::ok()
+                }
+                Err(error) => {
+                    runtime.set_last_error(error.to_string());
+                    AbiError {
+                        code: AbiErrorCode::Generic as u32,
+                        message: StringView::null(),
+                    }
+                }
+            }
+        }
+    };
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null and writable per the ABI contract.
+        unsafe { out_err.write(result) };
     }
 }
 
@@ -1800,7 +2099,7 @@ pub(crate) unsafe extern "C" fn host_find_guest_contract(
     let caller_bundle_id: u64 = runtime.current_init_bundle_id();
 
     if caller_bundle_id != 0
-        && !registry.is_bundle_dependency_declared(
+        && !runtime.bundle_declares_dependency(
             BundleId::from_u64(caller_bundle_id),
             GuestContractId::from_u64(contract_id),
         )
@@ -1835,7 +2134,7 @@ pub(crate) unsafe extern "C" fn host_find_all_guest_contracts(
     // (caller_bundle_id == 0, host-side lookups) enumeration is unrestricted.
     let caller_bundle_id: u64 = runtime.current_init_bundle_id();
     if caller_bundle_id != 0
-        && !registry.is_bundle_dependency_declared(
+        && !runtime.bundle_declares_dependency(
             BundleId::from_u64(caller_bundle_id),
             GuestContractId::from_u64(contract_id),
         )
@@ -1901,28 +2200,24 @@ pub unsafe extern "C" fn host_resolve_guest_contract(
     }
 }
 
-/// HostApi.revision_counter callback — returns a pointer to the runtime's registry
-/// revision counter, which a generated host→guest caller fetches ONCE at construction
-/// and then polls directly (a single aligned atomic load, no call back into the
-/// runtime) before each dispatch. While the polled value is unchanged the caller's
-/// cached interface pointer is current and it dispatches directly; any change (load /
-/// reload-swap / unload) makes the caller re-resolve. See the `revision_counter` field
-/// doc on `HostApi` and [`RuntimeStore::revision_ptr`].
+/// HostApi.registry_revision callback. It performs the acquire load of the
+/// runtime-owned revision inside Rust, so callers in every host language receive a
+/// synchronized value without observing atomic storage through a foreign ABI.
 ///
-/// Returns null if `this` is null; a caller receiving null treats its cache as
-/// always-current (there is no runtime to mediate reloads against).
+/// A generated host caller invokes this once before each direct dispatch and
+/// re-resolves its cached interface when the value changes.
 ///
 /// # Safety
 /// `this` must be a valid `HostApi` pointer whose `runtime` field points to a live
 /// `Runtime`.
-pub(crate) unsafe extern "C" fn host_revision_counter(this: *const HostApi) -> *const u64 {
+pub(crate) unsafe extern "C" fn host_registry_revision(this: *const HostApi) -> u64 {
     if this.is_null() {
-        return ptr::null();
+        return 0;
     }
     // SAFETY: this is a valid HostApi pointer passed by the host.
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-    runtime.registry.revision_ptr()
+    runtime.registry.current_revision()
 }
 
 /// HostApi.get_host_contract callback — returns an instance for a host contract.
@@ -2141,14 +2436,8 @@ pub(crate) unsafe extern "C" fn host_get_dependencies(
         return Array::empty();
     }
 
-    let manifests: RecoveringGuard<MutexGuard<'_, HashMap<String, ManifestData>>> = runtime
-        .bundle_manifests
-        .lock()
-        .recover_poisoned(runtime.logger, "runtime");
-
-    // Find manifest by ID
-    let manifest = match manifests.values().find(|m| m.id == caller_bundle_id) {
-        Some(m) => m,
+    let manifest: ManifestData = match runtime.init_manifest(BundleId::from_u64(caller_bundle_id)) {
+        Some(manifest) => manifest,
         None => return Array::empty(),
     };
 
@@ -2668,13 +2957,23 @@ unsafe fn host_create_guest_instance_impl(
     // (VM contracts route construction through their loader; native ignore it).
     let loader_data: VmLoaderData = unsafe { guest_instance_loader_data(interface) };
 
+    // SAFETY: the same live, pinned interface owns the opaque adapter context.
+    let adapter_context: *mut c_void = unsafe { (*interface).adapter_context };
     let mut inst: GuestContractInstance = GuestContractInstance::null();
     // SAFETY: `create_instance` is non-null by ABI contract (register_guest_contract
     // rejects null bits); the interface stays alive across the call via the pin;
-    // `loader_data` is this interface's VM handle (null for native); `args` satisfies
-    // the contract's argument layout per the caller's contract; `inst` is a valid,
-    // writable out-param for the constructed instance.
-    unsafe { ((*interface).create_instance)(loader_data, this, args.cast::<()>(), &mut inst) };
+    // `adapter_context` is copied opaque adapter state; `loader_data` is this
+    // interface's VM handle (null for native); `args` satisfies the contract's
+    // argument layout per the caller's contract; `inst` is a valid writable out-param.
+    unsafe {
+        ((*interface).create_instance)(
+            adapter_context,
+            loader_data,
+            this,
+            args.cast::<()>(),
+            &mut inst,
+        )
+    };
 
     if !inst.data.is_null() {
         runtime.note_instance_created(contract_id);
@@ -2715,11 +3014,14 @@ pub(crate) unsafe extern "C" fn host_destroy_guest_instance(
 
     // SAFETY: same live, pinned interface; selects the per-instance loader_data.
     let loader_data: VmLoaderData = unsafe { guest_instance_loader_data(interface) };
+    // SAFETY: the same live, pinned interface owns the opaque adapter context.
+    let adapter_context: *mut c_void = unsafe { (*interface).adapter_context };
 
     // SAFETY: `destroy_instance` is non-null by ABI contract; the interface stays
-    // alive across the call via the pin; `loader_data` is this interface's VM handle
-    // (null for native); `instance` was produced by this contract.
-    unsafe { ((*interface).destroy_instance)(loader_data, this, instance) };
+    // alive across the call via the pin; `adapter_context` is copied opaque adapter
+    // state; `loader_data` is this interface's VM handle (null for native); `instance`
+    // was produced by this contract.
+    unsafe { ((*interface).destroy_instance)(adapter_context, loader_data, this, instance) };
 
     if !instance.data.is_null() {
         runtime.note_instance_destroyed(contract_id);
@@ -2730,11 +3032,14 @@ pub(crate) unsafe extern "C" fn host_destroy_guest_instance(
 mod tests {
     #![allow(clippy::expect_used)]
     use core::cell::Cell;
+    use core::sync::atomic::{AtomicBool, Ordering};
     use std::fs;
     use std::panic;
 
     use polyplug_abi::{DispatchMechanisms, NativeDispatch};
     use polyplug_utils::{HostContractId, guest_contract_id, host_contract_id};
+
+    use polyplug_abi::{InProcessBundleMetadata, InProcessContractRegistration, SupportedLanguage};
     use tempfile::TempDir;
 
     use super::*;
@@ -2746,6 +3051,12 @@ mod tests {
             SupportedLanguage::JavaScript
         );
         assert!(is_known_runtime_language("js-quickjs"));
+    }
+
+    #[test]
+    fn cpp_loader_maps_to_cpp_language() {
+        assert_eq!(supported_language_from_str("cpp"), SupportedLanguage::Cpp);
+        assert!(is_known_runtime_language("cpp"));
     }
 
     /// `HostApi.log` stub for test hosts — drops the record.
@@ -2863,6 +3174,171 @@ mod tests {
     }
 
     #[test]
+    fn in_process_residents_are_runtime_local_and_release_on_logical_unload() {
+        struct Resident {
+            dropped: Arc<AtomicBool>,
+        }
+
+        impl Drop for Resident {
+            fn drop(&mut self) {
+                self.dropped.store(true, Ordering::SeqCst);
+            }
+        }
+
+        unsafe extern "C" fn create_stateful_instance(
+            _adapter_context: *mut c_void,
+            _loader_data: VmLoaderData,
+            _host: *const HostApi,
+            _args: *const (),
+            out_instance: *mut GuestContractInstance,
+        ) {
+            if !out_instance.is_null() {
+                let state: *mut u8 = Box::into_raw(Box::new(0_u8));
+                // SAFETY: the non-null out parameter is writable for this callback.
+                unsafe {
+                    out_instance.write(GuestContractInstance {
+                        data: state.cast(),
+                        contract_id: GuestContractId::from_u64(0xA173_3A09_4E02_0001),
+                    })
+                };
+            }
+        }
+
+        unsafe extern "C" fn destroy_stateful_instance(
+            _adapter_context: *mut c_void,
+            _loader_data: VmLoaderData,
+            _host: *const HostApi,
+            instance: GuestContractInstance,
+        ) {
+            if !instance.data.is_null() {
+                // SAFETY: create_stateful_instance allocated this exact boxed byte.
+                unsafe { drop(Box::from_raw(instance.data.cast::<u8>())) };
+            }
+        }
+
+        let interface_a: GuestContractInterface = GuestContractInterface {
+            contract_id: GuestContractId::from_u64(0xA173_3A09_4E02_0001),
+            contract_version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            dispatch_type: DispatchType::Native,
+            adapter_context: ptr::null_mut(),
+            create_instance: create_stateful_instance,
+            destroy_instance: destroy_stateful_instance,
+            dispatch: DispatchMechanisms {
+                native: NativeDispatch {
+                    function_count: 0,
+                    functions: ptr::null(),
+                },
+            },
+        };
+        let contract_a: InProcessContractRegistration = InProcessContractRegistration {
+            descriptor: PluginDescriptor {
+                name: StringView::from_static(b"resident-provider"),
+                contract_name: StringView::from_static(b"resident.contract"),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+            },
+            interface: &interface_a,
+            adapter_context: ptr::null_mut(),
+        };
+        let registration_a: InProcessBundleRegistration = InProcessBundleRegistration {
+            metadata: InProcessBundleMetadata {
+                name: StringView::from_static(b"runtime-local-resident"),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                runtime: SupportedLanguage::Rust,
+            },
+            dependency_ids: ptr::null(),
+            dependency_count: 0,
+            contracts: &contract_a,
+            contract_count: 1,
+        };
+
+        let interface_b: GuestContractInterface = GuestContractInterface {
+            contract_id: GuestContractId::from_u64(0xA173_3A09_4E02_0001),
+            ..interface_a
+        };
+        let contract_b: InProcessContractRegistration = InProcessContractRegistration {
+            descriptor: contract_a.descriptor,
+            interface: &interface_b,
+            adapter_context: ptr::null_mut(),
+        };
+        let registration_b: InProcessBundleRegistration = InProcessBundleRegistration {
+            contracts: &contract_b,
+            ..registration_a
+        };
+
+        let runtime_a: Arc<Runtime> = Runtime::builder().build().expect("build first runtime");
+        let runtime_b: Arc<Runtime> = Runtime::builder().build().expect("build second runtime");
+        let dropped_a: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+        let dropped_b: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+        let bundle_a: BundleId = runtime_a
+            .register_in_process_bundle(InProcessBundle::new(
+                registration_a,
+                Resident {
+                    dropped: Arc::clone(&dropped_a),
+                },
+            ))
+            .expect("register first runtime bundle");
+        runtime_b
+            .register_in_process_bundle(InProcessBundle::new(
+                registration_b,
+                Resident {
+                    dropped: Arc::clone(&dropped_b),
+                },
+            ))
+            .expect("register second runtime bundle");
+
+        assert!(!dropped_a.load(Ordering::SeqCst));
+        assert!(!dropped_b.load(Ordering::SeqCst));
+        let handle: GuestContractHandle = runtime_a
+            .find_guest_contract(0xA173_3A09_4E02_0001, 0)
+            .expect("resolve runtime-local provider");
+        let interface: *const GuestContractInterface = runtime_a
+            .resolve_guest_contract(handle)
+            .expect("resolve runtime-local interface");
+        let host: *const HostApi = runtime_a.host_abi();
+        let mut active: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: `host` and `interface` are owned by `runtime_a`; `active` is writable.
+        unsafe {
+            ((*host).create_guest_instance)(host, interface, ptr::null(), &mut active);
+        }
+        assert!(!active.data.is_null());
+        assert!(matches!(
+            runtime_a.unload_bundle(bundle_a),
+            Err(RuntimeError::InProcessBundleInUse {
+                active_instances: 1,
+                ..
+            })
+        ));
+        assert!(!dropped_a.load(Ordering::SeqCst));
+        // SAFETY: the stateful instance was created through this exact runtime interface.
+        unsafe {
+            ((*host).destroy_guest_instance)(host, interface, active);
+        }
+        runtime_a
+            .unload_bundle(bundle_a)
+            .expect("logical unload releases only the first resident");
+        assert!(dropped_a.load(Ordering::SeqCst));
+        assert!(!dropped_b.load(Ordering::SeqCst));
+
+        let bundle_b: BundleId = BundleId::new("runtime-local-resident");
+        runtime_b
+            .unload_bundle(bundle_b)
+            .expect("logical unload releases the second resident");
+        assert!(dropped_b.load(Ordering::SeqCst));
+    }
+
+    #[test]
     fn abi_ok_constant() {
         assert_eq!(AbiErrorCode::Ok, AbiErrorCode::Ok);
         assert_eq!(AbiErrorCode::Ok as u32, 0_u32);
@@ -2907,6 +3383,7 @@ mod tests {
         let host_interface: HostApi = HostApi {
             runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
+            register_in_process_bundle: host_register_in_process_bundle,
             alloc: host_alloc,
             free: host_free,
             find_guest_contract: host_find_guest_contract,
@@ -2927,7 +3404,7 @@ mod tests {
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
-            revision_counter: host_revision_counter,
+            registry_revision: host_registry_revision,
             reserved: ptr::null(),
         };
 
@@ -2982,6 +3459,7 @@ mod tests {
         };
 
         unsafe extern "C" fn stub_create_instance(
+            _adapter_context: *mut c_void,
             _loader_data: VmLoaderData,
             _host: *const HostApi,
             _args: *const (),
@@ -2994,6 +3472,7 @@ mod tests {
         }
 
         unsafe extern "C" fn stub_destroy_instance(
+            _adapter_context: *mut c_void,
             _loader_data: VmLoaderData,
             _host: *const HostApi,
             _instance: GuestContractInstance,
@@ -3009,6 +3488,7 @@ mod tests {
                     patch: 0,
                 },
                 dispatch_type: DispatchType::Native,
+                adapter_context: ptr::null_mut(),
                 create_instance: stub_create_instance,
                 destroy_instance: stub_destroy_instance,
                 dispatch: DispatchMechanisms {
@@ -3046,6 +3526,7 @@ mod tests {
 
     /// Native dispatch target: writes the i32 at `args` plus one into `out`.
     unsafe extern "C" fn native_add_one(
+        _adapter_context: *mut c_void,
         _instance: GuestContractInstance,
         args: *const (),
         out: *mut (),
@@ -3082,6 +3563,7 @@ mod tests {
         };
 
         unsafe extern "C" fn stub_create(
+            _adapter_context: *mut c_void,
             _loader_data: VmLoaderData,
             _host: *const HostApi,
             _args: *const (),
@@ -3093,6 +3575,7 @@ mod tests {
             }
         }
         unsafe extern "C" fn stub_destroy(
+            _adapter_context: *mut c_void,
             _loader_data: VmLoaderData,
             _host: *const HostApi,
             _instance: GuestContractInstance,
@@ -3108,6 +3591,7 @@ mod tests {
                     patch: 0,
                 },
                 dispatch_type: DispatchType::Native,
+                adapter_context: ptr::null_mut(),
                 create_instance: stub_create,
                 destroy_instance: stub_destroy,
                 dispatch: DispatchMechanisms {
@@ -3156,6 +3640,7 @@ mod tests {
     /// so the runtime counts it as a live stateful instance, stamped with the
     /// contract id like a real generated factory.
     unsafe extern "C" fn stateful_create_instance(
+        _adapter_context: *mut c_void,
         _loader_data: VmLoaderData,
         _host: *const HostApi,
         _args: *const (),
@@ -3174,6 +3659,7 @@ mod tests {
 
     /// Destroy the boxed unit created by `stateful_create_instance`.
     unsafe extern "C" fn stateful_destroy_instance(
+        _adapter_context: *mut c_void,
         _loader_data: VmLoaderData,
         _host: *const HostApi,
         instance: GuestContractInstance,
@@ -3202,6 +3688,7 @@ mod tests {
                     patch: 0,
                 },
                 dispatch_type: DispatchType::Native,
+                adapter_context: ptr::null_mut(),
                 create_instance: stateful_create_instance,
                 destroy_instance: stateful_destroy_instance,
                 dispatch: DispatchMechanisms {
@@ -3381,10 +3868,6 @@ mod tests {
             "enforce"
         }
 
-        fn loader_language(&self) -> SupportedLanguage {
-            SupportedLanguage::Rust
-        }
-
         fn supports_hot_reload(&self) -> bool {
             false
         }
@@ -3426,10 +3909,6 @@ mod tests {
             "probe"
         }
 
-        fn loader_language(&self) -> SupportedLanguage {
-            SupportedLanguage::Rust
-        }
-
         fn supports_hot_reload(&self) -> bool {
             false
         }
@@ -3460,10 +3939,6 @@ mod tests {
     impl BundleLoader for PanicLoader {
         fn loader_name(&self) -> &'static str {
             "panic"
-        }
-
-        fn loader_language(&self) -> SupportedLanguage {
-            SupportedLanguage::Rust
         }
 
         fn supports_hot_reload(&self) -> bool {
@@ -3499,10 +3974,6 @@ mod tests {
     impl BundleLoader for ReentrantLoader {
         fn loader_name(&self) -> &'static str {
             "reentrant"
-        }
-
-        fn loader_language(&self) -> SupportedLanguage {
-            SupportedLanguage::Rust
         }
 
         fn supports_hot_reload(&self) -> bool {
@@ -3574,10 +4045,6 @@ mod tests {
     impl BundleLoader for LazyLoader {
         fn loader_name(&self) -> &'static str {
             "lazy"
-        }
-
-        fn loader_language(&self) -> SupportedLanguage {
-            SupportedLanguage::Rust
         }
 
         fn supports_hot_reload(&self) -> bool {
@@ -4024,6 +4491,7 @@ mod tests {
         let host_interface: HostApi = HostApi {
             runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
+            register_in_process_bundle: host_register_in_process_bundle,
             alloc: host_alloc,
             free: host_free,
             find_guest_contract: host_find_guest_contract,
@@ -4043,7 +4511,7 @@ mod tests {
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
-            revision_counter: host_revision_counter,
+            registry_revision: host_registry_revision,
             reserved: ptr::null(),
         };
 
@@ -4068,6 +4536,7 @@ mod tests {
         let host_interface: HostApi = HostApi {
             runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
+            register_in_process_bundle: host_register_in_process_bundle,
             alloc: host_alloc,
             free: host_free,
             find_guest_contract: host_find_guest_contract,
@@ -4087,7 +4556,7 @@ mod tests {
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
-            revision_counter: host_revision_counter,
+            registry_revision: host_registry_revision,
             reserved: ptr::null(),
         };
 
@@ -4187,6 +4656,7 @@ mod tests {
         let host_interface: HostApi = HostApi {
             runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
+            register_in_process_bundle: host_register_in_process_bundle,
             alloc: host_alloc,
             free: host_free,
             find_guest_contract: host_find_guest_contract,
@@ -4206,7 +4676,7 @@ mod tests {
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
-            revision_counter: host_revision_counter,
+            registry_revision: host_registry_revision,
             reserved: ptr::null(),
         };
 
@@ -4277,6 +4747,7 @@ mod tests {
         let host_interface: HostApi = HostApi {
             runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
+            register_in_process_bundle: host_register_in_process_bundle,
             alloc: host_alloc,
             free: host_free,
             find_guest_contract: host_find_guest_contract,
@@ -4296,7 +4767,7 @@ mod tests {
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
-            revision_counter: host_revision_counter,
+            registry_revision: host_registry_revision,
             reserved: ptr::null(),
         };
 
@@ -4378,6 +4849,7 @@ mod tests {
         let host_interface: HostApi = HostApi {
             runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
+            register_in_process_bundle: host_register_in_process_bundle,
             alloc: host_alloc,
             free: host_free,
             find_guest_contract: host_find_guest_contract,
@@ -4397,7 +4869,7 @@ mod tests {
             log: stub_host_log,
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
-            revision_counter: host_revision_counter,
+            registry_revision: host_registry_revision,
             reserved: ptr::null(),
         };
 
@@ -4512,6 +4984,396 @@ mod tests {
                 .get_bundle_descriptor(dependent_bundle_id)
                 .is_none(),
             "dependent bundle must be gone after cascade unload"
+        );
+    }
+    unsafe extern "C" fn transaction_create_instance(
+        _adapter_context: *mut c_void,
+        _loader_data: VmLoaderData,
+        _host: *const HostApi,
+        _args: *const (),
+        out_instance: *mut GuestContractInstance,
+    ) {
+        if !out_instance.is_null() {
+            // SAFETY: the caller owns the non-null output slot.
+            unsafe { out_instance.write(GuestContractInstance::null()) };
+        }
+    }
+
+    unsafe extern "C" fn transaction_destroy_instance(
+        _adapter_context: *mut c_void,
+        _loader_data: VmLoaderData,
+        _host: *const HostApi,
+        _instance: GuestContractInstance,
+    ) {
+    }
+
+    #[derive(Clone, Copy)]
+    enum TransactionLoadMode {
+        FailAfterFirst,
+        MismatchedProvider,
+        Success,
+    }
+
+    struct TransactionLoader {
+        mode: TransactionLoadMode,
+        unloads: Arc<AtomicUsize>,
+    }
+
+    impl TransactionLoader {
+        fn register(
+            runtime: &Runtime,
+            contract_id: u64,
+            contract_name: &'static str,
+        ) -> Result<(), LoaderError> {
+            let interface: GuestContractInterface = GuestContractInterface {
+                contract_id: GuestContractId::from_u64(contract_id),
+                contract_version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                dispatch_type: DispatchType::Native,
+                adapter_context: ptr::null_mut(),
+                create_instance: transaction_create_instance,
+                destroy_instance: transaction_destroy_instance,
+                dispatch: DispatchMechanisms {
+                    native: NativeDispatch {
+                        function_count: 0,
+                        functions: ptr::null(),
+                    },
+                },
+            };
+            let descriptor: PluginDescriptor = PluginDescriptor {
+                name: StringView::from_static(b"transaction-loader"),
+                contract_name: StringView::from_static(contract_name.as_bytes()),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+            };
+            let host: *const HostApi = runtime.host_abi();
+            let mut result: AbiError = AbiError::ok();
+            // SAFETY: host belongs to runtime; descriptor/interface/result remain valid
+            // for the synchronous registration call.
+            unsafe {
+                ((*host).register_guest_contract)(host, &descriptor, &interface, &mut result);
+            }
+            if result.is_ok() {
+                Ok(())
+            } else {
+                Err(LoaderError::InitFailed {
+                    bundle: "transaction".to_owned(),
+                    error: format!("guest registration failed with ABI code {}", result.code),
+                })
+            }
+        }
+    }
+
+    impl BundleLoader for TransactionLoader {
+        fn loader_name(&self) -> &'static str {
+            "transaction"
+        }
+
+        fn supports_hot_reload(&self) -> bool {
+            false
+        }
+
+        fn load(
+            &self,
+            manifest: &ManifestData,
+            _source: &BundleSource,
+            runtime: &Runtime,
+        ) -> Result<(), LoaderError> {
+            runtime.push_init_bundle_id(manifest.id);
+            let result: Result<(), LoaderError> = (|| match self.mode {
+                TransactionLoadMode::FailAfterFirst => {
+                    Self::register(runtime, 0xDD00_0000_0000_0001, "transaction.first")?;
+                    let host: *const HostApi = runtime.host_abi();
+                    let descriptor: PluginDescriptor = PluginDescriptor {
+                        name: StringView::from_static(b"transaction-loader"),
+                        contract_name: StringView::from_static(b"transaction.second"),
+                        version: Version {
+                            major: 1,
+                            minor: 0,
+                            patch: 0,
+                        },
+                    };
+                    let mut result: AbiError = AbiError::ok();
+                    // SAFETY: this deliberately validates the null-interface failure path.
+                    unsafe {
+                        ((*host).register_guest_contract)(
+                            host,
+                            &descriptor,
+                            ptr::null(),
+                            &mut result,
+                        );
+                    }
+                    Err(LoaderError::InitFailed {
+                        bundle: manifest.name.clone(),
+                        error: format!(
+                            "second registration rejected with ABI code {}",
+                            result.code
+                        ),
+                    })
+                }
+                TransactionLoadMode::MismatchedProvider => {
+                    Self::register(runtime, 0xDD00_0000_0000_0002, "transaction.actual")
+                }
+                TransactionLoadMode::Success => {
+                    Self::register(runtime, 0xDD00_0000_0000_0003, "transaction.provider")
+                }
+            })();
+            runtime.pop_init_bundle_id();
+            result
+        }
+
+        fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
+            Err(LoaderError::HotReloadUnsupported {
+                loader_name: self.loader_name().to_owned(),
+            })
+        }
+
+        fn unload(&self, _bundle_id: BundleId, _runtime: &Runtime) -> Result<(), LoaderError> {
+            self.unloads.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    fn transaction_manifest(
+        name: &str,
+        provides: &[&str],
+        dependencies: Vec<RawManifestDependency>,
+    ) -> ManifestData {
+        let function_count: HashMap<String, u32> = provides
+            .iter()
+            .map(|provider: &&str| {
+                let contract: &str = provider.split_once('@').map_or(*provider, |(name, _)| name);
+                (format!("{contract}@1"), 0)
+            })
+            .collect();
+        ManifestData {
+            loader: "transaction".to_owned(),
+            name: name.to_owned(),
+            dependencies,
+            id: BundleId::new(name).id(),
+            version: "1.0.0".to_owned(),
+            file: "transaction.test".to_owned(),
+            provides: provides
+                .iter()
+                .map(|provider: &&str| (*provider).to_owned())
+                .collect(),
+            function_count,
+            needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
+            path: PathBuf::new(),
+        }
+    }
+
+    fn load_transaction(runtime: &Runtime, manifest: ManifestData) -> Result<(), RuntimeError> {
+        runtime.load_bundle_from_source(manifest, BundleSource::Code(String::new()))
+    }
+
+    #[test]
+    fn failed_second_registration_publishes_no_contract_or_metadata() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("runtime build");
+        let unloads: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        runtime
+            .register_loader(Box::new(TransactionLoader {
+                mode: TransactionLoadMode::FailAfterFirst,
+                unloads: Arc::clone(&unloads),
+            }))
+            .expect("loader registration");
+        let manifest: ManifestData = transaction_manifest(
+            "transaction-second-failure",
+            &["transaction.first", "transaction.second"],
+            Vec::new(),
+        );
+        let bundle_id: BundleId = BundleId::new(&manifest.name);
+
+        assert!(load_transaction(&runtime, manifest).is_err());
+        assert!(
+            runtime
+                .find_guest_contract(0xDD00_0000_0000_0001, 0)
+                .is_err()
+        );
+        assert!(runtime.registry.get_bundle_descriptor(bundle_id).is_none());
+        assert_eq!(unloads.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn provider_mismatch_publishes_no_contract_or_manifest() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("runtime build");
+        let unloads: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        runtime
+            .register_loader(Box::new(TransactionLoader {
+                mode: TransactionLoadMode::MismatchedProvider,
+                unloads: Arc::clone(&unloads),
+            }))
+            .expect("loader registration");
+        let manifest: ManifestData = transaction_manifest(
+            "transaction-provider-mismatch",
+            &["transaction.expected"],
+            Vec::new(),
+        );
+        let bundle_id: BundleId = BundleId::new(&manifest.name);
+
+        assert!(load_transaction(&runtime, manifest).is_err());
+        assert!(
+            runtime
+                .find_guest_contract(0xDD00_0000_0000_0002, 0)
+                .is_err()
+        );
+        assert!(runtime.registry.get_bundle_descriptor(bundle_id).is_none());
+        assert_eq!(unloads.load(Ordering::Relaxed), 1);
+        assert!(
+            runtime
+                .bundle_manifests
+                .lock()
+                .expect("manifest lock")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn unload_removes_loader_manifest_and_declared_dependencies() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("runtime build");
+        let unloads: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        runtime
+            .register_loader(Box::new(TransactionLoader {
+                mode: TransactionLoadMode::Success,
+                unloads: Arc::clone(&unloads),
+            }))
+            .expect("loader registration");
+        let dependency_id: GuestContractId = GuestContractId::new("transaction.dependency", 1);
+        let manifest: ManifestData = transaction_manifest(
+            "transaction-unload",
+            &["transaction.provider"],
+            vec![RawManifestDependency {
+                kind: "contract".to_owned(),
+                contract: "transaction.dependency".to_owned(),
+                min_version: "1.0.0".to_owned(),
+                bundle: None,
+                contract_id: dependency_id,
+                bundle_id: None,
+            }],
+        );
+        let bundle_name: String = manifest.name.clone();
+        let bundle_id: BundleId = BundleId::new(&bundle_name);
+
+        load_transaction(&runtime, manifest).expect("transaction load");
+        runtime
+            .unload_bundle(bundle_id)
+            .expect("transaction unload");
+
+        assert!(runtime.registry.get_bundle_descriptor(bundle_id).is_none());
+        assert!(
+            runtime
+                .registry
+                .bundles_depending_on_any(&HashSet::from([dependency_id]))
+                .is_empty()
+        );
+        assert!(
+            !runtime
+                .bundle_manifests
+                .lock()
+                .expect("manifest lock")
+                .contains_key(&bundle_name)
+        );
+        assert_eq!(unloads.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn repeated_load_preserves_the_committed_bundle_and_resident() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("runtime build");
+        let unloads: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        runtime
+            .register_loader(Box::new(TransactionLoader {
+                mode: TransactionLoadMode::Success,
+                unloads: Arc::clone(&unloads),
+            }))
+            .expect("loader registration");
+        let manifest: ManifestData = transaction_manifest(
+            "transaction-repeated",
+            &["transaction.provider"],
+            Vec::new(),
+        );
+        let bundle_id: BundleId = BundleId::new(&manifest.name);
+
+        load_transaction(&runtime, manifest.clone()).expect("initial load");
+        let repeated: Result<(), RuntimeError> = load_transaction(&runtime, manifest);
+
+        assert!(
+            matches!(
+                repeated,
+                Err(RuntimeError::Registry(
+                    RegistryError::BundleAlreadyRegistered { .. }
+                ))
+            ),
+            "a repeated load must fail before loader initialization, got {repeated:?}"
+        );
+        assert_eq!(
+            runtime.find_all_by_contract(
+                0xDD00_0000_0000_0003,
+                0,
+                &mut [GuestContractHandle::null(); 2],
+            ),
+            1,
+            "the original bundle provider must remain published"
+        );
+        assert!(
+            runtime.registry.get_bundle_descriptor(bundle_id).is_some(),
+            "the original bundle metadata must remain registered"
+        );
+        assert_eq!(
+            unloads.load(Ordering::Relaxed),
+            0,
+            "the original resident must not be reclaimed by a rejected repeated load"
+        );
+    }
+
+    #[test]
+    fn competing_loader_registrations_publish_one_complete_bundle() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("runtime build");
+        let unloads: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        runtime
+            .register_loader(Box::new(TransactionLoader {
+                mode: TransactionLoadMode::Success,
+                unloads,
+            }))
+            .expect("loader registration");
+        let manifest: ManifestData = transaction_manifest(
+            "transaction-competing",
+            &["transaction.provider"],
+            Vec::new(),
+        );
+        let first_runtime: Arc<Runtime> = Arc::clone(&runtime);
+        let second_runtime: Arc<Runtime> = Arc::clone(&runtime);
+        let first_manifest: ManifestData = manifest.clone();
+
+        let (first, second) = thread::scope(|scope| {
+            let first = scope.spawn(|| load_transaction(&first_runtime, first_manifest));
+            let second = scope.spawn(|| load_transaction(&second_runtime, manifest));
+            (
+                first.join().expect("first thread"),
+                second.join().expect("second thread"),
+            )
+        });
+
+        assert_eq!(
+            [first.is_ok(), second.is_ok()]
+                .into_iter()
+                .filter(|ok| *ok)
+                .count(),
+            1
+        );
+        assert_eq!(
+            runtime.find_all_by_contract(
+                0xDD00_0000_0000_0003,
+                0,
+                &mut [GuestContractHandle::null(); 2],
+            ),
+            1
         );
     }
 }

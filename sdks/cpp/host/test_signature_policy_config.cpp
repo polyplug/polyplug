@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <optional>
+#include <stdexcept>
 #include <vector>
 
 #include "polyplug/runtime.hpp"
@@ -149,6 +150,25 @@ int main() {
                   && g_captured_config->trusted_keys == nullptr
                   && g_captured_config->trusted_keys_len == 0,
               "no trusted_keys() -> trusted_keys fields stay zero (TOFU)");
+    }
+
+    // The reload callback enters through a C ABI function pointer. An exception
+    // from host code must be contained by the SDK trampoline.
+    {
+        g_captured_config.reset();
+        polyplug::Runtime rt = polyplug::Runtime::builder()
+            .on_reload([](const ReloadPhase&) {
+                throw std::runtime_error("callback failure");
+            })
+            .build();
+        bool escaped = false;
+        try {
+            ReloadPhase phase{};
+            g_captured_config->on_reload(g_captured_config->on_reload_user_data, &phase);
+        } catch (...) {
+            escaped = true;
+        }
+        check(!escaped, "on_reload callback exceptions do not cross the C ABI boundary");
     }
 
     if (g_failures == 0) {

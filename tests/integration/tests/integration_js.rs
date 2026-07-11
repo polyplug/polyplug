@@ -22,7 +22,8 @@ use polyplug_abi::HostApi;
 use polyplug_abi::HostContractInstance;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
-use polyplug_js::JsConfig;
+use polyplug_abi::in_process::reject_in_process_bundle;
+
 use polyplug_js::JsLoader;
 use polyplug_utils::BundleId;
 use polyplug_utils::guest_contract_id;
@@ -30,7 +31,7 @@ use std::sync::Arc;
 
 #[test]
 fn js_quickjs_loader_loader_name() {
-    let loader: JsLoader = JsLoader::new(JsConfig {});
+    let loader: JsLoader = JsLoader::new();
     assert_eq!(loader.loader_name(), "js-quickjs");
 }
 
@@ -38,7 +39,7 @@ fn js_quickjs_loader_loader_name() {
 fn js_quickjs_registered_in_runtime_builder() {
     let result: Result<Arc<polyplug::runtime::Runtime>, RuntimeError> =
         polyplug::runtime::Runtime::builder()
-            .loader(JsLoader::new(JsConfig {}))
+            .loader(JsLoader::new())
             .build();
     assert!(
         result.is_ok(),
@@ -51,8 +52,8 @@ fn js_quickjs_registered_in_runtime_builder() {
 fn js_quickjs_duplicate_loader_name_is_rejected() {
     let result: Result<Arc<polyplug::runtime::Runtime>, RuntimeError> =
         polyplug::runtime::Runtime::builder()
-            .loader(JsLoader::new(JsConfig {}))
-            .loader(JsLoader::new(JsConfig {}))
+            .loader(JsLoader::new())
+            .loader(JsLoader::new())
             .build();
     assert!(
         matches!(
@@ -74,7 +75,7 @@ struct AddArgs {
 #[test]
 fn js_quickjs_load_bundle_and_call() {
     let rt: Arc<Runtime> = Runtime::builder()
-        .loader(JsLoader::new(JsConfig {}))
+        .loader(JsLoader::new())
         .build()
         .expect("failed to build runtime");
     let result: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(JS_PLUGIN));
@@ -103,6 +104,7 @@ fn js_quickjs_load_bundle_and_call() {
     let mut result: AbiError = AbiError::ok();
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0,
@@ -260,6 +262,7 @@ fn counting_host() -> HostApi {
     HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: arena_stub_register_guest,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: counting_alloc,
         free: counting_free,
         find_guest_contract: arena_stub_find,
@@ -279,7 +282,7 @@ fn counting_host() -> HostApi {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: core::ptr::null(),
     }
 }
@@ -316,7 +319,7 @@ impl AbiStringView {
 #[test]
 fn js_quickjs_echo_uses_call_arena() {
     let rt: Arc<Runtime> = Runtime::builder()
-        .loader(JsLoader::new(JsConfig {}))
+        .loader(JsLoader::new())
         .build()
         .expect("failed to build runtime");
     rt.load_bundle(std::path::Path::new(JS_PLUGIN))
@@ -371,6 +374,7 @@ fn js_quickjs_echo_uses_call_arena() {
         let mut err: AbiError = AbiError::ok();
         unsafe {
             (vtable.dispatch.vm.call)(
+                vtable.adapter_context,
                 vtable.dispatch.vm.loader_data,
                 GuestContractInstance::null(),
                 ECHO_FN_ID,
@@ -436,6 +440,6 @@ unsafe extern "C" fn stub_destroy_guest_instance(
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const polyplug_abi::HostApi) -> *const u64 {
-    core::ptr::null()
+unsafe extern "C" fn stub_registry_revision(_this: *const polyplug_abi::HostApi) -> u64 {
+    0
 }

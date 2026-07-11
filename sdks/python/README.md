@@ -41,6 +41,38 @@ if decoder:
     result = decoder.decode(input)
 ```
 
+
+## In-process plugin registration
+
+Use generated `host.in_process.InProcessBundle` to register ordinary Python
+implementations in a specific `Runtime`. The generated `add_<contract>()`
+methods accept either an implementation object or a factory. A factory may take
+the owning `HostApi` pointer or no argument; it is called once for each guest
+instance, so state remains instance-local.
+
+```python
+from polyplug import Runtime
+from host.in_process import InProcessBundle
+
+
+class Decoder:
+    def decode(self, input: str) -> str:
+        return input.replace(",", "|")
+
+
+runtime = Runtime()
+bundle = InProcessBundle("example.python.decoder").add_pipeline_decoder(Decoder)
+bundle_id = runtime.register_in_process_bundle(bundle)
+```
+
+Registration submits every added contract as one canonical bundle transaction.
+The `Runtime` becomes the sole owner of the registered bundle resident,
+including factories, callbacks, implementation instances, and backing ABI
+tables. Successful registration transfers the bundle exactly once; a rejected
+registration releases the reservation so the object can be retried.
+`unload_bundle` logically drains the bundle before releasing that resident; a
+failed unload leaves it registered and retained.
+
 ## Plugin author
 
 Subclass the generated base class and register it as the factory at module load.

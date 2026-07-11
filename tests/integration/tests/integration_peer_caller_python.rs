@@ -48,7 +48,7 @@ use polyplug_codegen::GenerateConfig;
 use polyplug_codegen::GenerateOutput;
 use polyplug_codegen::Lang;
 use polyplug_codegen::Side;
-use polyplug_lua::LuaConfig;
+
 use polyplug_lua::LuaLoader;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
@@ -286,7 +286,7 @@ fn python_peer_caller_validate_roundtrip() {
 
     let rt: Arc<Runtime> = Runtime::builder()
         .loader(PythonLoader::new(PythonConfig::default()))
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(LuaLoader::new())
         .build()
         .expect("build runtime");
 
@@ -324,6 +324,7 @@ fn python_peer_caller_validate_roundtrip() {
     let mut err: AbiError = AbiError::ok();
     unsafe {
         (interface.dispatch.vm.call)(
+            interface.adapter_context,
             interface.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0_u32,

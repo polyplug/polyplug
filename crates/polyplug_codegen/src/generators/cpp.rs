@@ -23,6 +23,7 @@ use crate::ir::EnumVariant;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
+use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -163,6 +164,15 @@ impl CodeGenerator for CppGenerator {
             content: init_hpp,
             force_regenerate: false,
         });
+
+        if ir.bundle.is_some() {
+            let in_process_hpp: String = generate_cpp_in_process_hpp(ir)?;
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/in_process.hpp"),
+                content: in_process_hpp,
+                force_regenerate: false,
+            });
+        }
 
         // --api: manifest emitted by generate_host(); --bundle: emit full discovery manifest
         if ir.bundle.is_some() {
@@ -465,6 +475,7 @@ fn generate_cpp_guest_plugin_interface(
         "DispatchType::VirtualMachine"
     };
     out.push_str(&format!("    {},\n", dispatch_type_str));
+    out.push_str("    nullptr,  // adapter_context\n");
     out.push_str(&format!("    {}_create_instance,\n", plugin_upper));
     out.push_str(&format!("    {}_destroy_instance,\n", plugin_upper));
     out.push_str(&format!(
@@ -527,6 +538,7 @@ fn generate_cpp_guest_contract_interface(
         "DispatchType::VirtualMachine"
     };
     out.push_str(&format!("    {},\n", dispatch_type_str));
+    out.push_str("    nullptr,  // adapter_context\n");
     out.push_str(&format!("    {}_create_instance,\n", upper));
     out.push_str(&format!("    {}_destroy_instance,\n", upper));
     out.push_str(&format!(
@@ -664,6 +676,11 @@ fn render_cpp_host_method(
 fn cpp_create_instance_params() -> Vec<CppParameter> {
     vec![
         CppParameter {
+            name: "adapter_context".to_owned(),
+            param_type: "void*".to_owned(),
+            default_value: None,
+        },
+        CppParameter {
             name: "loader_data".to_owned(),
             param_type: "VmLoaderData".to_owned(),
             default_value: None,
@@ -761,7 +778,8 @@ fn emit_cpp_guest_instance_machinery(
     ));
 
     let create_body: String = format!(
-        "    (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.\n\
+        "    (void)adapter_context;\n\
+         \x20   (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.\n\
          \x20   (void)args;  // Contract-specific init args are unused by generated glue.\n\
          \x20   if (out_instance == nullptr) return;\n\
          \x20   if (host == nullptr) {{\n\
@@ -797,18 +815,27 @@ fn emit_cpp_guest_instance_machinery(
     out.push_str("\n\n");
 
     let destroy_body: String = format!(
-        "    (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.\n\
+        "    (void)adapter_context;\n\
+         \x20   (void)loader_data;  // Native-dispatch contracts ignore the VM loader handle.\n\
          \x20   (void)host;  // The payload is guest-owned; no host call is needed to free it.\n\
          \x20   if (instance.data == nullptr) {{\n\
          \x20       return;\n\
          \x20   }}\n\
-         \x20   auto* state = static_cast<{state_struct}*>(instance.data);\n\
-         \x20   delete state->impl;\n\
-         \x20   delete state;"
+         \x20   try {{\n\
+         \x20       auto* state = static_cast<{state_struct}*>(instance.data);\n\
+         \x20       delete state->impl;\n\
+         \x20       delete state;\n\
+         \x20   }} catch (...) {{\n\
+         \x20   }}"
     );
     out.push_str(&render_cpp_defn_fn(
         format!("{prefix_upper}_destroy_instance"),
         vec![
+            CppParameter {
+                name: "adapter_context".to_owned(),
+                param_type: "void*".to_owned(),
+                default_value: None,
+            },
             CppParameter {
                 name: "loader_data".to_owned(),
                 param_type: "VmLoaderData".to_owned(),
@@ -865,6 +892,7 @@ fn generate_cpp_guest_abi_wrapper(
     let has_params: bool = !func.params.is_empty();
 
     let mut body: String = String::new();
+    body.push_str("    (void)adapter_context;\n");
     body.push_str("    if (instance.data == nullptr) {\n");
     body.push_str("        static constexpr const char* null_inst_msg = \"instance is null\";\n");
     body.push_str(
@@ -950,6 +978,11 @@ fn generate_cpp_guest_abi_wrapper(
     body.push_str("    }\n");
 
     let wrapper_params: Vec<CppParameter> = vec![
+        CppParameter {
+            name: "adapter_context".to_owned(),
+            param_type: "void*".to_owned(),
+            default_value: None,
+        },
         CppParameter {
             name: "instance".to_owned(),
             param_type: "GuestContractInstance".to_owned(),
@@ -1081,11 +1114,14 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str(CPP_FILE_HEADER);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
     out.push_str("#pragma once\n");
-    out.push_str(&cpp_include_block(&[&[
-        ("interfaces.hpp", false),
-        ("polyplug/abi.hpp", false),
-        ("polyplug/guest.hpp", false),
-    ]]));
+    out.push_str(&cpp_include_block(&[
+        &[
+            ("interfaces.hpp", false),
+            ("polyplug/abi.hpp", false),
+            ("polyplug/guest.hpp", false),
+        ],
+        &[("exception", true)],
+    ]));
     out.push('\n');
     out.push_str("#if defined(_WIN32)\n");
     out.push_str("#define POLYPLUG_ENTRYPOINT_EXPORT __declspec(dllexport)\n");
@@ -1108,6 +1144,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
         len = init_err_msg.len()
     ));
     out.push_str("    }\n\n");
+    out.push_str("    try {\n");
     out.push_str(
         "    // No DSO-global state is stored here. The implementation is constructed per\n",
     );
@@ -1168,8 +1205,17 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     }
 
     out.push_str(
-        "    return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n",
+        "        return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};\n",
     );
+    out.push_str("    } catch (const std::exception&) {\n");
+    out.push_str(
+        "        static constexpr const char* err_msg = \"guest init threw std::exception\";\n",
+    );
+    out.push_str("        return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 30}};\n");
+    out.push_str("    } catch (...) {\n");
+    out.push_str("        static constexpr const char* err_msg = \"guest init threw\";\n");
+    out.push_str("        return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}};\n");
+    out.push_str("    }\n");
     out.push_str("}\n\n");
 
     Ok(out)
@@ -1218,6 +1264,194 @@ fn generate_init_hpp_register_guest_contract(
     ));
 
     Ok(())
+}
+
+/// Generate runtime-local typed adapters for C++ in-process registrations.
+///
+/// Each adapter owns its factory and interface table. The canonical
+/// `adapter_context` field carries the adapter address into every C ABI callback;
+/// no process-global lookup or HostApi implementation detail participates.
+fn generate_cpp_in_process_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
+    let bundle: &ResolvedBundle =
+        ir.bundle
+            .as_ref()
+            .ok_or_else(|| PolyplugcError::ValidationFailed {
+                message: "C++ in-process adapters require a bundle manifest".to_owned(),
+            })?;
+    let mut out = String::new();
+    out.push_str(CPP_FILE_HEADER);
+    out.push_str("#pragma once\n");
+    out.push_str(&cpp_include_block(&[
+        &[("interfaces.hpp", false), ("polyplug/runtime.hpp", false)],
+        &[("memory", true), ("utility", true), ("vector", true)],
+    ]));
+    out.push_str("\nnamespace polyplug_plugin {\nnamespace in_process {\n\n");
+    out.push_str("class Provider {\npublic:\n    virtual ~Provider() = default;\n    virtual InProcessContractRegistration registration() noexcept = 0;\n};\n\n");
+
+    for plugin in &bundle.plugins {
+        let contract_impl =
+            plugin
+                .implements
+                .first()
+                .ok_or_else(|| PolyplugcError::ValidationFailed {
+                    message: format!(
+                        "C++ in-process plugin `{}` implements no contract",
+                        plugin.name
+                    ),
+                })?;
+        let (contract_name, version) =
+            contract_impl
+                .split_once('@')
+                .ok_or_else(|| PolyplugcError::ValidationFailed {
+                    message: format!("invalid C++ in-process contract `{contract_impl}`"),
+                })?;
+        let major = version.split('.').next().unwrap_or(version);
+        let contract = ir
+            .contracts
+            .iter()
+            .find(|candidate| {
+                candidate.name == contract_name && candidate.version.major.to_string() == major
+            })
+            .ok_or_else(|| PolyplugcError::ValidationFailed {
+                message: format!("C++ in-process contract `{contract_impl}` is not resolved"),
+            })?;
+        let lower = plugin.name.to_lowercase().replace('.', "_");
+        let upper = plugin.name.to_uppercase().replace('.', "_");
+        let class_name = contract_name_to_guest_contract_class(&contract.name);
+        let state_name = format!("{}InstanceState", snake_to_pascal(&lower));
+        let contract_upper = contract_name_to_upper_snake(&contract.name);
+        let contract_full = format!("{}@{}", contract.name, contract.version.major);
+
+        out.push_str(&format!(
+            "template <typename Factory>\nclass {upper}Provider final : public Provider {{\n\
+             public:\n\
+             \x20   explicit {upper}Provider(Factory factory)\n\
+             \x20       : factory_(std::move(factory)), interface_{{\n\
+             \x20           {contract_upper}_CONTRACT_ID,\n\
+             \x20           Version{{{}U, {}U, {}U}},\n\
+             \x20           DispatchType::Native,\n\
+             \x20           this,\n\
+             \x20           &create_instance,\n\
+             \x20           &destroy_instance,\n\
+             \x20           DispatchMechanisms{{ .native = NativeDispatch{{{}U, {upper}_FNS}} }}\n\
+             \x20       }} {{}}\n\
+             \n\
+             \x20   InProcessContractRegistration registration() noexcept override {{\n\
+             \x20       return InProcessContractRegistration{{\n\
+             \x20           PluginDescriptor{{\n\
+             \x20               StringView{{reinterpret_cast<const uint8_t*>(\"{}\"), {}U}},\n\
+             \x20               StringView{{reinterpret_cast<const uint8_t*>(\"{contract_full}\"), {}U}},\n\
+             \x20               Version{{{}U, {}U, {}U}}\n\
+             \x20           }},\n\
+             \x20           &interface_,\n\
+             \x20           this\n\
+             \x20       }};\n\
+             \x20   }}\n\
+             \n\
+             private:\n\
+             \x20   static void create_instance(void* adapter_context, VmLoaderData, const HostApi* host, const void*, GuestContractInstance* out_instance) noexcept {{\n\
+             \x20       if (out_instance == nullptr) return;\n\
+             \x20       *out_instance = GuestContractInstance{{nullptr, 0U}};\n\
+             \x20       if (adapter_context == nullptr || host == nullptr) return;\n\
+             \x20       try {{\n\
+             \x20           auto* provider = static_cast<{upper}Provider*>(adapter_context);\n\
+             \x20           std::unique_ptr<{class_name}> implementation = provider->factory_(host);\n\
+             \x20           if (!implementation) return;\n\
+             \x20           auto* state = new {state_name}{{host, implementation.release()}};\n\
+             \x20           *out_instance = GuestContractInstance{{state, {contract_upper}_CONTRACT_ID}};\n\
+             \x20       }} catch (...) {{\n\
+             \x20           *out_instance = GuestContractInstance{{nullptr, 0U}};\n\
+             \x20       }}\n\
+             \x20   }}\n\
+             \n\
+             \x20   static void destroy_instance(void* adapter_context, VmLoaderData, const HostApi*, GuestContractInstance instance) noexcept {{\n\
+             \x20       (void)adapter_context;\n\
+             \x20       if (instance.data == nullptr) return;\n\
+             \x20       try {{\n\
+             \x20           auto* state = static_cast<{state_name}*>(instance.data);\n\
+             \x20           delete state->impl;\n\
+             \x20           delete state;\n\
+             \x20       }} catch (...) {{\n\
+             \x20       }}\n\
+             \x20   }}\n\
+             \n\
+             \x20   Factory factory_;\n\
+             \x20   GuestContractInterface interface_;\n\
+             }};\n\n",
+            contract.version.major,
+            contract.version.minor,
+            contract.version.patch,
+            contract.functions.len(),
+            plugin.name,
+            plugin.name.len(),
+            contract_full.len(),
+            contract.version.major,
+            contract.version.minor,
+            contract.version.patch,
+        ));
+    }
+
+    let dependency_ids: Vec<u64> = bundle
+        .dependencies
+        .iter()
+        .map(|dependency| match dependency {
+            ResolvedDependency::ByContract { contract_id, .. }
+            | ResolvedDependency::ByBundle { contract_id, .. } => *contract_id,
+        })
+        .collect();
+    out.push_str("class Resident final : public polyplug::detail::InProcessResident {\npublic:\n");
+    out.push_str(&format!(
+        "    Resident() : registration_{{InProcessBundleMetadata{{StringView{{reinterpret_cast<const uint8_t*>(\"{}\"), {}U}}, Version{{{}U, {}U, {}U}}, SupportedLanguage::Cpp}}, nullptr, 0U, nullptr, 0U}} {{\n",
+        bundle.name, bundle.name.len(), bundle.version.major, bundle.version.minor, bundle.version.patch
+    ));
+    for dependency in dependency_ids {
+        out.push_str(&format!(
+            "        dependencies_.push_back(0x{dependency:016X}ULL);\n"
+        ));
+    }
+    out.push_str("        rebuild_registration();\n    }\n\n");
+    out.push_str("    template <typename ProviderType, typename Factory>\n    void add(Factory factory) {\n        providers_.push_back(std::make_unique<ProviderType>(std::move(factory)));\n        rebuild_registration();\n    }\n\n");
+    out.push_str("    const InProcessBundleRegistration& registration() const noexcept { return registration_; }\n\n");
+    out.push_str("private:\n    void rebuild_registration() {\n        contracts_.clear();\n        contracts_.reserve(providers_.size());\n        for (const std::unique_ptr<Provider>& provider : providers_) contracts_.push_back(provider->registration());\n        registration_.dependency_ids = dependencies_.empty() ? nullptr : dependencies_.data();\n        registration_.dependency_count = dependencies_.size();\n        registration_.contracts = contracts_.empty() ? nullptr : contracts_.data();\n        registration_.contract_count = contracts_.size();\n    }\n\n    std::vector<std::unique_ptr<Provider>> providers_{};\n    std::vector<uint64_t> dependencies_{};\n    std::vector<InProcessContractRegistration> contracts_{};\n    InProcessBundleRegistration registration_{};\n};\n\n");
+    out.push_str("}  // namespace in_process\n\nclass InProcessBundle {\npublic:\n    InProcessBundle() : resident_(std::make_unique<in_process::Resident>()) {}\n    InProcessBundle(InProcessBundle&&) noexcept = default;\n    InProcessBundle& operator=(InProcessBundle&&) noexcept = default;\n    InProcessBundle(const InProcessBundle&) = delete;\n    InProcessBundle& operator=(const InProcessBundle&) = delete;\n\n");
+    for plugin in &bundle.plugins {
+        let upper = plugin.name.to_uppercase().replace('.', "_");
+        let lower = plugin.name.to_lowercase().replace('.', "_");
+        out.push_str(&format!("    template <typename Factory>\n    InProcessBundle& add_{lower}(Factory factory) {{\n        resident_->template add<in_process::{upper}Provider<Factory>>(std::move(factory));\n        return *this;\n    }}\n\n"));
+    }
+    out.push_str("    const InProcessBundleRegistration& in_process_registration() const noexcept { return resident_->registration(); }\n    polyplug::detail::InProcessResident* in_process_resident() const noexcept { return resident_.get(); }\n    std::unique_ptr<polyplug::detail::InProcessResident> take_in_process_resident() noexcept { return std::move(resident_); }\n\nprivate:\n    std::unique_ptr<in_process::Resident> resident_;\n};\n\n");
+    if !bundle.plugins.is_empty() {
+        let template_params: String = bundle
+            .plugins
+            .iter()
+            .map(|plugin| {
+                format!(
+                    "typename {}Factory",
+                    snake_to_pascal(&plugin.name.to_lowercase().replace('.', "_"))
+                )
+            })
+            .collect::<Vec<String>>()
+            .join(", ");
+        let parameters: String = bundle
+            .plugins
+            .iter()
+            .map(|plugin| {
+                let lower = plugin.name.to_lowercase().replace('.', "_");
+                format!("{}Factory {lower}_factory", snake_to_pascal(&lower))
+            })
+            .collect::<Vec<String>>()
+            .join(", ");
+        out.push_str(&format!("template <{template_params}>\nInProcessBundle create_in_process_bundle({parameters}) {{\n    InProcessBundle bundle;\n"));
+        for plugin in &bundle.plugins {
+            let lower = plugin.name.to_lowercase().replace('.', "_");
+            out.push_str(&format!(
+                "    bundle.add_{lower}(std::move({lower}_factory));\n"
+            ));
+        }
+        out.push_str("    return bundle;\n}\n\n");
+    }
+    out.push_str("}  // namespace polyplug_plugin\n");
+    Ok(out)
 }
 
 // ─── host_callers.hpp generator ──────────────────────────────────────────────
@@ -1559,34 +1793,11 @@ fn contract_needs_arena(contract: &ResolvedContract) -> bool {
 
 /// Emit the inline call-arena helpers used by per-caller arenas.
 ///
-/// Emit the shared revision-load helper used by every generated caller.
-///
-/// `revision_ptr` is the value returned by `HostApi.revision_counter`: a pointer
-/// to the runtime's registry revision counter (a Rust `AtomicU64`, layout-compatible
-/// with `std::atomic<std::uint64_t>`). C++17 has no `std::atomic_ref`, so the load is
-/// performed by reinterpreting the pointer as `const std::atomic<std::uint64_t>*` and
-/// issuing one acquire load. A null pointer (no runtime) reads as 0, so the per-call
-/// staleness check then compares the cached 0 against 0 — a no-op.
+/// Emit the shared revision helper used by every generated caller.
 fn emit_cpp_revision_helper(out: &mut String) {
-    out.push_str("/// Read the runtime's registry revision through `revision_ptr` with one\n");
-    out.push_str("/// acquire atomic load. Returns 0 when the pointer is null (no runtime),\n");
-    out.push_str("/// making the per-call staleness check a no-op.\n");
-    out.push_str(
-        "inline uint64_t polyplug_load_revision(const uint64_t* revision_ptr) noexcept {\n",
-    );
-    out.push_str("    if (revision_ptr == nullptr) { return 0; }\n");
-    out.push_str(
-        "    // SAFETY: revision_ptr was returned by HostApi.revision_counter and points at\n",
-    );
-    out.push_str(
-        "    // the runtime's revision counter — a Rust AtomicU64, layout-compatible with\n",
-    );
-    out.push_str(
-        "    // std::atomic<std::uint64_t> — whose address is stable for the runtime's lifetime.\n",
-    );
-    out.push_str(
-        "    return reinterpret_cast<const std::atomic<std::uint64_t>*>(revision_ptr)->load(std::memory_order_acquire);\n",
-    );
+    out.push_str("/// Read the synchronized runtime registry revision.\n");
+    out.push_str("inline uint64_t polyplug_load_revision(const HostApi* host) noexcept {\n");
+    out.push_str("    return host == nullptr ? 0 : host->registry_revision(host);\n");
     out.push_str("}\n\n");
 }
 
@@ -1851,19 +2062,10 @@ fn generate_cpp_host_contract(
     out.push_str(
         "        GuestContractInstance instance{};\n        host->create_guest_instance(host, iface, nullptr, &instance);\n",
     );
-    out.push_str(
-        "        // Fetch the registry revision counter ONCE, then read its current value, so\n",
-    );
-    out.push_str(
-        "        // every later call can detect a reload/unload with a direct atomic load (no\n",
-    );
-    out.push_str("        // call back into the runtime) and re-resolve before dispatching.\n");
-    out.push_str("        const uint64_t* revision_ptr = host->revision_counter(host);\n");
-    out.push_str(
-        "        const uint64_t cached_revision = polyplug_load_revision(revision_ptr);\n",
-    );
+    out.push_str("        // Capture the synchronized revision for this resolved interface.\n");
+    out.push_str("        const uint64_t cached_revision = host->registry_revision(host);\n");
     out.push_str(&format!(
-        "        return {}(iface, instance, host, handle, revision_ptr, cached_revision);\n",
+        "        return {}(iface, instance, host, handle, host, cached_revision);\n",
         class_name
     ));
     out.push_str("    }\n\n");
@@ -1890,7 +2092,7 @@ fn generate_cpp_host_contract(
         "        // the dead interface's destroy would be UB; the reload/unload already\n",
     );
     out.push_str("        // reclaimed the instance, so skip the destroy entirely.\n");
-    out.push_str("        if (polyplug_load_revision(revision_ptr_) != cached_revision_) {\n");
+    out.push_str("        if (polyplug_load_revision(revision_host_) != cached_revision_) {\n");
     out.push_str("            return;\n");
     out.push_str("        }\n");
     out.push_str("        // Destroy instance via factory\n");
@@ -1911,7 +2113,7 @@ fn generate_cpp_host_contract(
     out.push_str("          instance_(other.instance_),\n");
     out.push_str("          host_(other.host_),\n");
     out.push_str("          handle_(other.handle_),\n");
-    out.push_str("          revision_ptr_(other.revision_ptr_),\n");
+    out.push_str("          revision_host_(other.revision_host_),\n");
     if needs_arena {
         // The arena's interior pointers refer into *arena_buf_, a heap block whose
         // address is preserved by moving the unique_ptr, so the arena stays valid.
@@ -1940,11 +2142,11 @@ fn generate_cpp_host_contract(
     out.push_str(
         "            // changed under us; a reload/unload already reclaimed a stale instance.\n",
     );
-    out.push_str("            if (instance_.data != nullptr && polyplug_load_revision(revision_ptr_) == cached_revision_) {\n");
+    out.push_str("            if (instance_.data != nullptr && polyplug_load_revision(revision_host_) == cached_revision_) {\n");
     out.push_str("                host_->destroy_guest_instance(host_, interface_, instance_);\n");
     out.push_str("            }\n");
     out.push_str("            interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;\n");
-    out.push_str("            handle_ = other.handle_; revision_ptr_ = other.revision_ptr_; cached_revision_ = other.cached_revision_;\n");
+    out.push_str("            handle_ = other.handle_; revision_host_ = other.revision_host_; cached_revision_ = other.cached_revision_;\n");
     if needs_arena {
         out.push_str(
             "            arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;\n",
@@ -1987,7 +2189,7 @@ fn generate_cpp_host_contract(
         "        // the dead instance and builds a fresh one on the current interface —\n",
     );
     out.push_str("        // exactly the fresh instance reset() promises — so defer to it.\n");
-    out.push_str("        if (polyplug_load_revision(revision_ptr_) != cached_revision_) {\n");
+    out.push_str("        if (polyplug_load_revision(revision_host_) != cached_revision_) {\n");
     out.push_str("            revalidate();\n");
     out.push_str("            return;\n");
     out.push_str("        }\n");
@@ -2039,7 +2241,7 @@ fn generate_cpp_host_contract(
     out.push_str("        host_->create_guest_instance(host_, iface, nullptr, &inst);\n");
     out.push_str("        interface_ = iface;\n");
     out.push_str("        instance_ = inst;\n");
-    out.push_str("        cached_revision_ = polyplug_load_revision(revision_ptr_);\n");
+    out.push_str("        cached_revision_ = polyplug_load_revision(revision_host_);\n");
     out.push_str("        return true;\n");
     out.push_str("    }\n\n");
 
@@ -2056,12 +2258,10 @@ fn generate_cpp_host_contract(
         "    /// (which swaps a new interface into the same slot) or report a gone contract.\n",
     );
     out.push_str("    GuestContractHandle handle_;\n");
-    out.push_str("    /// Pointer to the runtime's registry revision counter, fetched once via\n");
-    out.push_str(
-        "    /// `HostApi.revision_counter`. Polled before each dispatch (one atomic load,\n",
-    );
-    out.push_str("    /// no call into the runtime); null when there is no runtime.\n");
-    out.push_str("    const uint64_t* revision_ptr_;\n");
+    out.push_str("    /// Host API used to read the synchronized registry revision.\n");
+    out.push_str("    /// `HostApi.registry_revision`. Called once before each dispatch.\n");
+    out.push_str("    /// A null host reads as revision zero.\n");
+    out.push_str("    const HostApi* revision_host_;\n");
     out.push_str(
         "    /// Revision value read when the interface was resolved. Compared before each\n",
     );
@@ -2084,10 +2284,10 @@ fn generate_cpp_host_contract(
     out.push('\n');
     if needs_arena {
         out.push_str(&format!(
-            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const uint64_t* revision_ptr, uint64_t cached_revision)\n",
+            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const HostApi* revision_host, uint64_t cached_revision)\n",
             class_name
         ));
-        out.push_str("        : interface_(iface), instance_(inst), host_(host), handle_(handle), revision_ptr_(revision_ptr), cached_revision_(cached_revision),\n");
+        out.push_str("        : interface_(iface), instance_(inst), host_(host), handle_(handle), revision_host_(revision_host), cached_revision_(cached_revision),\n");
         out.push_str(
             "          arena_buf_(std::make_unique<std::array<uint8_t, CALL_ARENA_BUF_LEN>>()),\n",
         );
@@ -2096,10 +2296,10 @@ fn generate_cpp_host_contract(
         );
     } else {
         out.push_str(&format!(
-            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const uint64_t* revision_ptr, uint64_t cached_revision) noexcept\n",
+            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const HostApi* revision_host, uint64_t cached_revision) noexcept\n",
             class_name
         ));
-        out.push_str("        : interface_(iface), instance_(inst), host_(host), handle_(handle), revision_ptr_(revision_ptr), cached_revision_(cached_revision) {}\n");
+        out.push_str("        : interface_(iface), instance_(inst), host_(host), handle_(handle), revision_host_(revision_host), cached_revision_(cached_revision) {}\n");
     }
     out.push_str("};\n\n");
     Ok(())
@@ -2162,7 +2362,7 @@ fn generate_cpp_host_function(
         "        // Per-call staleness check: re-resolve before dispatch if the registry changed,\n",
     );
     out.push_str("        // so the cached interface pointer is never used once it dangles.\n");
-    out.push_str("        if (polyplug_load_revision(revision_ptr_) != cached_revision_ && !revalidate()) {\n");
+    out.push_str("        if (polyplug_load_revision(revision_host_) != cached_revision_ && !revalidate()) {\n");
     out.push_str("            static constexpr const char* err_msg = \"contract not found\";\n");
     out.push_str(
         "            polyplug::check_abi_error(AbiError{static_cast<uint32_t>(AbiErrorCode::NotFound), StringView{reinterpret_cast<const uint8_t*>(err_msg), 18}});\n",
@@ -2237,13 +2437,13 @@ fn generate_cpp_host_function(
     ));
     out.push_str("                }\n");
     out.push_str(&format!(
-        "                auto fn_ = reinterpret_cast<void(*)(GuestContractInstance, const void*, void*, AbiError*)>(interface_->dispatch.native.functions[{}U]);\n",
+        "                auto fn_ = reinterpret_cast<void(*)(void*, GuestContractInstance, const void*, void*, AbiError*)>(interface_->dispatch.native.functions[{}U]);\n",
         fn_id
     ));
     out.push_str("                // SAFETY: instance_ is the token returned by create_instance and is valid.\n");
     out.push_str("                // args_ptr/out_ptr match the ABI contract for this function.\n");
     out.push_str(&format!(
-        "                fn_(instance_, args_ptr, {}, &err);\n",
+        "                fn_(interface_->adapter_context, instance_, args_ptr, {}, &err);\n",
         out_ptr_expr
     ));
     out.push_str("                break;\n");
@@ -2254,7 +2454,7 @@ fn generate_cpp_host_function(
     // pass nullptr and the VM bridge falls back to per-value host allocation.
     let arena_arg: &str = if needs_arena { "&arena_" } else { "nullptr" };
     out.push_str(&format!(
-        "                (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, {}U, args_ptr, {}, {}, &err);\n",
+        "                (interface_->dispatch.vm.call)(interface_->adapter_context, interface_->dispatch.vm.loader_data, instance_, {}U, args_ptr, {}, {}, &err);\n",
         fn_id, out_ptr_expr, arena_arg
     ));
     out.push_str("                break;\n");
@@ -2727,11 +2927,10 @@ fn generate_cpp_guest_host_contract_method(
     out.push_str("                break;\n");
     out.push_str("            }\n");
     out.push_str("            case DispatchType::VirtualMachine: {\n");
-    // The vm.call expects a GuestContractInstance; a host contract has no guest
-    // instance, so pass a null one (matches rust.rs). The host-contract instance
-    // is conveyed to the native thunk via the Native branch, not the VM bridge.
+    // The shared VM dispatch ABI receives the host contract's `user_data` as its
+    // adapter context. A host contract has no guest instance, so pass a null one.
     out.push_str(&format!(
-        "                (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, GuestContractInstance{{}}, {fn_id}U, args_ptr, out_ptr, nullptr, &err);\n"
+        "                (interface_->dispatch.vm.call)(interface_->user_data, interface_->dispatch.vm.loader_data, GuestContractInstance{{}}, {fn_id}U, args_ptr, out_ptr, nullptr, &err);\n"
     ));
     out.push_str("                break;\n");
     out.push_str("            }\n");
@@ -3556,18 +3755,11 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
         "        GuestContractInstance instance{};\n        host->create_guest_instance(host, iface, nullptr, &instance);\n",
     );
     out.push_str(
-        "        // Fetch the registry revision counter ONCE, then read its current value, so\n",
+        "        // Capture the synchronized revision for this resolved peer interface.\n",
     );
-    out.push_str(
-        "        // every later call can detect a reload/unload with a direct atomic load and\n",
-    );
-    out.push_str("        // re-resolve before dispatching.\n");
-    out.push_str("        const uint64_t* revision_ptr = host->revision_counter(host);\n");
-    out.push_str(
-        "        const uint64_t cached_revision = polyplug_load_revision(revision_ptr);\n",
-    );
+    out.push_str("        const uint64_t cached_revision = host->registry_revision(host);\n");
     out.push_str(&format!(
-        "        return {}(iface, instance, host, handle, revision_ptr, cached_revision);\n",
+        "        return {}(iface, instance, host, handle, host, cached_revision);\n",
         class_name
     ));
     out.push_str("    }\n\n");
@@ -3594,7 +3786,7 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
         "        // the dead interface's destroy would be UB; the reload/unload already\n",
     );
     out.push_str("        // reclaimed the instance, so skip the destroy entirely.\n");
-    out.push_str("        if (polyplug_load_revision(revision_ptr_) != cached_revision_) {\n");
+    out.push_str("        if (polyplug_load_revision(revision_host_) != cached_revision_) {\n");
     out.push_str("            return;\n");
     out.push_str("        }\n");
     out.push_str(
@@ -3617,7 +3809,7 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
     out.push_str("          instance_(other.instance_),\n");
     out.push_str("          host_(other.host_),\n");
     out.push_str("          handle_(other.handle_),\n");
-    out.push_str("          revision_ptr_(other.revision_ptr_),\n");
+    out.push_str("          revision_host_(other.revision_host_),\n");
     if needs_arena {
         out.push_str("          cached_revision_(other.cached_revision_),\n");
         out.push_str("          arena_buf_(std::move(other.arena_buf_)),\n");
@@ -3643,13 +3835,13 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
     out.push_str(
         "            // changed under us; a reload/unload already reclaimed a stale instance.\n",
     );
-    out.push_str("            if (instance_.data != nullptr && polyplug_load_revision(revision_ptr_) == cached_revision_) {\n");
+    out.push_str("            if (instance_.data != nullptr && polyplug_load_revision(revision_host_) == cached_revision_) {\n");
     out.push_str("                host_->destroy_guest_instance(host_, iface_, instance_);\n");
     out.push_str("            }\n");
     out.push_str(
         "            iface_ = other.iface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;\n",
     );
-    out.push_str("            handle_ = other.handle_; revision_ptr_ = other.revision_ptr_; cached_revision_ = other.cached_revision_;\n");
+    out.push_str("            handle_ = other.handle_; revision_host_ = other.revision_host_; cached_revision_ = other.cached_revision_;\n");
     if needs_arena {
         out.push_str(
             "            arena_buf_ = std::move(other.arena_buf_); arena_ = other.arena_;\n",
@@ -3716,7 +3908,7 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
     out.push_str("        host_->create_guest_instance(host_, iface, nullptr, &inst);\n");
     out.push_str("        iface_ = iface;\n");
     out.push_str("        instance_ = inst;\n");
-    out.push_str("        cached_revision_ = polyplug_load_revision(revision_ptr_);\n");
+    out.push_str("        cached_revision_ = polyplug_load_revision(revision_host_);\n");
     out.push_str("        return true;\n");
     out.push_str("    }\n\n");
 
@@ -3735,12 +3927,10 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
         "    /// (which swaps a new interface into the same slot) or report a gone contract.\n",
     );
     out.push_str("    GuestContractHandle handle_;\n");
-    out.push_str("    /// Pointer to the runtime's registry revision counter, fetched once via\n");
-    out.push_str(
-        "    /// `HostApi.revision_counter`. Polled before each dispatch (one atomic load,\n",
-    );
-    out.push_str("    /// no call into the runtime); null when there is no runtime.\n");
-    out.push_str("    const uint64_t* revision_ptr_;\n");
+    out.push_str("    /// Host API used to read the synchronized registry revision.\n");
+    out.push_str("    /// `HostApi.registry_revision`. Called once before each dispatch.\n");
+    out.push_str("    /// A null host reads as revision zero.\n");
+    out.push_str("    const HostApi* revision_host_;\n");
     out.push_str(
         "    /// Revision value read when the peer was resolved. Compared before each dispatch\n",
     );
@@ -3763,10 +3953,10 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
     out.push('\n');
     if needs_arena {
         out.push_str(&format!(
-            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const uint64_t* revision_ptr, uint64_t cached_revision)\n",
+            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const HostApi* revision_host, uint64_t cached_revision)\n",
             class_name
         ));
-        out.push_str("        : iface_(iface), instance_(inst), host_(host), handle_(handle), revision_ptr_(revision_ptr), cached_revision_(cached_revision),\n");
+        out.push_str("        : iface_(iface), instance_(inst), host_(host), handle_(handle), revision_host_(revision_host), cached_revision_(cached_revision),\n");
         out.push_str(
             "          arena_buf_(std::make_unique<std::array<uint8_t, CALL_ARENA_BUF_LEN>>()),\n",
         );
@@ -3775,10 +3965,10 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
         );
     } else {
         out.push_str(&format!(
-            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const uint64_t* revision_ptr, uint64_t cached_revision) noexcept\n",
+            "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const HostApi* revision_host, uint64_t cached_revision) noexcept\n",
             class_name
         ));
-        out.push_str("        : iface_(iface), instance_(inst), host_(host), handle_(handle), revision_ptr_(revision_ptr), cached_revision_(cached_revision) {}\n");
+        out.push_str("        : iface_(iface), instance_(inst), host_(host), handle_(handle), revision_host_(revision_host), cached_revision_(cached_revision) {}\n");
     }
     out.push_str("};\n\n");
 }
@@ -3842,7 +4032,7 @@ fn generate_cpp_peer_fn_caller(out: &mut String, class_name: &str, func: &Resolv
     // (hot-reload or unload of the peer), so the cached interface and instance are
     // never used once they dangle. This caller is noexcept, so a gone peer funnels
     // through the host log and returns a zero-initialised value.
-    out.push_str("        if (polyplug_load_revision(revision_ptr_) != cached_revision_ && !revalidate()) {\n");
+    out.push_str("        if (polyplug_load_revision(revision_host_) != cached_revision_ && !revalidate()) {\n");
     out.push_str(&format!(
         "            detail::log_call_failure(host_, \"guest.peer_caller\", \"{class_name}.{fn_name}\", static_cast<uint32_t>(AbiErrorCode::NotFound));\n",
         fn_name = func.name
@@ -3910,12 +4100,14 @@ fn generate_cpp_peer_fn_caller(out: &mut String, class_name: &str, func: &Resolv
     }
     out.push_str("                }\n");
     out.push_str(&format!(
-        "                auto fn_ = reinterpret_cast<void(*)(GuestContractInstance, const void*, void*, AbiError*)>(iface_->dispatch.native.functions[{}U]);\n",
+        "                auto fn_ = reinterpret_cast<void(*)(void*, GuestContractInstance, const void*, void*, AbiError*)>(iface_->dispatch.native.functions[{}U]);\n",
         fn_id
     ));
     out.push_str("                // SAFETY: instance_ is the token returned by create_instance and is valid.\n");
     out.push_str("                // args_ptr/out_ptr match the ABI contract for this function.\n");
-    out.push_str("                fn_(instance_, args_ptr, out_ptr, &err);\n");
+    out.push_str(
+        "                fn_(iface_->adapter_context, instance_, args_ptr, out_ptr, &err);\n",
+    );
     out.push_str("                break;\n");
     out.push_str("            }\n");
     out.push_str("            case DispatchType::VirtualMachine: {\n");
@@ -3924,7 +4116,7 @@ fn generate_cpp_peer_fn_caller(out: &mut String, class_name: &str, func: &Resolv
     // pass nullptr and the VM bridge falls back to per-value host allocation.
     let arena_arg: &str = if needs_arena { "&arena_" } else { "nullptr" };
     out.push_str(&format!(
-        "                (iface_->dispatch.vm.call)(iface_->dispatch.vm.loader_data, instance_, {}U, args_ptr, out_ptr, {}, &err);\n",
+        "                (iface_->dispatch.vm.call)(iface_->adapter_context, iface_->dispatch.vm.loader_data, instance_, {}U, args_ptr, out_ptr, {}, &err);\n",
         fn_id, arena_arg
     ));
     out.push_str("                break;\n");
@@ -4075,6 +4267,12 @@ mod tests {
                 "extern \"C\" POLYPLUG_ENTRYPOINT_EXPORT AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx)"
             ),
             "polyplug_init must retain its extern \"C\" ABI signature and carry the export declaration:\n{out}"
+        );
+        assert!(
+            out.contains("try {")
+                && out.contains("catch (const std::exception&)")
+                && out.contains("catch (...)"),
+            "polyplug_init must catch every C++ exception before returning through C ABI:\n{out}"
         );
     }
 
@@ -4283,30 +4481,32 @@ mod tests {
         // Check private constructor (threads the retained handle + revision counter
         // so the per-call staleness check can re-resolve after a reload/unload).
         assert!(
-            out.contains("explicit TestAddContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const uint64_t* revision_ptr, uint64_t cached_revision) noexcept"),
+            out.contains("explicit TestAddContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostApi* host, GuestContractHandle handle, const HostApi* revision_host, uint64_t cached_revision) noexcept"),
             "missing private constructor: {out}"
         );
 
-        // Check dispatch uses instance_ and passes &err as out-param
+        // Native guest dispatch receives the generated adapter context before
+        // the instance token and ordinary call arguments.
         assert!(
-            out.contains("fn_(instance_, args_ptr,") && out.contains(", &err)"),
-            "dispatch must call fn_ with instance_, args_ptr, out_ptr, &err: {out}"
+            out.contains("fn_(interface_->adapter_context, instance_, args_ptr,")
+                && out.contains(", &err)"),
+            "dispatch must forward adapter_context, instance_, args_ptr, out_ptr, and &err: {out}"
         );
 
         // Check revision-counter dangle protection: the caller stores the handle +
         // revision pointer, performs a per-call staleness check that re-resolves on
         // change, and the destructor skips destroy once the revision has moved.
         assert!(
-            out.contains("const uint64_t* revision_ptr_;")
+            out.contains("const HostApi* revision_host_;")
                 && out.contains("uint64_t cached_revision_;"),
-            "missing revision_ptr_/cached_revision_ members: {out}"
+            "missing revision_host_/cached_revision_ members: {out}"
         );
         assert!(
             out.contains("GuestContractHandle handle_;"),
             "missing retained contract handle_ member: {out}"
         );
         assert!(
-            out.contains("host->revision_counter(host)"),
+            out.contains("host->registry_revision(host)"),
             "factory must fetch the revision counter once: {out}"
         );
         assert!(
@@ -4315,12 +4515,12 @@ mod tests {
         );
         assert!(
             out.contains(
-                "if (polyplug_load_revision(revision_ptr_) != cached_revision_ && !revalidate())"
+                "if (polyplug_load_revision(revision_host_) != cached_revision_ && !revalidate())"
             ),
             "dispatch must re-resolve before use when the revision changed: {out}"
         );
         assert!(
-            out.contains("if (polyplug_load_revision(revision_ptr_) != cached_revision_) {\n            return;\n        }"),
+            out.contains("if (polyplug_load_revision(revision_host_) != cached_revision_) {\n            return;\n        }"),
             "destructor must skip destroy when the revision changed: {out}"
         );
     }
@@ -5004,28 +5204,41 @@ mod tests {
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
             enums: vec![],
-            contracts: vec![ResolvedContract {
-                name: "pipeline.Validator".to_owned(),
-                contract_id,
-                version: Version {
-                    major: 1,
-                    minor: 0,
-                    patch: 0,
-                },
-                functions: vec![ResolvedFunction {
-                    name: "validate".to_owned(),
-                    function_id: 0,
-                    params: vec![ResolvedParam {
-                        name: "input".to_owned(),
-                        ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+            contracts: vec![
+                ResolvedContract {
+                    name: "pipeline.Validator".to_owned(),
+                    contract_id,
+                    version: Version {
+                        major: 1,
+                        minor: 0,
+                        patch: 0,
+                    },
+                    functions: vec![ResolvedFunction {
+                        name: "validate".to_owned(),
+                        function_id: 0,
+                        params: vec![ResolvedParam {
+                            name: "input".to_owned(),
+                            ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                            docs: None,
+                        }],
+                        returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
                         docs: None,
+                        return_docs: None,
                     }],
-                    returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
                     docs: None,
-                    return_docs: None,
-                }],
-                docs: None,
-            }],
+                },
+                ResolvedContract {
+                    name: "data.Transformer".to_owned(),
+                    contract_id: 0xAABB_CCDD_EEFF_0011,
+                    version: Version {
+                        major: 1,
+                        minor: 0,
+                        patch: 0,
+                    },
+                    functions: vec![],
+                    docs: None,
+                },
+            ],
             host_contracts: vec![],
             bundle: Some(ResolvedBundle {
                 name: "cpp_transformer".to_owned(),
@@ -5311,6 +5524,7 @@ mod tests {
             "guest/contracts.hpp",
             "guest/interfaces.hpp",
             "guest/init.hpp",
+            "guest/in_process.hpp",
             "guest/host_contracts.hpp",
             "guest/peer_callers.hpp",
         ] {
@@ -5319,6 +5533,14 @@ mod tests {
                 "collision IR must produce {expected}: {names:?}"
             );
         }
+        let in_process = file_content(&files, "guest/in_process.hpp");
+        assert!(
+            in_process.contains("class InProcessBundle")
+                && in_process.contains("create_in_process_bundle")
+                && in_process.contains("adapter_context")
+                && in_process.contains("InProcessContractRegistration"),
+            "in-process adapters must retain typed factories and carry canonical context:\n{in_process}"
+        );
 
         for file in &files.files {
             assert!(
@@ -5418,22 +5640,21 @@ mod tests {
             "peer caller params must qualify contract types:\n{peer_callers}"
         );
 
-        // The C++17 atomic read idiom over the Rust AtomicU64 (no std::atomic_ref)
-        // must be emitted by the shared revision helper in BOTH caller files, so the
-        // per-call staleness check reads the live counter with an acquire load.
-        let atomic_idiom: &str = "reinterpret_cast<const std::atomic<std::uint64_t>*>(revision_ptr)->load(std::memory_order_acquire)";
+        // The shared helper must call the synchronized revision callback in both
+        // generated caller files.
+        let atomic_idiom: &str = "host->registry_revision(host)";
         assert!(
-            host_callers.contains("#include <atomic>") && host_callers.contains(atomic_idiom),
-            "host_callers.hpp must include <atomic> and emit the acquire-load idiom:\n{host_callers}"
+            host_callers.contains(atomic_idiom),
+            "host_callers.hpp must call the synchronized revision callback:\n{host_callers}"
         );
         assert!(
-            peer_callers.contains("#include <atomic>") && peer_callers.contains(atomic_idiom),
-            "peer_callers.hpp must include <atomic> and emit the acquire-load idiom:\n{peer_callers}"
+            peer_callers.contains(atomic_idiom),
+            "peer_callers.hpp must call the synchronized revision callback:\n{peer_callers}"
         );
         // The peer caller must also re-resolve before dispatch and guard its destroy.
         assert!(
             peer_callers.contains(
-                "if (polyplug_load_revision(revision_ptr_) != cached_revision_ && !revalidate())"
+                "if (polyplug_load_revision(revision_host_) != cached_revision_ && !revalidate())"
             ),
             "peer dispatch must re-resolve before use when the revision changed:\n{peer_callers}"
         );

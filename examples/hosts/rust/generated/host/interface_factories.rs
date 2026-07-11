@@ -191,6 +191,7 @@ pub fn create_host_logger_interface(
 pub fn create_host_logger_interface_vm(
     bridge_data: *mut c_void,
     dispatch_fn: unsafe extern "C" fn(
+        adapter_context: *mut c_void,
         loader_data: VmLoaderData,
         instance: GuestContractInstance,
         fn_id: u32,

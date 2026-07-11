@@ -27,6 +27,7 @@ import { getBackend } from "@polyplug/abi";
 import {
   HOST_API_RUNTIME_OFFSET,
   HOST_API_REGISTER_GUEST_CONTRACT_OFFSET,
+  HOST_API_REGISTER_IN_PROCESS_BUNDLE_OFFSET,
   HOST_API_ALLOC_OFFSET,
   HOST_API_FREE_OFFSET,
   HOST_API_FIND_GUEST_CONTRACT_OFFSET,
@@ -43,7 +44,7 @@ import {
   HOST_API_REGISTER_LOADER_OFFSET,
   HOST_API_GET_LAST_ERROR_OFFSET,
   HOST_API_GET_ERROR_LEN_OFFSET,
-  HOST_API_REVISION_COUNTER_OFFSET,
+  HOST_API_REGISTRY_REVISION_OFFSET,
   RUNTIME_CONFIG_COMPATIBILITY_OFFSET,
   RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET,
   RUNTIME_CONFIG_ON_RELOAD_OFFSET,
@@ -62,6 +63,7 @@ import {
   RELOAD_PHASE_BUNDLE_NAME_OFFSET,
   RELOAD_PHASE_REASON_OFFSET,
   GUEST_CONTRACT_INTERFACE_DISPATCH_TYPE_OFFSET,
+  GUEST_CONTRACT_INTERFACE_ADAPTER_CONTEXT_OFFSET,
   GUEST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET,
   GUEST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET,
   GUEST_CONTRACT_INTERFACE_DISPATCH_OFFSET,
@@ -79,6 +81,33 @@ import {
   HOST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET,
   HOST_CONTRACT_INTERFACE_DISPATCH_OFFSET,
   HOST_CONTRACT_INTERFACE_SIZE,
+} from "@polyplug/abi";
+
+import {
+  GUEST_CONTRACT_INTERFACE_CONTRACT_ID_OFFSET,
+  GUEST_CONTRACT_INTERFACE_CONTRACT_VERSION_OFFSET,
+  GUEST_CONTRACT_INTERFACE_SIZE,
+  IN_PROCESS_BUNDLE_METADATA_NAME_OFFSET,
+  IN_PROCESS_BUNDLE_METADATA_RUNTIME_OFFSET,
+  IN_PROCESS_BUNDLE_METADATA_VERSION_OFFSET,
+  IN_PROCESS_BUNDLE_REGISTRATION_CONTRACT_COUNT_OFFSET,
+  IN_PROCESS_BUNDLE_REGISTRATION_CONTRACTS_OFFSET,
+  IN_PROCESS_BUNDLE_REGISTRATION_DEPENDENCY_COUNT_OFFSET,
+  IN_PROCESS_BUNDLE_REGISTRATION_DEPENDENCY_IDS_OFFSET,
+  IN_PROCESS_BUNDLE_REGISTRATION_METADATA_OFFSET,
+  IN_PROCESS_BUNDLE_REGISTRATION_SIZE,
+  IN_PROCESS_CONTRACT_REGISTRATION_ADAPTER_CONTEXT_OFFSET,
+  IN_PROCESS_CONTRACT_REGISTRATION_DESCRIPTOR_OFFSET,
+  IN_PROCESS_CONTRACT_REGISTRATION_INTERFACE_OFFSET,
+  IN_PROCESS_CONTRACT_REGISTRATION_SIZE,
+  PLUGIN_DESCRIPTOR_CONTRACT_NAME_OFFSET,
+  PLUGIN_DESCRIPTOR_NAME_OFFSET,
+  PLUGIN_DESCRIPTOR_VERSION_OFFSET,
+  STRING_VIEW_LEN_OFFSET,
+  STRING_VIEW_PTR_OFFSET,
+  VERSION_MAJOR_OFFSET,
+  VERSION_MINOR_OFFSET,
+  VERSION_PATCH_OFFSET,
 } from "@polyplug/abi";
 
 // Import the GuestContractHandle layout constants so the by-value struct passing
@@ -185,6 +214,7 @@ const SYMBOLS = {
 const HOST_API_OFFSETS = {
   runtime: HOST_API_RUNTIME_OFFSET,
   register_guest_contract: HOST_API_REGISTER_GUEST_CONTRACT_OFFSET,
+  register_in_process_bundle: HOST_API_REGISTER_IN_PROCESS_BUNDLE_OFFSET,
   alloc: HOST_API_ALLOC_OFFSET,
   free: HOST_API_FREE_OFFSET,
   find_guest_contract: HOST_API_FIND_GUEST_CONTRACT_OFFSET,
@@ -201,7 +231,7 @@ const HOST_API_OFFSETS = {
   register_loader: HOST_API_REGISTER_LOADER_OFFSET,
   get_last_error: HOST_API_GET_LAST_ERROR_OFFSET,
   get_error_len: HOST_API_GET_ERROR_LEN_OFFSET,
-  revision_counter: HOST_API_REVISION_COUNTER_OFFSET,
+  registry_revision: HOST_API_REGISTRY_REVISION_OFFSET,
 };
 
 // Module-level caches for hot path performance (stateless encode/decode
@@ -447,6 +477,298 @@ export function buildHostContractInterface(spec) {
 }
 
 /**
+ * A complete generated in-process registration and its rooted JavaScript state.
+ *
+ * The registration bytes are borrowed only by the synchronous HostApi call.
+ * The resident owns every callback, implementation, factory, and backing table
+ * that native code can subsequently reach. It transfers exactly once into the
+ * Runtime that accepted the registration.
+ */
+export class InProcessBundle {
+  #registration;
+  #resident;
+
+  /**
+   * @param {Uint8Array} registration Complete InProcessBundleRegistration storage.
+   * @param {{ release: () => void }} resident Rooted generated state.
+   */
+  constructor(registration, resident) {
+    if (!(registration instanceof Uint8Array)) {
+      throw new TypeError("InProcessBundle registration must be a Uint8Array");
+    }
+    if (resident === null || typeof resident !== "object" || typeof resident.release !== "function") {
+      throw new TypeError("InProcessBundle resident must release rooted state");
+    }
+    this.#registration = registration;
+    this.#resident = resident;
+  }
+
+  /** @returns {Uint8Array} The canonical table for the synchronous ABI call. */
+  _inProcessRegistration() {
+    if (this.#resident === null) {
+      throw new Error("InProcessBundle has already been registered");
+    }
+    return this.#registration;
+  }
+
+  /** @returns {{ release: () => void }} The resident transferred to the Runtime. */
+  _takeInProcessResident() {
+    if (this.#resident === null) {
+      throw new Error("InProcessBundle resident has already been transferred");
+    }
+    const resident = this.#resident;
+    this.#resident = null;
+    return resident;
+  }
+}
+
+function writeVersion(view, offset, version) {
+  view.setUint32(offset + VERSION_MAJOR_OFFSET, version.major, true);
+  view.setUint32(offset + VERSION_MINOR_OFFSET, version.minor, true);
+  view.setUint32(offset + VERSION_PATCH_OFFSET, version.patch, true);
+}
+
+function writeStringView(view, offset, value, roots) {
+  const bytes = _encoder.encode(value);
+  roots.push(bytes);
+  view.setBigUint64(offset + STRING_VIEW_PTR_OFFSET, _ffi.pointerValue(_ffi.pointerOf(bytes)), true);
+  view.setBigUint64(offset + STRING_VIEW_LEN_OFFSET, BigInt(bytes.byteLength), true);
+}
+
+/**
+ * Builds one native guest interface from a JavaScript implementation object or
+ * factory. The opaque context is retained in the returned resident and is only
+ * forwarded by native code to its own callbacks.
+ *
+ * @param {{
+ *   contractId: bigint,
+ *   version: { major: number, minor: number, patch: number },
+ *   implementation: object | (() => object),
+ *   methods: Array<(implementation: object, args: PolyPtr, out: PolyPtr) => number | void>,
+ * }} spec
+ */
+export function buildInProcessGuestContract(spec, bridgeLibrary) {
+  if (spec === null || typeof spec !== "object" || typeof spec.contractId !== "bigint"
+    || !Array.isArray(spec.methods)) {
+    throw new TypeError("buildInProcessGuestContract requires a contract id and method adapters");
+  }
+  if (bridgeLibrary === null || typeof bridgeLibrary !== "object"
+    || bridgeLibrary.symbols === null || typeof bridgeLibrary.symbols !== "object") {
+    throw new TypeError("buildInProcessGuestContract requires an explicit polyplug_js bridge library");
+  }
+  const symbols = bridgeLibrary.symbols;
+  for (const name of [
+    "polyplug_js_in_process_bridge_create",
+    "polyplug_js_in_process_bridge_interface",
+    "polyplug_js_in_process_bridge_context",
+    "polyplug_js_in_process_bridge_free",
+  ]) {
+    if (typeof symbols[name] !== "function") {
+      throw new TypeError(`polyplug_js bridge library is missing ${name}`);
+    }
+  }
+
+  const factory = typeof spec.implementation === "function"
+    ? spec.implementation
+    : () => spec.implementation;
+  const instances = new Map();
+  const defaultImplementation = factory(null);
+  let nextInstanceId = 1n;
+  const createImplementation = (host) => {
+    try {
+      const id = nextInstanceId;
+      nextInstanceId += 1n;
+      instances.set(id, factory(host));
+      return id;
+    } catch (error) {
+      console.error(`polyplug: in-process create_instance threw: ${error}`);
+      return 0n;
+    }
+  };
+  const destroyImplementation = (instanceData) => {
+    instances.delete(_ffi.pointerValue(instanceData));
+  };
+  const dispatchImplementation = (instanceData, functionId, args, out) => {
+    try {
+      const implementation = _ffi.pointerValue(instanceData) === 0n
+        ? defaultImplementation
+        : instances.get(_ffi.pointerValue(instanceData));
+      const invoke = spec.methods[functionId];
+      if (implementation === undefined || typeof invoke !== "function") {
+        return AbiErrorCode.FunctionNotAvailable;
+      }
+      const code = invoke(implementation, args, out);
+      return typeof code === "number" ? code : AbiErrorCode.Ok;
+    } catch (error) {
+      console.error(`polyplug: in-process dispatch threw: ${error}`);
+      return AbiErrorCode.Panic;
+    }
+  };
+
+  const create = _ffi.makeCallback(
+    { parameters: ["pointer", "pointer"], result: "u64" },
+    (host, _args) => createImplementation(host),
+  );
+  const destroy = _ffi.makeCallback(
+    { parameters: ["pointer"], result: "void" },
+    (instanceData) => destroyImplementation(instanceData),
+  );
+  const dispatch = _ffi.makeCallback(
+    { parameters: ["pointer", "u32", "pointer", "pointer"], result: "u32" },
+    (instanceData, functionId, args, out) => dispatchImplementation(instanceData, functionId, args, out),
+  );
+  const bridgeResident = symbols.polyplug_js_in_process_bridge_create(
+    dispatch.pointer,
+    destroy.pointer,
+    create.pointer,
+    spec.contractId,
+    spec.version.major,
+    spec.version.minor,
+    spec.version.patch,
+  );
+  if (bridgeResident === null) {
+    destroy.close();
+    create.close();
+    dispatch.close();
+    throw new Error("polyplug_js bridge could not create an in-process adapter");
+  }
+  const interfacePtr = symbols.polyplug_js_in_process_bridge_interface(bridgeResident);
+  const adapterContext = symbols.polyplug_js_in_process_bridge_context(bridgeResident);
+  if (interfacePtr === null || adapterContext === null) {
+    symbols.polyplug_js_in_process_bridge_free(bridgeResident);
+    destroy.close();
+    create.close();
+    dispatch.close();
+    throw new Error("polyplug_js bridge returned an incomplete in-process adapter");
+  }
+
+  let released = false;
+  const resident = {
+    release() {
+      if (released) {
+        return;
+      }
+      released = true;
+      symbols.polyplug_js_in_process_bridge_free(bridgeResident);
+      instances.clear();
+      dispatch.close();
+      destroy.close();
+      create.close();
+    },
+  };
+  return {
+    interfacePtr,
+    adapterContext,
+    resident,
+    _createForTest: createImplementation,
+    _destroyForTest: destroyImplementation,
+    _dispatchForTest: dispatchImplementation,
+    roots: [bridgeLibrary, bridgeResident, dispatch, destroy, create, instances, defaultImplementation, factory],
+  };
+}
+
+/**
+ * Combines generated contract adapters into one atomically registered bundle.
+ *
+ * @param {{
+ *   name: string,
+ *   version: { major: number, minor: number, patch: number },
+ *   dependencies?: bigint[],
+ *   contracts: Array<{
+ *     provider: string,
+ *     contractName: string,
+ *     version: { major: number, minor: number, patch: number },
+ *     adapter: ReturnType<typeof buildInProcessGuestContract>,
+ *   }>,
+ * }} spec
+ * @returns {InProcessBundle}
+ */
+export function buildInProcessBundle(spec) {
+  if (spec === null || typeof spec !== "object" || !Array.isArray(spec.contracts)
+    || spec.contracts.length === 0) {
+    throw new TypeError("buildInProcessBundle requires at least one contract adapter");
+  }
+  const roots = [];
+  const dependencies = spec.dependencies ?? [];
+  const dependencyTable = new Uint8Array(dependencies.length * 8);
+  const dependencyView = new DataView(dependencyTable.buffer);
+  for (let index = 0; index < dependencies.length; index += 1) {
+    dependencyView.setBigUint64(index * 8, dependencies[index], true);
+  }
+  roots.push(dependencyTable);
+
+  const contractsTable = new Uint8Array(IN_PROCESS_CONTRACT_REGISTRATION_SIZE * spec.contracts.length);
+  const contractsView = new DataView(contractsTable.buffer);
+  for (let index = 0; index < spec.contracts.length; index += 1) {
+    const contract = spec.contracts[index];
+    const offset = index * IN_PROCESS_CONTRACT_REGISTRATION_SIZE;
+    const descriptor = offset + IN_PROCESS_CONTRACT_REGISTRATION_DESCRIPTOR_OFFSET;
+    writeStringView(contractsView, descriptor + PLUGIN_DESCRIPTOR_NAME_OFFSET, contract.provider, roots);
+    writeStringView(
+      contractsView,
+      descriptor + PLUGIN_DESCRIPTOR_CONTRACT_NAME_OFFSET,
+      contract.contractName,
+      roots,
+    );
+    writeVersion(contractsView, descriptor + PLUGIN_DESCRIPTOR_VERSION_OFFSET, contract.version);
+    contractsView.setBigUint64(
+      offset + IN_PROCESS_CONTRACT_REGISTRATION_INTERFACE_OFFSET,
+      _ffi.pointerValue(contract.adapter.interfacePtr),
+      true,
+    );
+    contractsView.setBigUint64(
+      offset + IN_PROCESS_CONTRACT_REGISTRATION_ADAPTER_CONTEXT_OFFSET,
+      _ffi.pointerValue(contract.adapter.adapterContext),
+      true,
+    );
+    roots.push(contract.adapter);
+  }
+  roots.push(contractsTable);
+
+  const registration = new Uint8Array(IN_PROCESS_BUNDLE_REGISTRATION_SIZE);
+  const registrationView = new DataView(registration.buffer);
+  const metadata = IN_PROCESS_BUNDLE_REGISTRATION_METADATA_OFFSET;
+  writeStringView(registrationView, metadata + IN_PROCESS_BUNDLE_METADATA_NAME_OFFSET, spec.name, roots);
+  writeVersion(registrationView, metadata + IN_PROCESS_BUNDLE_METADATA_VERSION_OFFSET, spec.version);
+  registrationView.setUint32(metadata + IN_PROCESS_BUNDLE_METADATA_RUNTIME_OFFSET, 5, true);
+  registrationView.setBigUint64(
+    IN_PROCESS_BUNDLE_REGISTRATION_DEPENDENCY_IDS_OFFSET,
+    dependencies.length === 0 ? 0n : _ffi.pointerValue(_ffi.pointerOf(dependencyTable)),
+    true,
+  );
+  registrationView.setBigUint64(
+    IN_PROCESS_BUNDLE_REGISTRATION_DEPENDENCY_COUNT_OFFSET,
+    BigInt(dependencies.length),
+    true,
+  );
+  registrationView.setBigUint64(
+    IN_PROCESS_BUNDLE_REGISTRATION_CONTRACTS_OFFSET,
+    _ffi.pointerValue(_ffi.pointerOf(contractsTable)),
+    true,
+  );
+  registrationView.setBigUint64(
+    IN_PROCESS_BUNDLE_REGISTRATION_CONTRACT_COUNT_OFFSET,
+    BigInt(spec.contracts.length),
+    true,
+  );
+  roots.push(registration);
+
+  let released = false;
+  return new InProcessBundle(registration, {
+    release() {
+      if (released) {
+        return;
+      }
+      released = true;
+      for (const root of roots) {
+        root.resident?.release?.();
+      }
+      roots.length = 0;
+    },
+  });
+}
+
+/**
  * Read a function pointer from HostApi at given offset.
  * The raw 64-bit value is wrapped into a native pointer object so it can be
  * passed to the backend's function-pointer caller (which rejects bare BigInts).
@@ -491,13 +813,14 @@ function callHostMethod(hostPtr, fieldOffset, paramTypes, resultType, args) {
  * pointers, the dispatch type, the function count, and a per-slot dispatch entry
  * callable as `dispatch(slot, instance, argsPtr, outPtr)`.
  *
- * Layout (56 bytes):
+ * Layout (64 bytes):
  *   contract_id (u64)        @ 0
  *   contract_version (12)    @ 8
  *   dispatch_type (u32)      @ 20
- *   create_instance (fn ptr) @ 24
- *   destroy_instance (fn ptr)@ 32
- *   dispatch (union, 16)     @ 40  (Native: function_count u32 @ +0, functions ptr @ +8)
+ *   adapter_context (ptr)    @ 24
+ *   create_instance (fn ptr) @ 32
+ *   destroy_instance (fn ptr)@ 40
+ *   dispatch (union, 16)     @ 48  (Native: function_count u32 @ +0, functions ptr @ +8)
  *
  * Dispatch is routed directly through the resolved interface's dispatch union
  * (native function table or VM call), so this view works identically for native
@@ -512,6 +835,7 @@ export class GuestContractInterfaceView {
   #host;          // HostApi pointer
   #interfacePtr;  // raw GuestContractInterface* (PolyPtr)
   #dispatchType;
+  #adapterContext;
   #functionCount;
   #createInstancePtr;
   #destroyInstancePtr;
@@ -531,6 +855,9 @@ export class GuestContractInterfaceView {
 
     const view = _ffi.pointerView(interfacePtr);
     this.#dispatchType = view.getUint32(GUEST_CONTRACT_INTERFACE_DISPATCH_TYPE_OFFSET);
+    this.#adapterContext = _ffi.pointerCreate(
+      view.getBigUint64(GUEST_CONTRACT_INTERFACE_ADAPTER_CONTEXT_OFFSET)
+    );
     this.#createInstancePtr = _ffi.pointerCreate(
       view.getBigUint64(GUEST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET)
     );
@@ -592,18 +919,15 @@ export class GuestContractInterfaceView {
       // raw null pointer survived, fall back to a zeroed (null-data) instance.
       return new Uint8Array(GUEST_CONTRACT_INSTANCE_SIZE);
     }
-    // Out-param ABI: create_instance(loader_data: VmLoaderData, host: *const HostApi,
-    // args: *const (), out_instance: *mut GuestContractInstance) -> void. The instance
-    // is written directly into the buffer we hand it. `loader_data` mirrors the runtime's
-    // host-mediated path: the interface's dispatch.vm.loader_data for VM contracts, null
-    // for native (which ignore it). #vmLoaderData is 0n for native, so the single
-    // UnsafePointer.create call yields null there.
+    // Out-param ABI: create_instance(adapter_context, loader_data: VmLoaderData,
+    // host: *const HostApi, args: *const (), out_instance: *mut GuestContractInstance)
+    // -> void. The interface's opaque adapter context is forwarded unchanged.
     const instance = new Uint8Array(GUEST_CONTRACT_INSTANCE_SIZE);
     const loaderData = _ffi.pointerCreate(this.#vmLoaderData);
     _ffi.callFunction(
       this.#createInstancePtr,
-      { parameters: ["pointer", "pointer", "pointer", "pointer"], result: "void" },
-      [loaderData, this.#host, null, _ffi.pointerOf(instance)],
+      { parameters: ["pointer", "pointer", "pointer", "pointer", "pointer"], result: "void" },
+      [this.#adapterContext, loaderData, this.#host, null, _ffi.pointerOf(instance)],
     );
     return instance;
   }
@@ -616,14 +940,13 @@ export class GuestContractInterfaceView {
     if (this.#destroyInstancePtr === null) {
       return;
     }
-    // destroy_instance(loader_data: VmLoaderData, host: *const HostApi,
-    // instance: GuestContractInstance). loader_data mirrors create_instance: the
-    // interface's dispatch.vm.loader_data for VM, null (0n) for native.
+    // destroy_instance(adapter_context, loader_data: VmLoaderData,
+    // host: *const HostApi, instance: GuestContractInstance) -> void.
     const loaderData = _ffi.pointerCreate(this.#vmLoaderData);
     _ffi.callFunction(
       this.#destroyInstancePtr,
-      { parameters: ["pointer", "pointer", { struct: ["pointer", "u64"] }], result: "void" },
-      [loaderData, this.#host, instance],
+      { parameters: ["pointer", "pointer", "pointer", { struct: ["pointer", "u64"] }], result: "void" },
+      [this.#adapterContext, loaderData, this.#host, instance],
     );
   }
 
@@ -632,9 +955,8 @@ export class GuestContractInterfaceView {
    *
    * This mirrors the canonical host-caller path (see polyplugc rust generator).
    * Out-param ABI: dispatch fns return void and write their AbiError through a
-   * trailing *mut AbiError, which this method reads back as the result code:
-   * - Native: `dispatch.native.functions[slot](instance, args, out, out_err) -> void`.
-   * - VM: `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err) -> void`.
+   * - Native: `dispatch.native.functions[slot](adapter_context, instance, args, out, out_err) -> void`.
+   * - VM: `dispatch.vm.call(adapter_context, loader_data, instance, fn_id, args, out, arena, out_err) -> void`.
    *
    * Direct interface dispatch is the supported mechanism and works for both native
    * and VM (QuickJS/Lua/Python) guests, including stateless ones whose instance
@@ -654,27 +976,24 @@ export class GuestContractInterfaceView {
       if (this.#vmCallPtr === null) {
         return AbiErrorCode.InvalidPointer; // null VM dispatch function.
       }
-      // call(loader_data: VmLoaderData, instance, fn_id: u32, args, out, arena,
-      // out_err: *mut AbiError) -> void. VmLoaderData is a single opaque pointer
-      // (`{ data: *mut c_void }`). The `arena` is a `*mut CallArena`; a null arena
-      // is the documented legacy fallback to per-value host->alloc (host callers
-      // carry no per-call arena).
+      // call(adapter_context, loader_data: VmLoaderData, instance, fn_id: u32,
+      // args, out, arena, out_err: *mut AbiError) -> void.
       const loaderData = _ffi.pointerCreate(this.#vmLoaderData);
       _ffi.callFunction(
         this.#vmCallPtr,
         {
-          parameters: ["pointer", GUEST_CONTRACT_INSTANCE_STRUCT, "u32", "pointer", "pointer", "pointer", "pointer"],
+          parameters: ["pointer", "pointer", GUEST_CONTRACT_INSTANCE_STRUCT, "u32", "pointer", "pointer", "pointer", "pointer"],
           result: "void",
         },
-        [loaderData, instance, slot, argsPtr, outPtr, null, errPtr],
+        [this.#adapterContext, loaderData, instance, slot, argsPtr, outPtr, null, errPtr],
       );
     } else {
       const fn = this.#nativeFnPointer(slot);
       if (fn === null) {
         return AbiErrorCode.InvalidPointer; // null native function slot.
       }
-      // functions[slot](instance, args, out, out_err: *mut AbiError) -> void.
-      fn.call(instance, argsPtr, outPtr, errPtr);
+      // functions[slot](adapter_context, instance, args, out, out_err) -> void.
+      fn.call(this.#adapterContext, instance, argsPtr, outPtr, errPtr);
     }
     return new DataView(errBuf.buffer).getUint32(0, true);
   }
@@ -698,9 +1017,9 @@ export class GuestContractInterfaceView {
     if (fnPtr === null) {
       return null;
     }
-    // Out-param ABI: functions[slot](instance, args, out, out_err) -> void.
+    // Out-param ABI: functions[slot](adapter_context, instance, args, out, out_err) -> void.
     const fn = _ffi.prepareFunction(fnPtr, {
-      parameters: [GUEST_CONTRACT_INSTANCE_STRUCT, "pointer", "pointer", "pointer"],
+      parameters: ["pointer", GUEST_CONTRACT_INSTANCE_STRUCT, "pointer", "pointer", "pointer"],
       result: "void",
     });
     this.#fnPtrCache.set(slot, fn);
@@ -718,6 +1037,9 @@ export class Runtime {
   // Per-instance FFI callback handles (on_reload / log trampolines).
   // Owned by THIS runtime (Rule 12: no module globals); closed on destroy.
   #callbacks;
+  // Generated in-process bundles transfer their rooted callback/table residents
+  // here only after core accepts their complete registration.
+  #inProcessResidents;
   #destroyed;
 
   /**
@@ -730,6 +1052,7 @@ export class Runtime {
     this.#host = host;
     this.#callbacks = callbacks;
     this.#destroyed = false;
+    this.#inProcessResidents = new Map();
   }
 
   /**
@@ -744,6 +1067,10 @@ export class Runtime {
     }
     this.#destroyed = true;
     this.#lib.symbols.polyplug_runtime_destroy(this.#host);
+    for (const resident of this.#inProcessResidents.values()) {
+      resident.release();
+    }
+    this.#inProcessResidents.clear();
     for (const cb of this.#callbacks) {
       cb.close();
     }
@@ -869,8 +1196,65 @@ export class Runtime {
     if (code !== 0) {
       throw new Error(`unloadBundle failed: ${this.lastError()}`);
     }
+    const resident = this.#inProcessResidents.get(bundleId);
+    if (resident !== undefined) {
+      this.#inProcessResidents.delete(bundleId);
+      resident.release();
+    }
   }
 
+  /**
+   * Synchronously register one generated, complete in-process bundle.
+   *
+   * The bundle prepares its canonical ABI table before this call. Its resident
+   * retains all JavaScript factories, implementations, callbacks, and backing
+   * buffers until this Runtime takes sole ownership after core accepts the
+   * registration. Logical unload releases that resident only after core drains
+   * its calls, instances, and leases.
+   * @param {{ _inProcessRegistration: () => Uint8Array, _takeInProcessResident: () => { release: () => void } }} bundle
+   * @returns {bigint} Stable bundle identifier.
+   */
+  registerInProcessBundle(bundle) {
+    if (this.#destroyed) {
+      throw new Error("registerInProcessBundle: runtime is destroyed");
+    }
+    if (bundle === null || typeof bundle !== "object"
+      || typeof bundle._inProcessRegistration !== "function"
+      || typeof bundle._takeInProcessResident !== "function") {
+      throw new TypeError("registerInProcessBundle expects a generated in-process bundle");
+    }
+
+    const registration = bundle._inProcessRegistration();
+    if (!(registration instanceof Uint8Array)) {
+      throw new TypeError("generated in-process bundle returned an invalid registration table");
+    }
+
+    const bundleIdBuf = new Uint8Array(8);
+    const errBuf = new Uint8Array(ABI_ERROR_SIZE);
+    callHostMethod(
+      this.#host,
+      HOST_API_OFFSETS.register_in_process_bundle,
+      ["pointer", "pointer", "pointer", "pointer"],
+      "void",
+      [this.#host, _ffi.pointerOf(registration), _ffi.pointerOf(bundleIdBuf), _ffi.pointerOf(errBuf)],
+    );
+    const code = new DataView(errBuf.buffer).getUint32(0, true);
+    if (code !== AbiErrorCode.Ok) {
+      throw new Error(`registerInProcessBundle failed: ${this.lastError()}`);
+    }
+
+    const bundleId = new DataView(bundleIdBuf.buffer).getBigUint64(0, true);
+    if (this.#inProcessResidents.has(bundleId)) {
+      throw new Error("registerInProcessBundle: runtime returned a duplicate live bundle id");
+    }
+    const resident = bundle._takeInProcessResident();
+    if (resident === null || typeof resident !== "object" || typeof resident.release !== "function") {
+      throw new Error("generated in-process bundle lost its resident during registration");
+    }
+    this.#inProcessResidents.set(bundleId, resident);
+    return bundleId;
+
+  }
   /**
    * Find guest contract by contract ID.
    * Calls through HostApi.find_guest_contract field.
@@ -1018,21 +1402,20 @@ export class Runtime {
   }
 
   /**
-   * Pointer to the runtime's monotonic registry revision counter (HostApi.revision_counter).
+   * Return the synchronized monotonic registry revision (HostApi.registry_revision).
    *
-   * The counter is a runtime-owned `u64` (atomic) bumped on every load, reload, and
-   * unload. A host caller reads it once at resolve time and again before each dispatch:
-   * an observed change means the cached interface/instance may dangle and must be
-   * re-resolved before use. Read the current value with
-   * `getBackend().pointerView(ptr).getBigUint64(0)`.
-   * @returns {PolyPtr} Pointer to the `u64` counter, or null when absent.
+   * The Rust callback performs the acquire load before returning the value, so every
+   * JavaScript host caller uses the same reload/unload synchronization as native
+   * callers. An observed change means its cached interface/instance must be
+   * re-resolved before use.
+   * @returns {bigint} Current registry revision.
    */
-  revisionCounter() {
+  registryRevision() {
     return callHostMethod(
       this.#host,
-      HOST_API_OFFSETS.revision_counter,
+      HOST_API_OFFSETS.registry_revision,
       ["pointer"],
-      "pointer",
+      "u64",
       [this.#host]
     );
   }

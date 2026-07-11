@@ -27,8 +27,11 @@ pub(crate) fn write_jsdoc(
     out.push_str("/**\n");
     for line in lines(docs) {
         out.push_str(indent);
-        out.push_str(" * ");
-        out.push_str(&line.replace("*/", "*\\/"));
+        out.push_str(" *");
+        if !line.is_empty() {
+            out.push(' ');
+            out.push_str(&line.replace("*/", "*\\/"));
+        }
         out.push('\n');
     }
     for (name, docs) in params {
@@ -40,7 +43,9 @@ pub(crate) fn write_jsdoc(
                 } else {
                     out.push_str(" *        ");
                 }
-                out.push_str(&line.replace("*/", "*\\/"));
+                if !line.is_empty() {
+                    out.push_str(&line.replace("*/", "*\\/"));
+                }
                 out.push('\n');
             }
         }
@@ -53,7 +58,9 @@ pub(crate) fn write_jsdoc(
             } else {
                 out.push_str(" *          ");
             }
-            out.push_str(&line.replace("*/", "*\\/"));
+            if !line.is_empty() {
+                out.push_str(&line.replace("*/", "*\\/"));
+            }
             out.push('\n');
         }
     }

@@ -30,6 +30,7 @@ use polyplug_abi::HostContractInstance;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::in_process::reject_in_process_bundle;
 use polyplug_abi::tracking::TrackingAllocator;
 use polyplug_abi::{
     AbiError, AbiErrorCode, BundleInitContext, GuestContractHandle, GuestContractInterface,
@@ -343,6 +344,7 @@ fn make_host_interface() -> HostApi {
     HostApi {
         runtime: null_mut(),
         register_guest_contract: registry_register_callback,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: noop_find_guest_contract,
@@ -362,7 +364,7 @@ fn make_host_interface() -> HostApi {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: null(),
     }
 }
@@ -459,11 +461,15 @@ fn stress_error_code_and_message_received_correctly() {
     // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
     // enforced by the test (fn 0 writes AbiError to *out, ignores args).
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { transmute(fn_ptr) };
+    ) = {
+        // SAFETY: the pointer comes from the generated dispatch table and is cast to that function's exact ABI.
+        unsafe { transmute(fn_ptr) }
+    };
 
     let host_interface: HostApi = make_host_interface();
     let message_args: MessageArgs = MessageArgs {
@@ -479,6 +485,7 @@ fn stress_error_code_and_message_received_correctly() {
     // SAFETY: message_args carries a live HostApi; out is a valid AbiError location.
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &message_args as *const MessageArgs as *const (),
             &mut out as *mut AbiError as *mut (),
@@ -537,17 +544,22 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
     // SAFETY: fn_ptr is cast to the generic dispatch signature. fn 1 ignores both
     // args and out -- it catches the panic internally and writes Panic to out_err.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { transmute(fn_ptr) };
+    ) = {
+        // SAFETY: the pointer comes from the generated dispatch table and is cast to that function's exact ABI.
+        unsafe { transmute(fn_ptr) }
+    };
 
     // fn 1 returns the AbiError via out_err. Both args and out are null.
     let mut result: AbiError = AbiError::ok();
     // SAFETY: fn 1 ignores args and out entirely (no pointer dereferences).
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             null(),
             null_mut(),
@@ -593,6 +605,7 @@ fn stress_error_chain_b_errors_a_propagates() {
     let chain_host_interface: HostApi = HostApi {
         runtime: null_mut(),
         register_guest_contract: registry_register_callback,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: chain_find_guest_contract,
@@ -612,7 +625,7 @@ fn stress_error_chain_b_errors_a_propagates() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: null(),
     };
 
@@ -638,11 +651,15 @@ fn stress_error_chain_b_errors_a_propagates() {
     // SAFETY: fn_ptr is cast to the generic dispatch signature. Args is *const ChainArgs,
     // out is *mut AbiError -- types enforced by this test.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { transmute(fn_ptr) };
+    ) = {
+        // SAFETY: the pointer comes from the generated dispatch table and is cast to that function's exact ABI.
+        unsafe { transmute(fn_ptr) }
+    };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: chain_args is a valid ChainArgs with a live HostApi.
@@ -650,6 +667,7 @@ fn stress_error_chain_b_errors_a_propagates() {
     // interface and writes the returned AbiError (Panic) to *out.
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &chain_args as *const ChainArgs as *const (),
             &mut out as *mut AbiError as *mut (),
@@ -697,11 +715,15 @@ fn stress_error_message_lifetime_valid_during_read() {
     // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
     // enforced by the test (fn 0 writes AbiError to *out, ignores args).
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { transmute(fn_ptr) };
+    ) = {
+        // SAFETY: the pointer comes from the generated dispatch table and is cast to that function's exact ABI.
+        unsafe { transmute(fn_ptr) }
+    };
 
     let host_interface: HostApi = make_host_interface();
     let message_args: MessageArgs = MessageArgs {
@@ -717,6 +739,7 @@ fn stress_error_message_lifetime_valid_during_read() {
     // SAFETY: message_args carries a live HostApi; out is a valid AbiError location.
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &message_args as *const MessageArgs as *const (),
             &mut out as *mut AbiError as *mut (),
@@ -791,6 +814,6 @@ unsafe extern "C" fn stub_destroy_guest_instance(
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
-    null()
+unsafe extern "C" fn stub_registry_revision(_this: *const HostApi) -> u64 {
+    0
 }

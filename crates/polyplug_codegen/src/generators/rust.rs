@@ -333,7 +333,7 @@ impl CodeGenerator for RustGenerator {
         callers_out.push_str(header);
 
         callers_out.push_str(&rust_use_block(&[
-            &["std::sync::Arc"],
+            &["core::ffi::c_void", "std::sync::Arc"],
             &[
                 "polyplug::Runtime",
                 "polyplug_abi::AbiErrorCode",
@@ -760,11 +760,7 @@ fn generate_guest_interfaces_file(
     embedded: bool,
 ) -> Result<(), PolyplugcError> {
     // Shared imports
-    let standard_imports: Vec<&str> = if embedded {
-        vec!["core::ffi::c_void", "std::sync::OnceLock"]
-    } else {
-        vec!["core::ffi::c_void"]
-    };
+    let standard_imports: Vec<&str> = vec!["core::ffi::c_void", "core::ptr"];
     out.push_str(&rust_use_block(&[
         &standard_imports,
         &[
@@ -862,8 +858,8 @@ fn generate_guest_interfaces_file(
 
 fn generate_embedded_factory_registry(out: &mut String, ir: &ValidatedIr) {
     let providers: Vec<GuestProvider<'_>> = guest_providers(ir);
-    out.push_str("/// Module-scoped author factories for an embedded guest bundle.\n");
-    out.push_str("pub struct EmbeddedFactories {\n");
+    out.push_str("/// Runtime-local author factories for this in-process guest bundle.\n");
+    out.push_str("pub struct InProcessFactories {\n");
     for provider in &providers {
         let lower: String = guest_provider_lower(provider);
         let trait_name: String = contract_name_to_guest_trait(&provider.contract.name);
@@ -872,22 +868,18 @@ fn generate_embedded_factory_registry(out: &mut String, ir: &ValidatedIr) {
         ));
     }
     out.push_str("}\n\n");
-    out.push_str("static EMBEDDED_FACTORIES: OnceLock<EmbeddedFactories> = OnceLock::new();\n\n");
-    out.push_str("pub(crate) fn install_embedded_factories(factories: EmbeddedFactories) {\n");
-    out.push_str("    let _ = EMBEDDED_FACTORIES.set(factories);\n");
-    out.push_str("}\n\n");
     for provider in &providers {
         let lower: String = guest_provider_lower(provider);
         let trait_name: String = contract_name_to_guest_trait(&provider.contract.name);
         out.push_str(&format!(
-            "unsafe fn embedded_factory_{lower}(host: HostContext) -> Box<dyn {trait_name}> {{\n"
+            "unsafe fn in_process_factory_{lower}(adapter_context: *mut c_void, host_ctx: HostContext) -> Option<Box<dyn {trait_name}>> {{\n"
         ));
-        out.push_str("    let factories: &EmbeddedFactories = EMBEDDED_FACTORIES\n");
-        out.push_str("        .get()\n");
-        out.push_str(
-            "        .expect(\"embedded_bundle must install factories before registration\");\n",
-        );
-        out.push_str(&format!("    (factories.{lower})(host)\n"));
+        out.push_str("    if adapter_context.is_null() {\n");
+        out.push_str("        return None;\n");
+        out.push_str("    }\n");
+        out.push_str(&format!(
+            "    let factories: &InProcessFactories = unsafe {{ &*(adapter_context as *const InProcessFactories) }};\n    Some((factories.{lower})(host_ctx))\n"
+        ));
         out.push_str("}\n\n");
     }
 }
@@ -971,6 +963,7 @@ fn generate_guest_contract_interface(
         "DispatchType::VirtualMachine"
     };
     out.push_str(&format!("    dispatch_type: {dispatch_type_str},\n"));
+    out.push_str("    adapter_context: core::ptr::null_mut(),\n");
     out.push_str(&format!("    create_instance: {upper}_create_instance,\n"));
     out.push_str(&format!(
         "    destroy_instance: {upper}_destroy_instance,\n"
@@ -1078,6 +1071,7 @@ fn generate_guest_plugin_interface(
         "DispatchType::VirtualMachine"
     };
     out.push_str(&format!("    dispatch_type: {dispatch_type_str},\n"));
+    out.push_str("    adapter_context: core::ptr::null_mut(),\n");
     out.push_str(&format!(
         "    create_instance: {plugin_upper}_create_instance,\n"
     ));
@@ -1151,7 +1145,7 @@ fn emit_guest_instance_machinery(
     embedded_factory: Option<&str>,
 ) -> Result<(), PolyplugcError> {
     let factory_name: String = embedded_factory
-        .map(|factory| format!("embedded_factory_{factory}"))
+        .map(|factory| format!("in_process_factory_{factory}"))
         .unwrap_or_else(|| format!("polyplug_create_{lower}"));
 
     if embedded_factory.is_none() {
@@ -1263,12 +1257,11 @@ fn emit_guest_instance_machinery(
              let host_ctx: HostContext = unsafe {{ HostContext::new(host) }};\n\
              let implementation: Box<dyn {trait_name}> =\n\
              match std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {{\n\
-             // SAFETY: this module-scoped factory only reads factories installed by\n\
-             // embedded_bundle before the runtime can create an instance.\n\
-             unsafe {{ {factory_name}(host_ctx) }}\n\
+             // SAFETY: adapter_context points at the resident owned by the in-process bundle.\n\
+             unsafe {{ {factory_name}(adapter_context, host_ctx) }}\n\
              }})) {{\n\
-             Ok(i) => i,\n\
-             Err(_) => {{\n\
+             Ok(Some(i)) => i,\n\
+             Ok(None) | Err(_) => {{\n\
              // SAFETY: out_instance is non-null and writable per the ABI contract.\n\
              unsafe {{ out_instance.write(GuestContractInstance::null()); }}\n\
              return;\n\
@@ -1326,11 +1319,20 @@ fn emit_guest_instance_machinery(
              }}"
         )
     };
+    let create_adapter_context_name: &str = if embedded_factory.is_some() {
+        "adapter_context"
+    } else {
+        "_adapter_context"
+    };
     let create_fn: RustFunction = RustFunction {
         name: format!("{prefix_upper}_create_instance"),
         visibility: RustVisibility::Private,
         self_kind: RustSelfKind::None,
         parameters: vec![
+            RustParameter {
+                name: create_adapter_context_name.to_owned(),
+                param_type: "*mut c_void".to_owned(),
+            },
             RustParameter {
                 name: "_loader_data".to_owned(),
                 param_type: "polyplug_abi::dispatch::VmLoaderData".to_owned(),
@@ -1380,6 +1382,10 @@ fn emit_guest_instance_machinery(
         visibility: RustVisibility::Private,
         self_kind: RustSelfKind::None,
         parameters: vec![
+            RustParameter {
+                name: "_adapter_context".to_owned(),
+                param_type: "*mut c_void".to_owned(),
+            },
             RustParameter {
                 name: "_loader_data".to_owned(),
                 param_type: "polyplug_abi::dispatch::VmLoaderData".to_owned(),
@@ -1517,6 +1523,10 @@ fn generate_guest_abi_wrapper(
         visibility: RustVisibility::Private,
         self_kind: RustSelfKind::None,
         parameters: vec![
+            RustParameter {
+                name: "_adapter_context".to_owned(),
+                param_type: "*mut c_void".to_owned(),
+            },
             RustParameter {
                 name: "instance".to_owned(),
                 param_type: "GuestContractInstance".to_owned(),
@@ -1836,65 +1846,80 @@ fn generate_embedded_guest_init_file(out: &mut String, ir: &ValidatedIr, bundle_
         .unwrap_or((1, 0, 0));
 
     out.push_str(&rust_use_block(&[
+        &["core::ffi::c_void"],
+        &["polyplug::InProcessBundle"],
         &[
-            "polyplug::EmbeddedBundle",
-            "polyplug::EmbeddedContract",
+            "polyplug_abi::InProcessBundleMetadata",
+            "polyplug_abi::InProcessBundleRegistration",
+            "polyplug_abi::InProcessContractRegistration",
+            "polyplug_abi::PluginDescriptor",
+            "polyplug_abi::StringView",
             "polyplug_abi::SupportedLanguage",
             "polyplug_abi::Version",
-            "polyplug_utils::GuestContractId",
         ],
-        &["super::interfaces::EmbeddedFactories"],
+        &["super::interfaces::InProcessFactories"],
     ]));
     out.push('\n');
     out.push_str(&format!(
-        "pub const EMBEDDED_BUNDLE_NAME: &str = {bundle_name:?};\n\n"
+        "pub const IN_PROCESS_BUNDLE_NAME: &str = {bundle_name:?};\n\n"
     ));
     out.push_str(&format!(
-        "static EMBEDDED_DEPENDENCIES: [GuestContractId; {}] = [\n",
+        "static IN_PROCESS_DEPENDENCIES: [u64; {}] = [\n",
         dependencies.len()
     ));
     for dependency in dependencies {
-        out.push_str(&format!(
-            "    GuestContractId::from_u64(0x{dependency:016X}),\n"
-        ));
+        out.push_str(&format!("    0x{dependency:016X},\n"));
     }
     out.push_str("];\n\n");
-    out.push_str(&format!(
-        "static EMBEDDED_CONTRACTS: [EmbeddedContract; {}] = [\n",
-        providers.len()
-    ));
+    out.push_str("/// Construct this module's runtime-local in-process bundle.\n");
+    out.push_str("pub fn in_process_bundle(factories: InProcessFactories) -> InProcessBundle<InProcessFactories> {\n");
+    out.push_str("    let resident: Box<InProcessFactories> = Box::new(factories);\n");
+    out.push_str("    let adapter_context: *mut c_void = (&*resident as *const InProcessFactories).cast_mut().cast();\n");
+    out.push_str("    let contracts: Box<[InProcessContractRegistration]> = Box::new([\n");
     for provider in &providers {
         let plugin_name: String = guest_provider_name(provider);
         let interface_upper: String = guest_provider_upper(provider);
         let contract = provider.contract;
-        out.push_str("    EmbeddedContract {\n");
-        out.push_str(&format!("        plugin_name: {plugin_name:?},\n"));
-        out.push_str(&format!("        contract_name: {:?},\n", contract.name));
+        out.push_str("        InProcessContractRegistration {\n");
+        out.push_str("            descriptor: PluginDescriptor {\n");
         out.push_str(&format!(
-            "        version: Version {{ major: {}, minor: {}, patch: {} }},\n",
+            "                name: StringView::from_static({plugin_name:?}.as_bytes()),\n"
+        ));
+        out.push_str(&format!(
+            "                contract_name: StringView::from_static({:?}.as_bytes()),\n",
+            contract.name
+        ));
+        out.push_str(&format!(
+            "                version: Version {{ major: {}, minor: {}, patch: {} }},\n",
             contract.version.major, contract.version.minor, contract.version.patch
         ));
+        out.push_str("            },\n");
         out.push_str(&format!(
-            "        interface: &super::interfaces::{interface_upper}_INTERFACE,\n"
+            "            interface: &super::interfaces::{interface_upper}_INTERFACE,\n"
         ));
-        out.push_str("    },\n");
+        out.push_str("            adapter_context,\n");
+        out.push_str("        },\n");
     }
-    out.push_str("];\n\n");
-    out.push_str("/// Construct this module's in-process Rust bundle.\n");
-    out.push_str("///\n");
-    out.push_str("/// Factory pointers are copied into static module storage once. The returned\n");
-    out.push_str("/// descriptor borrows only generated static strings, interfaces, and arrays.\n");
-    out.push_str("pub fn embedded_bundle(factories: EmbeddedFactories) -> EmbeddedBundle {\n");
-    out.push_str("    super::interfaces::install_embedded_factories(factories);\n");
-    out.push_str("    EmbeddedBundle {\n");
-    out.push_str("        name: EMBEDDED_BUNDLE_NAME,\n");
+    out.push_str("    ]);\n");
+    out.push_str("    InProcessBundle::with_boxed_resident(\n");
+    out.push_str("        InProcessBundleRegistration {\n");
+    out.push_str("            metadata: InProcessBundleMetadata {\n");
+    out.push_str(
+        "                name: StringView::from_static(IN_PROCESS_BUNDLE_NAME.as_bytes()),\n",
+    );
     out.push_str(&format!(
-        "        version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"
+        "                version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"
     ));
-    out.push_str("        runtime: SupportedLanguage::Rust,\n");
-    out.push_str("        dependencies: &EMBEDDED_DEPENDENCIES,\n");
-    out.push_str("        contracts: &EMBEDDED_CONTRACTS,\n");
-    out.push_str("    }\n");
+    out.push_str("                runtime: SupportedLanguage::Rust,\n");
+    out.push_str("            },\n");
+    out.push_str("            dependency_ids: IN_PROCESS_DEPENDENCIES.as_ptr(),\n");
+    out.push_str("            dependency_count: IN_PROCESS_DEPENDENCIES.len(),\n");
+    out.push_str("            contracts: core::ptr::null(),\n");
+    out.push_str("            contract_count: 0,\n");
+    out.push_str("        },\n");
+    out.push_str("        contracts,\n");
+    out.push_str("        resident,\n");
+    out.push_str("    )\n");
     out.push_str("}\n");
 }
 
@@ -2112,12 +2137,6 @@ fn generate_host_contract_caller(
     );
     out.push_str("    handle: GuestContractHandle,\n");
     out.push_str(
-        "    /// Pointer to the runtime's registry revision counter, fetched once via\n\
-         \x20   /// `HostApi.revision_counter`. Polled directly before each dispatch (one\n\
-         \x20   /// atomic load, no call into the runtime).\n",
-    );
-    out.push_str("    revision_ptr: *const u64,\n");
-    out.push_str(
         "    /// Revision value read when the interface was resolved. Compared before each\n\
          \x20   /// dispatch against the live counter to detect a reload/unload and re-resolve,\n\
          \x20   /// so the cached interface pointer never dangles.\n",
@@ -2182,28 +2201,15 @@ fn generate_host_contract_caller(
     );
     out.push_str("        };\n");
     out.push_str(
-        "        // Fetch the registry revision counter ONCE, then read its current value, so\n\
-         \x20       // every later call can detect a reload/unload with a direct atomic load (no\n\
-         \x20       // call back into the runtime) and re-resolve before dispatching.\n",
+        "        // Capture the acquire-synchronized registry revision value for this resolved\n\
+         \x20       // interface. Each later dispatch invokes the same HostApi callback before use.\n",
     );
     out.push_str(
-        "        // SAFETY: revision_counter is an ABI fn ptr safe to call with the live host.\n",
+        "        // SAFETY: registry_revision is an ABI fn ptr safe to call with the live host.\n",
     );
     out.push_str(
-        "        let revision_ptr: *const u64 = unsafe { (host_api.revision_counter)(host) };\n",
+        "        let cached_revision: u64 = unsafe { (host_api.registry_revision)(host) };\n",
     );
-    out.push_str("        let cached_revision: u64 = if revision_ptr.is_null() {\n");
-    out.push_str("            0\n");
-    out.push_str("        } else {\n");
-    out.push_str(
-        "            // SAFETY: revision_ptr was returned by revision_counter and points to the\n",
-    );
-    out.push_str("            // runtime's revision counter (an AtomicU64), valid while runtime is retained.\n");
-    out.push_str("            unsafe {\n");
-    out.push_str("                (*(revision_ptr as *const core::sync::atomic::AtomicU64))\n");
-    out.push_str("                    .load(core::sync::atomic::Ordering::Acquire)\n");
-    out.push_str("            }\n");
-    out.push_str("        };\n");
     if needs_arena {
         out.push_str(
             "        // Box the backing buffer first so the arena's interior pointers refer\n",
@@ -2218,11 +2224,11 @@ fn generate_host_contract_caller(
             "        let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);\n",
         );
         out.push_str(&format!(
-            "        Some({struct_name} {{ runtime, interface, instance, handle, revision_ptr, cached_revision, arena_buf, arena }})\n"
+            "        Some({struct_name} {{ runtime, interface, instance, handle, cached_revision, arena_buf, arena }})\n"
         ));
     } else {
         out.push_str(&format!(
-            "        Some({struct_name} {{ runtime, interface, instance, handle, revision_ptr, cached_revision }})\n"
+            "        Some({struct_name} {{ runtime, interface, instance, handle, cached_revision }})\n"
         ));
     }
     out.push_str("    }\n\n");
@@ -2231,24 +2237,18 @@ fn generate_host_contract_caller(
     out.push_str("        self.runtime.as_context_ptr()\n");
     out.push_str("    }\n\n");
     out.push_str(
-        "    /// Read the registry revision through the cached pointer — one aligned atomic\n\
-         \x20   /// load, no call into the runtime. Returns the cached value when the runtime\n\
-         \x20   /// exposes no revision counter, so the staleness check is then a no-op.\n",
+        "    /// Read the acquire-synchronized registry revision through HostApi.\n\
+         \x20   /// The runtime callback returns the current value.\n",
     );
     out.push_str("    #[inline]\n");
     out.push_str("    fn live_revision(&self) -> u64 {\n");
-    out.push_str("        if self.revision_ptr.is_null() {\n");
-    out.push_str("            return self.cached_revision;\n");
-    out.push_str("        }\n");
+    out.push_str("        let host: *const HostApi = self.host();\n");
     out.push_str(
-        "        // SAFETY: revision_ptr was returned by HostApi.revision_counter and points to\n",
+        "        // SAFETY: the retained runtime owns this HostApi for the caller lifetime.\n",
     );
-    out.push_str("        // the runtime's revision counter — an AtomicU64 whose address is stable for the\n");
-    out.push_str("        // runtime's lifetime, i.e. for as long as this caller can dispatch.\n");
-    out.push_str("        unsafe {\n");
-    out.push_str("            (*(self.revision_ptr as *const core::sync::atomic::AtomicU64))\n");
-    out.push_str("                .load(core::sync::atomic::Ordering::Acquire)\n");
-    out.push_str("        }\n");
+    out.push_str("        let host_api: &HostApi = unsafe { &*host };\n");
+    out.push_str("        // SAFETY: registry_revision is safe to call with the live host.\n");
+    out.push_str("        unsafe { (host_api.registry_revision)(host) }\n");
     out.push_str("    }\n\n");
     out.push_str("    /// Check if this caller holds a resolved contract interface.\n");
     out.push_str("    pub fn is_valid(&self) -> bool {\n");
@@ -2433,11 +2433,9 @@ fn generate_host_fn_caller(
     ));
 
     out.push_str(
-        "        // Cheap per-call staleness check: read the registry revision directly through\n\
-         \x20       // the cached pointer (one atomic load, no call into the runtime). While it\n\
-         \x20       // matches the value cached when this caller resolved, the interface pointer is\n\
-         \x20       // current and we dispatch directly; on any change (hot-reload or unload) we\n\
-         \x20       // re-resolve first, so the cached pointer is never used once it dangles.\n",
+        "        // Compare the current acquire-synchronized registry revision before using\n\
+         \x20       // the cached interface. A change re-resolves before direct dispatch, so a\n\
+         \x20       // reclaimed interface is never used.\n",
     );
     out.push_str(
         "        if self.live_revision() != self.cached_revision && !self.revalidate() {\n",
@@ -2536,10 +2534,10 @@ fn emit_native_vm_dispatch(out: &mut String, fn_id: u32, needs_arena: bool) {
     out.push_str("                        // SAFETY: Transmuting *const () to a function pointer is sound because:\n");
     out.push_str("                        // - Function pointers have the same size and alignment as data pointers on all supported platforms\n");
     out.push_str("                        // - The interface guarantees that the function at this index is a native dispatch function\n");
-    out.push_str("                        //   with the exact signature: unsafe extern \"C\" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)\n");
-    out.push_str("                        let dispatch_fn: unsafe extern \"C\" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) = core::mem::transmute(fn_ptr);\n");
+    out.push_str("                        //   with the exact signature: unsafe extern \"C\" fn(*mut c_void, GuestContractInstance, *const (), *mut (), *mut AbiError)\n");
+    out.push_str("                        let dispatch_fn: unsafe extern \"C\" fn(*mut c_void, GuestContractInstance, *const (), *mut (), *mut AbiError) = core::mem::transmute(fn_ptr);\n");
     out.push_str(
-        "                        dispatch_fn(self.instance, args_ptr, out_ptr, &mut err);\n",
+        "                        dispatch_fn(interface.adapter_context, self.instance, args_ptr, out_ptr, &mut err);\n",
     );
     out.push_str("                    }\n");
     out.push_str("                }\n");
@@ -2553,6 +2551,7 @@ fn emit_native_vm_dispatch(out: &mut String, fn_id: u32, needs_arena: bool) {
         out.push_str("                    self.arena.reset();\n");
     }
     out.push_str("                    (interface.dispatch.vm.call)(\n");
+    out.push_str("                        interface.adapter_context,\n");
     out.push_str("                        interface.dispatch.vm.loader_data,\n");
     out.push_str("                        self.instance,  // instance parameter\n");
     out.push_str(&format!("                        {fn_id}_u32,\n"));
@@ -3341,6 +3340,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!("pub fn {factory_vm_name}(\n"));
     out.push_str("    bridge_data: *mut c_void,\n");
     out.push_str("    dispatch_fn: unsafe extern \"C\" fn(\n");
+    out.push_str("        adapter_context: *mut c_void,\n");
     out.push_str("        loader_data: VmLoaderData,\n");
     out.push_str("        instance: GuestContractInstance,\n");
     out.push_str("        fn_id: u32,\n");
@@ -4125,7 +4125,7 @@ fn generate_guest_host_contract_method(
         "core::ptr::null_mut()"
     };
     body.push_str(&format!(
-        "                    (interface.dispatch.vm.call)(interface.dispatch.vm.loader_data, GuestContractInstance::null(), {fn_id}_u32, args_ptr, out_ptr, {arena_arg}, &mut err);\n"
+        "                    (interface.dispatch.vm.call)(interface.user_data, interface.dispatch.vm.loader_data, GuestContractInstance::null(), {fn_id}_u32, args_ptr, out_ptr, {arena_arg}, &mut err);\n"
     ));
     body.push_str("                }\n");
     body.push_str("            }\n");
@@ -4422,7 +4422,11 @@ fn generate_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) -> 
     if any_needs_arena {
         external.push("polyplug_abi::CallArena");
     }
-    out.push_str(&rust_use_block(&[&external, &["super::types::*"]]));
+    out.push_str(&rust_use_block(&[
+        &["core::ffi::c_void"],
+        &external,
+        &["super::types::*"],
+    ]));
     out.push('\n');
 
     if any_needs_arena {
@@ -4500,12 +4504,6 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
         "    /// (which swaps a new interface into the same slot) or report a gone contract.\n",
     );
     out.push_str("    handle: GuestContractHandle,\n");
-    out.push_str("    /// Pointer to the runtime's registry revision counter, fetched once via\n");
-    out.push_str("    /// `HostApi.revision_counter`. Polled directly before each dispatch (one\n");
-    out.push_str(
-        "    /// atomic load, no call into the runtime); null when there is no runtime.\n",
-    );
-    out.push_str("    revision_ptr: *const u64,\n");
     out.push_str(
         "    /// Revision value read when the peer was resolved. Compared before each dispatch\n",
     );
@@ -4583,31 +4581,18 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
     );
     out.push_str("        };\n");
     out.push_str(
-        "        // Fetch the registry revision counter ONCE, then read its current value, so\n",
+        "        // Capture the acquire-synchronized registry revision value for this resolved\n",
     );
     out.push_str(
-        "        // every later call can detect a reload/unload with a direct atomic load (no\n",
+        "        // peer interface. Each later dispatch invokes the same HostApi callback before use.\n",
     );
-    out.push_str("        // call back into the runtime) and re-resolve before dispatching.\n");
     out.push_str(
-        "        // SAFETY: iface_api is the reborrowed non-null HostApi; revision_counter is an\n",
+        "        // SAFETY: iface_api is the reborrowed non-null HostApi and registry_revision\n",
     );
-    out.push_str("        // ABI function pointer safe to call with a valid host.\n");
+    out.push_str("        // is an ABI function pointer safe to call with a valid host.\n");
     out.push_str(
-        "        let revision_ptr: *const u64 = unsafe { (iface_api.revision_counter)(host) };\n",
+        "        let cached_revision: u64 = unsafe { (iface_api.registry_revision)(host) };\n",
     );
-    out.push_str("        let cached_revision: u64 = if revision_ptr.is_null() {\n");
-    out.push_str("            0\n");
-    out.push_str("        } else {\n");
-    out.push_str(
-        "            // SAFETY: revision_ptr was returned by revision_counter and points to the\n",
-    );
-    out.push_str("            // runtime's revision counter (an AtomicU64), valid for the runtime's lifetime.\n");
-    out.push_str("            unsafe {\n");
-    out.push_str("                (*(revision_ptr as *const core::sync::atomic::AtomicU64))\n");
-    out.push_str("                    .load(core::sync::atomic::Ordering::Acquire)\n");
-    out.push_str("            }\n");
-    out.push_str("        };\n");
     if needs_arena {
         out.push_str(
             "        // Box the backing buffer first so the arena's interior pointers refer\n",
@@ -4620,37 +4605,23 @@ fn generate_peer_caller(out: &mut String, contract: &ResolvedContract, min_versi
             "        let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);\n",
         );
         out.push_str(&format!(
-            "        Some({struct_name} {{ interface, instance, host, handle, revision_ptr, cached_revision, arena_buf, arena }})\n"
+            "        Some({struct_name} {{ interface, instance, host, handle, cached_revision, arena_buf, arena }})\n"
         ));
     } else {
         out.push_str(&format!(
-            "        Some({struct_name} {{ interface, instance, host, handle, revision_ptr, cached_revision }})\n"
+            "        Some({struct_name} {{ interface, instance, host, handle, cached_revision }})\n"
         ));
     }
     out.push_str("    }\n\n");
 
     // live_revision()
-    out.push_str(
-        "    /// Read the registry revision through the cached pointer — one aligned atomic\n",
-    );
-    out.push_str(
-        "    /// load, no call into the runtime. Returns the cached value (\"unchanged\") when\n",
-    );
-    out.push_str("    /// there is no counter (null host/runtime), making the check a no-op.\n");
+    out.push_str("    /// Read the synchronized registry revision through HostApi.\n");
     out.push_str("    #[inline]\n");
     out.push_str("    fn live_revision(&self) -> u64 {\n");
-    out.push_str("        if self.revision_ptr.is_null() {\n");
-    out.push_str("            return self.cached_revision;\n");
-    out.push_str("        }\n");
-    out.push_str(
-        "        // SAFETY: revision_ptr was returned by HostApi.revision_counter and points to\n",
-    );
-    out.push_str("        // the runtime's revision counter — an AtomicU64 whose address is stable for the\n");
-    out.push_str("        // runtime's lifetime, i.e. for as long as this caller can dispatch.\n");
-    out.push_str("        unsafe {\n");
-    out.push_str("            (*(self.revision_ptr as *const core::sync::atomic::AtomicU64))\n");
-    out.push_str("                .load(core::sync::atomic::Ordering::Acquire)\n");
-    out.push_str("        }\n");
+    out.push_str("        // SAFETY: self.host is retained for the caller lifetime.\n");
+    out.push_str("        let host_api: &HostApi = unsafe { &*self.host };\n");
+    out.push_str("        // SAFETY: registry_revision is safe to call with the live host.\n");
+    out.push_str("        unsafe { (host_api.registry_revision)(self.host) }\n");
     out.push_str("    }\n\n");
 
     // is_valid()
@@ -4810,11 +4781,12 @@ fn generate_peer_fn_caller(out: &mut String, func: &ResolvedFunction, struct_nam
 
     // Per-call staleness check: re-resolve if the registry changed under us.
     out.push_str(
-        "        // Cheap per-call staleness check: read the registry revision directly through\n",
+        "        // Compare the current acquire-synchronized registry revision before using\n",
     );
-    out.push_str("        // the cached pointer (one atomic load, no call into the runtime). On any change\n");
-    out.push_str("        // (hot-reload or unload of the peer) we re-resolve first, so the cached interface\n");
-    out.push_str("        // and instance are never used once they dangle.\n");
+    out.push_str(
+        "        // the cached peer interface. A change re-resolves before direct dispatch,\n",
+    );
+    out.push_str("        // so a reclaimed interface and instance are never used.\n");
     out.push_str(
         "        if self.live_revision() != self.cached_revision && !self.revalidate() {\n",
     );

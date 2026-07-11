@@ -18,6 +18,8 @@
 //! - `create_instance`: Factory function to create new instances
 //! - `destroy_instance`: Destructor to clean up instances before hot-reload
 
+use core::ffi::c_void;
+
 use polyplug_utils::GuestContractId;
 
 use crate::{
@@ -71,12 +73,23 @@ pub struct GuestContractInterface {
     /// - Native: Direct function pointer call
     /// - VirtualMachine: VM-specific dispatch via loader
     pub dispatch_type: DispatchType,
+    /// Opaque context owned by the generated adapter that registered this contract.
+    ///
+    /// Core copies and forwards this pointer unchanged, but never dereferences,
+    /// writes, or frees it. Every lifecycle and dispatch callback receives this
+    /// exact value as its first argument.
+    ///
+    /// The registrant keeps the pointee alive until logical unload completes and
+    /// all callbacks have quiesced.
+    pub adapter_context: *mut c_void,
     /// Create a new instance of this contract.
     ///
     /// Factory function called by host to create instances.
     /// Returns null handle on failure.
     ///
     /// # Arguments
+    /// - `adapter_context`: opaque generated-adapter state copied from this
+    ///   interface and forwarded unchanged by core
     /// - `loader_data`: the VM loader's per-(bundle,runtime) data handle (the same
     ///   handle carried in `dispatch.vm.loader_data`). Native-dispatch contracts
     ///   ignore it — their generated factory is statically linked. VM-dispatch
@@ -99,6 +112,7 @@ pub struct GuestContractInterface {
     /// # Thread Safety
     /// May be called from any thread. Implementation must handle synchronization.
     pub create_instance: unsafe extern "C" fn(
+        adapter_context: *mut c_void,
         loader_data: VmLoaderData,
         host: *const HostApi,
         args: *const (),
@@ -110,6 +124,8 @@ pub struct GuestContractInterface {
     /// Failure to destroy instances causes memory leaks.
     ///
     /// # Arguments
+    /// - `adapter_context`: opaque generated-adapter state copied from this
+    ///   interface and forwarded unchanged by core
     /// - `loader_data`: the VM loader's per-(bundle,runtime) data handle (mirrors
     ///   `create_instance`). Native contracts ignore it; VM contracts use it to
     ///   reach the per-instance registry the handle was minted into. The runtime
@@ -126,16 +142,26 @@ pub struct GuestContractInterface {
     /// # Safety
     /// After calling destroy_instance, the instance handle is invalid.
     pub destroy_instance: unsafe extern "C" fn(
+        adapter_context: *mut c_void,
         loader_data: VmLoaderData,
         host: *const HostApi,
         instance: GuestContractInstance,
     ),
     /// Union of dispatch mechanisms — access based on dispatch_type.
     ///
-    /// For Native dispatch: use `dispatch.native.functions[fn_id]`.
-    /// For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err)`.
+    /// For Native dispatch: call a function as
+    /// `fn(adapter_context, instance, args, out, out_err)`.
+    /// For VM dispatch: call
+    /// `dispatch.vm.call(adapter_context, loader_data, instance, fn_id, args, out, arena, out_err)`.
     pub dispatch: DispatchMechanisms,
 }
+// SAFETY: adapter_context is opaque and only forwarded to callbacks. Registrants
+// guarantee its synchronization and lifetime through logical unload and quiescence.
+unsafe impl Send for GuestContractInterface {}
+
+// SAFETY: callbacks receive immutable copied table data and synchronize their
+// adapter_context access according to the generated-adapter contract.
+unsafe impl Sync for GuestContractInterface {}
 
 #[cfg(test)]
 mod tests {
@@ -149,19 +175,20 @@ mod tests {
         //   contract_id (GuestContractId/u64): 8 bytes @ offset 0
         //   contract_version (Version/3xu32): 12 bytes @ offset 8
         //   dispatch_type (DispatchType/u32): 4 bytes @ offset 20
-        //   [padding 4 bytes for alignment]
-        //   create_instance (fn ptr): 8 bytes @ offset 24
-        //   destroy_instance (fn ptr): 8 bytes @ offset 32
-        //   dispatch (union): 16 bytes @ offset 40
-        // Total: 56 bytes
-        assert_eq!(size_of::<GuestContractInterface>(), 56);
+        //   adapter_context (*mut c_void): 8 bytes @ offset 24
+        //   create_instance (fn ptr): 8 bytes @ offset 32
+        //   destroy_instance (fn ptr): 8 bytes @ offset 40
+        //   dispatch (union): 16 bytes @ offset 48
+        // Total: 64 bytes
+        assert_eq!(size_of::<GuestContractInterface>(), 64);
         assert_eq!(align_of::<GuestContractInterface>(), 8);
         assert_eq!(offset_of!(GuestContractInterface, contract_id), 0);
         assert_eq!(offset_of!(GuestContractInterface, contract_version), 8);
         assert_eq!(offset_of!(GuestContractInterface, dispatch_type), 20);
-        assert_eq!(offset_of!(GuestContractInterface, create_instance), 24);
-        assert_eq!(offset_of!(GuestContractInterface, destroy_instance), 32);
-        assert_eq!(offset_of!(GuestContractInterface, dispatch), 40);
+        assert_eq!(offset_of!(GuestContractInterface, adapter_context), 24);
+        assert_eq!(offset_of!(GuestContractInterface, create_instance), 32);
+        assert_eq!(offset_of!(GuestContractInterface, destroy_instance), 40);
+        assert_eq!(offset_of!(GuestContractInterface, dispatch), 48);
     }
 
     /// Verify HostApi is pointer-sized for FFI compatibility.

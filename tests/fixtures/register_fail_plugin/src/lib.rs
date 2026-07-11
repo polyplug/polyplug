@@ -8,6 +8,7 @@
 //! `dlclose` such a library (its registered statics may be referenced by the
 //! retired interface) and must invalidate whatever the failed init registered.
 
+use core::{ffi::c_void, ptr};
 use polyplug_abi::*;
 use polyplug_utils::GuestContractId;
 
@@ -25,7 +26,7 @@ pub struct AddArgs {
 /// The `add` function: returns a.wrapping_add(b).
 ///
 /// Uses the frozen native cross-dispatch ABI signature
-/// `extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)` — the
+/// `extern "C" fn(*mut c_void, GuestContractInstance, *const (), *mut (), *mut AbiError)` — the
 /// exact shape the runtime's native dispatch transmutes each function-table slot
 /// to. This fixture's `regfail.add` is never dispatched (init reports failure
 /// after registration, so the loader invalidates it), but the signature is kept
@@ -34,6 +35,7 @@ pub struct AddArgs {
 /// # Safety
 /// `args` must point to a valid `AddArgs`; `out` must point to a valid `u32`.
 unsafe extern "C" fn plugin_add(
+    _adapter_context: *mut c_void,
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
@@ -70,6 +72,7 @@ unsafe extern "C" fn plugin_add(
 /// # Safety
 /// Stateless contract: dispatch never reads instance data.
 unsafe extern "C" fn create_instance_stub(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -86,6 +89,7 @@ unsafe extern "C" fn create_instance_stub(
 /// # Safety
 /// Stateless contract: there is no instance data to release.
 unsafe extern "C" fn destroy_instance_stub(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -121,6 +125,7 @@ fn regfail_add_interface() -> GuestContractInterface {
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance: create_instance_stub,
         destroy_instance: destroy_instance_stub,
         dispatch: DispatchMechanisms {

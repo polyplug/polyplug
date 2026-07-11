@@ -6,7 +6,7 @@
 //! Unlike `test_plugin` (whose registered `add` uses the 2-argument
 //! `fn(*const (), *mut ())` form), this fixture's dispatch function uses the
 //! frozen **native cross-dispatch** signature
-//! `extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)`,
+//! `extern "C" fn(*mut c_void, GuestContractInstance, *const (), *mut (), *mut AbiError)`,
 //! which is the exact signature the runtime's native dispatch transmutes each
 //! function-table slot to. That makes this contract a valid peer-call target
 //! through direct cached-interface dispatch (`interface.dispatch.native`).
@@ -15,6 +15,7 @@
 //! returns `a.wrapping_add(b).wrapping_add(1000)` so reload routing is
 //! observable.
 
+use core::{ffi::c_void, ptr};
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::*;
 use polyplug_utils::GuestContractId;
@@ -51,6 +52,7 @@ const TARGET_INSTANCE_MARKER: u64 = 0xC0FF_EE00_7A86_E700;
 /// # Safety
 /// `args` must point to a valid `AddArgs`; `out` must point to a valid `u32`.
 unsafe extern "C" fn target_add(
+    _adapter_context: *mut c_void,
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
@@ -87,6 +89,7 @@ unsafe extern "C" fn target_add(
 /// # Safety
 /// `_host`/`_args` follow the ABI calling convention but are unused here.
 unsafe extern "C" fn create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -112,6 +115,7 @@ unsafe extern "C" fn create_instance(
 /// `instance.data` must be a pointer returned by `create_instance` of this
 /// contract, not yet destroyed.
 unsafe extern "C" fn destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     instance: GuestContractInstance,
@@ -150,6 +154,7 @@ fn target_interface() -> GuestContractInterface {
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance,
         destroy_instance,
         dispatch: DispatchMechanisms {

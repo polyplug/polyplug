@@ -236,9 +236,7 @@ fn lua_guest_calls_real_host_contract() {
     let bundle_dir: PathBuf = build_lua_bundle(tmp.path());
 
     let rt: Arc<Runtime> = Runtime::builder()
-        .loader(polyplug_lua::LuaLoader::new(
-            polyplug_lua::LuaConfig::default(),
-        ))
+        .loader(polyplug_lua::LuaLoader::new())
         .build()
         .expect("build runtime");
 
@@ -278,6 +276,7 @@ fn lua_guest_calls_real_host_contract() {
     let mut err: AbiError = AbiError::ok();
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             polyplug_abi::GuestContractInstance::null(),
             TRANSFORM_FN_ID,

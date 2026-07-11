@@ -57,12 +57,9 @@ def _get_lib() -> ctypes.CDLL:
         lib_path: str = _resolve_lib_path("POLYPLUG_JS_LIB", "polyplug_js")
         _lib = ctypes.CDLL(lib_path)
         _lib.polyplug_js_loader_create.restype = ctypes.c_void_p
-        _lib.polyplug_js_loader_create.argtypes = [ctypes.c_void_p]
+        _lib.polyplug_js_loader_create.argtypes = []
     return _lib
 
-
-class _JsConfig(ctypes.Structure):
-    _fields_ = [("_reserved", ctypes.c_uint8)]
 
 
 _RUNTIME_NAME: str = "js-quickjs"
@@ -71,8 +68,7 @@ _RUNTIME_NAME: str = "js-quickjs"
 def register_js_loader(runtime: Runtime) -> None:
     """Register the JS (QuickJS) loader with the runtime via HostApi.register_loader."""
     lib: ctypes.CDLL = _get_lib()
-    cfg = _JsConfig(0)
-    loader_ptr: int = lib.polyplug_js_loader_create(ctypes.byref(cfg))
+    loader_ptr: int = lib.polyplug_js_loader_create()
     if not loader_ptr:
         raise RuntimeError("polyplug: js loader create failed")
 

@@ -26,7 +26,6 @@ use mlua::RegistryKey;
 use mlua::Table;
 use mlua::Value;
 
-use crate::config::LuaConfig;
 use polyplug::Runtime;
 use polyplug::error::LoaderError;
 use polyplug::loader::BundleLoader;
@@ -42,7 +41,7 @@ use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
-use polyplug_abi::SupportedLanguage;
+
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
 use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
@@ -254,6 +253,7 @@ impl Drop for LuaDispatchGuard<'_> {
 /// - `host` is the owning runtime's `HostApi` pointer, forwarded to the factory.
 /// - `out_instance`, when non-null, must be writable per the ABI contract.
 unsafe extern "C" fn lua_create_instance(
+    _adapter_context: *mut c_void,
     loader_data: VmLoaderData,
     host: *const HostApi,
     _args: *const (),
@@ -344,6 +344,7 @@ unsafe extern "C" fn lua_create_instance(
 /// - `instance` must be a handle previously produced by [`lua_create_instance`]
 ///   for this contract (or a null handle).
 unsafe extern "C" fn lua_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     instance: GuestContractInstance,
@@ -381,6 +382,7 @@ unsafe extern "C" fn lua_destroy_instance(
 ///   caller for this call. Values written by the guest into the arena (via
 ///   `polyplug_guest.alloc_string_arena`) are valid until the caller's next reset.
 unsafe extern "C" fn lua_dispatch(
+    _adapter_context: *mut c_void,
     loader_data: VmLoaderData,
     instance: GuestContractInstance,
     fn_id: u32,
@@ -548,8 +550,6 @@ unsafe fn lua_dispatch_impl(
 /// (plugin metadata + function tables) plus the canonical `AbiError` `{ code,
 /// message }` table. Nothing is deposited into any global namespace (Rule 12).
 pub struct LuaLoader {
-    /// Configuration for this loader instance.
-    pub config: LuaConfig,
     /// Per-bundle VM state owned by the loader, keyed by [`BundleId`].
     ///
     /// Each registered contract contributes one [`LuaLoaderData`] (which holds a
@@ -570,11 +570,16 @@ pub struct LuaLoader {
     scheduled_reclaims: AtomicU64,
 }
 
+impl Default for LuaLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LuaLoader {
-    /// Create a new `LuaLoader` with the given configuration.
-    pub fn new(config: LuaConfig) -> Self {
+    /// Create a new `LuaLoader`.
+    pub fn new() -> Self {
         Self {
-            config,
             live: Mutex::new(HashMap::new()),
             scheduled_reclaims: AtomicU64::new(0),
         }
@@ -1055,6 +1060,7 @@ impl LuaLoader {
                     patch: 0,
                 },
                 dispatch_type: DispatchType::VirtualMachine,
+                adapter_context: ptr::null_mut(),
                 create_instance: lua_create_instance,
                 destroy_instance: lua_destroy_instance,
                 dispatch: DispatchMechanisms {
@@ -1187,10 +1193,6 @@ impl BundleLoader for LuaLoader {
         "lua"
     }
 
-    fn loader_language(&self) -> SupportedLanguage {
-        SupportedLanguage::Lua
-    }
-
     fn supports_hot_reload(&self) -> bool {
         true
     }
@@ -1266,7 +1268,7 @@ mod tests {
 
     #[test]
     fn lua_loader_name() {
-        let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+        let loader: LuaLoader = LuaLoader::new();
         assert_eq!(loader.loader_name(), "lua");
     }
 
@@ -1319,9 +1321,9 @@ end
     /// epoch keeps the VM alive until that reader's pin clears).
     #[test]
     fn unload_removes_live_and_schedules_reclaim() {
-        let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+        let loader: LuaLoader = LuaLoader::new();
         let runtime: Arc<Runtime> = RuntimeBuilder::new()
-            .loader(LuaLoader::new(LuaConfig::default()))
+            .loader(LuaLoader::new())
             .build()
             .expect("runtime build must succeed");
         let (_dir, manifest): (tempfile::TempDir, ManifestData) =
@@ -1360,9 +1362,9 @@ end
     /// map unboundedly: reclaim keeps memory bounded at one entry.
     #[test]
     fn unload_load_loop_is_bounded() {
-        let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+        let loader: LuaLoader = LuaLoader::new();
         let runtime: Arc<Runtime> = RuntimeBuilder::new()
-            .loader(LuaLoader::new(LuaConfig::default()))
+            .loader(LuaLoader::new())
             .build()
             .expect("runtime build must succeed");
         let (_dir, manifest): (tempfile::TempDir, ManifestData) =
@@ -1415,9 +1417,9 @@ end
     /// supersede path a real reload takes.
     #[test]
     fn reload_replaces_live_and_reclaims_superseded_vm() {
-        let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+        let loader: LuaLoader = LuaLoader::new();
         let runtime: Arc<Runtime> = RuntimeBuilder::new()
-            .loader(LuaLoader::new(LuaConfig::default()))
+            .loader(LuaLoader::new())
             .build()
             .expect("runtime build must succeed");
         let (_dir, manifest): (tempfile::TempDir, ManifestData) =
@@ -1476,9 +1478,9 @@ end
     /// alive until the call completes, so unload never parks the state forever.
     #[test]
     fn unload_schedules_reclaim_even_when_in_flight() {
-        let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+        let loader: LuaLoader = LuaLoader::new();
         let runtime: Arc<Runtime> = RuntimeBuilder::new()
-            .loader(LuaLoader::new(LuaConfig::default()))
+            .loader(LuaLoader::new())
             .build()
             .expect("runtime build must succeed");
         let (_dir, manifest): (tempfile::TempDir, ManifestData) =

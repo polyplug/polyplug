@@ -35,7 +35,7 @@ flowchart TB
     subgraph RT["polyplug runtime (libpolyplug)"]
         Store["RuntimeStore<br/>write-locked authoritative state"]
         View["ReadView<br/>immutable published snapshot"]
-        Rev["revision_counter (u64)"]
+        Rev["registry revision (u64)"]
         Loaders["registered loaders"]
         Store -- "publish (epoch)" --> View
     end
@@ -56,7 +56,7 @@ flowchart TB
 
 The host-side library exposes exactly **two** `#[no_mangle]` C symbols —
 `polyplug_runtime_create` and `polyplug_runtime_destroy`. Everything else is a
-field on the `HostApi` struct (a frozen 184-byte function table). See
+field on the `HostApi` struct (a frozen 192-byte function table). See
 [`ABI_ARCHITECTURE.md`](ABI_ARCHITECTURE.md) for the full surface.
 
 ---
@@ -80,16 +80,17 @@ sequenceDiagram
     participant S as RuntimeStore
 
     H->>R: load_bundle(path)
-    R->>R: validate manifest
+    R->>R: validate manifest and begin bundle preparation
     R->>R: enforce SignaturePolicy (verify bundle.sig)
     R->>R: resolve loader from manifest
-    R->>S: record declared dependencies (pre-init gate)
     R->>L: load()
     L->>G: polyplug_init(host, ctx)
     G->>R: host->register_guest_contract(descriptor, interface)
-    R->>S: write slot + interface Arc
-    S->>S: publish new ReadView (epoch)
-    S->>S: bump revision_counter
+    R->>S: stage copied interface and init-time dependencies
+    L-->>R: load result
+    R->>R: validate exact providers and function sets
+    R->>S: publish metadata, dependencies, and all slots in one snapshot
+    S->>S: advance registry revision
     R-->>H: Ok
 ```
 
@@ -97,13 +98,57 @@ sequenceDiagram
 `host->register_guest_contract(host, &descriptor, &interface)` — identical across
 every language generator (a hard rule; see `CLAUDE.md` §10).
 
-Static in-process implementations use
-`Runtime::register_embedded_bundle(&EmbeddedBundle)`. An `EmbeddedBundle` contains
-one or more `EmbeddedContract` values whose interfaces are `'static`; the runtime
-derives the normal nonzero `BundleId` from its name and atomically records metadata,
-declared dependencies, and contract slots. Embedded bundles use the same discovery,
-unload, stale-handle, dependency, and re-registration paths as loaded bundles.
-`HostApi::register_guest_contract` is reserved for loader-owned `polyplug_init`.
+## In-process registration contract
+
+Every maintained host SDK uses the same one-shot `HostApi` callback:
+
+```c
+host->register_in_process_bundle(
+    host,
+    &InProcessBundleRegistration,
+    &out_bundle_id,
+    &out_error
+);
+```
+
+`InProcessBundleRegistration` contains named `InProcessBundleMetadata`, a counted
+`u64` dependency-ID array, and a counted `InProcessContractRegistration` array.
+Each contract record contains a `PluginDescriptor`, a `GuestContractInterface*`,
+and an opaque generated-adapter context pointer. The callback borrows every input
+pointer only for this synchronous call; core copies and validates metadata,
+interface tables, and the opaque context, then publishes the complete bundle
+through `register_prepared_bundle` in the same transaction as loader-backed bundles.
+
+Rust, C++, C#, Python, Lua, and JavaScript hosts MUST create implementation
+objects in their own language and retain them in a resident owned by one specific
+`Runtime`, keyed by the returned bundle ID. Core neither accepts arbitrary
+implementation-object pointers nor understands a language object's layout.
+`register_guest_contract` remains reserved for loader-owned `polyplug_init`.
+
+### SDK implementer handoff
+
+- Use the generated ABI mirror's named `InProcessBundleMetadata`,
+  `InProcessContractRegistration`, and `InProcessBundleRegistration` records, then
+  call `HostApi.register_in_process_bundle` once for the complete bundle. Keep all
+  input storage valid only through that synchronous call; core copies the records it
+  retains.
+- Keep typed factories, implementation objects, callback roots, and interface-table
+  backing storage in a resident owned by the individual C++, C#, Python, Lua, or
+  JavaScript runtime wrapper. Insert it only after a successful registration, remove
+  it only after a successful unload, and never use a process-global factory map.
+- Route interface callbacks through that runtime-local resident. The opaque
+  `adapter_context` is copied into the registered `GuestContractInterface` and
+  forwarded as the first argument to create, destroy, native dispatch, and VM
+  dispatch callbacks. Core never dereferences or interprets it.
+- On unload, first prevent new wrapper calls and drain active calls, guest instances,
+  and language-specific leases. Call `HostApi.unload_bundle`; only when it succeeds
+  may the wrapper invalidate callers and release its resident. On failure, retain
+  every resident and caller.
+
+Rust's generated adapter follows this contract through `InProcessFactories` and
+`InProcessBundle`. Its runtime refuses logical unload while it owns live stateful
+instances, then invalidates the bundle and releases the resident. Logical unload
+does not promise to unload a host language runtime or resident machine code.
 
 ---
 
@@ -141,16 +186,16 @@ rejected instead of dereferencing freed memory.
 ## Pipeline 3 — host → guest dispatch (self-revalidating caller)
 
 Generated host callers resolve the interface **once** and cache it. Before each
-dispatch they do a single acquire-load of `HostApi.revision_counter` and compare it
-to the last value they saw. Unchanged → use the cached pointer (no re-resolve, no
-lock). Changed (something was loaded/reloaded/unloaded) → re-resolve transparently.
-A cached pointer therefore can never dangle.
+dispatch they call `HostApi.registry_revision` once and compare the returned
+acquire-synchronized value to the last value they saw. Unchanged → use the cached
+pointer (no re-resolve, no lock). Changed (something was loaded/reloaded/unloaded)
+→ re-resolve transparently. A cached pointer therefore can never dangle.
 
 ```mermaid
 flowchart TD
     Start["generated caller: dispatch()"] --> Cached{"interface cached?"}
     Cached -- no --> Resolve["find + resolve, cache ptr<br/>store last_revision"]
-    Cached -- yes --> Poll["load revision_counter (Acquire)"]
+    Cached -- yes --> Poll["registry_revision()"]
     Poll --> Changed{"revision changed?"}
     Changed -- no --> Fast["use cached interface ptr"]
     Changed -- yes --> Resolve
@@ -186,7 +231,7 @@ bridge, which resolves and dispatches on the guest's behalf.
 ```mermaid
 flowchart LR
     subgraph Native["native guest A → guest B"]
-        A1["resolve B once (declared dep)"] --> A2["poll revision_counter"]
+        A1["resolve B once (declared dep)"] --> A2["call registry_revision"]
         A2 --> A3{"changed?"}
         A3 -- no --> A4["call B.functions[fn_id] directly"]
         A3 -- yes --> A5["re-resolve B"] --> A4
@@ -218,6 +263,9 @@ callers. See [`TRUST_MODEL.md`](TRUST_MODEL.md) and [`UNLOAD_DESIGN.md`](UNLOAD_
 
 There are two loader families. Both present the **same** C ABI to the runtime; they
 differ only in where the `polyplug_init` symbol lives.
+The runtime resolves a bundle's loader solely from the manifest's `loader` field,
+which must exactly match a registered loader's `loader_name()`. The bundle's
+language is recorded as metadata after its loader completes.
 
 ```mermaid
 flowchart TB
@@ -322,10 +370,11 @@ undefined behaviour — the host must quiesce first. See
 
 Reads are lock-free: every reader serves from an immutable, epoch-published
 `ReadView`. Writers (load / reload / unload) mutate the locked `RuntimeStore`, then
-atomically publish a new snapshot and bump the `revision_counter`. Superseded
+atomically publish a new snapshot and advance the registry revision. Superseded
 snapshots, interface `Arc`s, and dylibs/VMs are reclaimed through crossbeam-epoch
 deferral, so memory is freed only once no reader can still observe it. Generated
-callers cache the resolved interface and revalidate with a single acquire-load of
-the revision counter before each dispatch — giving near-native call cost with no
-dangling pointers across reloads. The epoch publish/reclaim protocol is
-model-checked with [loom](https://docs.rs/loom).
+callers cache the resolved interface and revalidate through one
+`HostApi.registry_revision` call before each dispatch; the callback performs the
+acquire load in Rust, preserving synchronized reload safety for every host language.
+The epoch publish/reclaim protocol is model-checked with
+[loom](https://docs.rs/loom).

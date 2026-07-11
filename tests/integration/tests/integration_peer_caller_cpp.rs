@@ -33,6 +33,7 @@
 mod cli_support;
 use cli_support::cli_generate;
 
+use core::ffi::c_void;
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
@@ -45,7 +46,7 @@ use polyplug_codegen::GenerateConfig;
 use polyplug_codegen::GenerateOutput;
 use polyplug_codegen::Lang;
 use polyplug_codegen::Side;
-use polyplug_lua::LuaConfig;
+
 use polyplug_lua::LuaLoader;
 use polyplug_native::NativeConfig;
 use polyplug_native::NativeLoader;
@@ -318,7 +319,7 @@ fn cpp_peer_caller_validate_roundtrip() {
 
     let rt: Arc<Runtime> = Runtime::builder()
         .loader(NativeLoader::new(NativeConfig::default()))
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(LuaLoader::new())
         .build()
         .expect("build runtime");
 
@@ -351,6 +352,7 @@ fn cpp_peer_caller_validate_roundtrip() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: transmute to the generated native dispatch out-param signature.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
@@ -372,6 +374,7 @@ fn cpp_peer_caller_validate_roundtrip() {
     let mut instance: GuestContractInstance = GuestContractInstance::null();
     unsafe {
         (interface.create_instance)(
+            interface.adapter_context,
             polyplug_abi::VmLoaderData::null(),
             host_abi,
             core::ptr::null(),
@@ -387,6 +390,7 @@ fn cpp_peer_caller_validate_roundtrip() {
     let mut err: AbiError = AbiError::ok();
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             instance,
             &input_view as *const StringView as *const (),
             &mut out_view as *mut StringView as *mut (),
@@ -402,7 +406,14 @@ fn cpp_peer_caller_validate_roundtrip() {
     // SAFETY: instance was created by create_instance; destroy exactly once.
     // out_view points to host-allocated bytes (alloc_string), which outlive the
     // instance — destroying before reading the view below is safe.
-    unsafe { (interface.destroy_instance)(polyplug_abi::VmLoaderData::null(), host_abi, instance) };
+    unsafe {
+        (interface.destroy_instance)(
+            interface.adapter_context,
+            polyplug_abi::VmLoaderData::null(),
+            host_abi,
+            instance,
+        )
+    };
     assert!(
         !out_view.ptr.is_null(),
         "returned StringView must not be null"

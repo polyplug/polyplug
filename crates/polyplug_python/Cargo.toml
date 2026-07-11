@@ -19,8 +19,6 @@ targets = ["x86_64-unknown-linux-gnu"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [lib]
-name = "polyplug_python"
-path = "src/lib.rs"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
@@ -39,15 +37,9 @@ libloading = { workspace = true }
 pyo3-build-config = { workspace = true }
 
 [dev-dependencies]
-polyplug = { workspace = true }
-polyplug_abi = { workspace = true }
-polyplug_utils = { workspace = true }
 tempfile = { workspace = true }
 criterion = { workspace = true }
 
-[[test]]
-name = "python_loader"
-path = "tests/python_loader.rs"
 
 [[bench]]
 name = "dispatch_benchmark"

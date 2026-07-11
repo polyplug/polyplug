@@ -221,8 +221,8 @@ fn bench_host_contract_call(c: &mut Criterion) {
 /// emitted at an enabled level (`Info`) every iteration. The funnel timed here is
 /// the production path: `LoggerHandle::enabled` filter → message production →
 /// `StringView` construction → the installed `extern "C"` trampoline → the boxed
-/// `LogSink`. The sink itself is a no-op `black_box` so the bar measures the
-/// funnel, not the host's logging work.
+/// Rust logger closure. The closure itself is a no-op `black_box` so the bar measures
+/// the funnel, not the host's logging work.
 ///
 /// This drives `LoggerHandle::log` directly (the exact funnel `HostApi.log`
 /// reaches via `(*this).runtime.logger().log(...)`), so it is the language-neutral

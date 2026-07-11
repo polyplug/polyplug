@@ -6,7 +6,8 @@ local ffi = require("ffi")
 
 local function cdef_guarded(decl)
 	local ok, err = pcall(ffi.cdef, decl)
-	if not ok and not string.find(err, "already defined", 1, true) then
+	local in_process_redefinition = string.find(err or "", "attempt to redefine 'PolyplugLuaInProcess", 1, true)
+	if not ok and not string.find(err, "already defined", 1, true) and not in_process_redefinition then
 		error(err, 2)
 	end
 end
@@ -21,3 +22,7 @@ local LogLevel = {
     Error = 3,
 }
 
+
+return {
+    LogLevel = LogLevel,
+}

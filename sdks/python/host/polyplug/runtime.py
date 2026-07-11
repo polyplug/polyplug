@@ -41,7 +41,8 @@ from polyplug_abi import (
 # const pointer to this 48-byte struct). The `polyplug_abi` package re-exports a
 # higher-level Python `ReloadPhase` wrapper class under the same name, so the
 # raw ctypes Structure is imported from its defining module to disambiguate.
-from polyplug_abi.abi import ReloadPhase as AbiReloadPhase
+from polyplug_abi.abi import InProcessBundleRegistration, ReloadPhase as AbiReloadPhase
+
 
 _LIB_NAME: str = "polyplug"
 
@@ -228,10 +229,14 @@ class Runtime:
             None if trusted_keys is None else list(trusted_keys)
         )
 
+        # Per-runtime residents for in-process bundles. Each bundle owns its
+        # typed factories, ctypes callback roots, implementation objects, and
+        # backing registration storage. A resident enters this mapping only
+        # after core accepts its complete registration.
+        self._in_process_residents: dict[int, object] = {}
+
         # Per-instance host-contract keepalives: registered interface structs
-        # (with their thunks/stubs anchored on `_keepalive`), keyed by
-        # contract_id. The runtime holds raw pointers into these for its whole
-        # lifetime, so they must stay alive on THIS instance (Rule 12).
+        # and callback roots remain valid for every runtime dispatch.
         self._host_contract_interfaces: dict[int, HostContractInterface] = {}
 
         # Create HostApi (options or default)
@@ -261,6 +266,7 @@ class Runtime:
         self._load_bundle_fn = self._host_struct.load_bundle
         self._reload_bundle_fn = self._host_struct.reload_bundle
         self._unload_bundle_fn = self._host_struct.unload_bundle
+        self._register_in_process_bundle_fn = self._host_struct.register_in_process_bundle
         self._find_guest_contract_fn = self._host_struct.find_guest_contract
         self._find_all_fn = self._host_struct.find_all_guest_contracts
         self._resolve_fn = self._host_struct.resolve_guest_contract
@@ -360,6 +366,7 @@ class Runtime:
         if host_ptr != 0 and backend is not None:
             backend.destroy_host_interface(host_ptr)
             self._host = 0
+            self._in_process_residents.clear()
 
     def _make_c_callback(self) -> ctypes.CFUNCTYPE:
         """Internal: Create a C-compatible callback wrapper bound to THIS instance.
@@ -469,11 +476,52 @@ class Runtime:
         self._check_error(err.code, "reload_bundle")
 
     def unload_bundle(self, bundle_id: int) -> None:
-        """Unload a plugin bundle by bundle ID."""
+        """Logically unload a bundle and release its resident after core drains it."""
         host: int = self._ensure_host()
         err: AbiError = AbiError()
         self._unload_bundle_fn(host, bundle_id, ctypes.byref(err))
         self._check_error(err.code, "unload_bundle")
+        self._in_process_residents.pop(bundle_id, None)
+
+    def register_in_process_bundle(self, bundle: object) -> int:
+        """Synchronously register a generated in-process bundle with this runtime.
+
+        Generated ``host.in_process.InProcessBundle`` objects expose
+        ``_in_process_registration()``. It returns a complete canonical
+        ``InProcessBundleRegistration`` while keeping all Python callback roots
+        and table storage on the bundle object. The resident is retained only
+        after the core has atomically accepted the registration.
+        """
+        host: int = self._ensure_host()
+        reserve = getattr(bundle, "_reserve_transfer", None)
+        cancel = getattr(bundle, "_cancel_transfer", None)
+        prepare = getattr(bundle, "_in_process_registration", None)
+        if not callable(reserve) or not callable(cancel) or not callable(prepare):
+            raise TypeError(
+                "bundle must be a generated host.in_process.InProcessBundle"
+            )
+        reserve()
+        try:
+            registration = prepare()
+            if not isinstance(registration, InProcessBundleRegistration):
+                raise TypeError(
+                    "_in_process_registration() must return InProcessBundleRegistration"
+                )
+
+            bundle_id = ctypes.c_uint64()
+            err = AbiError()
+            self._register_in_process_bundle_fn(
+                host,
+                ctypes.byref(registration),
+                ctypes.byref(bundle_id),
+                ctypes.byref(err),
+            )
+            self._check_error(err.code, "register_in_process_bundle")
+            self._in_process_residents[bundle_id.value] = bundle
+            return bundle_id.value
+        except BaseException:
+            cancel()
+            raise
 
     def find_guest_contract(self, contract_id: int, min_version: int) -> GuestContractHandle:
         """Find a guest contract by contract_id and minimum version.

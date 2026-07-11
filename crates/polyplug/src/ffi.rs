@@ -18,10 +18,10 @@
 //! - `polyplug_runtime_destroy` — destroys the HostApi/runtime
 //!
 //! All runtime operations are now accessed through the HostApi struct fields:
-//! - `load_bundle`, `reload_bundle` — bundle lifecycle
+//! - `load_bundle`, `reload_bundle`, `unload_bundle` — bundle lifecycle
+//! - `register_in_process_bundle` — complete in-process bundle registration
 //! - `find_guest_contract`, `find_all_guest_contracts`, `resolve_guest_contract` — contract discovery
 //! - `register_host_contract`, `register_loader` — registration
-//! - `get_last_error`, `get_error_len` — error handling
 //! - `alloc`, `free` — memory management
 
 use core::panic::AssertUnwindSafe;

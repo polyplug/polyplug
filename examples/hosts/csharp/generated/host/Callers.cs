@@ -73,6 +73,7 @@ public static class PipelineDecoderContractConstants {
 
 /// <summary>
 /// Host caller for contract `pipeline.Decoder` (id=0xE1D7DE773BE6E7F7)
+/// Decodes CSV input into the pipeline representation.
 /// Instance-based RAII wrapper with automatic cleanup via IDisposable.
 /// </summary>
 public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
@@ -84,13 +85,9 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
     /// hot-reload (which swaps a new interface into the same slot) or report a
     /// gone contract.</summary>
     private readonly GuestContractHandle _handle;
-    /// <summary>Pointer to the runtime's registry revision counter, fetched once
-    /// via HostApi.RevisionCounter. Polled directly before each dispatch (one
-    /// atomic load, no call into the runtime); IntPtr.Zero when there is no runtime.</summary>
-    private readonly IntPtr _revisionPtr;
-    /// <summary>Revision value read when the interface was resolved. Compared
-    /// before each dispatch against the live counter to detect a reload/unload and
-    /// re-resolve, so the cached interface pointer never dangles.</summary>
+    /// <summary>Registry revision value captured when this caller resolved its
+    /// interface. The HostApi callback performs acquire synchronization; each
+    /// dispatch compares its current value before using the cached interface.</summary>
     private ulong _cachedRevision;
     /// <summary>Unmanaged backing buffer for the per-call arena. C-heap
     /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>
@@ -98,13 +95,12 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
     /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>
     private CallArena _arena;
 
-    private PipelineDecoderContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {
+    private PipelineDecoderContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, ulong cachedRevision) {
         _interface = iface;
         _instance = inst;
         _host = host;
         _disposed = false;
         _handle = handle;
-        _revisionPtr = revisionPtr;
         _cachedRevision = cachedRevision;
         // C-heap allocation: cross-boundary arena data must not live on the managed heap.
         _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);
@@ -120,23 +116,19 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
         var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
         GuestContractInstance inst = default;
         createFn(host, iface, null, &inst);
-        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, IntPtr>)host->RevisionCounter;
-        IntPtr revisionPtr = revisionFn(host);
-        ulong cachedRevision = revisionPtr == IntPtr.Zero
-            ? 0UL
-            : System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)revisionPtr));
-        return new PipelineDecoderContractCaller(iface, inst, host, handle, revisionPtr, cachedRevision);
+        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, ulong>)host->RegistryRevision;
+        ulong cachedRevision = revisionFn(host);
+        return new PipelineDecoderContractCaller(iface, inst, host, handle, cachedRevision);
     }
 
     /// <summary>Check if this caller holds a resolved contract interface.</summary>
     public bool IsValid => !_disposed && _interface != null;
 
-    /// <summary>Read the registry revision through the cached pointer — one
-    /// acquire atomic load, no call into the runtime. Returns the cached value
-    /// ("unchanged") when there is no counter (IntPtr.Zero).</summary>
+    /// <summary>Read the acquire-synchronized registry revision through HostApi.
+    /// The runtime callback returns the current value.</summary>
     private ulong LiveRevision() {
-        if (_revisionPtr == IntPtr.Zero) { return _cachedRevision; }
-        return System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)_revisionPtr));
+        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, ulong>)_host->RegistryRevision;
+        return revisionFn(_host);
     }
 
     /// <summary>Re-resolve the cached interface after the registry changed under
@@ -196,6 +188,14 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
         }
     }
 
+    /// <summary>
+    /// Decodes one CSV record.
+    /// </summary>
+    /// <param name="input">The CSV record to decode.
+    /// </param>
+    /// <returns>
+    /// The decoded pipeline record.
+    /// </returns>
     /// <summary>Returns a value borrowing this caller's arena; it stays valid
     /// until the next arena-backed call on this caller.</summary>
     public Polyplug.Abi.StringView Decode(Polyplug.Abi.StringView input) {
@@ -225,14 +225,14 @@ public sealed unsafe class PipelineDecoderContractCaller : IDisposable {
                     }
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
-                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;
-                    dispatch(_instance, argsPtr, outPtr, &err);
+                    var dispatch = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;
+                    dispatch(_interface->AdapterContext, _instance, argsPtr, outPtr, &err);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;
+                    var vmFn = (delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;
                     fixed (CallArena* arenaPtr = &_arena) {
-                        vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
+                        vmFn(_interface->AdapterContext, _interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
                     }
                     break;
                 }
@@ -266,13 +266,9 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
     /// hot-reload (which swaps a new interface into the same slot) or report a
     /// gone contract.</summary>
     private readonly GuestContractHandle _handle;
-    /// <summary>Pointer to the runtime's registry revision counter, fetched once
-    /// via HostApi.RevisionCounter. Polled directly before each dispatch (one
-    /// atomic load, no call into the runtime); IntPtr.Zero when there is no runtime.</summary>
-    private readonly IntPtr _revisionPtr;
-    /// <summary>Revision value read when the interface was resolved. Compared
-    /// before each dispatch against the live counter to detect a reload/unload and
-    /// re-resolve, so the cached interface pointer never dangles.</summary>
+    /// <summary>Registry revision value captured when this caller resolved its
+    /// interface. The HostApi callback performs acquire synchronization; each
+    /// dispatch compares its current value before using the cached interface.</summary>
     private ulong _cachedRevision;
     /// <summary>Unmanaged backing buffer for the per-call arena. C-heap
     /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>
@@ -280,13 +276,12 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
     /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>
     private CallArena _arena;
 
-    private DataTransformerContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {
+    private DataTransformerContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, ulong cachedRevision) {
         _interface = iface;
         _instance = inst;
         _host = host;
         _disposed = false;
         _handle = handle;
-        _revisionPtr = revisionPtr;
         _cachedRevision = cachedRevision;
         // C-heap allocation: cross-boundary arena data must not live on the managed heap.
         _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);
@@ -302,23 +297,19 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
         var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
         GuestContractInstance inst = default;
         createFn(host, iface, null, &inst);
-        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, IntPtr>)host->RevisionCounter;
-        IntPtr revisionPtr = revisionFn(host);
-        ulong cachedRevision = revisionPtr == IntPtr.Zero
-            ? 0UL
-            : System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)revisionPtr));
-        return new DataTransformerContractCaller(iface, inst, host, handle, revisionPtr, cachedRevision);
+        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, ulong>)host->RegistryRevision;
+        ulong cachedRevision = revisionFn(host);
+        return new DataTransformerContractCaller(iface, inst, host, handle, cachedRevision);
     }
 
     /// <summary>Check if this caller holds a resolved contract interface.</summary>
     public bool IsValid => !_disposed && _interface != null;
 
-    /// <summary>Read the registry revision through the cached pointer — one
-    /// acquire atomic load, no call into the runtime. Returns the cached value
-    /// ("unchanged") when there is no counter (IntPtr.Zero).</summary>
+    /// <summary>Read the acquire-synchronized registry revision through HostApi.
+    /// The runtime callback returns the current value.</summary>
     private ulong LiveRevision() {
-        if (_revisionPtr == IntPtr.Zero) { return _cachedRevision; }
-        return System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)_revisionPtr));
+        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, ulong>)_host->RegistryRevision;
+        return revisionFn(_host);
     }
 
     /// <summary>Re-resolve the cached interface after the registry changed under
@@ -407,14 +398,14 @@ public sealed unsafe class DataTransformerContractCaller : IDisposable {
                     }
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
-                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;
-                    dispatch(_instance, argsPtr, outPtr, &err);
+                    var dispatch = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;
+                    dispatch(_interface->AdapterContext, _instance, argsPtr, outPtr, &err);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;
+                    var vmFn = (delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;
                     fixed (CallArena* arenaPtr = &_arena) {
-                        vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
+                        vmFn(_interface->AdapterContext, _interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
                     }
                     break;
                 }
@@ -448,13 +439,9 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
     /// hot-reload (which swaps a new interface into the same slot) or report a
     /// gone contract.</summary>
     private readonly GuestContractHandle _handle;
-    /// <summary>Pointer to the runtime's registry revision counter, fetched once
-    /// via HostApi.RevisionCounter. Polled directly before each dispatch (one
-    /// atomic load, no call into the runtime); IntPtr.Zero when there is no runtime.</summary>
-    private readonly IntPtr _revisionPtr;
-    /// <summary>Revision value read when the interface was resolved. Compared
-    /// before each dispatch against the live counter to detect a reload/unload and
-    /// re-resolve, so the cached interface pointer never dangles.</summary>
+    /// <summary>Registry revision value captured when this caller resolved its
+    /// interface. The HostApi callback performs acquire synchronization; each
+    /// dispatch compares its current value before using the cached interface.</summary>
     private ulong _cachedRevision;
     /// <summary>Unmanaged backing buffer for the per-call arena. C-heap
     /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>
@@ -462,13 +449,12 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
     /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>
     private CallArena _arena;
 
-    private PipelineEncoderContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {
+    private PipelineEncoderContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, ulong cachedRevision) {
         _interface = iface;
         _instance = inst;
         _host = host;
         _disposed = false;
         _handle = handle;
-        _revisionPtr = revisionPtr;
         _cachedRevision = cachedRevision;
         // C-heap allocation: cross-boundary arena data must not live on the managed heap.
         _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);
@@ -484,23 +470,19 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
         var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
         GuestContractInstance inst = default;
         createFn(host, iface, null, &inst);
-        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, IntPtr>)host->RevisionCounter;
-        IntPtr revisionPtr = revisionFn(host);
-        ulong cachedRevision = revisionPtr == IntPtr.Zero
-            ? 0UL
-            : System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)revisionPtr));
-        return new PipelineEncoderContractCaller(iface, inst, host, handle, revisionPtr, cachedRevision);
+        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, ulong>)host->RegistryRevision;
+        ulong cachedRevision = revisionFn(host);
+        return new PipelineEncoderContractCaller(iface, inst, host, handle, cachedRevision);
     }
 
     /// <summary>Check if this caller holds a resolved contract interface.</summary>
     public bool IsValid => !_disposed && _interface != null;
 
-    /// <summary>Read the registry revision through the cached pointer — one
-    /// acquire atomic load, no call into the runtime. Returns the cached value
-    /// ("unchanged") when there is no counter (IntPtr.Zero).</summary>
+    /// <summary>Read the acquire-synchronized registry revision through HostApi.
+    /// The runtime callback returns the current value.</summary>
     private ulong LiveRevision() {
-        if (_revisionPtr == IntPtr.Zero) { return _cachedRevision; }
-        return System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)_revisionPtr));
+        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, ulong>)_host->RegistryRevision;
+        return revisionFn(_host);
     }
 
     /// <summary>Re-resolve the cached interface after the registry changed under
@@ -589,14 +571,14 @@ public sealed unsafe class PipelineEncoderContractCaller : IDisposable {
                     }
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
-                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;
-                    dispatch(_instance, argsPtr, outPtr, &err);
+                    var dispatch = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;
+                    dispatch(_interface->AdapterContext, _instance, argsPtr, outPtr, &err);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;
+                    var vmFn = (delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;
                     fixed (CallArena* arenaPtr = &_arena) {
-                        vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
+                        vmFn(_interface->AdapterContext, _interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
                     }
                     break;
                 }
@@ -630,13 +612,9 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
     /// hot-reload (which swaps a new interface into the same slot) or report a
     /// gone contract.</summary>
     private readonly GuestContractHandle _handle;
-    /// <summary>Pointer to the runtime's registry revision counter, fetched once
-    /// via HostApi.RevisionCounter. Polled directly before each dispatch (one
-    /// atomic load, no call into the runtime); IntPtr.Zero when there is no runtime.</summary>
-    private readonly IntPtr _revisionPtr;
-    /// <summary>Revision value read when the interface was resolved. Compared
-    /// before each dispatch against the live counter to detect a reload/unload and
-    /// re-resolve, so the cached interface pointer never dangles.</summary>
+    /// <summary>Registry revision value captured when this caller resolved its
+    /// interface. The HostApi callback performs acquire synchronization; each
+    /// dispatch compares its current value before using the cached interface.</summary>
     private ulong _cachedRevision;
     /// <summary>Unmanaged backing buffer for the per-call arena. C-heap
     /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>
@@ -644,13 +622,12 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
     /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>
     private CallArena _arena;
 
-    private DataReporterContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {
+    private DataReporterContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, ulong cachedRevision) {
         _interface = iface;
         _instance = inst;
         _host = host;
         _disposed = false;
         _handle = handle;
-        _revisionPtr = revisionPtr;
         _cachedRevision = cachedRevision;
         // C-heap allocation: cross-boundary arena data must not live on the managed heap.
         _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);
@@ -666,23 +643,19 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
         var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
         GuestContractInstance inst = default;
         createFn(host, iface, null, &inst);
-        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, IntPtr>)host->RevisionCounter;
-        IntPtr revisionPtr = revisionFn(host);
-        ulong cachedRevision = revisionPtr == IntPtr.Zero
-            ? 0UL
-            : System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)revisionPtr));
-        return new DataReporterContractCaller(iface, inst, host, handle, revisionPtr, cachedRevision);
+        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, ulong>)host->RegistryRevision;
+        ulong cachedRevision = revisionFn(host);
+        return new DataReporterContractCaller(iface, inst, host, handle, cachedRevision);
     }
 
     /// <summary>Check if this caller holds a resolved contract interface.</summary>
     public bool IsValid => !_disposed && _interface != null;
 
-    /// <summary>Read the registry revision through the cached pointer — one
-    /// acquire atomic load, no call into the runtime. Returns the cached value
-    /// ("unchanged") when there is no counter (IntPtr.Zero).</summary>
+    /// <summary>Read the acquire-synchronized registry revision through HostApi.
+    /// The runtime callback returns the current value.</summary>
     private ulong LiveRevision() {
-        if (_revisionPtr == IntPtr.Zero) { return _cachedRevision; }
-        return System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)_revisionPtr));
+        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, ulong>)_host->RegistryRevision;
+        return revisionFn(_host);
     }
 
     /// <summary>Re-resolve the cached interface after the registry changed under
@@ -771,14 +744,14 @@ public sealed unsafe class DataReporterContractCaller : IDisposable {
                     }
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
-                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;
-                    dispatch(_instance, argsPtr, outPtr, &err);
+                    var dispatch = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;
+                    dispatch(_interface->AdapterContext, _instance, argsPtr, outPtr, &err);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;
+                    var vmFn = (delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;
                     fixed (CallArena* arenaPtr = &_arena) {
-                        vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
+                        vmFn(_interface->AdapterContext, _interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
                     }
                     break;
                 }
@@ -812,13 +785,9 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
     /// hot-reload (which swaps a new interface into the same slot) or report a
     /// gone contract.</summary>
     private readonly GuestContractHandle _handle;
-    /// <summary>Pointer to the runtime's registry revision counter, fetched once
-    /// via HostApi.RevisionCounter. Polled directly before each dispatch (one
-    /// atomic load, no call into the runtime); IntPtr.Zero when there is no runtime.</summary>
-    private readonly IntPtr _revisionPtr;
-    /// <summary>Revision value read when the interface was resolved. Compared
-    /// before each dispatch against the live counter to detect a reload/unload and
-    /// re-resolve, so the cached interface pointer never dangles.</summary>
+    /// <summary>Registry revision value captured when this caller resolved its
+    /// interface. The HostApi callback performs acquire synchronization; each
+    /// dispatch compares its current value before using the cached interface.</summary>
     private ulong _cachedRevision;
     /// <summary>Unmanaged backing buffer for the per-call arena. C-heap
     /// memory (never the managed heap) so cross-boundary data stays off the GC.</summary>
@@ -826,13 +795,12 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
     /// <summary>Per-call bump arena over `_arenaBuf`, reset at each arena-backed call.</summary>
     private CallArena _arena;
 
-    private PipelineValidatorContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {
+    private PipelineValidatorContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, ulong cachedRevision) {
         _interface = iface;
         _instance = inst;
         _host = host;
         _disposed = false;
         _handle = handle;
-        _revisionPtr = revisionPtr;
         _cachedRevision = cachedRevision;
         // C-heap allocation: cross-boundary arena data must not live on the managed heap.
         _arenaBuf = (byte*)NativeMemory.Alloc(CallArenaOps.CALL_ARENA_BUF_LEN);
@@ -848,23 +816,19 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
         var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;
         GuestContractInstance inst = default;
         createFn(host, iface, null, &inst);
-        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, IntPtr>)host->RevisionCounter;
-        IntPtr revisionPtr = revisionFn(host);
-        ulong cachedRevision = revisionPtr == IntPtr.Zero
-            ? 0UL
-            : System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)revisionPtr));
-        return new PipelineValidatorContractCaller(iface, inst, host, handle, revisionPtr, cachedRevision);
+        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, ulong>)host->RegistryRevision;
+        ulong cachedRevision = revisionFn(host);
+        return new PipelineValidatorContractCaller(iface, inst, host, handle, cachedRevision);
     }
 
     /// <summary>Check if this caller holds a resolved contract interface.</summary>
     public bool IsValid => !_disposed && _interface != null;
 
-    /// <summary>Read the registry revision through the cached pointer — one
-    /// acquire atomic load, no call into the runtime. Returns the cached value
-    /// ("unchanged") when there is no counter (IntPtr.Zero).</summary>
+    /// <summary>Read the acquire-synchronized registry revision through HostApi.
+    /// The runtime callback returns the current value.</summary>
     private ulong LiveRevision() {
-        if (_revisionPtr == IntPtr.Zero) { return _cachedRevision; }
-        return System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)_revisionPtr));
+        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, ulong>)_host->RegistryRevision;
+        return revisionFn(_host);
     }
 
     /// <summary>Re-resolve the cached interface after the registry changed under
@@ -953,14 +917,14 @@ public sealed unsafe class PipelineValidatorContractCaller : IDisposable {
                     }
                     nint funcsArray = _interface->Dispatch.Native.Functions;
                     nint funcPtr = ((nint*)funcsArray)[0];
-                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;
-                    dispatch(_instance, argsPtr, outPtr, &err);
+                    var dispatch = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;
+                    dispatch(_interface->AdapterContext, _instance, argsPtr, outPtr, &err);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;
+                    var vmFn = (delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;
                     fixed (CallArena* arenaPtr = &_arena) {
-                        vmFn(_interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
+                        vmFn(_interface->AdapterContext, _interface->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, arenaPtr, &err);
                     }
                     break;
                 }

@@ -1,5 +1,7 @@
 //! VM dispatch data — call through a dispatch function.
 
+use core::ffi::c_void;
+
 use crate::dispatch::VmLoaderData;
 use crate::guest::GuestContractInstance;
 use crate::types::{AbiError, CallArena};
@@ -14,8 +16,9 @@ pub struct VmDispatch {
     /// Dispatch function called for every VM function invocation.
     ///
     /// # Arguments
+    /// - `adapter_context`: opaque generated-adapter context copied from the
+    ///   contract interface; the runtime forwards it unchanged.
     /// - `loader_data`: VmLoaderData handle containing VM-specific state
-    /// - `instance`: The guest contract instance (opaque handle)
     /// - `fn_id`: Function index within the contract
     /// - `args`: Pointer to packed arguments (ABI-specific layout)
     /// - `out`: Pointer to output buffer for return value
@@ -32,6 +35,7 @@ pub struct VmDispatch {
     /// that case (registration rejects a null `call`). When
     /// `dispatch_type == Native` this union variant is never read.
     pub call: unsafe extern "C" fn(
+        adapter_context: *mut c_void,
         loader_data: VmLoaderData,
         instance: GuestContractInstance,
         fn_id: u32,

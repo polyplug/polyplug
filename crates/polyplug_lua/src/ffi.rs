@@ -33,17 +33,14 @@ use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::CallArena;
 use polyplug_abi::GuestContractInstance;
+use polyplug_abi::HostApi;
 use polyplug_abi::HostContractInstance;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::VmLoaderData;
+use polyplug_utils::GuestContractId;
 
-use crate::{LuaConfig, LuaLoader};
-
-#[repr(C)]
-pub struct PolyplugLuaConfig {
-    pub _reserved: u8,
-}
+use crate::LuaLoader;
 
 /// Bridge between the ABI VM-dispatch convention and a LuaJIT-creatable callback.
 ///
@@ -67,20 +64,41 @@ pub struct PolyplugLuaHostDispatchBridge {
     pub destroy_callback: Option<unsafe extern "C" fn(*mut c_void)>,
 }
 
-/// VM-dispatch trampoline for host contracts implemented in a LuaJIT host.
+/// Bridge for an in-process guest implemented by a LuaJIT host.
 ///
-/// Matches `VmDispatch.call`. Routes the call to the scalar LuaJIT callback in
-/// the `PolyplugLuaHostDispatchBridge` carried by `loader_data` and widens the
-/// returned `u32` code into an `AbiError` (empty message).
+/// LuaJIT callbacks cannot accept ABI structs by value, while the guest
+/// lifecycle and VM dispatch callbacks do. The generated Lua adapter therefore
+/// owns this bridge in its Runtime-local resident and installs these scalar
+/// callbacks. The native entry points below expand the ABI records, then invoke
+/// the callbacks with only pointers and scalar values.
+#[repr(C)]
+pub struct PolyplugLuaInProcessBridge {
+    /// Scalar dispatch callback:
+    /// `(instance_data, function_id, args, out) -> AbiErrorCode as u32`.
+    pub callback: Option<unsafe extern "C" fn(*mut c_void, u32, *const c_void, *mut c_void) -> u32>,
+    /// Scalar teardown callback receiving the opaque numeric instance handle.
+    pub destroy_callback: Option<unsafe extern "C" fn(*mut c_void)>,
+    /// Scalar factory callback. A zero result means construction failed.
+    pub create_callback: Option<unsafe extern "C" fn(*const HostApi, *const c_void) -> u64>,
+    /// Contract identity stamped into every created `GuestContractInstance`.
+    pub contract_id: u64,
+}
+
+/// VM dispatch trampoline for generated Lua in-process guest adapters.
+///
+/// The bridge is retained by the Runtime-local Lua resident until successful
+/// logical unload, so this function never reaches through process-global state
+/// or stores a language object in the ABI.
 ///
 /// # Safety
-/// `loader_data.data` must be null or point to a live `PolyplugLuaHostDispatchBridge`
-/// that outlives every dispatch through the registered interface (the generated
-/// factory anchors it for the program lifetime). `args`/`out` follow the
-/// per-function ABI marshalling contract and are passed through untouched.
+///
+/// `adapter_context` must be null or point to a live generated bridge.
+/// Non-null argument, output, arena, and error pointers must satisfy the
+/// generated contract for the duration of this synchronous call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_lua_host_vm_dispatch(
-    loader_data: VmLoaderData,
+pub unsafe extern "C" fn polyplug_lua_in_process_vm_dispatch(
+    adapter_context: *mut c_void,
+    _loader_data: VmLoaderData,
     instance: GuestContractInstance,
     fn_id: u32,
     args: *const (),
@@ -88,11 +106,152 @@ pub unsafe extern "C" fn polyplug_lua_host_vm_dispatch(
     _arena: *mut CallArena,
     out_err: *mut AbiError,
 ) {
-    // SAFETY: loader_data carries the bridge pointer per this function's safety
-    // contract; the impl forwards instance.data/args/out untouched to the LuaJIT
-    // callback.
-    let result: AbiError =
-        unsafe { polyplug_lua_host_vm_dispatch_impl(loader_data, instance.data, fn_id, args, out) };
+    let bridge: *const PolyplugLuaInProcessBridge =
+        adapter_context as *const PolyplugLuaInProcessBridge;
+    let result: AbiError = if bridge.is_null() {
+        AbiError {
+            code: AbiErrorCode::InvalidPointer as u32,
+            message: StringView::from_static(b"lua in-process bridge is null"),
+        }
+    } else {
+        // SAFETY: the generated resident owns the bridge while its registration is live.
+        let callback: Option<
+            unsafe extern "C" fn(*mut c_void, u32, *const c_void, *mut c_void) -> u32,
+        > = unsafe { (*bridge).callback };
+        match callback {
+            Some(callback) => {
+                // SAFETY: instance data is an opaque numeric identifier issued by the
+                // generated bridge; args/out follow the contract ABI.
+                let code: u32 = unsafe {
+                    callback(
+                        instance.data,
+                        fn_id,
+                        args as *const c_void,
+                        out as *mut c_void,
+                    )
+                };
+                if code == AbiErrorCode::Ok as u32 {
+                    AbiError::ok()
+                } else {
+                    AbiError {
+                        code,
+                        message: StringView::from_static(
+                            b"lua in-process implementation returned an error",
+                        ),
+                    }
+                }
+            }
+            None => AbiError {
+                code: AbiErrorCode::InvalidPointer as u32,
+                message: StringView::from_static(b"lua in-process bridge has no dispatch callback"),
+            },
+        }
+    };
+    if !out_err.is_null() {
+        // SAFETY: the ABI caller supplies a writable error out-param when non-null.
+        unsafe { out_err.write(result) };
+    }
+}
+
+/// Lifecycle factory trampoline for generated Lua in-process guest adapters.
+///
+/// # Safety
+///
+/// `adapter_context` must be null or point to a live generated bridge.
+/// `host` and `args` must satisfy the generated contract, and a non-null
+/// `out_instance` must be writable for one `GuestContractInstance`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_lua_in_process_create_instance(
+    adapter_context: *mut c_void,
+    _loader_data: VmLoaderData,
+    host: *const HostApi,
+    args: *const (),
+    out_instance: *mut GuestContractInstance,
+) {
+    if out_instance.is_null() {
+        return;
+    }
+    // SAFETY: checked non-null above; initialize before any callback can fail.
+    unsafe { out_instance.write(GuestContractInstance::null()) };
+    let bridge: *const PolyplugLuaInProcessBridge =
+        adapter_context as *const PolyplugLuaInProcessBridge;
+    if bridge.is_null() {
+        return;
+    }
+    // SAFETY: the generated resident owns the bridge while its registration is live.
+    let callback: Option<unsafe extern "C" fn(*const HostApi, *const c_void) -> u64> =
+        unsafe { (*bridge).create_callback };
+    let Some(callback) = callback else {
+        return;
+    };
+    // SAFETY: host/args are forwarded directly from the runtime ABI invocation.
+    let instance_id: u64 = unsafe { callback(host, args as *const c_void) };
+    if instance_id == 0 {
+        return;
+    }
+    let Ok(instance_id) = usize::try_from(instance_id) else {
+        return;
+    };
+    // SAFETY: bridge and out_instance are valid for this synchronous callback.
+    unsafe {
+        (*out_instance).data = instance_id as *mut c_void;
+        (*out_instance).contract_id = GuestContractId::from_u64((*bridge).contract_id);
+    }
+}
+
+/// Lifecycle destroy trampoline for generated Lua in-process guest adapters.
+///
+/// # Safety
+///
+/// `adapter_context` must be null or point to the live bridge that created
+/// `instance`. A non-null instance payload must have been returned by the
+/// matching generated factory and remain owned by that bridge.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_lua_in_process_destroy_instance(
+    adapter_context: *mut c_void,
+    _loader_data: VmLoaderData,
+    _host: *const HostApi,
+    instance: GuestContractInstance,
+) {
+    let bridge: *const PolyplugLuaInProcessBridge =
+        adapter_context as *const PolyplugLuaInProcessBridge;
+    if bridge.is_null() || instance.data.is_null() {
+        return;
+    }
+    // SAFETY: the generated resident owns the bridge while its registration is live.
+    let callback: Option<unsafe extern "C" fn(*mut c_void)> = unsafe { (*bridge).destroy_callback };
+    if let Some(callback) = callback {
+        // SAFETY: instance data is the opaque numeric identifier issued by the bridge.
+        unsafe { callback(instance.data) };
+    }
+}
+
+/// VM-dispatch trampoline for host contracts implemented in a LuaJIT host.
+///
+/// Matches `VmDispatch.call`. Routes through the explicit adapter context,
+/// which the generated host interface sets to its runtime-local bridge.
+///
+/// # Safety
+/// `adapter_context` must be null or point to a live
+/// [`PolyplugLuaHostDispatchBridge`] that outlives every dispatch through the
+/// registered interface. `args`/`out` follow the per-function ABI marshalling
+/// contract and are passed through untouched.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_lua_host_vm_dispatch(
+    adapter_context: *mut c_void,
+    _loader_data: VmLoaderData,
+    instance: GuestContractInstance,
+    fn_id: u32,
+    args: *const (),
+    out: *mut (),
+    _arena: *mut CallArena,
+    out_err: *mut AbiError,
+) {
+    // SAFETY: adapter_context carries the bridge pointer per this function's
+    // contract; the impl forwards instance.data/args/out to the LuaJIT callback.
+    let result: AbiError = unsafe {
+        polyplug_lua_host_vm_dispatch_impl(adapter_context, instance.data, fn_id, args, out)
+    };
     if !out_err.is_null() {
         // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
         unsafe { out_err.write(result) };
@@ -100,14 +259,14 @@ pub unsafe extern "C" fn polyplug_lua_host_vm_dispatch(
 }
 
 unsafe fn polyplug_lua_host_vm_dispatch_impl(
-    loader_data: VmLoaderData,
+    adapter_context: *mut c_void,
     instance_data: *mut c_void,
     fn_id: u32,
     args: *const (),
     out: *mut (),
 ) -> AbiError {
     let bridge_ptr: *const PolyplugLuaHostDispatchBridge =
-        loader_data.data as *const PolyplugLuaHostDispatchBridge;
+        adapter_context as *const PolyplugLuaHostDispatchBridge;
     if bridge_ptr.is_null() {
         return AbiError {
             code: AbiErrorCode::InvalidPointer as u32,
@@ -267,14 +426,10 @@ pub unsafe extern "C" fn polyplug_lua_host_destroy_instance(
     }
 }
 
-/// # Safety
-/// `config` may be null. The returned pointer must be freed with `polyplug_lua_loader_free`.
+/// Returns a pointer that must be freed with `polyplug_lua_loader_free`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_lua_loader_create(
-    config: *const PolyplugLuaConfig,
-) -> *mut c_void {
-    let _ = config;
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+pub extern "C" fn polyplug_lua_loader_create() -> *mut c_void {
+    let loader: LuaLoader = LuaLoader::new();
     // Double-box: inner Box<dyn BundleLoader> preserves the fat pointer (data + vtable),
     // outer Box stores it on the heap so we can pass a thin *mut c_void across FFI.
     let trait_obj: Box<dyn BundleLoader> = Box::new(loader);
@@ -299,10 +454,24 @@ mod tests {
     use core::ffi::c_void;
     use core::ptr;
     use core::slice;
+    use core::sync::atomic::AtomicU64;
+    use core::sync::atomic::Ordering;
+
+    use polyplug_abi::AbiError;
+    use polyplug_abi::AbiErrorCode;
+    use polyplug_abi::GuestContractInstance;
+    use polyplug_abi::HostApi;
+    use polyplug_abi::VmLoaderData;
 
     use polyplug_abi::StringView;
+    use polyplug_utils::GuestContractId;
 
-    use super::{PolyplugLuaLogBridge, polyplug_lua_log_trampoline};
+    use super::{
+        PolyplugLuaHostDispatchBridge, PolyplugLuaInProcessBridge, PolyplugLuaLogBridge,
+        polyplug_lua_host_vm_dispatch, polyplug_lua_in_process_create_instance,
+        polyplug_lua_in_process_destroy_instance, polyplug_lua_in_process_vm_dispatch,
+        polyplug_lua_loader_create, polyplug_lua_loader_free, polyplug_lua_log_trampoline,
+    };
 
     /// Record of one forwarded log call, written by the scalar test callback.
     struct Captured {
@@ -336,6 +505,117 @@ mod tests {
         let msg_bytes: &[u8] = unsafe { slice::from_raw_parts(msg_ptr, msg_len) };
         captured.scope = String::from_utf8_lossy(scope_bytes).into_owned();
         captured.message = String::from_utf8_lossy(msg_bytes).into_owned();
+    }
+
+    static IN_PROCESS_DESTROYED: AtomicU64 = AtomicU64::new(0);
+
+    unsafe extern "C" fn in_process_create(_host: *const HostApi, _args: *const c_void) -> u64 {
+        41
+    }
+
+    unsafe extern "C" fn in_process_dispatch(
+        instance_data: *mut c_void,
+        function_id: u32,
+        _args: *const c_void,
+        out: *mut c_void,
+    ) -> u32 {
+        if instance_data as usize != 41 || function_id != 3 || out.is_null() {
+            return AbiErrorCode::Generic as u32;
+        }
+        // SAFETY: the test provides a writable u32 result slot.
+        unsafe { (out as *mut u32).write(99) };
+        AbiErrorCode::Ok as u32
+    }
+
+    unsafe extern "C" fn in_process_destroy(instance_data: *mut c_void) {
+        IN_PROCESS_DESTROYED.store(instance_data as usize as u64, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn in_process_bridge_expands_lifecycle_and_dispatch_abi() {
+        IN_PROCESS_DESTROYED.store(0, Ordering::SeqCst);
+        let mut bridge = PolyplugLuaInProcessBridge {
+            callback: Some(in_process_dispatch),
+            destroy_callback: Some(in_process_destroy),
+            create_callback: Some(in_process_create),
+            contract_id: 0xCAFE_BABE,
+        };
+        let adapter_context: *mut c_void =
+            &mut bridge as *mut PolyplugLuaInProcessBridge as *mut c_void;
+        let loader_data = VmLoaderData::null();
+        let mut instance = GuestContractInstance::null();
+        // SAFETY: the test bridge and output instance remain live through the call.
+        unsafe {
+            polyplug_lua_in_process_create_instance(
+                adapter_context,
+                loader_data,
+                ptr::null(),
+                ptr::null(),
+                &mut instance,
+            );
+        }
+        assert_eq!(instance.data as usize, 41);
+        assert_eq!(instance.contract_id.id(), 0xCAFE_BABE);
+
+        let mut output: u32 = 0;
+        let mut error = AbiError::ok();
+        // SAFETY: the bridge validates the numeric instance id and writes the supplied slot.
+        unsafe {
+            polyplug_lua_in_process_vm_dispatch(
+                adapter_context,
+                loader_data,
+                instance,
+                3,
+                ptr::null(),
+                &mut output as *mut u32 as *mut (),
+                ptr::null_mut(),
+                &mut error,
+            );
+        }
+        assert_eq!(error.code, AbiErrorCode::Ok as u32);
+        assert_eq!(output, 99);
+
+        // SAFETY: the instance was just created by this bridge and is still live.
+        unsafe {
+            polyplug_lua_in_process_destroy_instance(
+                adapter_context,
+                loader_data,
+                ptr::null(),
+                instance,
+            )
+        };
+        assert_eq!(IN_PROCESS_DESTROYED.load(Ordering::SeqCst), 41);
+    }
+
+    #[test]
+    fn host_trampoline_reads_bridge_from_adapter_context() {
+        let mut bridge = PolyplugLuaHostDispatchBridge {
+            callback: Some(in_process_dispatch),
+            destroy_callback: None,
+        };
+        let adapter_context: *mut c_void =
+            &mut bridge as *mut PolyplugLuaHostDispatchBridge as *mut c_void;
+        let mut output: u32 = 0;
+        let mut error: AbiError = AbiError::ok();
+        let instance = GuestContractInstance {
+            data: 41_usize as *mut c_void,
+            contract_id: GuestContractId::from_u64(0),
+        };
+        // SAFETY: the runtime-local bridge and output slot remain live for this call.
+        unsafe {
+            polyplug_lua_host_vm_dispatch(
+                adapter_context,
+                VmLoaderData::null(),
+                instance,
+                3,
+                ptr::null(),
+                &mut output as *mut u32 as *mut (),
+                ptr::null_mut(),
+                &mut error,
+            );
+        }
+        assert_eq!(error.code, AbiErrorCode::Ok as u32);
+        assert_eq!(output, 99);
     }
 
     #[test]
@@ -429,5 +709,14 @@ mod tests {
             );
         }
         // Reaching here without a crash IS the assertion.
+    }
+
+    #[test]
+    fn create_without_configuration_returns_a_freeable_loader() {
+        let loader = polyplug_lua_loader_create();
+        assert!(!loader.is_null());
+        // SAFETY: `loader` was just returned by the matching constructor and
+        // has not been freed.
+        unsafe { polyplug_lua_loader_free(loader) };
     }
 }

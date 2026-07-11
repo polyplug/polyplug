@@ -218,6 +218,7 @@ fn dispatch_no_arg_i32(
     // produced by this contract's create_instance. All outlive the call.
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             instance,
             fn_id,

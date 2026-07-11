@@ -1193,7 +1193,7 @@ fn generate_callers_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str(
         "    resolveGuestContractInterface(handle: number): GuestContractInterfaceView | null;\n",
     );
-    out.push_str("    revisionCounter(): Deno.PointerValue;\n");
+    out.push_str("    registryRevision(): bigint;\n");
     out.push_str("    alloc(size: number, align?: number): Deno.PointerValue;\n");
     out.push_str("    free(ptr: Deno.PointerValue, size: number, align?: number): void;\n");
     out.push_str("}\n\n");
@@ -1262,23 +1262,18 @@ fn generate_host_caller_class_quickjs(
     // Retained so the cache can re-resolve after a hot-reload (which swaps a new
     // interface into the same slot) or report a gone contract after an unload.
     out.push_str("    #handle: number;\n");
-    // Pointer to the runtime's registry revision counter, fetched once via
-    // `revisionCounter()`. Read directly before each dispatch (one atomic load on the
-    // Deno side); null when there is no counter.
-    out.push_str("    #revisionPtr: Deno.PointerValue;\n");
     // Revision value read when the interface was resolved. Compared before each
     // dispatch against the live counter to detect a reload/unload and re-resolve,
     // so the cached interface pointer and instance never dangle.
     out.push_str("    #cachedRevision: bigint;\n\n");
 
     out.push_str(
-        "    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, revisionPtr: Deno.PointerValue, cachedRevision: bigint) {\n",
+        "    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, cachedRevision: bigint) {\n",
     );
     out.push_str("        this.#rt = rt;\n");
     out.push_str("        this.#view = view;\n");
     out.push_str("        this.#instance = instance;\n");
     out.push_str("        this.#handle = handle;\n");
-    out.push_str("        this.#revisionPtr = revisionPtr;\n");
     out.push_str("        this.#cachedRevision = cachedRevision;\n");
     out.push_str("    }\n\n");
 
@@ -1303,12 +1298,9 @@ fn generate_host_caller_class_quickjs(
     // Fetch the registry revision counter ONCE and read its current value, so every
     // later call can detect a reload/unload with a direct atomic load and re-resolve
     // before dispatching through a stale interface.
-    out.push_str("        const revisionPtr = rt.revisionCounter();\n");
-    out.push_str(
-        "        const cachedRevision = revisionPtr === null ? 0n : new Deno.UnsafePointerView(revisionPtr).getBigUint64(0, true);\n",
-    );
+    out.push_str("        const cachedRevision = rt.registryRevision();\n");
     out.push_str(&format!(
-        "        return new {}Contract(rt, view, instance, handle, revisionPtr, cachedRevision);\n",
+        "        return new {}Contract(rt, view, instance, handle, cachedRevision);\n",
         class_name
     ));
     out.push_str("    }\n\n");
@@ -1316,12 +1308,7 @@ fn generate_host_caller_class_quickjs(
     // Read the registry revision through the cached pointer — one atomic load, no call
     // into the runtime. Returns the cached value ("unchanged") when there is no counter.
     out.push_str("    #liveRevision(): bigint {\n");
-    out.push_str("        if (this.#revisionPtr === null) {\n");
-    out.push_str("            return this.#cachedRevision;\n");
-    out.push_str("        }\n");
-    out.push_str(
-        "        return new Deno.UnsafePointerView(this.#revisionPtr).getBigUint64(0, true);\n",
-    );
+    out.push_str("        return this.#rt.registryRevision();\n");
     out.push_str("    }\n\n");
 
     // Re-resolve the cached interface after the registry changed under us. A hot-reload

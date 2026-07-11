@@ -9,6 +9,7 @@
 #![allow(clippy::nursery)]
 
 use core::ffi::c_void;
+use core::ptr;
 
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
@@ -78,6 +79,7 @@ struct ValidatorPluginState {
 /// Create a new instance: calls the author factory and boxes the payload.
 /// Writes a null handle through `out_instance` when `host` is null or the factory panics.
 unsafe extern "C" fn VALIDATOR_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: polyplug_abi::dispatch::VmLoaderData,
     host: *const HostApi,
     _args: *const (),
@@ -127,6 +129,7 @@ unsafe extern "C" fn VALIDATOR_create_instance(
 
 /// Destroy an instance created by `VALIDATOR_create_instance`.
 unsafe extern "C" fn VALIDATOR_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: polyplug_abi::dispatch::VmLoaderData,
     _host: *const HostApi,
     instance: GuestContractInstance,
@@ -144,6 +147,7 @@ unsafe extern "C" fn VALIDATOR_destroy_instance(
 // SAFETY: args and out pointers are validated at entry before dereferencing.
 #[allow(clippy::unnecessary_cast)]
 extern "C" fn validator_validate_abi(
+    _adapter_context: *mut c_void,
     instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
@@ -209,6 +213,7 @@ pub static VALIDATOR_INTERFACE: GuestContractInterface = GuestContractInterface 
         patch: 0,
     },
     dispatch_type: DispatchType::Native,
+    adapter_context: core::ptr::null_mut(),
     create_instance: VALIDATOR_create_instance,
     destroy_instance: VALIDATOR_destroy_instance,
     dispatch: DispatchMechanisms {

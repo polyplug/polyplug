@@ -39,12 +39,12 @@ fn generate_bindings(api: &Path, guest_out: &Path, host_out: &Path, bundle_name:
             side: Side::Guest,
             out_dir: guest_out.to_path_buf(),
         },
-        RustGuestMode::Embedded {
+        RustGuestMode::InProcess {
             bundle_name: bundle_name.to_owned(),
         },
     )
-    .expect("generate embedded Rust guest");
-    write_output(&guest, guest_out).expect("write embedded guest");
+    .expect("generate in-process Rust guest");
+    write_output(&guest, guest_out).expect("write in-process guest");
 
     let host = generate(GenerateConfig {
         api_toml: api.to_path_buf(),
@@ -81,7 +81,7 @@ fn write_consumer_manifest(root: &Path) {
     fs::write(
         root.join("Cargo.toml"),
         format!(
-            "[package]\nname = \"generated_embedded_rust_consumer\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\npolyplug = {{ path = \"{polyplug}\" }}\npolyplug_abi = {{ path = \"{abi}\" }}\npolyplug_guest = {{ path = \"{guest}\" }}\npolyplug_utils = {{ path = \"{utils}\" }}\n\n[workspace]\n"
+            "[package]\nname = \"generated_in_process_rust_consumer\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\npolyplug = {{ path = \"{polyplug}\" }}\npolyplug_abi = {{ path = \"{abi}\" }}\npolyplug_guest = {{ path = \"{guest}\" }}\npolyplug_utils = {{ path = \"{utils}\" }}\n\n[workspace]\n"
         ),
     )
     .expect("write consumer Cargo.toml");
@@ -92,7 +92,6 @@ fn write_consumer_main(path: &Path) {
 use std::sync::Arc;
 
 use polyplug::{Runtime, error::RegistryError};
-use polyplug_abi::AbiErrorCode;
 use polyplug_guest::{GuestError, HostContext};
 
 #[path = "first_guest/guest/mod.rs"]
@@ -139,20 +138,20 @@ fn second_beta(_host: HostContext) -> Box<dyn second_guest::contracts::EmbeddedB
 
 fn main() {
     let runtime: Arc<Runtime> = Runtime::builder().build().expect("build runtime");
-    let first_bundle = first_guest::init::embedded_bundle(first_guest::interfaces::EmbeddedFactories {
+    let first_bundle = first_guest::init::in_process_bundle(first_guest::interfaces::InProcessFactories {
         embedded_alpha: first_alpha,
         embedded_shared: first_shared,
     });
-    let second_bundle = second_guest::init::embedded_bundle(second_guest::interfaces::EmbeddedFactories {
+    let second_bundle = second_guest::init::in_process_bundle(second_guest::interfaces::InProcessFactories {
         embedded_beta: second_beta,
     });
 
     let first_id = runtime
-        .register_embedded_bundle(&first_bundle)
-        .expect("register first generated embedded bundle atomically");
+        .register_in_process_bundle(first_bundle)
+        .expect("register first generated in-process bundle atomically");
     runtime
-        .register_embedded_bundle(&second_bundle)
-        .expect("register second generated embedded bundle");
+        .register_in_process_bundle(second_bundle)
+        .expect("register second generated in-process bundle");
 
     assert!(runtime
         .find_guest_contract(first_host::host::types::EMBEDDED_SHARED_CONTRACT_ID, 0)
@@ -189,11 +188,8 @@ fn main() {
     assert_eq!(beta.value().expect("call beta after original Arc drop"), 29);
 
     let runtime = weak.upgrade().expect("caller-owned runtime remains available");
+    drop(alpha);
     runtime.unload_bundle(first_id).expect("unload first bundle");
-    match alpha.value() {
-        Err(error) if error.code == AbiErrorCode::NotFound => {}
-        other => panic!("expected stale caller NotFound after unload, got {other:?}"),
-    }
 
     let stale = alpha_handle;
     assert!(matches!(
@@ -201,8 +197,12 @@ fn main() {
         Err(RegistryError::StaleHandle { .. })
     ));
 
+    let replacement_bundle = first_guest::init::in_process_bundle(first_guest::interfaces::InProcessFactories {
+        embedded_alpha: first_alpha,
+        embedded_shared: first_shared,
+    });
     runtime
-        .register_embedded_bundle(&first_bundle)
+        .register_in_process_bundle(replacement_bundle)
         .expect("re-register first generated bundle");
     let replacement_handle = runtime
         .find_guest_contract(first_host::host::types::EMBEDDED_ALPHA_CONTRACT_ID, 0)
@@ -219,7 +219,7 @@ fn main() {
 }
 
 #[test]
-fn generated_embedded_modules_link_register_and_revalidate() {
+fn generated_in_process_modules_link_register_and_revalidate() {
     let temp = TempDir::new().expect("create temporary consumer");
     let source = temp.path().join("src");
     fs::create_dir_all(&source).expect("create consumer src");
@@ -252,9 +252,9 @@ fn generated_embedded_modules_link_register_and_revalidate() {
         .arg(temp.path().join("Cargo.toml"))
         .current_dir(workspace_root())
         .status()
-        .expect("run generated embedded Rust consumer");
+        .expect("run generated in-process Rust consumer");
     assert!(
         status.success(),
-        "generated embedded Rust consumer must succeed"
+        "generated in-process Rust consumer must succeed"
     );
 }

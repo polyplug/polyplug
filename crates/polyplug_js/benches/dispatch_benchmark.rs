@@ -25,7 +25,7 @@ use polyplug::runtime::Runtime as PolyplugRuntime;
 use polyplug::runtime::RuntimeBuilder as PolyplugRuntimeBuilder;
 use polyplug_abi::Compatibility;
 use polyplug_abi::RuntimeConfig as PolyplugRuntimeConfig;
-use polyplug_js::JsConfig;
+
 use polyplug_js::JsLoader;
 // ponytail: rquickjs::Runtime collides with polyplug::runtime::Runtime on the bare name; `Runtime`
 // stays as the rquickjs type (used throughout the bench), PolyplugRuntime is the alias.
@@ -778,7 +778,7 @@ fn bench_js_reload(c: &mut Criterion) {
         write_temp_js_bundle("test.reload.contract", &bundle);
 
     let runtime: Arc<PolyplugRuntime> = PolyplugRuntimeBuilder::new()
-        .loader(JsLoader::new(JsConfig {}))
+        .loader(JsLoader::new())
         .config(PolyplugRuntimeConfig {
             compatibility: Compatibility::Strict,
             hot_reload_enabled: true,

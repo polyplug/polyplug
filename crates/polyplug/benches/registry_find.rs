@@ -6,6 +6,7 @@
 // Benchmark: Registry::find_guest_contract hot path
 // Measures: Time for contract lookup with various slot counts
 
+use core::ffi::c_void;
 use core::hint::black_box;
 use core::ptr;
 
@@ -36,6 +37,7 @@ use polyplug_utils::GuestContractId;
 
 /// Stub create_instance for benchmarks - writes null instance to out_instance.
 unsafe extern "C" fn bench_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -49,6 +51,7 @@ unsafe extern "C" fn bench_create_instance(
 
 /// Stub destroy_instance for benchmarks - no cleanup needed.
 unsafe extern "C" fn bench_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -65,6 +68,7 @@ static BENCH_INTERFACE: GuestContractInterface = GuestContractInterface {
         patch: 0,
     },
     dispatch_type: DispatchType::Native,
+    adapter_context: ptr::null_mut(),
     create_instance: bench_create_instance,
     destroy_instance: bench_destroy_instance,
     dispatch: DispatchMechanisms {
@@ -97,6 +101,7 @@ fn make_interface(id: u64) -> GuestContractInterface {
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance: bench_create_instance,
         destroy_instance: bench_destroy_instance,
         dispatch: DispatchMechanisms {

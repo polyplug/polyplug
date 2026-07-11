@@ -44,6 +44,59 @@ if decoder then
 end
 ```
 
+## In-process guest implementations
+
+Generated `host/callers.lua` exposes `in_process_bundle(spec, lua_bridge_lib)` for
+implementations that run in the host LuaJIT VM. Supply one table or factory per
+generated contract, then register the complete bundle synchronously. Factories
+receive the `HostApi*` and return a fresh implementation table for each caller
+instance. Obtain `lua_bridge_lib` from the Lua loader module so its scalar native
+trampolines can expand the canonical adapter-context ABI.
+
+```lua
+local callers = require("generated.host.callers")
+local lua_loader = require("polyplug.loaders.lua")
+
+local bundle = callers.in_process_bundle({
+    name = "my-lua-services",
+    version = { major = 1, minor = 0, patch = 0 },
+    implementations = {
+        ["pipeline.decoder"] = function(host)
+            return {
+                decode = function(self, input)
+                    return "decoded:" .. input
+                end,
+            }
+        end,
+    },
+}, lua_loader.bridge_lib())
+
+local bundle_id = runtime:register_in_process_bundle(bundle)
+-- Unload only after generated callers have released their instances.
+runtime:unload_bundle(bundle_id)
+```
+
+The Runtime becomes the sole owner of the generated resident—typed factories,
+Lua callback cdata, interfaces, backing registration tables, and live
+implementations—only after the complete registration succeeds. Successful
+registration consumes the bundle resident exactly once; a rejected registration
+leaves it available for retry. The Runtime releases the resident only after
+successful logical unload; a failed unload leaves it intact for callers to drain
+and retry. Lua errors are contained at callback boundaries and returned as ABI
+errors.
+
+The generated adapter integration test covers atomic registration, per-instance
+state, two-Runtime isolation, resident lifetime, failed unload retention, and
+unload/re-registration:
+
+```sh
+cargo build -p polyplug -p polyplug_lua -p polyplugc
+POLYPLUG_LIB=$PWD/target/debug/libpolyplug.so \
+POLYPLUG_LUA_LIB=$PWD/target/debug/libpolyplug_lua.so \
+POLYPLUGC_BIN=$PWD/target/debug/polyplugc \
+luajit sdks/lua/host/tests/test_in_process_runtime.lua
+```
+
 ## Plugin author
 
 Provide an author factory `factory(host) -> impl` whose returned object's methods

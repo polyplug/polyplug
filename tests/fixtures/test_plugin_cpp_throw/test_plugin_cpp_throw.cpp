@@ -7,7 +7,8 @@
 // (the process must survive, see test_exception_isolation_cpp).
 //
 // The dispatch entry stored in `functions[0]` uses the polyplug native calling
-// convention `void(GuestContractInstance, const void* args, void* out, AbiError* out_err)`.
+// convention `void(void* adapter_context, GuestContractInstance, const void* args,
+// void* out, AbiError* out_err)`.
 //
 // ABI types come from the real C++ ABI SDK header (sdks/cpp/abi/polyplug/abi.hpp)
 // so the fixture can never drift from the frozen layouts; build_all.sh passes
@@ -43,7 +44,7 @@ void throwing_impl() {
     throw std::runtime_error("intentional test exception");
 }
 
-void cpp_throw_abi(GuestContractInstance, const void* args, void* out, AbiError* out_err) noexcept {
+void cpp_throw_abi(void*, GuestContractInstance, const void* args, void* out, AbiError* out_err) noexcept {
     (void)args;
     (void)out;
     if (out_err == nullptr) {
@@ -57,13 +58,13 @@ void cpp_throw_abi(GuestContractInstance, const void* args, void* out, AbiError*
     }
 }
 
-void create_instance_stub(VmLoaderData, const HostApi*, const void*, GuestContractInstance* out_instance) noexcept {
+void create_instance_stub(void*, VmLoaderData, const HostApi*, const void*, GuestContractInstance* out_instance) noexcept {
     if (out_instance != nullptr) {
         *out_instance = GuestContractInstance{nullptr, 0};
     }
 }
 
-void destroy_instance_stub(VmLoaderData, const HostApi*, GuestContractInstance) noexcept {}
+void destroy_instance_stub(void*, VmLoaderData, const HostApi*, GuestContractInstance) noexcept {}
 
 void* const kTestAddFns[] = {
     reinterpret_cast<void*>(&cpp_throw_abi),
@@ -73,6 +74,7 @@ GuestContractInterface kTestAddInterface = {
     kTestAddContractId,
     Version{1, 0, 0},
     DispatchType::Native,
+    nullptr,
     create_instance_stub,
     destroy_instance_stub,
     DispatchMechanisms{.native = NativeDispatch{1, kTestAddFns}},

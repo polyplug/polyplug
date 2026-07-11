@@ -4,6 +4,7 @@
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering;
 use polyplug::error::LoaderError;
+use polyplug::error::RegistryError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
@@ -21,7 +22,8 @@ use polyplug_abi::HostContractInstance;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
-use polyplug_lua::LuaConfig;
+use polyplug_abi::in_process::reject_in_process_bundle;
+
 use polyplug_lua::LuaLoader;
 use polyplug_utils::BundleId;
 use polyplug_utils::guest_contract_id;
@@ -36,7 +38,7 @@ struct AddArgs {
 }
 
 fn make_loader() -> LuaLoader {
-    LuaLoader::new(LuaConfig::default())
+    LuaLoader::new()
 }
 
 fn create_runtime() -> Arc<Runtime> {
@@ -79,6 +81,7 @@ unsafe fn call_vm_function(
     let mut err: AbiError = AbiError::ok();
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             fn_id,
@@ -93,7 +96,7 @@ unsafe fn call_vm_function(
 
 #[test]
 fn integration_lua_loader_name() {
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let loader: LuaLoader = LuaLoader::new();
     assert_eq!(loader.loader_name(), "lua");
 }
 
@@ -323,12 +326,9 @@ fn integration_lua_utf8_roundtrip() {
     assert_eq!(version_str.as_bytes(), b"1.0.0-lua");
 }
 
-/// Loading the same bundle twice without an unload or reload in between must be
-/// rejected: the second registration is a same-bundle duplicate of the same
-/// contract (DuplicateProvider). The old "second load succeeds" behaviour left a
-/// stale duplicate registration that `find` kept resolving to the first VM.
-/// Legitimate re-loading goes through `unload_bundle` + `load_bundle` or
-/// `reload_bundle`, both covered by their own tests.
+/// Loading the same bundle twice without an unload or reload in between is
+/// rejected at the bundle transaction boundary. Legitimate replacement uses
+/// `unload_bundle` followed by `load_bundle`, or `reload_bundle`.
 #[test]
 fn integration_lua_second_load_rejected_as_duplicate() {
     let rt: Arc<Runtime> = create_runtime();
@@ -337,7 +337,9 @@ fn integration_lua_second_load_rejected_as_duplicate() {
     assert!(
         matches!(
             result,
-            Err(RuntimeError::Loader(LoaderError::InitFailed { .. }))
+            Err(RuntimeError::Registry(
+                RegistryError::BundleAlreadyRegistered { .. }
+            ))
         ),
         "second load of the same bundle must fail as a duplicate registration, got: {:?}",
         result.as_ref().err()
@@ -484,6 +486,7 @@ fn counting_host() -> HostApi {
     HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: arena_stub_register_guest,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: counting_alloc,
         free: counting_free,
         find_guest_contract: arena_stub_find,
@@ -503,7 +506,7 @@ fn counting_host() -> HostApi {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: core::ptr::null(),
     }
 }
@@ -582,6 +585,7 @@ fn lua_echo_uses_call_arena() {
         let mut err: AbiError = AbiError::ok();
         unsafe {
             (vtable.dispatch.vm.call)(
+                vtable.adapter_context,
                 vtable.dispatch.vm.loader_data,
                 GuestContractInstance::null(),
                 ECHO_FN_ID,
@@ -647,6 +651,6 @@ unsafe extern "C" fn stub_destroy_guest_instance(
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const polyplug_abi::HostApi) -> *const u64 {
-    core::ptr::null()
+unsafe extern "C" fn stub_registry_revision(_this: *const polyplug_abi::HostApi) -> u64 {
+    0
 }

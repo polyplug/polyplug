@@ -39,8 +39,8 @@ cross-compilation guide](CROSS_COMPILATION.md).
 │                                                                    │
 │    let runtime = Runtime::builder()                                │
 │        .loader(NativeLoader::new(NativeConfig {}))    // always    │
-│        .loader(LuaLoader::new(LuaConfig::default()))  // opt-in    │
-│        .loader(JsLoader::new(JsConfig {}))            // opt-in    │
+│        .loader(LuaLoader::new())                       // opt-in    │
+│        .loader(JsLoader::new())                        // opt-in    │
 │        .loader(PythonLoader::new(PythonConfig::default()))         │
 │        .config(config)                                             │
 │        .build()?;                                                  │

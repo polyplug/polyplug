@@ -5,8 +5,24 @@ let _lib: FfiLibrary<typeof JS_SYMBOLS> | null = null;
 
 const JS_SYMBOLS = {
     polyplug_js_loader_create: {
+        parameters: [] as const,
+        result: "pointer" as const,
+    },
+    polyplug_js_in_process_bridge_create: {
+        parameters: ["pointer", "pointer", "pointer", "u64", "u32", "u32", "u32"] as const,
+        result: "pointer" as const,
+    },
+    polyplug_js_in_process_bridge_interface: {
         parameters: ["pointer"] as const,
         result: "pointer" as const,
+    },
+    polyplug_js_in_process_bridge_context: {
+        parameters: ["pointer"] as const,
+        result: "pointer" as const,
+    },
+    polyplug_js_in_process_bridge_free: {
+        parameters: ["pointer"] as const,
+        result: "void" as const,
     },
 } satisfies FfiSymbolTable;
 
@@ -19,14 +35,20 @@ function getLib(): FfiLibrary<typeof JS_SYMBOLS> {
 }
 
 /**
+ * Returns the explicit Rust bridge library required by JavaScript in-process
+ * adapters. Bundle residents retain this object through logical unload.
+ */
+export function bridgeLibrary(): FfiLibrary<typeof JS_SYMBOLS> {
+    return getLib();
+}
+
+/**
  * Register the JavaScript (QuickJS) loader with a Runtime under the
  * "js-quickjs" runtime name.
  */
 export function registerJsLoader(rt: Runtime): void {
     const lib = getLib();
-    const cfgBuf = new Uint8Array([0]);
-    const cfgPtr = getBackend().pointerOf(cfgBuf);
-    const loaderPtr = lib.symbols.polyplug_js_loader_create(cfgPtr);
+    const loaderPtr = lib.symbols.polyplug_js_loader_create();
     if (loaderPtr === null) {
         throw new Error("polyplug: js loader create failed");
     }

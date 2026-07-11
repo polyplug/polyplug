@@ -217,12 +217,12 @@ glue is produced from a single `.toml` contract by the `polyplugc` CLI.
   so the runtime pins the epoch across construction/destruction and attributes each
   live instance to its contract.
 - Self-revalidating generated callers: host→guest and peer callers cache the resolved
-  interface for fast dispatch and detect a hot-reload/unload through the new
-  `HostApi.revision_counter` field — a pointer to a runtime registry revision counter that
-  callers poll with one acquire load before each dispatch (no per-call call into the
-  runtime). On a change the caller transparently re-resolves and recreates its instance,
-  so a cached interface pointer can never dangle after a reload/unload and authors never
-  have to manage cached pointers by hand. Applied across all six language generators.
+  interface for fast dispatch and detect a hot-reload/unload through the
+  `HostApi.registry_revision` callback. The runtime performs the acquire load before
+  returning the registry revision value; callers compare that value before each
+  dispatch and re-resolve/recreate their instance on a change. A cached interface
+  pointer never dangles after a reload/unload, and callers never access runtime-owned
+  atomic storage. Applied across all six language generators.
 - Cross-boundary allocation through the `alloc` / `free` `HostApi` fields; all boundary
   strings are UTF-8 `StringView` (ptr + len), never null-terminated C strings.
 - Host-provided logging threaded through `RuntimeConfig.log` and the `HostApi.log` field,

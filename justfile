@@ -450,6 +450,7 @@ test-host-js:
         cd {{sdks_dir}}/js && \
         POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/../../target/{{profile}}/libpolyplug.so}" \
         POLYPLUG_NATIVE_LIB="${POLYPLUG_NATIVE_LIB:-$(pwd)/../../target/{{profile}}/libpolyplug_native.so}" \
+        POLYPLUG_JS_LIB="${POLYPLUG_JS_LIB:-$(pwd)/../../target/{{profile}}/libpolyplug_js.so}" \
         deno run --allow-ffi --allow-env --allow-read --allow-write testing/run_deno.ts; \
     else \
         echo "deno not installed, skipping"; \
@@ -469,6 +470,7 @@ test-host-js-node:
         if [ ! -d node_modules ]; then npm install; fi && \
         POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/../../target/{{profile}}/libpolyplug.so}" \
         POLYPLUG_NATIVE_LIB="${POLYPLUG_NATIVE_LIB:-$(pwd)/../../target/{{profile}}/libpolyplug_native.so}" \
+        POLYPLUG_JS_LIB="${POLYPLUG_JS_LIB:-$(pwd)/../../target/{{profile}}/libpolyplug_js.so}" \
         NODE_OPTIONS="--conditions=polyplug-src" \
         node_modules/.bin/tsx testing/run_node.ts; \
     else \
@@ -489,6 +491,7 @@ test-host-js-bun:
         if [ ! -d node_modules ]; then bun install; fi && \
         POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/../../target/{{profile}}/libpolyplug.so}" \
         POLYPLUG_NATIVE_LIB="${POLYPLUG_NATIVE_LIB:-$(pwd)/../../target/{{profile}}/libpolyplug_native.so}" \
+        POLYPLUG_JS_LIB="${POLYPLUG_JS_LIB:-$(pwd)/../../target/{{profile}}/libpolyplug_js.so}" \
         bun --conditions=polyplug-src testing/run_bun.ts; \
     else \
         echo "bun not installed, skipping"; \

@@ -7,10 +7,11 @@
 // a later increment; they reuse the same manifest + runner.
 //
 // Run from repo root:
-//   cargo build --release -p polyplug -p polyplug_native
+//   cargo build --release -p polyplug -p polyplug_native -p polyplug_js
 //   bash tests/fixtures/build_all.sh
 //   POLYPLUG_LIB=$PWD/target/release/libpolyplug.so \
 //   POLYPLUG_NATIVE_LIB=$PWD/target/release/libpolyplug_native.so \
+//   POLYPLUG_JS_LIB=$PWD/target/release/libpolyplug_js.so \
 //   deno run --allow-ffi --allow-env --allow-read --allow-write \
 //     sdks/js/testing/run_deno.ts
 

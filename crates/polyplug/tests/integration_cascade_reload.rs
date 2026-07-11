@@ -18,16 +18,18 @@ use core::sync::atomic::Ordering;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use core::ffi::c_void;
 use core::ptr;
 use polyplug::error::LoaderError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::BundleSource;
 use polyplug::runtime::Runtime;
-use polyplug_abi::SupportedLanguage;
+
 use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::{
-    Compatibility, DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface,
-    HostApi, NativeDispatch, PluginDescriptor, RuntimeConfig, StringView, Version,
+    AbiError, Compatibility, DispatchMechanisms, DispatchType, GuestContractInstance,
+    GuestContractInterface, HostApi, NativeDispatch, PluginDescriptor, RuntimeConfig, StringView,
+    Version,
 };
 use polyplug_common::ManifestData;
 use polyplug_utils::bundle_id;
@@ -41,6 +43,7 @@ use tempfile::TempDir;
 const MOCK_FNS_EMPTY: [*const (); 0] = [];
 
 unsafe extern "C" fn noop_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -53,6 +56,7 @@ unsafe extern "C" fn noop_create_instance(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -66,59 +70,63 @@ unsafe extern "C" fn noop_destroy_instance(
 struct CascadeLoader {
     loader_name: &'static str,
     contract_id: u64,
+    contract_name: &'static str,
     reload_called: Arc<AtomicBool>,
 }
 
 impl CascadeLoader {
-    fn register(&self, manifest: &ManifestData, runtime: &Runtime) {
-        let interface: &'static GuestContractInterface =
-            Box::leak(Box::new(GuestContractInterface {
-                contract_id: GuestContractId::from_u64(self.contract_id),
-                contract_version: Version {
-                    major: 1,
-                    minor: 0,
-                    patch: 0,
+    fn register(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), LoaderError> {
+        let interface: GuestContractInterface = GuestContractInterface {
+            contract_id: GuestContractId::from_u64(self.contract_id),
+            contract_version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            dispatch_type: DispatchType::Native,
+            adapter_context: ptr::null_mut(),
+            create_instance: noop_create_instance,
+            destroy_instance: noop_destroy_instance,
+            dispatch: DispatchMechanisms {
+                native: NativeDispatch {
+                    function_count: 0,
+                    functions: MOCK_FNS_EMPTY.as_ptr(),
                 },
-                dispatch_type: DispatchType::Native,
-                create_instance: noop_create_instance,
-                destroy_instance: noop_destroy_instance,
-                dispatch: DispatchMechanisms {
-                    native: NativeDispatch {
-                        function_count: 0,
-                        functions: MOCK_FNS_EMPTY.as_ptr(),
-                    },
-                },
-            }));
+            },
+        };
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView::from_static(b"cascade"),
-            contract_name: StringView::from_static(b"cascade.contract"),
+            contract_name: StringView::from_static(self.contract_name.as_bytes()),
             version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
             },
         };
-        let bundle_id: BundleId = BundleId::new(&manifest.name);
-        // SAFETY: interface is leaked and lives for the process lifetime.
+        let host: *const HostApi = runtime.host_abi();
+        let mut registration: AbiError = AbiError::ok();
+        // SAFETY: the host belongs to runtime; descriptor, interface, and error
+        // output remain valid for the synchronous registration call.
         unsafe {
-            runtime.registry().register_guest_contract(
-                descriptor,
-                interface,
-                "cascade.contract".to_owned(),
-                bundle_id,
-            )
+            ((*host).register_guest_contract)(host, &descriptor, &interface, &mut registration);
         }
-        .expect("contract registration should succeed");
+        if registration.is_ok() {
+            Ok(())
+        } else {
+            Err(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!(
+                    "guest registration failed with ABI code {}",
+                    registration.code
+                ),
+            })
+        }
     }
 }
 
 impl BundleLoader for CascadeLoader {
     fn loader_name(&self) -> &'static str {
         self.loader_name
-    }
-
-    fn loader_language(&self) -> SupportedLanguage {
-        SupportedLanguage::Rust
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -131,14 +139,18 @@ impl BundleLoader for CascadeLoader {
         _source: &BundleSource,
         runtime: &Runtime,
     ) -> Result<(), LoaderError> {
-        self.register(manifest, runtime);
-        Ok(())
+        runtime.push_init_bundle_id(BundleId::new(&manifest.name).id());
+        let result: Result<(), LoaderError> = self.register(manifest, runtime);
+        runtime.pop_init_bundle_id();
+        result
     }
 
     fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), LoaderError> {
         self.reload_called.store(true, Ordering::SeqCst);
-        self.register(manifest, runtime);
-        Ok(())
+        runtime.push_init_bundle_id(BundleId::new(&manifest.name).id());
+        let result: Result<(), LoaderError> = self.register(manifest, runtime);
+        runtime.pop_init_bundle_id();
+        result
     }
 }
 
@@ -165,6 +177,7 @@ fn write_bundle(
     temp: &TempDir,
     bundle_name: &str,
     loader_name: &str,
+    provided_contract: &str,
     needs_reinit: bool,
     dep_contract: Option<&str>,
 ) -> PathBuf {
@@ -179,6 +192,7 @@ fn write_bundle(
          loader = \"{loader_name}\"\n\
          file = \"dummy.so\"\n\
          version = \"1.0\"\n\
+         provides = [\"{provided_contract}\"]\n\
          needs_reinit_on_dep_reload = {needs_reinit}\n"
     );
     if let Some(contract_name) = dep_contract {
@@ -209,19 +223,28 @@ fn cascade_reload_disabled_does_not_trigger() {
         .loader(CascadeLoader {
             loader_name: "cascade-a",
             contract_id: a_contract_id,
+            contract_name: "dep.contract",
             reload_called: Arc::new(AtomicBool::new(false)),
         })
         .loader(CascadeLoader {
             loader_name: "cascade-b",
             contract_id: guest_contract_id("b.contract", 1_u32),
+            contract_name: "b.contract",
             reload_called: Arc::clone(&b_reload_called),
         })
         .build()
         .expect("runtime build should succeed");
 
-    let a_path: PathBuf = write_bundle(&temp, "bundle_a", "cascade-a", false, None);
+    let a_path: PathBuf = write_bundle(&temp, "bundle_a", "cascade-a", "dep.contract", false, None);
     // B depends on A's contract but opts OUT of cascade reload.
-    let b_path: PathBuf = write_bundle(&temp, "bundle_b", "cascade-b", false, Some("dep.contract"));
+    let b_path: PathBuf = write_bundle(
+        &temp,
+        "bundle_b",
+        "cascade-b",
+        "b.contract",
+        false,
+        Some("dep.contract"),
+    );
 
     runtime.load_bundle(a_path.as_path()).expect("load A");
     runtime.load_bundle(b_path.as_path()).expect("load B");
@@ -248,19 +271,28 @@ fn cascade_reload_enabled_triggers_dependent() {
         .loader(CascadeLoader {
             loader_name: "cascade-a",
             contract_id: a_contract_id,
+            contract_name: "dep.contract",
             reload_called: Arc::new(AtomicBool::new(false)),
         })
         .loader(CascadeLoader {
             loader_name: "cascade-b",
             contract_id: guest_contract_id("b.contract", 1_u32),
+            contract_name: "b.contract",
             reload_called: Arc::clone(&b_reload_called),
         })
         .build()
         .expect("runtime build should succeed");
 
-    let a_path: PathBuf = write_bundle(&temp, "bundle_a", "cascade-a", false, None);
+    let a_path: PathBuf = write_bundle(&temp, "bundle_a", "cascade-a", "dep.contract", false, None);
     // B depends on A's contract and opts IN to cascade reload.
-    let b_path: PathBuf = write_bundle(&temp, "bundle_b", "cascade-b", true, Some("dep.contract"));
+    let b_path: PathBuf = write_bundle(
+        &temp,
+        "bundle_b",
+        "cascade-b",
+        "b.contract",
+        true,
+        Some("dep.contract"),
+    );
 
     runtime.load_bundle(a_path.as_path()).expect("load A");
     runtime.load_bundle(b_path.as_path()).expect("load B");
@@ -290,19 +322,35 @@ fn cascade_reload_cycle_detection() {
         .loader(CascadeLoader {
             loader_name: "cycle-a",
             contract_id: a_contract_id,
+            contract_name: "a.contract",
             reload_called: Arc::clone(&a_reload_called),
         })
         .loader(CascadeLoader {
             loader_name: "cycle-b",
             contract_id: b_contract_id,
+            contract_name: "b.contract",
             reload_called: Arc::clone(&b_reload_called),
         })
         .build()
         .expect("runtime build should succeed");
 
     // A depends on B's contract; B depends on A's contract. Both opt in.
-    let a_path: PathBuf = write_bundle(&temp, "cycle_a", "cycle-a", true, Some("b.contract"));
-    let b_path: PathBuf = write_bundle(&temp, "cycle_b", "cycle-b", true, Some("a.contract"));
+    let a_path: PathBuf = write_bundle(
+        &temp,
+        "cycle_a",
+        "cycle-a",
+        "a.contract",
+        true,
+        Some("b.contract"),
+    );
+    let b_path: PathBuf = write_bundle(
+        &temp,
+        "cycle_b",
+        "cycle-b",
+        "b.contract",
+        true,
+        Some("a.contract"),
+    );
 
     runtime.load_bundle(a_path.as_path()).expect("load A");
     runtime.load_bundle(b_path.as_path()).expect("load B");

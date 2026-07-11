@@ -53,6 +53,7 @@
 //!   cargo test --release -p polyplug --test soak_load_unload -- --nocapture --exact soak_load_unload_churn
 //! ```
 
+use core::ffi::c_void;
 use core::hint::black_box;
 use core::mem::transmute;
 use core::time::Duration;
@@ -98,7 +99,7 @@ const DISPATCHES_PER_CYCLE: u32 = 4;
 /// `*const args`, `*mut out`, `*mut AbiError` out-param; returns void). Matches the
 /// integration-dispatch tests.
 type NativeDispatchFn =
-    unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError);
+    unsafe extern "C" fn(*mut c_void, GuestContractInstance, *const (), *mut (), *mut AbiError);
 
 /// `test.add` argument struct (matches `libtest_plugin`'s `add` contract).
 #[repr(C)]
@@ -133,7 +134,7 @@ fn env_u64(name: &str, default: u64) -> u64 {
 }
 
 /// Resolve `test.add` on `runtime` and return its native dispatch fn pointer.
-fn resolve_add_dispatch(runtime: &Runtime) -> NativeDispatchFn {
+fn resolve_add_dispatch(runtime: &Runtime) -> (NativeDispatchFn, *mut c_void) {
     let contract_id: u64 = GuestContractId::new("test.add", 1).id();
     let handle: GuestContractHandle = runtime
         .find_guest_contract(contract_id, 0)
@@ -155,7 +156,10 @@ fn resolve_add_dispatch(runtime: &Runtime) -> NativeDispatchFn {
     // native function table.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: `add` was registered with the frozen native dispatch signature.
-    unsafe { transmute::<*const (), NativeDispatchFn>(fn_ptr) }
+    (
+        unsafe { transmute::<*const (), NativeDispatchFn>(fn_ptr) },
+        interface.adapter_context,
+    )
 }
 
 /// One full churn cycle: fresh runtime, load, dispatch a few times, unload,
@@ -170,7 +174,8 @@ fn run_one_cycle() {
         .load_bundle(Path::new(TEST_PLUGIN_DIR))
         .expect("load_bundle must succeed");
 
-    let dispatch_fn: NativeDispatchFn = resolve_add_dispatch(&runtime);
+    let (dispatch_fn, adapter_context): (NativeDispatchFn, *mut c_void) =
+        resolve_add_dispatch(&runtime);
     for i in 0..DISPATCHES_PER_CYCLE {
         let args: AddArgs = AddArgs { a: i, b: 1 };
         let mut out: u32 = u32::MAX;
@@ -179,6 +184,7 @@ fn run_one_cycle() {
         // exactly as the native dispatch ABI expects for a stateless contract.
         unsafe {
             dispatch_fn(
+                adapter_context,
                 GuestContractInstance::null(),
                 &args as *const AddArgs as *const (),
                 &mut out as *mut u32 as *mut (),

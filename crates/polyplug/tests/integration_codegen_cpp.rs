@@ -38,6 +38,7 @@ use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::in_process::reject_in_process_bundle;
 use polyplug_abi::types::StringView;
 use polyplug_abi::types::abi_error_ok;
 use polyplug_utils::BundleId;
@@ -290,6 +291,7 @@ fn make_host_interface() -> HostApi {
     HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: registry_register_callback,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: noop_alloc,
         free: noop_free,
         find_guest_contract: noop_find_guest_contract,
@@ -309,7 +311,7 @@ fn make_host_interface() -> HostApi {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: ptr::null(),
     }
 }
@@ -356,12 +358,13 @@ fn test_cpp_codegen_files_exist() {
         String::from_utf8_lossy(&gen_output.stderr),
     );
 
-    // ── 3. Assert all 5 expected guest-side files exist ─────────────────────
-    let expected_files: [&str; 5] = [
+    // ── 3. Assert all 6 expected guest-side files exist ─────────────────────
+    let expected_files: [&str; 6] = [
         "guest/types.hpp",
         "guest/contracts.hpp",
         "guest/interfaces.hpp",
         "guest/init.hpp",
+        "guest/in_process.hpp",
         "manifest.toml",
     ];
     for filename in expected_files {
@@ -374,7 +377,7 @@ fn test_cpp_codegen_files_exist() {
     }
 
     println!(
-        "test_cpp_codegen_files_exist: all 5 guest files present in {} ✓",
+        "test_cpp_codegen_files_exist: all 6 guest files present in {} ✓",
         out_dir.display()
     );
 
@@ -384,6 +387,8 @@ fn test_cpp_codegen_files_exist() {
     if let Ok(version_out) = gpp_version_result {
         if version_out.status.success() {
             let sdks_cpp_abi: PathBuf = workspace_root().join("sdks").join("cpp").join("abi");
+            let sdks_cpp_host: PathBuf = workspace_root().join("sdks").join("cpp").join("host");
+            let sdks_cpp_guest: PathBuf = workspace_root().join("sdks").join("cpp").join("guest");
             let interfaces_hpp: PathBuf = out_dir.join("guest").join("interfaces.hpp");
             let out_obj: PathBuf =
                 PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("test_cpp_codegen_interfaces.o");
@@ -408,6 +413,52 @@ fn test_cpp_codegen_files_exist() {
             );
 
             println!("test_cpp_codegen_files_exist: interfaces.hpp compiled successfully ✓");
+
+            let init_hpp: PathBuf = out_dir.join("guest").join("init.hpp");
+            let init_obj: PathBuf =
+                PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("test_cpp_codegen_init.o");
+            let init_compile_result: Output = Command::new("g++")
+                .arg("-std=c++20")
+                .arg(format!("-I{}", out_dir.join("guest").display()))
+                .arg(format!("-I{}", sdks_cpp_abi.display()))
+                .arg(format!("-I{}", sdks_cpp_guest.display()))
+                .arg(&init_hpp)
+                .arg("-c")
+                .arg("-o")
+                .arg(&init_obj)
+                .output()
+                .expect("g++ failed to run");
+
+            assert!(
+                init_compile_result.status.success(),
+                "init.hpp did not compile:\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&init_compile_result.stdout),
+                String::from_utf8_lossy(&init_compile_result.stderr),
+            );
+            println!("test_cpp_codegen_files_exist: init.hpp compiled successfully ✓");
+
+            let in_process_hpp: PathBuf = out_dir.join("guest").join("in_process.hpp");
+            let in_process_obj: PathBuf =
+                PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("test_cpp_codegen_in_process.o");
+            let in_process_compile_result: Output = Command::new("g++")
+                .arg("-std=c++20")
+                .arg(format!("-I{}", out_dir.join("guest").display()))
+                .arg(format!("-I{}", sdks_cpp_abi.display()))
+                .arg(format!("-I{}", sdks_cpp_host.display()))
+                .arg(&in_process_hpp)
+                .arg("-c")
+                .arg("-o")
+                .arg(&in_process_obj)
+                .output()
+                .expect("g++ failed to run");
+
+            assert!(
+                in_process_compile_result.status.success(),
+                "in_process.hpp did not compile:\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&in_process_compile_result.stdout),
+                String::from_utf8_lossy(&in_process_compile_result.stderr),
+            );
+            println!("test_cpp_codegen_files_exist: in_process.hpp compiled successfully ✓");
         } else {
             eprintln!("skipping g++ compile check: g++ --version returned non-zero");
         }
@@ -490,18 +541,19 @@ fn test_cpp_plugin_dispatch() {
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     // ── 6. Get function pointer from interface.dispatch.native.functions[0] ───────
-    // SAFETY: functions[0] is the cpp_test_add ABI wrapper with signature
-    //   extern "C" AbiError(const void* args, void* out).
+    // SAFETY: functions[0] has the canonical native callback signature with
+    // adapter context first; AddArgs matches the fixture's argument ABI.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-
-    // SAFETY: fn_ptr is transmuted to the generic dispatch signature. Argument
-    // types are enforced: AddArgs matches what cpp_test_add expects.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { mem::transmute(fn_ptr) };
+    ) = {
+        // SAFETY: the pointer comes from the generated dispatch table and is cast to that function's exact ABI.
+        unsafe { mem::transmute(fn_ptr) }
+    };
 
     // ── 7. Call fn_ptr(args_ptr, out_ptr) — add(10, 20) → 30 ─────────────────
     let args: AddArgs = AddArgs {
@@ -514,6 +566,7 @@ fn test_cpp_plugin_dispatch() {
     // SAFETY: args is a valid AddArgs; out is a valid u32 location.
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -601,21 +654,25 @@ fn test_cpp_host_loads_rust_plugin() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
 
-    // SAFETY: functions[0] is the first ABI wrapper with the frozen native signature
-    //   extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)
+    // SAFETY: functions[0] has the canonical native callback signature with
+    // adapter context first.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    // SAFETY: fn_ptr layout matches the target function signature per ABI contract.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { mem::transmute(fn_ptr) };
+    ) = {
+        // SAFETY: the pointer comes from the generated dispatch table and is cast to that function's exact ABI.
+        unsafe { mem::transmute(fn_ptr) }
+    };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args and out are valid stack allocations; null stateless instance.
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -704,20 +761,25 @@ fn test_exception_isolation_cpp() {
     let args: AddArgs = AddArgs { a: 0_u32, b: 0_u32 };
     let mut out: u32 = 0_u32;
 
-    // SAFETY: functions[0] is the cpp_throw_abi with noexcept wrapper
+    // SAFETY: functions[0] has the canonical native callback signature with
+    // adapter context first.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    // SAFETY: fn_ptr layout matches the target function signature per ABI contract.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { mem::transmute(fn_ptr) };
+    ) = {
+        // SAFETY: the pointer comes from the generated dispatch table and is cast to that function's exact ABI.
+        unsafe { mem::transmute(fn_ptr) }
+    };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args and out are valid
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -734,6 +796,201 @@ fn test_exception_isolation_cpp() {
     // Process survived — if we reach this line, no crash occurred
     println!("test_exception_isolation_cpp: exception caught, host survived ✓");
     mem::forget(library);
+}
+
+#[test]
+fn test_cpp_in_process_adapters_are_stateful_and_context_local() {
+    let out_dir: PathBuf =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_cpp_in_process_adapters");
+    let input_dir: PathBuf = out_dir.join("input");
+    let generated_dir: PathBuf = out_dir.join("generated");
+    fs::create_dir_all(&input_dir).expect("failed to create C++ adapter test input directory");
+
+    fs::write(
+        input_dir.join("api.toml"),
+        r#"
+[[contract]]
+name = "test.alpha"
+version = "1.0.0"
+
+[[contract.functions]]
+name = "increment"
+return = "u32"
+
+[[contract]]
+name = "test.beta"
+version = "1.0.0"
+
+[[contract.functions]]
+name = "increment"
+return = "u32"
+"#,
+    )
+    .expect("failed to write C++ adapter test API");
+    fs::write(
+        input_dir.join("bundle.toml"),
+        r#"
+[bundle]
+name = "cpp_in_process_adapters"
+version = "1.0.0"
+api = "api.toml"
+loader = "native"
+
+[bundle.file]
+linux.x86_64 = "libcpp_in_process_adapters.so"
+
+[[plugin]]
+name = "alpha"
+implements = ["test.alpha@1.0"]
+
+[[plugin]]
+name = "beta"
+implements = ["test.beta@1.0"]
+"#,
+    )
+    .expect("failed to write C++ adapter test bundle");
+
+    let generation: Output = Command::new(polyplugc_bin())
+        .arg("generate")
+        .arg("--bundle")
+        .arg(input_dir.join("bundle.toml"))
+        .arg("--lang")
+        .arg("cpp")
+        .arg("--out")
+        .arg(&generated_dir)
+        .output()
+        .expect("failed to generate C++ in-process adapters");
+    assert!(
+        generation.status.success(),
+        "C++ in-process adapter generation failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&generation.stdout),
+        String::from_utf8_lossy(&generation.stderr),
+    );
+
+    let driver: PathBuf = out_dir.join("in_process_adapter_driver.cpp");
+    fs::write(
+        &driver,
+        r#"
+#include <cstdint>
+#include <memory>
+#include <stdexcept>
+
+#include "in_process.hpp"
+
+namespace {
+int alpha_destroyed = 0;
+int beta_destroyed = 0;
+
+class Alpha final : public polyplug_plugin::TestAlphaGuestContract {
+public:
+    ~Alpha() override { ++alpha_destroyed; }
+    uint32_t increment() override { return ++value_; }
+private:
+    uint32_t value_ = 0;
+};
+
+class Beta final : public polyplug_plugin::TestBetaGuestContract {
+public:
+    ~Beta() override { ++beta_destroyed; }
+    uint32_t increment() override { return ++value_; }
+private:
+    uint32_t value_ = 40;
+};
+
+bool invoke_twice(const InProcessContractRegistration& registration, const HostApi& host,
+                  uint32_t first, uint32_t second) {
+    GuestContractInstance instance{nullptr, 0U};
+    registration.interface->create_instance(
+        registration.adapter_context, VmLoaderData{nullptr}, &host, nullptr, &instance);
+    if (instance.data == nullptr) return false;
+
+    auto dispatch = reinterpret_cast<void (*)(void*, GuestContractInstance, const void*, void*, AbiError*)>(
+        registration.interface->dispatch.native.functions[0]);
+    uint32_t result = 0;
+    AbiError error{};
+    dispatch(registration.adapter_context, instance, nullptr, &result, &error);
+    if (error.code != static_cast<uint32_t>(AbiErrorCode::Ok) || result != first) return false;
+    dispatch(registration.adapter_context, instance, nullptr, &result, &error);
+    if (error.code != static_cast<uint32_t>(AbiErrorCode::Ok) || result != second) return false;
+    registration.interface->destroy_instance(
+        registration.adapter_context, VmLoaderData{nullptr}, &host, instance);
+    return true;
+}
+}  // namespace
+
+namespace polyplug_plugin {
+TestAlphaGuestContract* polyplug_create_alpha(const HostApi*) { return nullptr; }
+TestBetaGuestContract* polyplug_create_beta(const HostApi*) { return nullptr; }
+}  // namespace polyplug_plugin
+
+int main() {
+    HostApi host{};
+    auto bundle = polyplug_plugin::create_in_process_bundle(
+        [](const HostApi*) { return std::make_unique<Alpha>(); },
+        [](const HostApi*) { return std::make_unique<Beta>(); });
+
+    const InProcessBundleRegistration& registration = bundle.in_process_registration();
+    if (registration.contract_count != 2U || registration.contracts == nullptr) return 1;
+    if (registration.contracts[0].adapter_context == registration.contracts[1].adapter_context) return 2;
+    if (!invoke_twice(registration.contracts[0], host, 1U, 2U)) return 3;
+    if (!invoke_twice(registration.contracts[1], host, 41U, 42U)) return 4;
+    if (alpha_destroyed != 1 || beta_destroyed != 1) return 5;
+
+    auto throwing_bundle = polyplug_plugin::create_in_process_bundle(
+        [](const HostApi*) -> std::unique_ptr<Alpha> { throw std::runtime_error("factory failure"); },
+        [](const HostApi*) { return std::make_unique<Beta>(); });
+    const InProcessContractRegistration& throwing = throwing_bundle.in_process_registration().contracts[0];
+    GuestContractInstance failed{reinterpret_cast<void*>(1), 99U};
+    throwing.interface->create_instance(
+        throwing.adapter_context, VmLoaderData{nullptr}, &host, nullptr, &failed);
+    if (failed.data != nullptr || failed.contract_id != 0U) return 6;
+    return 0;
+}
+"#,
+    )
+    .expect("failed to write C++ in-process adapter driver");
+
+    let executable: PathBuf = out_dir.join("in_process_adapter_driver");
+    let compile: Output = Command::new("g++")
+        .arg("-std=c++20")
+        .arg(&driver)
+        .arg(format!("-I{}", generated_dir.join("guest").display()))
+        .arg(format!(
+            "-I{}",
+            workspace_root()
+                .join("sdks")
+                .join("cpp")
+                .join("abi")
+                .display()
+        ))
+        .arg(format!(
+            "-I{}",
+            workspace_root()
+                .join("sdks")
+                .join("cpp")
+                .join("host")
+                .display()
+        ))
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("g++ failed to compile the C++ in-process adapter driver");
+    assert!(
+        compile.status.success(),
+        "C++ in-process adapter driver did not compile:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr),
+    );
+    let execution: Output = Command::new(&executable)
+        .output()
+        .expect("failed to run C++ in-process adapter driver");
+    assert!(
+        execution.status.success(),
+        "C++ in-process adapter driver failed with {:?}:\nstdout: {}\nstderr: {}",
+        execution.status.code(),
+        String::from_utf8_lossy(&execution.stdout),
+        String::from_utf8_lossy(&execution.stderr),
+    );
 }
 
 // ─── Enum types codegen test ─────────────────────────────────────────────────
@@ -803,6 +1060,6 @@ unsafe extern "C" fn stub_destroy_guest_instance(
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
-    ptr::null()
+unsafe extern "C" fn stub_registry_revision(_this: *const HostApi) -> u64 {
+    0
 }

@@ -193,11 +193,11 @@ pub struct PythonLoaderData {
     pub contract_id: GuestContractId,
 }
 
-// SAFETY: PythonLoaderData is shared across threads via the leaked raw pointer in
-// VmLoaderData. The Py<PyAny> fields and the HashMap of Py values are Send/Sync
-// when access is GIL-guarded, which the loader guarantees (every access to a
-// Python object happens inside Python::attach). The Mutex/AtomicU64 are Send/Sync
-// in their own right.
+// SAFETY: PythonLoaderData is shared across threads through the loader-owned
+// `VmLoaderData` pointer. The Py<PyAny> fields and the HashMap of Py values are
+// Send/Sync when access is GIL-guarded, which the loader guarantees (every access
+// to a Python object happens inside Python::attach). The Mutex/AtomicU64 are
+// Send/Sync in their own right.
 unsafe impl Send for PythonLoaderData {}
 // SAFETY: see the Send impl above — every access to a Python object is GIL-guarded
 // (inside Python::attach), so the type is safe to share across threads.
@@ -214,11 +214,12 @@ unsafe impl Sync for PythonLoaderData {}
 /// poisoned registry lock) writes a null instance handle.
 ///
 /// # Safety
-/// - `loader_data` must wrap a valid pointer to a [`PythonLoaderData`] created by
-///   the loader (and leaked for the runtime lifetime).
+/// - `loader_data` must wrap a valid pointer to a [`PythonLoaderData`] owned by
+///   the loader until the runtime invalidates its bundle.
 /// - `host` is the owning runtime's `HostApi` pointer, forwarded to the factory.
 /// - `out_instance`, when non-null, must be writable per the ABI contract.
 unsafe extern "C" fn python_create_instance(
+    _adapter_context: *mut c_void,
     loader_data: VmLoaderData,
     host: *const HostApi,
     _args: *const (),
@@ -227,8 +228,8 @@ unsafe extern "C" fn python_create_instance(
     if out_instance.is_null() {
         return;
     }
-    // SAFETY: loader_data wraps a valid PythonLoaderData pointer created by the
-    // loader; it is leaked for the runtime lifetime so the borrow is valid here.
+    // SAFETY: loader_data wraps a loader-owned PythonLoaderData pointer whose
+    // bundle remains registered for the duration of this call.
     let data: &PythonLoaderData = unsafe { &*(loader_data.data as *const PythonLoaderData) };
     let host_addr: i64 = host as usize as i64;
 
@@ -267,11 +268,12 @@ unsafe extern "C" fn python_create_instance(
 /// is a no-op.
 ///
 /// # Safety
-/// - `loader_data` must wrap a valid pointer to a [`PythonLoaderData`] created by
-///   the loader (and leaked for the runtime lifetime).
+/// - `loader_data` must wrap a valid pointer to a [`PythonLoaderData`] owned by
+///   the loader until the runtime invalidates its bundle.
 /// - `instance` must be a handle previously produced by [`python_create_instance`]
 ///   for this contract (or a null handle).
 unsafe extern "C" fn python_destroy_instance(
+    _adapter_context: *mut c_void,
     loader_data: VmLoaderData,
     _host: *const HostApi,
     instance: GuestContractInstance,
@@ -280,8 +282,8 @@ unsafe extern "C" fn python_destroy_instance(
     if id == 0 {
         return;
     }
-    // SAFETY: loader_data wraps a valid PythonLoaderData pointer created by the
-    // loader; it is leaked for the runtime lifetime so the borrow is valid here.
+    // SAFETY: loader_data wraps a loader-owned PythonLoaderData pointer whose
+    // bundle remains registered for the duration of this call.
     let data: &PythonLoaderData = unsafe { &*(loader_data.data as *const PythonLoaderData) };
     Python::attach(|_py: Python<'_>| {
         if let Ok(mut map) = data.instances.lock() {
@@ -308,13 +310,14 @@ unsafe extern "C" fn python_destroy_instance(
 /// [`AbiErrorCode::FunctionNotAvailable`].
 ///
 /// # Safety
-/// - `loader_data` must wrap a valid pointer to a [`PythonLoaderData`] created by
-///   the loader (and leaked for the runtime lifetime).
+/// - `loader_data` must wrap a valid pointer to a [`PythonLoaderData`] owned by
+///   the loader until the runtime invalidates its bundle.
 /// - `args` and `out` must be valid pointers for this ABI call.
 /// - `arena`, when non-null, must point to a valid [`CallArena`] reset by the
 ///   caller for this call; values the guest writes into it are valid until the
 ///   caller's next reset.
 unsafe extern "C" fn python_vm_dispatch(
+    _adapter_context: *mut c_void,
     loader_data: VmLoaderData,
     instance: GuestContractInstance,
     fn_id: u32,
@@ -323,8 +326,8 @@ unsafe extern "C" fn python_vm_dispatch(
     arena: *mut CallArena,
     out_err: *mut AbiError,
 ) {
-    // SAFETY: loader_data wraps a valid PythonLoaderData pointer created by the
-    // loader; it is leaked for the runtime lifetime so the borrow is valid for the call.
+    // SAFETY: loader_data wraps a loader-owned PythonLoaderData pointer whose
+    // bundle remains registered for the duration of this call.
     let result: AbiError =
         unsafe { python_vm_dispatch_impl(loader_data, instance, fn_id, args, out, arena) };
     if !out_err.is_null() {
@@ -341,8 +344,8 @@ unsafe fn python_vm_dispatch_impl(
     out: *mut (),
     arena: *mut CallArena,
 ) -> AbiError {
-    // SAFETY: loader_data wraps a valid PythonLoaderData pointer created by the
-    // loader; it is leaked for the runtime lifetime so the borrow is valid for the call.
+    // SAFETY: loader_data wraps a loader-owned PythonLoaderData pointer whose
+    // bundle remains registered for the duration of this call.
     let data: &PythonLoaderData = unsafe { &*(loader_data.data as *const PythonLoaderData) };
 
     let callable: &Py<PyAny> = match data.callables.get(fn_id as usize) {
@@ -623,21 +626,38 @@ pub(crate) fn collect_registrations(
     Ok(registrations)
 }
 
+/// Ownership retained for a contract that was published through the runtime.
+///
+/// The registry copies the interface but its VM loader-data pointer refers to this
+/// allocation. Keeping both boxes together makes the lifetime explicit: the loader
+/// drops them only after the runtime has invalidated the owning bundle.
+pub(crate) struct RegisteredPythonContract {
+    _loader_data: Box<PythonLoaderData>,
+    _interface: Box<GuestContractInterface>,
+}
+
 /// Register every collected contract with the runtime through the `HostApi`
 /// self-passing pattern, building a VM-dispatch [`GuestContractInterface`] per
 /// contract.
 ///
-/// Each contract gets its own leaked [`PythonLoaderData`] (leaked for the runtime
-/// lifetime so any resolved dispatch pointer stays valid), and the interface plus
-/// descriptor strings are leaked to `'static` for the same reason. Returns the
-/// number of contracts registered, or an error if registration of any contract
-/// fails or none were registered.
+/// Successfully published contracts are appended to `retained`, which the loader
+/// owns until logical unload. If a later registration fails, its unregistered
+/// interface and data drop immediately; earlier entries remain in `retained`
+/// because the current core registry may already have published their VM pointers.
+/// Returns the number of contracts registered, or an error if registration of any
+/// contract fails or none were registered.
 pub(crate) fn register_contracts(
     registrations: Vec<ContractRegistration>,
     host_interface: *const HostApi,
     bundle_name: &str,
+    retained: &mut Vec<RegisteredPythonContract>,
 ) -> Result<u32, LoaderError> {
-    let mut registered: u32 = 0_u32;
+    if registrations.is_empty() {
+        return Err(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: "polyplug_init returned no contracts (empty registrations list)".to_owned(),
+        });
+    }
 
     // One arena allocator per bundle, bound to the runtime's host pointer. It is
     // stateless (reads the target arena from its argument), so every contract's
@@ -647,13 +667,10 @@ pub(crate) fn register_contracts(
     let arena_alloc: Py<PyAny> = Python::attach(|py: Python<'_>| {
         build_arena_bridge(py, host_interface, bundle_name).map(|b: Bound<'_, PyAny>| b.unbind())
     })?;
+    let mut registered: u32 = 0;
 
     for reg in registrations {
         let cid: GuestContractId = GuestContractId::new(&reg.contract_name, reg.contract_major);
-
-        // Build the stateless default impl once at load via the author factory,
-        // bound to the runtime's host pointer. Dispatch uses it for null instance
-        // handles (stateless contracts and the low-level null-instance paths).
         let host_addr: i64 = host_interface as usize as i64;
         let default_impl: Py<PyAny> =
             Python::attach(
@@ -675,7 +692,7 @@ pub(crate) fn register_contracts(
 
         let arena_alloc_clone: Py<PyAny> =
             Python::attach(|py: Python<'_>| arena_alloc.clone_ref(py));
-        let loader_data: Box<PythonLoaderData> = Box::new(PythonLoaderData {
+        let mut loader_data: Box<PythonLoaderData> = Box::new(PythonLoaderData {
             callables: reg.callables,
             arena_alloc: arena_alloc_clone,
             factory: reg.factory,
@@ -684,9 +701,8 @@ pub(crate) fn register_contracts(
             next_id: AtomicU64::new(1),
             contract_id: cid,
         });
-        let loader_data_ptr: *mut PythonLoaderData = Box::into_raw(loader_data);
-
-        let interface: GuestContractInterface = GuestContractInterface {
+        let loader_data_ptr: *mut PythonLoaderData = &mut *loader_data;
+        let interface: Box<GuestContractInterface> = Box::new(GuestContractInterface {
             contract_id: cid,
             contract_version: Version {
                 major: reg.contract_major,
@@ -694,36 +710,27 @@ pub(crate) fn register_contracts(
                 patch: 0,
             },
             dispatch_type: DispatchType::VirtualMachine,
+            adapter_context: ptr::null_mut(),
             create_instance: python_create_instance,
             destroy_instance: python_destroy_instance,
             dispatch: DispatchMechanisms {
                 vm: VmDispatch {
                     call: python_vm_dispatch,
                     loader_data: VmLoaderData {
-                        data: loader_data_ptr as *mut c_void,
+                        data: loader_data_ptr.cast::<c_void>(),
                     },
                 },
             },
-        };
-
-        // Leak the interface so it has 'static lifetime. Python plugins are never
-        // unloaded; the interface must outlive every resolved dispatch pointer.
-        let static_interface: *const GuestContractInterface = Box::into_raw(Box::new(interface));
-
-        // The descriptor's human-readable contract_name must be the canonical
-        // "<name>@<major>" form so it matches what every other loader registers.
+        });
         let contract_display_name: String = format!("{}@{}", reg.contract_name, reg.contract_major);
-        let plugin_name_leaked: &'static str = Box::leak(reg.plugin_name.into_boxed_str());
-        let contract_name_leaked: &'static str = Box::leak(contract_display_name.into_boxed_str());
-
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView {
-                ptr: plugin_name_leaked.as_ptr(),
-                len: plugin_name_leaked.len(),
+                ptr: reg.plugin_name.as_ptr(),
+                len: reg.plugin_name.len(),
             },
             contract_name: StringView {
-                ptr: contract_name_leaked.as_ptr(),
-                len: contract_name_leaked.len(),
+                ptr: contract_display_name.as_ptr(),
+                len: contract_display_name.len(),
             },
             version: Version {
                 major: reg.contract_major,
@@ -732,41 +739,32 @@ pub(crate) fn register_contracts(
             },
         };
 
-        // SAFETY: `host_interface` is a valid HostApi pointer for this call.
-        // `descriptor` is stack-allocated and only borrowed for the call (the host
-        // copies what it retains). `static_interface` is a leaked Box, valid for
-        // 'static. This is the canonical self-passing registration path shared by
-        // every loader.
         let mut reg_result: AbiError = AbiError::ok();
-        // SAFETY: `host_interface` is a valid HostApi pointer; `reg_result` is a
-        // valid, writable out-param for the duration of the call.
+        // SAFETY: `host_interface`, `descriptor`, and `interface` are valid for the
+        // synchronous registration call; the host copies retained descriptor fields.
         unsafe {
             ((*host_interface).register_guest_contract)(
                 host_interface,
-                &descriptor as *const PluginDescriptor,
-                static_interface,
+                &descriptor,
+                &*interface,
                 &mut reg_result,
             )
         };
-
         if !reg_result.is_ok() {
             return Err(LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
                 error: format!(
                     "register_guest_contract failed for `{}`: code={:?}",
-                    contract_name_leaked, reg_result.code
+                    contract_display_name, reg_result.code
                 ),
             });
         }
 
-        registered += 1;
-    }
-
-    if registered == 0 {
-        return Err(LoaderError::InitFailed {
-            bundle: bundle_name.to_owned(),
-            error: "polyplug_init returned no contracts (empty registrations list)".to_owned(),
+        retained.push(RegisteredPythonContract {
+            _loader_data: loader_data,
+            _interface: interface,
         });
+        registered += 1;
     }
 
     Ok(registered)

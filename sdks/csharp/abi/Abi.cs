@@ -37,8 +37,9 @@ public struct VmDispatch
     ///  Dispatch function called for every VM function invocation.
     ///
     ///  # Arguments
+    ///  - `adapter_context`: opaque generated-adapter context copied from the
+    ///    contract interface; the runtime forwards it unchanged.
     ///  - `loader_data`: VmLoaderData handle containing VM-specific state
-    ///  - `instance`: The guest contract instance (opaque handle)
     ///  - `fn_id`: Function index within the contract
     ///  - `args`: Pointer to packed arguments (ABI-specific layout)
     ///  - `out`: Pointer to output buffer for return value
@@ -143,7 +144,7 @@ public struct GuestContractInstance
 ///  # Dispatch
 ///  - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id](instance, args, out, out_err)`
 ///  - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err)`
-[StructLayout(LayoutKind.Sequential, Size = 56)]
+[StructLayout(LayoutKind.Sequential, Size = 64)]
 public struct GuestContractInterface
 {
     ///  FNV-1a hash of "guest_contract:name@major_version".
@@ -161,12 +162,23 @@ public struct GuestContractInterface
     ///  - Native: Direct function pointer call
     ///  - VirtualMachine: VM-specific dispatch via loader
     public DispatchType DispatchType;
+    ///  Opaque context owned by the generated adapter that registered this contract.
+    ///
+    ///  Core copies and forwards this pointer unchanged, but never dereferences,
+    ///  writes, or frees it. Every lifecycle and dispatch callback receives this
+    ///  exact value as its first argument.
+    ///
+    ///  The registrant keeps the pointee alive until logical unload completes and
+    ///  all callbacks have quiesced.
+    public IntPtr AdapterContext;
     ///  Create a new instance of this contract.
     ///
     ///  Factory function called by host to create instances.
     ///  Returns null handle on failure.
     ///
     ///  # Arguments
+    ///  - `adapter_context`: opaque generated-adapter state copied from this
+    ///    interface and forwarded unchanged by core
     ///  - `loader_data`: the VM loader's per-(bundle,runtime) data handle (the same
     ///    handle carried in `dispatch.vm.loader_data`). Native-dispatch contracts
     ///    ignore it — their generated factory is statically linked. VM-dispatch
@@ -195,6 +207,8 @@ public struct GuestContractInterface
     ///  Failure to destroy instances causes memory leaks.
     ///
     ///  # Arguments
+    ///  - `adapter_context`: opaque generated-adapter state copied from this
+    ///    interface and forwarded unchanged by core
     ///  - `loader_data`: the VM loader's per-(bundle,runtime) data handle (mirrors
     ///    `create_instance`). Native contracts ignore it; VM contracts use it to
     ///    reach the per-instance registry the handle was minted into. The runtime
@@ -213,19 +227,21 @@ public struct GuestContractInterface
     public IntPtr DestroyInstance;
     ///  Union of dispatch mechanisms — access based on dispatch_type.
     ///
-    ///  For Native dispatch: use `dispatch.native.functions[fn_id]`.
-    ///  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err)`.
+    ///  For Native dispatch: call a function as
+    ///  `fn(adapter_context, instance, args, out, out_err)`.
+    ///  For VM dispatch: call
+    ///  `dispatch.vm.call(adapter_context, loader_data, instance, fn_id, args, out, arena, out_err)`.
     public DispatchMechanisms Dispatch;
 }
 
-/// Expected size: 56 bytes
+/// Expected size: 64 bytes
 
 ///  Host Interface — function table passed to guests during initialization.
 ///
 ///  Contains an opaque runtime pointer and function pointers for guest calls.
 ///  All functions use self-passing pattern (receive HostApi pointer as first parameter).
-///  `HostApi` is `184 bytes` (1 opaque runtime pointer + 21 function pointer fields + 1 reserved data pointer).
-///  Tail offsets: `create_guest_instance` @152, `destroy_guest_instance` @160, `revision_counter` @168, `reserved` @176.
+///  `HostApi` contains an opaque runtime pointer, callback table, and one reserved pointer.
+///  Producers set every callback to a valid function and set `reserved` to null.
 ///
 ///  # Who provides
 ///  The runtime creates this struct and passes it to `polyplug_init()`.
@@ -258,7 +274,7 @@ public struct GuestContractInterface
 ///  Each function receives the interface pointer as its first parameter,
 ///  allowing guests to call: `host->find_guest_contract(host, id, ver)`
 ///  SDKs hide this pattern: `host.find_guest_contract(id, ver)`
-[StructLayout(LayoutKind.Sequential, Size = 184)]
+[StructLayout(LayoutKind.Sequential, Size = 192)]
 public struct HostApi
 {
     ///  Opaque pointer to Runtime.
@@ -281,6 +297,15 @@ public struct HostApi
     ///  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
     ///    success, an error otherwise). Never null.
     public IntPtr RegisterGuestContract;
+    ///  Register every contract and metadata record in one in-process bundle transaction.
+    ///
+    ///  The host retains language-specific implementation objects in its own
+    ///  runtime-local resident. Core synchronously copies and validates `registration`;
+    ///  it never receives an implementation-object pointer.
+    ///
+    ///  On success, `out_bundle_id` receives the derived nonzero bundle ID. `out_err`
+    ///  is always written when non-null.
+    public IntPtr RegisterInProcessBundle;
     ///  Allocate memory using the host allocator.
     ///
     ///  Memory allocated here must be freed via `free`.
@@ -529,54 +554,34 @@ public struct HostApi
     ///  Mirror of `create_guest_instance`: the runtime invokes the interface's
     ///  `destroy_instance` under an epoch pin and updates its live-instance accounting.
     public IntPtr DestroyGuestInstance;
-    ///  Return a pointer to the runtime's monotonic registry revision counter — the
-    ///  shared word a generated host→guest caller polls to keep its cached interface
-    ///  safe with NO per-call function call.
+    ///  Return the runtime's monotonic registry revision with acquire synchronization.
     ///
-    ///  Generated callers resolve a contract once and cache the interface pointer so
-    ///  the hot path is a direct indirect call with no per-call resolve. To keep that
-    ///  cache safe without making the user track dangling pointers, the caller invokes
-    ///  THIS function exactly once — at construction — to obtain the address of the
-    ///  counter, caches that pointer alongside the counter's current value, and then
-    ///  before every dispatch reads the counter *directly through the cached pointer*
-    ///  (a single aligned atomic load — one instruction, no call into the runtime).
-    ///  While the value is unchanged the cached interface is guaranteed current and the
-    ///  caller dispatches directly; when it changes (a bundle was loaded, hot-reloaded,
-    ///  or unloaded) the caller re-resolves and refreshes its cache. This is what turns
-    ///  the "raw interface pointer cached after reload/unload is UB" footgun into an
-    ///  automatically managed, safe cache that costs a memory load per call, not a
-    ///  function call.
+    ///  Generated host callers cache a resolved contract interface for direct dispatch.
+    ///  Before every dispatch they call this callback once and compare its value with
+    ///  the revision captured when the interface was resolved. A change means a bundle
+    ///  was loaded, reloaded, or unloaded, so the caller re-resolves before using its
+    ///  cached interface.
     ///
-    ///  The pointed-to value is an opaque monotonic counter; callers must treat it only
-    ///  as "equal ⇒ unchanged" and never ascribe meaning to its magnitude or deltas. It
-    ///  is deliberately a runtime-wide revision rather than a per-slot generation: a
-    ///  hot-reload swaps a new interface into the *same* slot WITHOUT bumping that
-    ///  slot's generation (so existing handles survive a reload), which a generation
-    ///  check would miss — the revision changes on every mutation, so reload is
-    ///  detected.
+    ///  The runtime publishes a new registry view before it advances this revision with
+    ///  `Release` ordering. This callback performs the matching `Acquire` load inside
+    ///  Rust, so every maintained host language gets the same synchronization without
+    ///  reading Rust atomic storage through a foreign ABI.
     ///
-    ///  # Memory model
-    ///  The runtime bumps the counter under its write lock with `Release` ordering;
-    ///  readers should load with `Acquire` where the language allows (Rust/C++/C#). On
-    ///  every supported 64-bit target an aligned 64-bit load is itself atomic, so
-    ///  languages that cannot express ordering (Python/Lua) still observe a coherent,
-    ///  monotonically advancing value. The counter lives inside the `Runtime` (held
-    ///  behind an `Arc`, so its address is stable) and is valid for the whole lifetime
-    ///  of the runtime — i.e. for as long as any caller may dispatch.
+    ///  Callers must treat the result only as "equal means unchanged"; its magnitude
+    ///  and deltas have no meaning. The revision is runtime-wide instead of per-slot so
+    ///  a hot-reload that replaces an interface in the same slot is detected.
     ///
     ///  # Arguments
     ///  - `this`: HostApi pointer (self-passing)
     ///
     ///  # Returns
-    ///  A pointer to the `u64` revision counter, or null if `this` is null. A caller
-    ///  that receives null treats its cache as always-current (it has no runtime to
-    ///  mediate reloads against).
-    public IntPtr RevisionCounter;
+    ///  The current registry revision, or zero when `this` is null.
+    public IntPtr RegistryRevision;
     ///  Reserved. Producers must set this to null; consumers must not read it.
     public IntPtr Reserved;
 }
 
-/// Expected size: 184 bytes
+/// Expected size: 192 bytes
 
 ///  Opaque handle to a host contract instance.
 ///
@@ -697,6 +702,59 @@ public struct HostContractInterface
 }
 
 /// Expected size: 80 bytes
+
+///  Metadata shared by every contract in one in-process bundle registration.
+[StructLayout(LayoutKind.Sequential, Size = 32)]
+public struct InProcessBundleMetadata
+{
+    ///  Stable UTF-8 bundle name. Core derives the nonzero bundle ID from this value.
+    public StringView Name;
+    ///  Bundle semantic version.
+    public Version Version;
+    ///  Language owning the resident and interface implementation.
+    public SupportedLanguage Runtime;
+}
+
+/// Expected size: 32 bytes
+
+///  One contract supplied by an in-process bundle.
+[StructLayout(LayoutKind.Sequential, Size = 64)]
+public struct InProcessContractRegistration
+{
+    ///  Provider and contract metadata copied by core during registration.
+    public PluginDescriptor Descriptor;
+    ///  Canonical guest interface table copied and validated by core during registration.
+    public IntPtr Interface;
+    ///  Opaque generated-adapter context copied into the registered interface.
+    ///
+    ///  Core never dereferences, writes, or frees this pointer. Generated lifecycle
+    ///  and dispatch thunks receive it as their first callback argument.
+    public IntPtr AdapterContext;
+}
+
+/// Expected size: 64 bytes
+
+///  Complete, one-shot in-process bundle registration input.
+///
+///  All pointers are borrowed only for the synchronous registration call. If a count is
+///  nonzero, its corresponding pointer is required to be non-null and valid for that many
+///  elements. `dependency_ids` contains canonical `GuestContractId` numeric values.
+[StructLayout(LayoutKind.Sequential, Size = 64)]
+public struct InProcessBundleRegistration
+{
+    ///  Bundle-level metadata.
+    public InProcessBundleMetadata Metadata;
+    ///  Declared guest-contract dependency IDs.
+    public IntPtr DependencyIds;
+    ///  Number of dependency IDs.
+    public nuint DependencyCount;
+    ///  Contract descriptors and interface-table pointers.
+    public IntPtr Contracts;
+    ///  Number of supplied contracts.
+    public nuint ContractCount;
+}
+
+/// Expected size: 64 bytes
 
 ///  Opaque handle to a registered guest contract.
 ///

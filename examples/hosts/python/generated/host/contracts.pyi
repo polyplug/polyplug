@@ -7,8 +7,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 class HostLogger(ABC):
+    """Logging service supplied by the host."""
     @abstractmethod
-    def log(self, message: str) -> None: ...
+    def log(self, message: str) -> None:
+        """Writes an informational log message.\n\nArgs:\n    message: Message text to write.\n\nReturns:\n    Logging has no return value."""
+        ...
     @abstractmethod
     def log_with_level(self, level: LogLevel, message: str) -> None: ...
 

@@ -28,10 +28,6 @@ impl BundleLoader for StubLoader {
         self.name
     }
 
-    fn loader_language(&self) -> polyplug_abi::SupportedLanguage {
-        polyplug_abi::SupportedLanguage::Rust
-    }
-
     fn supports_hot_reload(&self) -> bool {
         true
     }
@@ -224,11 +220,11 @@ fn python_loader_loads_nonexistent_file_errors() {
 
 #[test]
 fn lua_loader_returns_error_for_missing_file() {
-    let loader: LuaLoader = LuaLoader::new(polyplug_lua::LuaConfig::default());
+    let loader: LuaLoader = LuaLoader::new();
     assert_eq!(loader.loader_name(), "lua");
 
     let rt: Arc<Runtime> = Runtime::builder()
-        .loader(LuaLoader::new(polyplug_lua::LuaConfig::default()))
+        .loader(LuaLoader::new())
         .build()
         .expect("failed to build runtime");
     let manifest: ManifestData = ManifestData {

@@ -7,6 +7,7 @@
 //!   fn 1 — error_panic: catches an intentional panic and returns AbiErrorCode::Panic
 //!   fn 2 — error_chain_propagate: calls another plugin via host interface and propagates its error
 
+use core::{ffi::c_void, ptr};
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::*;
 use polyplug_utils::GuestContractId;
@@ -41,6 +42,7 @@ pub struct ChainArgs {
 /// `args` must point to a valid `MessageArgs` carrying a live HostApi.
 /// `out` must point to a valid `AbiError`.
 extern "C" fn error_return_with_message(
+    _adapter_context: *mut c_void,
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
@@ -91,6 +93,7 @@ extern "C" fn error_return_with_message(
 /// # Safety
 /// `_args` and `_out` are ignored but must follow standard ABI conventions.
 extern "C" fn error_panic(
+    _adapter_context: *mut c_void,
     _instance: GuestContractInstance,
     _args: *const (),
     _out: *mut (),
@@ -122,6 +125,7 @@ extern "C" fn error_panic(
 /// # Safety
 /// `args` must point to a valid `ChainArgs`. `out` must point to a valid `AbiError`.
 extern "C" fn error_chain_propagate(
+    _adapter_context: *mut c_void,
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
@@ -167,6 +171,7 @@ extern "C" fn error_chain_propagate(
                 // SAFETY: Transmuted to the native out-param dispatch signature
                 // (void + trailing *mut AbiError); types enforced by generated callers.
                 let dispatch_fn: unsafe extern "C" fn(
+                    *mut c_void,
                     GuestContractInstance,
                     *const (),
                     *mut (),
@@ -177,6 +182,7 @@ extern "C" fn error_chain_propagate(
                 // the inner AbiError is written through the trailing out-param.
                 unsafe {
                     dispatch_fn(
+                        iface.adapter_context,
                         GuestContractInstance::null(),
                         core::ptr::null(),
                         core::ptr::null_mut(),
@@ -203,6 +209,7 @@ extern "C" fn error_chain_propagate(
 /// # Safety
 /// Test plugins don't need real instances; dispatch uses global state.
 unsafe extern "C" fn create_instance_stub(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -219,6 +226,7 @@ unsafe extern "C" fn create_instance_stub(
 /// # Safety
 /// Test plugins don't own instance data.
 unsafe extern "C" fn destroy_instance_stub(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -260,6 +268,7 @@ fn error_test_interface() -> GuestContractInterface {
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance: create_instance_stub,
         destroy_instance: destroy_instance_stub,
         dispatch: DispatchMechanisms {

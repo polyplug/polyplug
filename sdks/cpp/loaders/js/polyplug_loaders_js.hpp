@@ -6,16 +6,14 @@
 #include "../host/polyplug/runtime.hpp"
 
 extern "C" {
-    struct PolyplugJsConfig { uint8_t _reserved; };
-    void* polyplug_js_loader_create(const PolyplugJsConfig* cfg);
+    void* polyplug_js_loader_create();
     void  polyplug_js_loader_free(void* ptr);
 }
 
 namespace polyplug::loaders {
 
 inline void register_js(Runtime& rt) {
-    PolyplugJsConfig cfg{0};
-    void* loader = polyplug_js_loader_create(&cfg);
+    void* loader = polyplug_js_loader_create();
     if (loader == nullptr) {
         throw std::runtime_error("polyplug: js loader create failed");
     }

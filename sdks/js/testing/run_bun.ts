@@ -14,11 +14,12 @@
 // the `polyplug-src` export condition (`bun --conditions=polyplug-src`); the
 // bun:ffi FFI backend is selected automatically by getBackend() (see
 // abi/ffi/index.ts). Run from repo root:
-//   cargo build --release -p polyplug -p polyplug_native
+//   cargo build --release -p polyplug -p polyplug_native -p polyplug_js
 //   bash tests/fixtures/build_all.sh
 //   (cd sdks/js && bun install)
 //   POLYPLUG_LIB=$PWD/target/release/libpolyplug.so \
 //   POLYPLUG_NATIVE_LIB=$PWD/target/release/libpolyplug_native.so \
+//   POLYPLUG_JS_LIB=$PWD/target/release/libpolyplug_js.so \
 //   bun --conditions=polyplug-src sdks/js/testing/run_bun.ts
 
 import "./all_tests.ts";

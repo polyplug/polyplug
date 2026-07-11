@@ -90,6 +90,9 @@ local HOST_FREE_FN_T = ffi.typeof("void(*)(const HostApi*, void*, size_t, size_t
 local RESOLVE_GUEST_CONTRACT_FN_T = ffi.typeof("const GuestContractInterface*(*)(const HostApi*, GuestContractHandle)")
 local REGISTER_HOST_CONTRACT_FN_T = ffi.typeof("void(*)(const HostApi*, const HostContractInterface*, AbiError*)")
 local REGISTER_LOADER_FN_T = ffi.typeof("void(*)(const HostApi*, void*, AbiError*)")
+local REGISTER_IN_PROCESS_BUNDLE_FN_T = ffi.typeof(
+    "void(*)(const HostApi*, const InProcessBundleRegistration*, uint64_t*, AbiError*)"
+)
 
 M.bundle_id = abi.bundle_id
 M.host_contract_id = abi.host_contract_id
@@ -369,6 +372,11 @@ function M.Runtime.new(opts)
         -- unreferenced).
         _log_cb_cdata = log_cb_cdata,
         _log_bridge = log_bridge,
+        -- Runtime-local in-process residents. A generated bundle owns its
+        -- callbacks, interfaces, backing arrays, factories, and implementation
+        -- registry; retain that one object only after core has atomically
+        -- accepted the complete registration.
+        _in_process_residents = {},
         _destroyed = false
     }
     local obj = setmetatable(self, M.Runtime)
@@ -386,6 +394,7 @@ function M.Runtime.new(opts)
                 self._log_cb_cdata = nil
             end
             self._log_bridge = nil
+            self._in_process_residents = {}
         end
     end)
     return obj
@@ -423,6 +432,44 @@ function M.Runtime:reload_bundle(path)
     end
 end
 
+--- Register one complete generated in-process bundle.
+---
+--- `bundle` is the generated adapter's owned registration object. Its
+--- `registration` cdata and `resident` table stay alive through the synchronous
+--- ABI call; on success the resident is retained by this Runtime under the
+--- returned bundle id. This method deliberately accepts no implementation
+--- pointer: generated adapters keep language objects in the resident.
+--- @param bundle table  Generated bundle with `registration` and `resident`.
+--- @return cdata         Nonzero uint64 bundle id.
+function M.Runtime:register_in_process_bundle(bundle)
+    if self._destroyed or self._host == nil then
+        error("register_in_process_bundle: runtime is destroyed", 2)
+    end
+    if type(bundle) ~= "table" or bundle.registration == nil or bundle.resident == nil then
+        error("register_in_process_bundle: expected generated bundle { registration, resident }", 2)
+    end
+
+    local fn = ffi.cast(
+        REGISTER_IN_PROCESS_BUNDLE_FN_T,
+        self._host_struct.register_in_process_bundle
+    )
+    local bundle_id = ffi.new("uint64_t[1]")
+    local err = ffi.new("AbiError[1]")
+    fn(self._host, bundle.registration, bundle_id, err)
+    if err[0].code ~= ffi.C.AbiErrorCode_Ok then
+        error("register_in_process_bundle failed: " .. M.last_error(self._host, self._lib), 2)
+    end
+
+    local id = bundle_id[0]
+    local key = tostring(id)
+    if self._in_process_residents[key] ~= nil then
+        error("register_in_process_bundle: runtime returned a duplicate live bundle id", 2)
+    end
+    self._in_process_residents[key] = bundle.resident
+    bundle.resident = nil
+    return id
+end
+
 --- Unload a plugin bundle by bundle ID.
 -- Calls through HostApi.unload_bundle field.
 -- @param bundle_id number  Bundle identifier (uint64).
@@ -435,6 +482,7 @@ function M.Runtime:unload_bundle(bundle_id)
     if err[0].code ~= ffi.C.AbiErrorCode_Ok then
         error("unload_bundle failed: " .. M.last_error(self._host, self._lib))
     end
+    self._in_process_residents[tostring(bundle_id)] = nil
 end
 
 --- Find guest contract by contract_id and minimum version.
@@ -563,6 +611,7 @@ function M.Runtime:destroy()
             self._log_cb_cdata = nil
         end
         self._log_bridge = nil
+        self._in_process_residents = {}
     end
 end
 

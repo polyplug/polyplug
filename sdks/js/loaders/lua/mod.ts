@@ -5,7 +5,7 @@ let _lib: FfiLibrary<typeof LUA_SYMBOLS> | null = null;
 
 const LUA_SYMBOLS = {
     polyplug_lua_loader_create: {
-        parameters: ["pointer"] as const,
+        parameters: [] as const,
         result: "pointer" as const,
     },
 } satisfies FfiSymbolTable;
@@ -23,9 +23,7 @@ function getLib(): FfiLibrary<typeof LUA_SYMBOLS> {
  */
 export function registerLuaLoader(rt: Runtime): void {
     const lib = getLib();
-    const cfgBuf = new Uint8Array([0]);
-    const cfgPtr = getBackend().pointerOf(cfgBuf);
-    const loaderPtr = lib.symbols.polyplug_lua_loader_create(cfgPtr);
+    const loaderPtr = lib.symbols.polyplug_lua_loader_create();
     if (loaderPtr === null) {
         throw new Error("polyplug: lua loader create failed");
     }

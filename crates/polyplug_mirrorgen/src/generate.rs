@@ -949,9 +949,12 @@ const KNOWN_SIZES: &[(&str, usize)] = &[
     ("AbiError", 24),
     ("DependencyInfo", 24),
     ("DispatchMechanisms", 16),
-    ("GuestContractInterface", 56),
+    ("GuestContractInterface", 64),
     ("GuestContractInstance", 16),
-    ("HostApi", 184),
+    ("HostApi", 192),
+    ("InProcessBundleMetadata", 32),
+    ("InProcessContractRegistration", 64),
+    ("InProcessBundleRegistration", 64),
     ("HostContractInterface", 80),
     ("HostContractInstance", 8),
     ("GuestContractHandle", 8),
@@ -1145,7 +1148,16 @@ pub fn generate_language_sdk(
     }
 
     output.push_str(&generator.generate_footer(&ctx)?);
-    Ok(output)
+    let had_trailing_newline: bool = output.ends_with('\n');
+    let mut normalized: String = output
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<&str>>()
+        .join("\n");
+    if had_trailing_newline {
+        normalized.push('\n');
+    }
+    Ok(normalized)
 }
 
 /// Emit C++ forward declarations for every struct, union, and enum item.
@@ -2017,16 +2029,16 @@ fn generate_csharp_layout_tests(sized_structs: &[(&str, usize)]) -> String {
     // Field OFFSET asserts for the frozen tail of HostApi and the logging
     // fields of RuntimeConfig. Size-only asserts cannot catch a transposed
     // or dropped field that another field's padding silently compensates
-    // for; these offsets are frozen ABI (see CLAUDE.md: unload_bundle @136,
-    // log @144, create_guest_instance @152, destroy_guest_instance @160,
-    // reserved @176; RuntimeConfig log @24, log_user_data @32,
+    // for; these offsets are frozen ABI (see CLAUDE.md: unload_bundle @144,
+    // log @152, create_guest_instance @160, destroy_guest_instance @168,
+    // reserved @184; RuntimeConfig log @24, log_user_data @32,
     // log_max_level @40).
     let offset_asserts: [(&str, &str, usize); 8] = [
-        ("HostApi", "UnloadBundle", 136),
-        ("HostApi", "Log", 144),
-        ("HostApi", "CreateGuestInstance", 152),
-        ("HostApi", "DestroyGuestInstance", 160),
-        ("HostApi", "Reserved", 176),
+        ("HostApi", "UnloadBundle", 144),
+        ("HostApi", "Log", 152),
+        ("HostApi", "CreateGuestInstance", 160),
+        ("HostApi", "DestroyGuestInstance", 168),
+        ("HostApi", "Reserved", 184),
         ("RuntimeConfig", "Log", 24),
         ("RuntimeConfig", "LogUserData", 32),
         ("RuntimeConfig", "LogMaxLevel", 40),

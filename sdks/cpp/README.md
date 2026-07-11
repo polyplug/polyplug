@@ -34,6 +34,40 @@ cargo install polyplugc
 polyplugc generate --bundle bundle.toml --lang cpp --out ./generated
 ```
 
+## In-process bundles
+
+Generated `guest/in_process.hpp` exposes an `InProcessBundle` for the bundle’s
+typed implementation factories. Each factory returns a `std::unique_ptr` to its
+generated contract implementation. Register the complete bundle synchronously
+through its owning `Runtime`:
+
+```cpp
+#include "generated/guest/in_process.hpp"
+
+auto bundle = polyplug_plugin::create_in_process_bundle(
+    [](const HostApi* host) { return std::make_unique<DecoderImpl>(host); },
+    [](const HostApi* host) { return std::make_unique<ValidatorImpl>(host); });
+
+const uint64_t bundle_id = runtime.register_in_process_bundle(bundle);
+```
+
+The bundle owns its factories, callback tables, and table backing storage until
+registration succeeds. The owning `Runtime` then becomes the sole resident
+owner; a transferred bundle cannot be registered again. Registration publishes
+every supplied contract as one transaction, and a rejected registration leaves
+the bundle reusable.
+
+Each registration carries a runtime-local adapter context into the create,
+destroy, and native dispatch callbacks. Factories create one typed object per
+guest instance; the generated noexcept thunks convert factory or implementation
+exceptions into null-instance or ABI-error results. No callback depends on a
+global registry or `HostApi.runtime`.
+
+`Runtime::unload_bundle(bundle_id)` performs logical unload. It releases the
+resident only after the runtime has blocked and drained active calls, instances,
+and leases. If unload reports an error, the resident and all callable contracts
+remain intact.
+
 ## Host application
 
 ```cpp

@@ -34,7 +34,7 @@ def _arena_free_all(arena: CallArena, host: ctypes.c_void_p) -> None:
         block = next_block
     arena.first_overflow = None
 
-_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
 
 # Peer caller for guest contract `pipeline.Validator` (id=0x45173A959EEC57C5)
 class PipelineValidatorPeer:
@@ -53,12 +53,9 @@ class PipelineValidatorPeer:
         self._interface: int = interface
         self._instance: GuestContractInstance = instance
         # Fetch the registry revision counter ONCE, then read its current value, so
-        # every later call can detect a reload/unload with a direct atomic load (one
-        # aligned 64-bit load through the cached pointer, no call into the runtime)
-        # and re-resolve before dispatching.
+        # Capture the synchronized registry revision for the resolved interface.
         host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostApi))
-        self._revision_ptr: int = host.contents.revision_counter(host_ptr) or 0
-        self._cached_revision: int = self._live_revision()
+        self._cached_revision: int = host.contents.registry_revision(host_ptr)
         # Per-caller call arena backed by C-heap memory (not Python GC heap).
         self._arena_buf: Any = ctypes.create_string_buffer(CALL_ARENA_BUF_LEN)
         buf_addr: int = ctypes.cast(self._arena_buf, ctypes.c_void_p).value or 0
@@ -119,13 +116,9 @@ class PipelineValidatorPeer:
         return bool(getattr(self, "_interface", None))
 
     def _live_revision(self) -> int:
-        """Read the registry revision through the cached pointer — one aligned
-        atomic load, no call into the runtime. Returns the cached value ("unchanged")
-        when there is no counter (null host/runtime), making the check a no-op.
-        """
-        if not self._revision_ptr:
-            return self._cached_revision
-        return ctypes.c_uint64.from_address(self._revision_ptr).value
+        """Read the synchronized registry revision through HostApi."""
+        host: Any = ctypes.cast(self._host_ptr, ctypes.POINTER(HostApi))
+        return int(host.contents.registry_revision(self._host_ptr))
 
     def _revalidate(self) -> bool:
         """Re-resolve the cached peer interface after the registry changed under us.
@@ -171,11 +164,11 @@ class PipelineValidatorPeer:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
             # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
-            dispatch_fn(self._instance, args_ptr, out_ptr, ctypes.byref(err))
+            dispatch_fn(interface.adapter_context, self._instance, args_ptr, out_ptr, ctypes.byref(err))
         else:
             # SAFETY: the union's vm variant is active per dispatch_type; args/out
             # are valid per the ABI contract. The arena was reset at call start.
-            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
+            interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError(f"peer call failed (code {err.code})")
         return out_val

@@ -44,3 +44,34 @@ const runtime = runtimeNew(lib, {
 The runtime copies `trusted_keys` during `runtimeNew` (`polyplug_runtime_create`),
 so the host SDK only holds the packed key buffer across that call and lets it go
 once create returns.
+
+## In-process bundles
+
+Generated JavaScript host bindings create an `InProcessBundle` containing one
+complete canonical registration table and a rooted resident. Register it
+synchronously with `Runtime.registerInProcessBundle(bundle)`. The runtime takes
+sole ownership of the resident only after core accepts the entire bundle; the
+resident keeps generated callback handles, implementation factories, objects,
+and table storage reachable for the registered lifetime.
+Successful registration transfers that resident exactly once; a rejected
+registration leaves the bundle reusable.
+Generated callback adapters forward their runtime-local opaque context on every
+lifecycle and dispatch call. A thrown JavaScript callback exception is reported
+to the ABI caller as `AbiErrorCode.Panic`.
+
+Pass the JavaScript loader's bridge library explicitly when creating each
+adapter. The bridge expands lifecycle and VM ABI records in Rust, so JavaScript
+callbacks use only pointers and scalar values across Deno, Node, and Bun FFI.
+
+```js
+import { bridgeLibrary } from "@polyplug/loaders/js";
+import { buildInProcessGuestContract } from "@polyplug/host";
+
+const adapter = buildInProcessGuestContract(spec, bridgeLibrary());
+```
+
+`unloadBundle(bundleId)` performs logical unload. If core reports that active
+calls, instances, or leases still prevent unload, the resident remains rooted
+and the bundle remains usable. On successful unload, the runtime releases the
+resident, after which a newly constructed generated bundle may be registered
+under the same bundle name.

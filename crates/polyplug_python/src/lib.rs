@@ -47,7 +47,7 @@ use polyplug::runtime::Runtime;
 use polyplug_abi::BundleInitContext;
 use polyplug_abi::HostApi;
 use polyplug_abi::StringView;
-use polyplug_abi::SupportedLanguage;
+
 use polyplug_common::ManifestData;
 use polyplug_utils::BundleId;
 
@@ -56,6 +56,7 @@ use crate::context::ensure_python_initialized;
 use crate::isolation::isolate_bundle_modules;
 use crate::isolation::snapshot_loaded_modules;
 use crate::loader::ContractRegistration;
+use crate::loader::RegisteredPythonContract;
 
 /// Loader for Python plugin bundles (`.py` files).
 ///
@@ -72,6 +73,12 @@ pub struct PythonLoader {
     /// every matching `sys.modules` key so a later load re-imports the fresh source
     /// instead of a cached module.
     module_prefixes: Mutex<HashMap<BundleId, Vec<String>>>,
+    /// VM dispatch allocations for published contracts, grouped by bundle.
+    ///
+    /// The runtime copies each interface but retains its loader-data pointer, so
+    /// these boxes stay owned until the runtime invalidates the bundle and calls
+    /// [`PythonLoader::unload`].
+    live_contracts: Mutex<HashMap<BundleId, Vec<RegisteredPythonContract>>>,
 }
 
 impl PythonLoader {
@@ -80,6 +87,7 @@ impl PythonLoader {
         PythonLoader {
             config,
             module_prefixes: Mutex::new(HashMap::new()),
+            live_contracts: Mutex::new(HashMap::new()),
         }
     }
 
@@ -94,11 +102,47 @@ impl PythonLoader {
             .or_default()
             .push(prefix);
     }
+
+    /// Take ownership of contract data whose registration reached the registry.
+    ///
+    /// A later registration in the same bundle can fail after an earlier one was
+    /// accepted by the current core registry. Retaining those earlier boxes prevents
+    /// their VM pointers from dangling until the registry transaction is available.
+    fn retain_contracts(&self, bundle_id: u64, mut contracts: Vec<RegisteredPythonContract>) {
+        if contracts.is_empty() {
+            return;
+        }
+        let mut live: MutexGuard<'_, HashMap<BundleId, Vec<RegisteredPythonContract>>> = self
+            .live_contracts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        live.entry(BundleId::from_u64(bundle_id))
+            .or_default()
+            .append(&mut contracts);
+    }
 }
 
 impl Default for PythonLoader {
     fn default() -> PythonLoader {
         PythonLoader::new(PythonConfig::default())
+    }
+}
+
+/// Balances one runtime init-stack entry on every return and unwind path.
+struct InitBundleGuard<'r> {
+    runtime: &'r Runtime,
+}
+
+impl<'r> InitBundleGuard<'r> {
+    fn enter(runtime: &'r Runtime, bundle_id: u64) -> Self {
+        runtime.push_init_bundle_id(bundle_id);
+        Self { runtime }
+    }
+}
+
+impl Drop for InitBundleGuard<'_> {
+    fn drop(&mut self) {
+        self.runtime.pop_init_bundle_id();
     }
 }
 
@@ -148,10 +192,11 @@ impl PythonLoader {
         init_ret: &Bound<'_, PyAny>,
         host_interface: *const HostApi,
         bundle_name: &str,
+        retained: &mut Vec<RegisteredPythonContract>,
     ) -> Result<(), LoaderError> {
         let registrations: Vec<ContractRegistration> =
             loader::collect_registrations(py, init_ret, bundle_name)?;
-        loader::register_contracts(registrations, host_interface, bundle_name)?;
+        loader::register_contracts(registrations, host_interface, bundle_name, retained)?;
         Ok(())
     }
 
@@ -214,9 +259,8 @@ impl PythonLoader {
         // Self-passing pattern: the interface already carries the runtime pointer.
         let host_interface: *const HostApi = runtime.as_context_ptr();
 
-        // Per-thread init stack for dependency enforcement during init
-        // (instance-owned; Rule 12 — no thread-locals).
-        runtime.push_init_bundle_id(bundle_id);
+        let _init_window: InitBundleGuard<'_> = InitBundleGuard::enter(runtime, bundle_id);
+        let mut retained: Vec<RegisteredPythonContract> = Vec::new();
 
         // Serialize the snapshot→exec→isolate critical section against other
         // concurrent Python loads sharing this process's interpreter (see the
@@ -245,15 +289,9 @@ impl PythonLoader {
                         bundle: bundle_name.clone(),
                     })?;
 
-            // The bundle path is empty for in-memory sources (no bundle directory).
-            // NOTE: Intentionally leaked; bundle_path_static outlives this call.
-            let bundle_path_static: &'static str = Box::leak(String::new().into_boxed_str());
             let ctx: BundleInitContext = BundleInitContext {
                 bundle_id,
-                bundle_path: StringView {
-                    ptr: bundle_path_static.as_ptr(),
-                    len: bundle_path_static.len(),
-                },
+                bundle_path: StringView::from_static(b""),
             };
 
             let host_interface_i64: i64 = host_interface as usize as i64;
@@ -267,9 +305,7 @@ impl PythonLoader {
                     error: format!("polyplug_init call failed: {}", e),
                 })?;
 
-            // Collect the guest's registration data and register every contract
-            // with VM dispatch.
-            Self::collect_and_register(py, &init_ret, host_interface, &bundle_name)?;
+            Self::collect_and_register(py, &init_ret, host_interface, &bundle_name, &mut retained)?;
 
             // Isolate this bundle's freshly imported modules. With no bundle
             // directory ("") no imported module is classified as in-bundle, so this
@@ -282,7 +318,7 @@ impl PythonLoader {
             Ok::<String, LoaderError>(prefix)
         });
 
-        runtime.pop_init_bundle_id();
+        self.retain_contracts(bundle_id, retained);
         let prefix: String = result?;
         self.track_module_prefix(bundle_id, prefix);
         Ok(())
@@ -292,10 +328,6 @@ impl PythonLoader {
 impl BundleLoader for PythonLoader {
     fn loader_name(&self) -> &'static str {
         "python"
-    }
-
-    fn loader_language(&self) -> SupportedLanguage {
-        SupportedLanguage::Python
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -373,9 +405,8 @@ impl BundleLoader for PythonLoader {
         // The interface already has the runtime pointer set internally.
         let host_interface: *const HostApi = runtime.as_context_ptr();
 
-        // Push bundle_id onto the runtime's per-thread init stack for dependency
-        // enforcement during init (instance-owned; Rule 12 — no thread-locals).
-        runtime.push_init_bundle_id(bundle_id);
+        let _init_window: InitBundleGuard<'_> = InitBundleGuard::enter(runtime, bundle_id);
+        let mut retained: Vec<RegisteredPythonContract> = Vec::new();
 
         // Serialize the snapshot→exec→isolate critical section against other
         // concurrent Python loads sharing this process's interpreter. CPython
@@ -385,7 +416,7 @@ impl BundleLoader for PythonLoader {
         let _load_guard: MutexGuard<'_, ()> = acquire_load_lock();
 
         // Step 3: Load the Python module and call polyplug_init.
-        let prefix: String = Python::attach(|py| {
+        let result: Result<String, LoaderError> = Python::attach(|py| {
             // Step 3a: Prepend bundle directory (and site-packages) to sys.path.
             let sys_mod: Bound<'_, PyModule> =
                 PyModule::import(py, "sys").map_err(|e: PyErr| LoaderError::InitFailed {
@@ -480,14 +511,11 @@ impl BundleLoader for PythonLoader {
                     }
                 })?;
 
-            // NOTE: Intentionally leaked; bundle_path_static outlives this call.
-            let bundle_path_static: &'static str =
-                Box::leak(bundle_dir_str.clone().into_boxed_str());
             let ctx: BundleInitContext = BundleInitContext {
                 bundle_id,
                 bundle_path: StringView {
-                    ptr: bundle_path_static.as_ptr(),
-                    len: bundle_path_static.len(),
+                    ptr: bundle_dir_str.as_ptr(),
+                    len: bundle_dir_str.len(),
                 },
             };
 
@@ -505,9 +533,7 @@ impl BundleLoader for PythonLoader {
                     error: format!("polyplug_init call failed: {}", e),
                 })?;
 
-            // Collect the guest's registration data and register every contract
-            // with VM dispatch.
-            Self::collect_and_register(py, &init_ret, host_interface, &bundle_name)?;
+            Self::collect_and_register(py, &init_ret, host_interface, &bundle_name, &mut retained)?;
 
             // Isolate this bundle's freshly imported modules under a unique
             // per-bundle prefix so the next bundle imports its own generated
@@ -524,13 +550,10 @@ impl BundleLoader for PythonLoader {
             )?;
 
             Ok::<String, LoaderError>(prefix)
-        })?;
+        });
 
-        // Pop bundle_id from the runtime's per-thread init stack after init completes.
-        runtime.pop_init_bundle_id();
-
-        // Record the re-key prefix so `unload` can purge this bundle's `sys.modules`
-        // entries and force a fresh re-import next load.
+        self.retain_contracts(bundle_id, retained);
+        let prefix: String = result?;
         self.track_module_prefix(bundle_id, prefix);
 
         Ok(())
@@ -544,32 +567,40 @@ impl BundleLoader for PythonLoader {
         })
     }
 
-    // Unlike native `dlclose`, purging `sys.modules` is memory-safe regardless of any
-    // in-flight call: CPython refcounts/GC keep every still-referenced module object
-    // alive, so deleting a `sys.modules` entry only drops the import cache, never the
-    // object a running dispatch is using. Python therefore ALWAYS purges this bundle's
-    // module entries on unload — no deferred-reclaim branch, no quiescence hint, no
-    // crossbeam-epoch (CPython owns object liveness, there is no raw resource for the
-    // epoch to govern).
+    // Logical unload follows registry invalidation, so no new runtime-mediated
+    // dispatch can resolve these VM pointers. Drop all loader-owned Python objects
+    // under the GIL and purge the isolated import cache even when one purge fails.
     fn unload(&self, bundle_id: BundleId, _runtime: &Runtime) -> Result<(), LoaderError> {
-        // Drain this bundle's prefixes and delete every matching `sys.modules` key so
-        // a subsequent load re-imports fresh source.
         let prefixes: Vec<String> = {
             let mut map: MutexGuard<'_, HashMap<BundleId, Vec<String>>> = self
                 .module_prefixes
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            match map.remove(&bundle_id) {
-                Some(p) => p,
-                None => return Ok(()),
-            }
+            map.remove(&bundle_id).unwrap_or_default()
+        };
+        let contracts: Vec<RegisteredPythonContract> = {
+            let mut live: MutexGuard<'_, HashMap<BundleId, Vec<RegisteredPythonContract>>> = self
+                .live_contracts
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            live.remove(&bundle_id).unwrap_or_default()
         };
 
+        let mut purge_error: Option<LoaderError> = None;
         for prefix in prefixes {
-            purge_prefix_from_sys_modules(&prefix)?;
+            if let Err(error) = purge_prefix_from_sys_modules(&prefix) {
+                if purge_error.is_none() {
+                    purge_error = Some(error);
+                }
+            }
         }
-
-        Ok(())
+        if !contracts.is_empty() {
+            Python::attach(|_py: Python<'_>| drop(contracts));
+        }
+        match purge_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 }
 

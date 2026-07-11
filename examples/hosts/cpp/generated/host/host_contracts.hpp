@@ -10,9 +10,13 @@ namespace polyplug_host {
 
 /// Host abstract class for contract `host.logger` (id=0xF53EB5F2845853BB)
 /// Hosts implement this class to provide functionality to plugins.
+/// Logging service supplied by the host.
 class HostLogger {
 public:
     virtual ~HostLogger() = default;
+    /// Writes an informational log message.
+    /// @param message Message text to write.
+    /// @return Logging has no return value.
     virtual void log(StringView message) = 0;
     virtual void log_with_level(const polyplug_generated::LogLevel& level, StringView message) = 0;
 };

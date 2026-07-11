@@ -11,6 +11,14 @@ export const LogLevel = Object.freeze({
 } as const);
 export type LogLevel = typeof LogLevel[keyof typeof LogLevel];
 
+/**
+ * Decodes CSV input into the pipeline representation.
+ */
+/**
+ * Decodes one CSV record.
+ * @param input The CSV record to decode.
+ * @returns The decoded pipeline record.
+ */
 export type pipeline_Decoder_decode = (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number };
 export type data_Transformer_transform = (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number };
 export type pipeline_Encoder_encode = (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number };

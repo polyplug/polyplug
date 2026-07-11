@@ -9,8 +9,8 @@
   "exports": {
     ".": {
       "polyplug-src": "./polyplug_abi.ts",
-      "types": "./dist/polyplug_abi.d.ts",
-      "import": "./dist/polyplug_abi.js"
+      "import": "./dist/polyplug_abi.js",
+      "types": "./dist/polyplug_abi.d.ts"
     }
   },
   "files": ["dist", "README.md"],

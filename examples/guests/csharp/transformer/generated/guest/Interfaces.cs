@@ -19,6 +19,19 @@ public static class TransformerInterfaces {
     /// </summary>
     public static void SetTransformerFactory(Func<IntPtr, IDataTransformerGuestContract> factory) { _factory_transformer = factory; }
 
+    private sealed class TransformerAdapterState { public Func<IntPtr, IDataTransformerGuestContract> Factory = null!; }
+    public static GuestContractInterface CreateInProcessInterface(Func<IntPtr, IDataTransformerGuestContract> factory) {
+        ArgumentNullException.ThrowIfNull(factory);
+        var context = GCHandle.Alloc(new TransformerAdapterState { Factory = factory });
+        var iface = TRANSFORMER_INTERFACE;
+        iface.AdapterContext = GCHandle.ToIntPtr(context);
+        return iface;
+    }
+
+    public static void ReleaseInProcessInterface(GuestContractInterface iface) {
+        if (iface.AdapterContext != IntPtr.Zero) GCHandle.FromIntPtr(iface.AdapterContext).Free();
+    }
+
     /// <summary>Per-instance payload carried in GuestContractInstance.Data (via GCHandle).</summary>
     private sealed class TransformerInstanceState {
         // Host pointer captured at instance creation — routes every host call
@@ -29,7 +42,7 @@ public static class TransformerInterfaces {
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static unsafe void TRANSFORMER_CreateInstance(VmLoaderData loaderData, IntPtr host, IntPtr args, GuestContractInstance* outInstance) {
+    private static unsafe void TRANSFORMER_CreateInstance(IntPtr adapterContext, VmLoaderData loaderData, IntPtr host, IntPtr args, GuestContractInstance* outInstance) {
         _ = loaderData;  // Native-dispatch contracts ignore the VM loader handle.
         // Calls the author factory and carries the payload in instance.Data as a
         // normal (non-pinned) GCHandle — an opaque token the host never
@@ -37,7 +50,7 @@ public static class TransformerInterfaces {
         // was not registered, or it throws.
         if (outInstance == null) return;
         try {
-            var factory = _factory_transformer;
+            var factory = adapterContext == IntPtr.Zero ? _factory_transformer : ((TransformerAdapterState)GCHandle.FromIntPtr(adapterContext).Target!).Factory;
             if (host == IntPtr.Zero || factory is null) {
                 *outInstance = new GuestContractInstance { Data = IntPtr.Zero };
                 return;
@@ -54,8 +67,9 @@ public static class TransformerInterfaces {
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void TRANSFORMER_DestroyInstance(VmLoaderData loaderData, IntPtr host, GuestContractInstance instance) {
+    private static void TRANSFORMER_DestroyInstance(IntPtr adapterContext, VmLoaderData loaderData, IntPtr host, GuestContractInstance instance) {
         _ = loaderData;  // Native-dispatch contracts ignore the VM loader handle.
+        _ = adapterContext;
         // Frees the GCHandle allocated by CreateInstance; the payload becomes
         // collectible. The host calls destroy exactly once per instance.
         if (instance.Data == IntPtr.Zero) return;
@@ -67,7 +81,8 @@ public static class TransformerInterfaces {
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static unsafe void transformer_transform_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {
+    private static unsafe void transformer_transform_abi(IntPtr adapterContext, GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {
+        _ = adapterContext;
         if (outErr == null) return;
         try {
             if (instance.Data == IntPtr.Zero) {
@@ -109,15 +124,16 @@ public static class TransformerInterfaces {
     static TransformerInterfaces() {
         unsafe {
             TRANSFORMER_FNS = new IntPtr[] {
-                (IntPtr)(delegate* unmanaged[Cdecl]<GuestContractInstance, IntPtr, IntPtr, AbiError*, void>)&transformer_transform_abi,
+                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, IntPtr, IntPtr, AbiError*, void>)&transformer_transform_abi,
             };
             _TRANSFORMER_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(TRANSFORMER_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
             TRANSFORMER_INTERFACE = new GuestContractInterface {
                 ContractId = DATA_TRANSFORMER_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
                 DispatchType = DispatchType.Native,
-                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, IntPtr, GuestContractInstance*, void>)&TRANSFORMER_CreateInstance,
-                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, GuestContractInstance, void>)&TRANSFORMER_DestroyInstance,
+                AdapterContext = IntPtr.Zero,
+                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, IntPtr, IntPtr, GuestContractInstance*, void>)&TRANSFORMER_CreateInstance,
+                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, IntPtr, GuestContractInstance, void>)&TRANSFORMER_DestroyInstance,
                 Dispatch = new DispatchMechanisms {
                     Native = new NativeDispatch {
                         FunctionCount = 1u,

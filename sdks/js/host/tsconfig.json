@@ -2,10 +2,7 @@
   "extends": "../tsconfig.npm.json",
   "compilerOptions": {
     "rootDir": ".",
-    "outDir": "dist",
-    "paths": {
-      "@polyplug/abi": ["../abi/dist/polyplug_abi.d.ts"]
-    }
+    "outDir": "dist"
   },
   "include": ["mod.js", "polyplug/**/*.js", "polyplug/**/*.ts"],
   "files": ["../deno-shim.d.ts"]

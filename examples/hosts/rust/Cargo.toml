@@ -10,14 +10,14 @@ name = "pipeline_host"
 path = "src/main.rs"
 
 [dependencies]
-polyplug = { path = "../../../crates/polyplug" }
-polyplug_abi = { path = "../../../crates/polyplug_abi" }
-polyplug_utils = { path = "../../../crates/polyplug_utils" }
-polyplug_native = { path = "../../../crates/polyplug_native" }
-polyplug_js = { path = "../../../crates/polyplug_js" }
-polyplug_lua = { path = "../../../crates/polyplug_lua" }
-polyplug_python = { path = "../../../crates/polyplug_python" }
-polyplug_dotnet = { path = "../../../crates/polyplug_dotnet" }
+polyplug = { workspace = true }
+polyplug_abi = { workspace = true }
+polyplug_utils = { workspace = true }
+polyplug_native = { workspace = true }
+polyplug_js = { workspace = true }
+polyplug_lua = { workspace = true }
+polyplug_python = { workspace = true }
+polyplug_dotnet = { workspace = true }
 libloading = { workspace = true }
 [lints]
 workspace = true

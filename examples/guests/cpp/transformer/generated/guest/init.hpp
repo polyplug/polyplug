@@ -5,14 +5,23 @@
 #include "polyplug/abi.hpp"
 #include "polyplug/guest.hpp"
 
-extern "C" uint32_t polyplug_abi_version() { return 1U; }
+#include <exception>
 
-extern "C" AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx) {
+#if defined(_WIN32)
+#define POLYPLUG_ENTRYPOINT_EXPORT __declspec(dllexport)
+#else
+#define POLYPLUG_ENTRYPOINT_EXPORT __attribute__((visibility("default")))
+#endif
+
+extern "C" POLYPLUG_ENTRYPOINT_EXPORT uint32_t polyplug_abi_version() { return 1U; }
+
+extern "C" POLYPLUG_ENTRYPOINT_EXPORT AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx) {
     if (!host || !ctx) {
         static constexpr const char* err_msg = "null parameter in polyplug_init";
         return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 31}};
     }
 
+    try {
     // No DSO-global state is stored here. The implementation is constructed per
     // instance by create_instance (which calls the author factory
     // polyplug_create_<plugin> with the HostApi pointer); init only registers
@@ -28,6 +37,13 @@ extern "C" AbiError polyplug_init(const HostApi* host, const BundleInitContext* 
     host->register_guest_contract(host, &desc_TRANSFORMER, &polyplug_plugin::TRANSFORMER_INTERFACE, &err_TRANSFORMER);
     if (err_TRANSFORMER.code != static_cast<uint32_t>(AbiErrorCode::Ok)) return err_TRANSFORMER;
 
-    return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
+        return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};
+    } catch (const std::exception&) {
+        static constexpr const char* err_msg = "guest init threw std::exception";
+        return AbiError{static_cast<uint32_t>(AbiErrorCode::Generic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 30}};
+    } catch (...) {
+        static constexpr const char* err_msg = "guest init threw";
+        return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}};
+    }
 }
 

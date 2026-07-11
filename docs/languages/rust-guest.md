@@ -119,11 +119,11 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
   exports; the generated `init.rs` provides `polyplug_init`. Trait and factory
   names come from [Generated names](../generated-names.md).
 
-## Embedded Rust guest
+## In-process Rust guest
 
-An embedded guest is linked directly into a Rust host executable rather than
-loaded from a disk bundle. Generate it through the public code-generation
-library; the CLI continues to generate the disk guest ABI:
+An in-process guest is an ordinary Rust implementation object created by the
+host and registered at runtime. Generate its typed adapters through the public
+code-generation library; the CLI continues to generate the path-loaded guest ABI:
 
 ```rust
 use polyplug_codegen::{
@@ -137,38 +137,34 @@ let output = generate_rust_guest(
         side: Side::Guest,
         out_dir: "generated".into(),
     },
-    RustGuestMode::Embedded {
+    RustGuestMode::InProcess {
         bundle_name: "my_plugin".to_owned(),
     },
 )?;
 write_output(&output, std::path::Path::new("generated"))?;
 ```
 
-The generated module exposes `interfaces::EmbeddedFactories` and
-`init::embedded_bundle`. Supply ordinary module-scoped Rust factory functions;
-the generated bundle descriptor borrows only static generated tables and can be
-registered through `Runtime::register_embedded_bundle`:
+The generated module exposes `interfaces::InProcessFactories` and
+`init::in_process_bundle`. Supply ordinary factory functions and register the
+returned value by ownership:
 
 ```rust
 fn create_my_plugin(host: HostContext) -> Box<dyn PipelineDecoderGuestContract> {
     Box::new(Plugin { host })
 }
 
-let bundle = generated::init::embedded_bundle(
-    generated::interfaces::EmbeddedFactories {
+let bundle = generated::init::in_process_bundle(
+    generated::interfaces::InProcessFactories {
         my_plugin: create_my_plugin,
     },
 );
-runtime.register_embedded_bundle(&bundle)?;
+runtime.register_in_process_bundle(bundle)?;
 ```
 
-Each generated module has independent factory storage and interfaces, so several
-embedded Rust guests can link into one executable. Use ordinary
-`unload_bundle` and re-registration operations for their lifecycle.
-
-To call a host contract (such as a logging service) from your plugin, use the
-typed caller in the generated `host_contract_callers.rs`. See
-`examples/guests/rust/reporter/src/lib.rs` for the full pattern.
+`Runtime` owns the factory resident until logical unload. Each runtime has a
+separate resident, so the same generated module can use different factories in
+different runtimes. Use ordinary `unload_bundle` and re-registration operations
+for lifecycle management.
 
 ## 5. Build
 

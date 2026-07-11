@@ -8,6 +8,7 @@
 //! the hot-reload runtime/path helpers backed by the build-script-emitted
 //! reload-plugin directories.
 
+use core::ffi::c_void;
 use core::mem::transmute;
 use core::ptr::null_mut;
 use std::path::PathBuf;
@@ -41,6 +42,7 @@ pub(crate) const MOCK_FNS_EMPTY: [*const (); 0] = [];
 /// # Safety
 /// Matches the ABI `create_instance` signature; reads neither argument.
 pub(crate) unsafe extern "C" fn noop_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -57,6 +59,7 @@ pub(crate) unsafe extern "C" fn noop_create_instance(
 /// # Safety
 /// Matches the ABI `destroy_instance` signature; owns no instance data.
 pub(crate) unsafe extern "C" fn noop_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -86,6 +89,7 @@ macro_rules! make_interface {
             contract_id: $contract_id,
             contract_version: $version,
             dispatch_type: polyplug_abi::DispatchType::Native,
+            adapter_context: core::ptr::null_mut(),
             create_instance: crate::fixtures::noop_create_instance,
             destroy_instance: crate::fixtures::noop_destroy_instance,
             dispatch: polyplug_abi::DispatchMechanisms {

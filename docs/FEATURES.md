@@ -40,16 +40,22 @@ Key ABI facts (verified in `crates/polyplug_abi/src/host/host_api.rs`):
 - **FFI surface is exactly two `#[no_mangle]` exports** — `polyplug_runtime_create`
   and `polyplug_runtime_destroy` (`crates/polyplug/src/ffi.rs`). Everything else
   is reached through function-pointer fields on `HostApi`.
-- **`HostApi` is 184 bytes, align 8**: one opaque `runtime` pointer plus 21
-  function pointers (`unload_bundle` at offset 136, `log` at offset 144,
-  `create_guest_instance` at offset 152, `destroy_guest_instance` at offset 160,
-  `revision_counter` at offset 168) followed by a trailing
-  `reserved: *const c_void` data pointer at offset 176 (always null;
+- **Stable layout**: `HostApi` is `192` bytes on 64-bit targets (one runtime
+  pointer, 22 function pointers including `register_in_process_bundle` at offset
+  16, `unload_bundle` at offset 144, `log` at offset 152,
+  `create_guest_instance` at offset 160, `destroy_guest_instance` at offset 168,
+  and `registry_revision` at offset 176) followed by a trailing
+  `reserved: *const c_void` data pointer at offset 184 (always null;
   forward-compat room only).
   Layout is locked by `layout_host_api` in `host_api.rs`.
 - **Plugin entry point is `polyplug_init(const HostApi*, const BundleInitContext*)`**
   (2 args). Plugins register via the self-passing pattern
   `host->register_guest_contract(host, &descriptor, &interface)`.
+- **Bundle registration is transactional:** `Runtime::load_bundle` and
+  `Runtime::load_bundle_from_source` stage every guest registration while
+  initialization runs, validate the complete manifest provider and function sets,
+  then publish one registry snapshot. A failed load publishes no contracts,
+  metadata, or dependency declarations and invokes the loader's resident cleanup.
 - **ABI freeze policy:** the ABI freezes at v1.0; the project is pre-1.0 today, so
   ABI-visible changes are permitted **only with explicit owner approval**, never
   unilaterally (CLAUDE.md Rule 7; [`TRUST_MODEL.md`](TRUST_MODEL.md) §7).
@@ -207,6 +213,9 @@ tier; unload always reclaims once it is safe to do so.
   All previously minted `GuestContractHandle`s for those slots return
   `AbiErrorCode::StaleHandle` (5) on the next `resolve_guest_contract` call;
   `find_guest_contract` and `list_bundles` no longer return it.
+- **Complete bundle cleanup:** unload removes the bundle manifest and declared
+  dependencies with its registry metadata before the matching loader reclaims the
+  native library, VM, or managed resident.
 - **Epoch reclamation:** the superseded interface `Arc` and the loader-owned
   resource (dylib mapping or VM state) are handed to crossbeam-epoch via
   `defer_destroy`. The deferred free runs only after every reader pinned in the

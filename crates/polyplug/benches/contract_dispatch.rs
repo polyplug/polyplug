@@ -36,6 +36,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::in_process::reject_in_process_bundle;
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
 
@@ -344,6 +345,7 @@ fn bench_host_api() -> HostApi {
     HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: bench_register_callback,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: bench_alloc,
         free: bench_free,
         find_guest_contract: bench_find_guest_contract,
@@ -363,7 +365,7 @@ fn bench_host_api() -> HostApi {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: ptr::null(),
     }
 }
@@ -407,7 +409,10 @@ fn load_and_init_plugin(path: &str) -> Library {
 /// Retrieve the dispatch function for `fn_id` from the last registered interface (LAST_INTERFACE).
 fn get_interface_fn(
     fn_id: usize,
-) -> unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) {
+) -> (
+    unsafe extern "C" fn(*mut c_void, GuestContractInstance, *const (), *mut (), *mut AbiError),
+    *mut c_void,
+) {
     let interface_ptr: *const GuestContractInterface = LAST_INTERFACE.with(|cell| cell.get());
     assert!(
         !interface_ptr.is_null(),
@@ -426,7 +431,24 @@ fn get_interface_fn(
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(fn_id) };
     // SAFETY: transmuting to the canonical 4-arg native dispatch signature.
     // Arg/out types are enforced by each benchmark's setup code.
-    unsafe { mem::transmute(fn_ptr) }
+    (
+        {
+            // SAFETY: the pointer comes from the generated dispatch table and is cast to that function's exact ABI.
+            unsafe {
+                mem::transmute::<
+                    *const (),
+                    unsafe extern "C" fn(
+                        *mut c_void,
+                        GuestContractInstance,
+                        *const (),
+                        *mut (),
+                        *mut AbiError,
+                    ),
+                >(fn_ptr)
+            }
+        },
+        interface.adapter_context,
+    )
 }
 
 // ─── Benchmark 1 — noop dispatch ─────────────────────────────────────────────
@@ -440,12 +462,7 @@ fn bench_dispatch_noop(c: &mut Criterion) {
     });
 
     let _library: Library = load_and_init_plugin(TEST_PLUGIN_SO);
-    let dispatch_fn: unsafe extern "C" fn(
-        GuestContractInstance,
-        *const (),
-        *mut (),
-        *mut AbiError,
-    ) = get_interface_fn(0);
+    let (dispatch_fn, adapter_context) = get_interface_fn(0);
 
     let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("dispatch");
     group.throughput(Throughput::Elements(1));
@@ -460,6 +477,7 @@ fn bench_dispatch_noop(c: &mut Criterion) {
             // test_plugin fn 0 (add) has signature: (a: u32, b: u32) -> u32.
             unsafe {
                 dispatch_fn(
+                    adapter_context,
                     black_box(GuestContractInstance::null()),
                     black_box(&args as *const AddArgs as *const ()),
                     black_box(&mut out as *mut u32 as *mut ()),
@@ -487,12 +505,7 @@ fn bench_dispatch_buffer_arg(c: &mut Criterion) {
 
     let _library: Library = load_and_init_plugin(MEMORY_PLUGIN_SO);
     // fn 0 = memory_fill_preallocated_buffer(args: FillArgs) -> u32
-    let dispatch_fn: unsafe extern "C" fn(
-        GuestContractInstance,
-        *const (),
-        *mut (),
-        *mut AbiError,
-    ) = get_interface_fn(0);
+    let (dispatch_fn, adapter_context) = get_interface_fn(0);
 
     // Allocate 4096 bytes ONCE outside the benchmark loop.
     let buf_ptr: *mut u8 = polyplug_host_alloc(4096, 1);
@@ -519,6 +532,7 @@ fn bench_dispatch_buffer_arg(c: &mut Criterion) {
             // buf_ptr is a valid 4096-byte allocation from polyplug_host_alloc.
             unsafe {
                 dispatch_fn(
+                    adapter_context,
                     black_box(GuestContractInstance::null()),
                     black_box(&args as *const FillArgs as *const ()),
                     black_box(&mut out as *mut u32 as *mut ()),
@@ -550,12 +564,7 @@ fn bench_dispatch_struct_arg_and_return(c: &mut Criterion) {
     });
 
     let _library: Library = load_and_init_plugin(TEST_PLUGIN_SO);
-    let dispatch_fn: unsafe extern "C" fn(
-        GuestContractInstance,
-        *const (),
-        *mut (),
-        *mut AbiError,
-    ) = get_interface_fn(0);
+    let (dispatch_fn, adapter_context) = get_interface_fn(0);
 
     let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("dispatch");
     group.throughput(Throughput::Elements(1));
@@ -575,6 +584,7 @@ fn bench_dispatch_struct_arg_and_return(c: &mut Criterion) {
                 // test_plugin fn 0 (add) expects (a: u32, b: u32) -> u32.
                 unsafe {
                     dispatch_fn(
+                        adapter_context,
                         black_box(GuestContractInstance::null()),
                         black_box(&args as *const AddArgs as *const ()),
                         black_box(&mut out as *mut u32 as *mut ()),
@@ -660,16 +670,21 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
                 let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(2) };
                 // SAFETY: fn_ptr is a valid extern C fn for the given function id.
                 let dispatch_fn: unsafe extern "C" fn(
+                    *mut c_void,
                     GuestContractInstance,
                     *const (),
                     *mut (),
                     *mut AbiError,
-                ) = unsafe { mem::transmute(fn_ptr) };
+                ) = {
+                    // SAFETY: the pointer comes from the generated dispatch table and is cast to that function's exact ABI.
+                    unsafe { mem::transmute(fn_ptr) }
+                };
                 let mut err: AbiError = AbiError::ok();
                 // SAFETY: sv and sv_out are valid locations matching the fn signature;
                 // err is a valid writable out-param.
                 unsafe {
                     dispatch_fn(
+                        interface.adapter_context,
                         black_box(GuestContractInstance::null()),
                         black_box(&sv as *const StringView as *const ()),
                         black_box(&mut sv_out as *mut StringView as *mut ()),
@@ -714,14 +729,8 @@ fn bench_marshalling(c: &mut Criterion) {
     let _library: Library = load_and_init_plugin(MEMORY_PLUGIN_SO);
     // fn 4 = memory_return_borrowed(StringView) -> StringView
     // fn 5 = memory_return_owned(CopyArgs) -> Buffer
-    let borrowed_fn: unsafe extern "C" fn(
-        GuestContractInstance,
-        *const (),
-        *mut (),
-        *mut AbiError,
-    ) = get_interface_fn(4);
-    let owned_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
-        get_interface_fn(5);
+    let (borrowed_fn, adapter_context) = get_interface_fn(4);
+    let (owned_fn, _) = get_interface_fn(5);
 
     // Host table so the owned path can allocate through the host allocator.
     let host_interface: HostApi = bench_host_api();
@@ -749,6 +758,7 @@ fn bench_marshalling(c: &mut Criterion) {
                 // result is writable. memory_plugin fn 4 echoes the view back without touching the bytes.
                 unsafe {
                     borrowed_fn(
+                        adapter_context,
                         black_box(GuestContractInstance::null()),
                         black_box(sv as *const StringView as *const ()),
                         black_box(&mut out as *mut StringView as *mut ()),
@@ -776,6 +786,7 @@ fn bench_marshalling(c: &mut Criterion) {
                 // valid Buffer; result is writable. memory_plugin fn 5 host-allocs `sv.len` bytes and copies in.
                 unsafe {
                     owned_fn(
+                        adapter_context,
                         black_box(GuestContractInstance::null()),
                         black_box(args as *const CopyArgs as *const ()),
                         black_box(&mut out as *mut Buffer as *mut ()),
@@ -837,6 +848,6 @@ unsafe extern "C" fn stub_destroy_guest_instance(
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
-    ptr::null()
+unsafe extern "C" fn stub_registry_revision(_this: *const HostApi) -> u64 {
+    0
 }

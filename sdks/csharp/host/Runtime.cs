@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -25,6 +26,11 @@ public sealed class Runtime
     private GCHandle _reloadStateHandle;
     private GCHandle _reloadTrampolineHandle;
 
+    // Each entry owns all managed objects that back one successfully registered
+    // in-process bundle. The resident is released only after logical unload.
+    private readonly object _inProcessBundlesGate = new();
+    private readonly Dictionary<ulong, InProcessBundle> _inProcessBundles = new();
+
     // Cached function pointer delegates (18-03)
     private LoadBundleDelegate? _loadBundleFn;
     private ReloadBundleDelegate? _reloadBundleFn;
@@ -36,6 +42,7 @@ public sealed class Runtime
     private GetErrorLenDelegate? _getErrorLenFn;
     private RegisterHostContractDelegate? _registerHostContractFn;
     private RegisterLoaderDelegate? _registerLoaderFn;
+    private RegisterInProcessBundleDelegate? _registerInProcessBundleFn;
     private FreeDelegate? _freeFn;
 
     // ─── Function pointer delegate types (18-03) ─────────────────────────────────
@@ -77,6 +84,13 @@ public sealed class Runtime
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void RegisterLoaderDelegate(nint host, nint loaderPtr, out AbiError outErr);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private unsafe delegate void RegisterInProcessBundleDelegate(
+        nint host,
+        InProcessBundleRegistration* registration,
+        out ulong outBundleId,
+        out AbiError outErr);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void FreeDelegate(nint host, nint ptr, nuint size, nuint align);
@@ -261,6 +275,8 @@ public sealed class Runtime
         _getErrorLenFn = Marshal.GetDelegateForFunctionPointer<GetErrorLenDelegate>(_hostStruct.GetErrorLen);
         _registerHostContractFn = Marshal.GetDelegateForFunctionPointer<RegisterHostContractDelegate>(_hostStruct.RegisterHostContract);
         _registerLoaderFn = Marshal.GetDelegateForFunctionPointer<RegisterLoaderDelegate>(_hostStruct.RegisterLoader);
+        _registerInProcessBundleFn = Marshal.GetDelegateForFunctionPointer<RegisterInProcessBundleDelegate>(
+            _hostStruct.RegisterInProcessBundle);
         _freeFn = Marshal.GetDelegateForFunctionPointer<FreeDelegate>(_hostStruct.Free);
     }
 
@@ -282,6 +298,22 @@ public sealed class Runtime
         if (_reloadTrampolineHandle.IsAllocated)
         {
             _reloadTrampolineHandle.Free();
+        }
+        ReleaseInProcessBundles();
+    }
+
+    private void ReleaseInProcessBundles()
+    {
+        List<InProcessBundle> bundles;
+        lock (_inProcessBundlesGate)
+        {
+            bundles = new List<InProcessBundle>(_inProcessBundles.Values);
+            _inProcessBundles.Clear();
+        }
+
+        foreach (InProcessBundle bundle in bundles)
+        {
+            bundle.Release();
         }
     }
 
@@ -363,8 +395,17 @@ public sealed class Runtime
     public void UnloadBundle(ulong bundleId)
     {
         EnsureHost();
-        _unloadBundleFn!(_host, bundleId, out AbiError result);
-        CheckAbiError(result, "Failed to unload bundle.");
+        InProcessBundle? resident = null;
+        lock (_inProcessBundlesGate)
+        {
+            _unloadBundleFn!(_host, bundleId, out AbiError result);
+            CheckAbiError(result, "Failed to unload bundle.");
+            if (_inProcessBundles.Remove(bundleId, out InProcessBundle? bundle))
+            {
+                resident = bundle;
+            }
+        }
+        resident?.Release();
     }
 
     /// <summary>
@@ -473,6 +514,51 @@ public sealed class Runtime
         _registerLoaderFn!(_host, loaderPtr, out AbiError error);
         // AbiError.Message is static or runtime-owned; the receiver never frees it.
         return error.Code;
+    }
+
+    /// <summary>
+    /// Registers a complete in-process bundle in one native transaction and
+    /// retains its managed resident for this runtime's logical lifetime.
+    /// </summary>
+    /// <param name="bundle">Generated registration and its managed resident.</param>
+    /// <returns>The stable identifier derived by the runtime for the bundle.</returns>
+    public unsafe ulong RegisterInProcessBundle(InProcessBundle bundle)
+    {
+        EnsureHost();
+        ArgumentNullException.ThrowIfNull(bundle);
+        if (!bundle.TryReserveTransfer())
+        {
+            throw new InvalidOperationException("In-process bundle has already been registered.");
+        }
+        try
+        {
+            InProcessBundleRegistration registration = bundle.Registration;
+            lock (_inProcessBundlesGate)
+            {
+                ulong bundleId = 0;
+                AbiError error = default;
+                _registerInProcessBundleFn!(_host, &registration, out bundleId, out error);
+                CheckAbiError(error, "Failed to register in-process bundle.");
+                _inProcessBundles.Add(bundleId, bundle);
+                return bundleId;
+            }
+        }
+        catch
+        {
+            bundle.CancelTransfer();
+            throw;
+        }
+    }
+
+    internal int InProcessBundleCount
+    {
+        get
+        {
+            lock (_inProcessBundlesGate)
+            {
+                return _inProcessBundles.Count;
+            }
+        }
     }
 
     private static void InvokeWithUtf8(string value, Action<nint, nuint> action)

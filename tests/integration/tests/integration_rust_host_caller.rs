@@ -1,6 +1,8 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
+use core::ffi::c_void;
+use core::ptr;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering;
 
@@ -19,6 +21,7 @@ use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::VmLoaderData;
+use polyplug_abi::in_process::reject_in_process_bundle;
 use polyplug_native::NativeLoader;
 use polyplug_utils::BundleId;
 
@@ -92,6 +95,7 @@ impl TestAddContract {
             } else {
                 let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
                 let dispatch_fn: unsafe extern "C" fn(
+                    *mut c_void,
                     GuestContractInstance,
                     *const (),
                     *mut (),
@@ -99,6 +103,7 @@ impl TestAddContract {
                 ) = core::mem::transmute(fn_ptr);
                 let mut dispatch_err: AbiError = AbiError::ok();
                 dispatch_fn(
+                    vtable.adapter_context,
                     GuestContractInstance::null(),
                     args_ptr,
                     out_ptr,
@@ -352,6 +357,7 @@ fn counting_host() -> HostApi {
     HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: caller_stub_register_guest,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: caller_counting_alloc,
         free: caller_counting_free,
         find_guest_contract: caller_stub_find,
@@ -371,7 +377,7 @@ fn counting_host() -> HostApi {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: core::ptr::null(),
     }
 }
@@ -379,6 +385,7 @@ fn counting_host() -> HostApi {
 /// Fake VM `call`: echoes the 11-byte input string into arena memory and writes
 /// the resulting `StringView` to `out`. A null arena would force a host alloc.
 unsafe extern "C" fn echo_vm_call(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _instance: GuestContractInstance,
     _fn_id: u32,
@@ -453,6 +460,7 @@ impl EchoVmCaller {
         unsafe {
             let vtable: &GuestContractInterface = &*self.vtable;
             (vtable.dispatch.vm.call)(
+                vtable.adapter_context,
                 vtable.dispatch.vm.loader_data,
                 GuestContractInstance::null(),
                 0_u32,
@@ -490,6 +498,7 @@ fn test_host_caller_arena_reuses_buffer_across_calls() {
             patch: 0,
         },
         dispatch_type: DispatchType::VirtualMachine,
+        adapter_context: ptr::null_mut(),
         create_instance: vm_noop_create,
         destroy_instance: vm_noop_destroy,
         dispatch: DispatchMechanisms {
@@ -555,6 +564,7 @@ fn test_host_caller_arena_reuses_buffer_across_calls() {
 }
 
 unsafe extern "C" fn vm_noop_create(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -567,6 +577,7 @@ unsafe extern "C" fn vm_noop_create(
 }
 
 unsafe extern "C" fn vm_noop_destroy(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -601,6 +612,6 @@ unsafe extern "C" fn stub_destroy_guest_instance(
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const polyplug_abi::HostApi) -> *const u64 {
-    core::ptr::null()
+unsafe extern "C" fn stub_registry_revision(_this: *const polyplug_abi::HostApi) -> u64 {
+    0
 }

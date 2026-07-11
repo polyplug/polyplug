@@ -27,6 +27,14 @@ function _ppEncodeUtf8(str: string): Uint8Array {
 }
 
 // Plugin: decoder (pipeline.Decoder@1)
+/**
+ * Decodes CSV input into the pipeline representation.
+ */
+/**
+ * Decodes one CSV record.
+ * @param input The CSV record to decode.
+ * @returns The decoded pipeline record.
+ */
 //   decode(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
 
 export const DECODER_INTERFACE = {

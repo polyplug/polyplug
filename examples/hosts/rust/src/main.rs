@@ -7,8 +7,8 @@ use polyplug_abi::runtime::ReloadPhase;
 use polyplug_abi::runtime::ReloadPhaseType;
 use polyplug_abi::runtime::RuntimeConfig;
 use polyplug_dotnet::{DotnetConfig, DotnetLoader};
-use polyplug_js::{JsConfig, JsLoader};
-use polyplug_lua::{LuaConfig, LuaLoader};
+use polyplug_js::JsLoader;
+use polyplug_lua::LuaLoader;
 use polyplug_native::{NativeConfig, NativeLoader};
 use polyplug_python::{PythonConfig, PythonLoader};
 use std::env;
@@ -69,8 +69,8 @@ fn run() -> Result<(), String> {
     // before this `Arc` does at the end of `run`, so the runtime outlives them.
     let runtime: Arc<Runtime> = Runtime::builder()
         .loader(NativeLoader::new(NativeConfig {}))
-        .loader(JsLoader::new(JsConfig {}))
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(JsLoader::new())
+        .loader(LuaLoader::new())
         .loader(PythonLoader::new(PythonConfig::default()))
         .loader(DotnetLoader::new(DotnetConfig::default()))
         .config(config)

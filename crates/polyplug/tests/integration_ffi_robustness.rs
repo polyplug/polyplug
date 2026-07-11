@@ -14,6 +14,7 @@ use libloading::{Library, Symbol};
 use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::in_process::reject_in_process_bundle;
 use polyplug_abi::{
     AbiError, AbiErrorCode, Array, Buffer, BundleInitContext, DependencyInfo, GuestContractHandle,
     GuestContractInstance, GuestContractInterface, HostApi, HostContractInstance,
@@ -255,6 +256,7 @@ fn init_memory_plugin_interface(library: &Library) -> *const GuestContractInterf
     let host_interface: HostApi = HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: registry_register_callback,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: noop_alloc,
         free: noop_free,
         find_guest_contract: noop_find_guest_contract,
@@ -274,7 +276,7 @@ fn init_memory_plugin_interface(library: &Library) -> *const GuestContractInterf
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: ptr::null(),
     };
 
@@ -341,14 +343,22 @@ fn test_misaligned_buffer_fill() {
 
     // SAFETY: fn_ptr is function 0 in the interface (memory_fill_preallocated_buffer).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
-        // SAFETY: fn_ptr is cast to the out-param dispatch signature.
-        unsafe { mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = {
+        // SAFETY: `fn_ptr` names function 0 and therefore has this exact generated ABI.
+        unsafe { mem::transmute(fn_ptr) }
+    };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args is a valid FillArgs, out is a valid u32 location; &mut call_result is valid.
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const FillArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -389,14 +399,22 @@ fn test_stringview_cross_thread_echo() {
 
             // SAFETY: fn_ptr is function 2 in the interface (memory_echo_string_view).
             let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(2) };
-            let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
-                // SAFETY: fn_ptr is cast to the out-param dispatch signature.
-                unsafe { mem::transmute(fn_ptr) };
+            let dispatch_fn: unsafe extern "C" fn(
+                *mut c_void,
+                GuestContractInstance,
+                *const (),
+                *mut (),
+                *mut AbiError,
+            ) = {
+                // SAFETY: `fn_ptr` names function 2 and therefore has this exact generated ABI.
+                unsafe { mem::transmute(fn_ptr) }
+            };
 
             let mut call_result: AbiError = AbiError::ok();
             // SAFETY: input_sv is valid for the call; out_sv is a valid output location; &mut is valid.
             unsafe {
                 dispatch_fn(
+                    interface.adapter_context,
                     GuestContractInstance::null(),
                     &input_sv as *const StringView as *const (),
                     &mut out_sv as *mut StringView as *mut (),
@@ -450,14 +468,22 @@ fn test_buffer_cap_less_than_len() {
 
     // SAFETY: fn_ptr is function 0 in the interface (memory_fill_preallocated_buffer).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
-        // SAFETY: fn_ptr is cast to the out-param dispatch signature.
-        unsafe { mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = {
+        // SAFETY: `fn_ptr` names function 0 and therefore has this exact generated ABI.
+        unsafe { mem::transmute(fn_ptr) }
+    };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args is a valid FillArgs, out is a valid u32 location; &mut call_result is valid.
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const FillArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -512,6 +538,6 @@ unsafe extern "C" fn stub_destroy_guest_instance(
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
-    ptr::null()
+unsafe extern "C" fn stub_registry_revision(_this: *const HostApi) -> u64 {
+    0
 }

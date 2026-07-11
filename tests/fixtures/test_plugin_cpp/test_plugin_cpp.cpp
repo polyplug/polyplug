@@ -4,8 +4,9 @@
 // fixture exactly. It implements the "test.add" contract: add(a, b) -> a + b.
 //
 // The dispatch entry stored in `functions[0]` uses the polyplug native calling
-// convention `void(GuestContractInstance, const void* args, void* out, AbiError* out_err)`
-// — the same out-param shape the Rust fixture exports and that the runtime dispatches.
+// convention `void(void* adapter_context, GuestContractInstance, const void* args,
+// void* out, AbiError* out_err)` — the same context-first out-param shape that
+// the runtime dispatches.
 //
 // ABI types come from the real C++ ABI SDK header (sdks/cpp/abi/polyplug/abi.hpp)
 // so the fixture can never drift from the frozen layouts; build_all.sh passes
@@ -40,7 +41,7 @@ struct AddArgs {
     uint32_t b;
 };
 
-void cpp_test_add(GuestContractInstance, const void* args, void* out, AbiError* out_err) noexcept {
+void cpp_test_add(void*, GuestContractInstance, const void* args, void* out, AbiError* out_err) noexcept {
     const AddArgs* in = static_cast<const AddArgs*>(args);
     *static_cast<uint32_t*>(out) = in->a + in->b;
     if (out_err != nullptr) {
@@ -48,13 +49,13 @@ void cpp_test_add(GuestContractInstance, const void* args, void* out, AbiError* 
     }
 }
 
-void create_instance_stub(VmLoaderData, const HostApi*, const void*, GuestContractInstance* out_instance) noexcept {
+void create_instance_stub(void*, VmLoaderData, const HostApi*, const void*, GuestContractInstance* out_instance) noexcept {
     if (out_instance != nullptr) {
         *out_instance = GuestContractInstance{nullptr, 0};
     }
 }
 
-void destroy_instance_stub(VmLoaderData, const HostApi*, GuestContractInstance) noexcept {}
+void destroy_instance_stub(void*, VmLoaderData, const HostApi*, GuestContractInstance) noexcept {}
 
 void* const kTestAddFns[] = {
     reinterpret_cast<void*>(&cpp_test_add),
@@ -64,6 +65,7 @@ GuestContractInterface kTestAddInterface = {
     kTestAddContractId,
     Version{1, 0, 0},
     DispatchType::Native,
+    nullptr,
     create_instance_stub,
     destroy_instance_stub,
     DispatchMechanisms{.native = NativeDispatch{1, kTestAddFns}},

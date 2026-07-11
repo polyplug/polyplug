@@ -24,7 +24,7 @@ use polyplug::loader::{BundleLoader, BundleSource};
 use polyplug::logger::RecoverPoisoned;
 use polyplug_abi::HostApi;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
-use polyplug_abi::SupportedLanguage;
+
 use polyplug_abi::plugin::BundleInitContext;
 use polyplug_abi::types::{AbiError, AbiErrorCode, StringView};
 use polyplug_common::ManifestData;
@@ -97,24 +97,14 @@ impl NativeLoader {
         crossbeam_epoch::pin().defer(move || drop(library));
     }
 
-    /// Handle a `load()` failure that occurred AFTER `polyplug_init` was invoked.
+    /// Handle a `load()` failure that occurred after `polyplug_init` was invoked.
     ///
-    /// init may have already registered one or more live, resolvable interfaces
-    /// before reporting failure (or panicking). Two things must happen, in order:
-    ///
-    /// 1. Invalidate whatever the failed init registered so the runtime vacates
-    ///    those interfaces (the generation bump makes any published handle stale).
-    ///    `invalidate_bundle` returns `Ok(0)` when nothing was registered.
-    /// 2. SCHEDULE the library for epoch-deferred `dlclose` instead of dropping it
-    ///    inline. A library whose init ran must never be `dlclose`d eagerly: its
-    ///    'static registration data (descriptor / function-pointer arrays) backs
-    ///    the now-invalidated interface, which the runtime keeps epoch-owned in its
-    ///    published `ReadView` until quiescent. The global epoch keeps both the
-    ///    interface and this library alive together until no reader is pinned.
-    fn vacate_failed_init(&self, bundle_name: &str, library: Library, runtime: &Runtime) {
-        let bundle_id: BundleId = BundleId::new(bundle_name);
-        // Ignore the slot count / vacated Arcs: we only need the interfaces vacated.
-        let _ = runtime.registry().invalidate_bundle(bundle_id);
+    /// The runtime owns the registration transaction and discards every staged
+    /// interface before it asks the loader to clean up. The native loader retains
+    /// ownership of the uncommitted library and schedules its `dlclose` through the
+    /// epoch so any registration copies retained while the abort is processed remain
+    /// valid until all readers are quiescent.
+    fn reclaim_failed_init(&self, library: Library) {
         self.schedule_reclaim(library);
     }
 }
@@ -319,10 +309,7 @@ impl NativeLoader {
                 };
                 String::from_utf8_lossy(bytes).into_owned()
             };
-            // init ran and may have registered a contract before reporting failure:
-            // invalidate those registrations and schedule the library for epoch-deferred
-            // dlclose (do not dlclose inline).
-            self.vacate_failed_init(&manifest.name, library, runtime);
+            self.reclaim_failed_init(library);
             return Err(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
                 error: error_msg,
@@ -351,13 +338,6 @@ impl NativeLoader {
 impl BundleLoader for NativeLoader {
     fn loader_name(&self) -> &'static str {
         "native"
-    }
-
-    /// The native loader serves both Rust and C++ `cdylib` bundles (which share the
-    /// native ABI); it claims Rust as its reference language. This value is not used
-    /// for once-per-process boot tracking (native has no shared boot state).
-    fn loader_language(&self) -> SupportedLanguage {
-        SupportedLanguage::Rust
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -491,42 +471,73 @@ mod unload_tests {
             .join("test_plugin_dir")
     }
 
-    /// Build a default `Runtime`. No loader is registered: the test drives a
-    /// directly-constructed `NativeLoader`, using the runtime only for `host_abi()`.
+    struct ObservingNativeLoader {
+        inner: Arc<NativeLoader>,
+    }
+
+    impl BundleLoader for ObservingNativeLoader {
+        fn loader_name(&self) -> &'static str {
+            self.inner.loader_name()
+        }
+
+        fn supports_hot_reload(&self) -> bool {
+            self.inner.supports_hot_reload()
+        }
+
+        fn load(
+            &self,
+            manifest: &ManifestData,
+            source: &BundleSource,
+            runtime: &Runtime,
+        ) -> Result<(), LoaderError> {
+            self.inner.load(manifest, source, runtime)
+        }
+
+        fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), LoaderError> {
+            self.inner.reload(manifest, runtime)
+        }
+
+        fn unload(&self, bundle_id: BundleId, runtime: &Runtime) -> Result<(), LoaderError> {
+            self.inner.unload(bundle_id, runtime)
+        }
+    }
+
     fn test_runtime() -> Arc<Runtime> {
         Runtime::builder()
             .build()
             .expect("runtime build should succeed")
     }
 
-    /// Load the `test_plugin` fixture through a freshly-constructed `NativeLoader`.
-    /// Returns the loader and the bundle id so the test can drive `unload` directly.
-    fn load_test_plugin(runtime: &Runtime) -> (NativeLoader, BundleId) {
+    fn runtime_with_loader(loader: Arc<NativeLoader>) -> Arc<Runtime> {
+        Runtime::builder()
+            .loader(ObservingNativeLoader { inner: loader })
+            .build()
+            .expect("runtime build should succeed")
+    }
+
+    fn load_test_plugin() -> (Arc<Runtime>, Arc<NativeLoader>, BundleId) {
+        let loader: Arc<NativeLoader> = Arc::new(NativeLoader::new(NativeConfig::default()));
+        let runtime: Arc<Runtime> = runtime_with_loader(Arc::clone(&loader));
         let dir: PathBuf = test_plugin_dir();
         let manifest: ManifestData =
             parse_manifest(&dir).expect("parse_manifest for test_plugin_dir");
         let bundle_id: BundleId = BundleId::new(&manifest.name);
-        let source: BundleSource = BundleSource::Path(manifest.path.clone());
-        let loader: NativeLoader = NativeLoader::new(NativeConfig::default());
-        loader
-            .load(&manifest, &source, runtime)
-            .expect("native load of test_plugin should succeed");
-        (loader, bundle_id)
+        runtime
+            .load_bundle(&dir)
+            .expect("native load of test_plugin");
+        (runtime, loader, bundle_id)
     }
 
-    /// Unload removes the live handle and SCHEDULES the library for epoch-deferred
-    /// reclaim. Every unload epoch-reclaims uniformly — there is no opt-out branch that
-    /// parks the library alive.
     #[test]
     #[cfg(not(miri))]
     fn unload_removes_live_and_schedules_reclaim() {
-        let runtime: Arc<Runtime> = test_runtime();
-        let (loader, bundle_id): (NativeLoader, BundleId) = load_test_plugin(&runtime);
+        let (runtime, loader, bundle_id): (Arc<Runtime>, Arc<NativeLoader>, BundleId) =
+            load_test_plugin();
         assert_eq!(loader.live_library_count(), 1);
         assert_eq!(loader.scheduled_reclaim_count(), 0);
 
-        loader
-            .unload(bundle_id, &runtime)
+        runtime
+            .unload_bundle(bundle_id)
             .expect("unload should succeed");
 
         assert_eq!(loader.live_library_count(), 0, "live handle removed");
@@ -549,110 +560,74 @@ mod unload_tests {
             .join("register_fail_plugin")
     }
 
-    /// A failed `load()` whose init had already registered a contract must NOT
-    /// `dlclose` the library inline (its registered statics back the published,
-    /// still-resolvable interface). The loader instead SCHEDULES the library for
-    /// epoch-deferred reclaim and invalidates whatever the failed init registered;
-    /// the global epoch keeps the library alive alongside the runtime's epoch-owned
-    /// invalidated interface until no reader is pinned.
-    ///
-    /// Regression for the HIGH finding: previously the local `library` dropped on
-    /// the error return → `dlclose` while the registry still held live interfaces
-    /// whose fn pointers dangled into unmapped pages.
     #[test]
     #[cfg(not(miri))]
-    fn failed_load_after_register_schedules_reclaim_and_invalidates() {
-        let runtime: Arc<Runtime> = test_runtime();
+    fn failed_runtime_load_discards_staged_contracts_and_schedules_reclaim() {
+        let loader: Arc<NativeLoader> = Arc::new(NativeLoader::new(NativeConfig::default()));
+        let runtime: Arc<Runtime> = runtime_with_loader(Arc::clone(&loader));
         let dir: PathBuf = register_fail_plugin_dir();
         let manifest: ManifestData =
             parse_manifest(&dir).expect("parse_manifest for register_fail_plugin");
         let bundle_id: BundleId = BundleId::new(&manifest.name);
-        let source: BundleSource = BundleSource::Path(manifest.path.clone());
-        let loader: NativeLoader = NativeLoader::new(NativeConfig::default());
 
-        let load_result: Result<(), LoaderError> = loader.load(&manifest, &source, &runtime);
+        let result = runtime.load_bundle(&dir);
         assert!(
-            load_result.is_err(),
-            "init returns a non-Ok error, so load() must fail"
+            result.is_err(),
+            "init returns a non-Ok error, so the runtime load must fail: {result:?}"
         );
-
-        // The library must be SCHEDULED for epoch-deferred reclaim, never dropped
-        // inline: its registered statics may be referenced by the (now invalidated)
-        // interface still epoch-owned by the runtime.
         assert_eq!(
             loader.live_library_count(),
             0,
-            "no live handle after a failed load"
+            "a failed load must not leave a live library resident"
         );
         assert_eq!(
             loader.scheduled_reclaim_count(),
             1,
-            "a library whose init ran must be scheduled for reclaim, not dropped inline"
+            "a library whose init ran must be scheduled for epoch-deferred reclaim: {result:?}"
         );
-
-        // The failed init's registration must have been invalidated: re-invalidating
-        // the same bundle now reports zero slots (idempotent — nothing left to vacate).
-        let count: u32 = runtime
-            .registry()
-            .invalidate_bundle(bundle_id)
-            .expect("invalidate_bundle should succeed");
+        assert!(
+            runtime
+                .registry()
+                .get_bundle_descriptor(bundle_id)
+                .is_none(),
+            "a failed load must not publish bundle metadata"
+        );
         assert_eq!(
-            count, 0,
-            "load() must have already invalidated the failed init's registration"
+            runtime
+                .registry()
+                .invalidate_bundle(bundle_id)
+                .expect("invalidate_bundle should succeed"),
+            0,
+            "a failed load must not publish registrations"
         );
     }
 
-    /// A second `load()` that re-inserts the same `BundleId` must SCHEDULE the
-    /// superseded `Library` handle for epoch-deferred reclaim rather than dropping it
-    /// inline: old registry slots may still resolve raw fn pointers into the prior
-    /// mapping, so it is reclaimed only once no reader is pinned.
-    ///
-    /// Regression for the double-load MEDIUM finding (Step 8 `insert` returning the
-    /// old handle was previously dropped).
-    ///
-    /// The runtime rejects a duplicate provider for the same contract, so between
-    /// the two loads the bundle's registration is invalidated in the registry
-    /// (simulating the contract having been unloaded while the loader still holds
-    /// the old library handle). The second `load()` then succeeds at the registry
-    /// level and re-inserts the same `BundleId`, exercising the supersede path.
     #[test]
     #[cfg(not(miri))]
-    fn double_load_schedules_superseded_library_reclaim() {
-        let runtime: Arc<Runtime> = test_runtime();
-        let dir: PathBuf = test_plugin_dir();
-        let manifest: ManifestData =
-            parse_manifest(&dir).expect("parse_manifest for test_plugin_dir");
-        let bundle_id: BundleId = BundleId::new(&manifest.name);
-        let source: BundleSource = BundleSource::Path(manifest.path.clone());
-        let loader: NativeLoader = NativeLoader::new(NativeConfig::default());
+    fn repeated_runtime_load_preserves_the_live_library() {
+        let (runtime, loader, bundle_id): (Arc<Runtime>, Arc<NativeLoader>, BundleId) =
+            load_test_plugin();
+        let repeated = runtime.load_bundle(&test_plugin_dir());
 
-        loader
-            .load(&manifest, &source, &runtime)
-            .expect("first native load should succeed");
-        assert_eq!(loader.live_library_count(), 1);
-        assert_eq!(loader.scheduled_reclaim_count(), 0);
-
-        // Drop the registry-side registration (the loader still holds the library
-        // handle) so the second load's register_guest_contract is not a duplicate.
-        runtime
-            .registry()
-            .invalidate_bundle(bundle_id)
-            .expect("invalidate_bundle should succeed");
-
-        loader
-            .load(&manifest, &source, &runtime)
-            .expect("second native load should succeed");
-
+        assert!(
+            repeated.is_err(),
+            "the runtime must reject a repeated bundle load"
+        );
         assert_eq!(
             loader.live_library_count(),
             1,
-            "the new handle replaces the old live handle"
+            "the rejected load must retain the original library resident"
         );
         assert_eq!(
             loader.scheduled_reclaim_count(),
-            1,
-            "the superseded library must be scheduled for reclaim, not dropped inline"
+            0,
+            "the rejected load must not reclaim the original library"
         );
+
+        runtime
+            .unload_bundle(bundle_id)
+            .expect("unload should succeed");
+        assert_eq!(loader.scheduled_reclaim_count(), 1);
     }
 
     /// A non-UTF-8 bundle path must fail cleanly with a clear "not valid UTF-8"

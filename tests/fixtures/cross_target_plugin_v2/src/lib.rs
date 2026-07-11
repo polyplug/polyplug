@@ -8,6 +8,7 @@
 //! re-resolves the live interface on every call (per-call routing), mirroring
 //! the `reload_plugin_v1` / `reload_plugin_v2` pattern.
 
+use core::{ffi::c_void, ptr};
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::*;
 use polyplug_utils::GuestContractId;
@@ -33,6 +34,7 @@ const TARGET_INSTANCE_MARKER: u64 = 0xC0FF_EE00_7A86_E702;
 /// # Safety
 /// `args` must point to a valid `AddArgs`; `out` must point to a valid `u32`.
 unsafe extern "C" fn target_add(
+    _adapter_context: *mut c_void,
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
@@ -65,6 +67,7 @@ unsafe extern "C" fn target_add(
 /// # Safety
 /// `_host`/`_args` follow the ABI calling convention but are unused here.
 unsafe extern "C" fn create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -88,6 +91,7 @@ unsafe extern "C" fn create_instance(
 /// `instance.data` must be a pointer returned by `create_instance` of this
 /// contract, not yet destroyed.
 unsafe extern "C" fn destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     instance: GuestContractInstance,
@@ -121,6 +125,7 @@ fn target_interface() -> GuestContractInterface {
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance,
         destroy_instance,
         dispatch: DispatchMechanisms {

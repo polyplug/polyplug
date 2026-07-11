@@ -37,6 +37,7 @@
 // runtime expects of generated plugins. It needs no on-disk bundle or loader, so
 // the only thing that varies between the cold and warm arms is cache warmth.
 
+use core::ffi::c_void;
 use core::hint::black_box;
 use std::sync::Arc;
 
@@ -81,6 +82,7 @@ struct AddArgs {
 /// `args` must point to a valid `AddArgs`; `out` must point to a valid `u32`;
 /// `out_err` must be non-null and writable.
 unsafe extern "C" fn bench_add(
+    _adapter_context: *mut c_void,
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
@@ -98,6 +100,7 @@ unsafe extern "C" fn bench_add(
 }
 
 unsafe extern "C" fn noop_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -110,6 +113,7 @@ unsafe extern "C" fn noop_create_instance(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -127,6 +131,7 @@ fn leak_native_interface(contract_id: u64) -> &'static GuestContractInterface {
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance: noop_create_instance,
         destroy_instance: noop_destroy_instance,
         dispatch: DispatchMechanisms {
@@ -186,11 +191,15 @@ fn dispatch_fn0(interface: &GuestContractInterface) -> u32 {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions };
     // SAFETY: transmute to the canonical 4-arg native dispatch signature.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { mem::transmute(fn_ptr) };
+    ) = {
+        // SAFETY: the pointer comes from the generated dispatch table and is cast to that function's exact ABI.
+        unsafe { mem::transmute(fn_ptr) }
+    };
     let instance: GuestContractInstance = GuestContractInstance {
         data: ptr::null_mut(),
         contract_id: GuestContractId::from_u64(interface.contract_id.id()),
@@ -204,6 +213,7 @@ fn dispatch_fn0(interface: &GuestContractInterface) -> u32 {
     // SAFETY: instance carries the contract_id; args/out match bench_add; err is writable.
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             instance,
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),

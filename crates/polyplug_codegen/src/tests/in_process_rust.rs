@@ -1,4 +1,4 @@
-//! Focused output contracts for embedded Rust guest generation.
+//! Focused output contracts for in-process Rust guest generation.
 
 #![allow(clippy::expect_used)]
 
@@ -22,7 +22,7 @@ fn output_map(output: GenerateOutput) -> BTreeMap<PathBuf, String> {
 fn write_api(path: &Path) {
     fs::write(
         path,
-        "[[plugin_contract]]\nname = \"embedded.alpha\"\nversion = \"1.0\"\n\n[[plugin_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n\n[[plugin_contract]]\nname = \"embedded.beta\"\nversion = \"1.0\"\n\n[[plugin_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n",
+        "[[plugin_contract]]\nname = \"in_process.alpha\"\nversion = \"1.0\"\n\n[[plugin_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n\n[[plugin_contract]]\nname = \"in_process.beta\"\nversion = \"1.0\"\n\n[[plugin_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n",
     )
     .expect("write API TOML");
 }
@@ -55,7 +55,7 @@ fn disk_mode_is_byte_identical_to_existing_rust_guest_generation() {
 }
 
 #[test]
-fn embedded_mode_uses_module_scoped_factories_and_static_descriptors() {
+fn in_process_mode_uses_runtime_local_factories_and_canonical_descriptors() {
     let temp = tempfile::tempdir().expect("create temporary directory");
     let api = temp.path().join("api.toml");
     write_api(&api);
@@ -63,31 +63,41 @@ fn embedded_mode_uses_module_scoped_factories_and_static_descriptors() {
     let output = output_map(
         generate_rust_guest(
             config(&api, Side::Guest),
-            RustGuestMode::Embedded {
-                bundle_name: "embedded-output-contract".to_owned(),
+            RustGuestMode::InProcess {
+                bundle_name: "in-process-output-contract".to_owned(),
             },
         )
-        .expect("generate embedded guest"),
+        .expect("generate in-process guest"),
     );
     let interfaces = output
         .get(&PathBuf::from("guest/interfaces.rs"))
-        .expect("embedded interfaces");
+        .expect("in-process interfaces");
     let init = output
         .get(&PathBuf::from("guest/init.rs"))
-        .expect("embedded init");
+        .expect("in-process init");
     let host = output_map(generate(config(&api, Side::Host)).expect("generate host"));
     let callers = host
         .get(&PathBuf::from("host/host_callers.rs"))
         .expect("generated host callers");
 
-    assert!(interfaces.contains("pub struct EmbeddedFactories"));
-    assert!(interfaces.contains("embedded_factory_embedded_alpha"));
-    assert!(interfaces.contains("embedded_factory_embedded_beta"));
+    assert!(interfaces.contains("pub struct InProcessFactories"));
+    assert!(interfaces.contains("in_process_factory_in_process_alpha"));
+    assert!(interfaces.contains("in_process_factory_in_process_beta"));
+    assert!(!interfaces.contains("with_in_process_resident"));
+    assert!(interfaces.contains("adapter_context: *mut c_void"));
+    assert!(!interfaces.contains("OnceLock"));
     assert!(!interfaces.contains("polyplug_create_"));
     assert!(!interfaces.contains("no_mangle"));
-    assert!(init.contains("pub fn embedded_bundle"));
-    assert!(init.contains("static EMBEDDED_CONTRACTS: [EmbeddedContract; 2]"));
-    assert!(init.contains("static EMBEDDED_DEPENDENCIES"));
+    assert!(!interfaces.contains(concat!("Embedded", "Bundle")));
+    assert!(!interfaces.contains(concat!("Embedded", "Contract")));
+    assert!(!interfaces.contains(concat!("EMBEDDED_", "FACTORIES")));
+    assert!(!interfaces.contains(concat!("install_", "embedded_factories")));
+    assert!(!init.contains(concat!("register_", "embedded_bundle")));
+    assert!(init.contains("pub fn in_process_bundle"));
+    assert!(init.contains("InProcessBundle::with_boxed_resident"));
+    assert!(init.contains("let adapter_context: *mut c_void"));
+    assert!(init.contains("let contracts: Box<[InProcessContractRegistration]>"));
+    assert!(init.contains("static IN_PROCESS_DEPENDENCIES"));
     assert!(!init.contains("polyplug_init"));
     assert!(!init.contains("no_mangle"));
     assert!(callers.contains("runtime: Arc<Runtime>"));

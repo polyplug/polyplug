@@ -227,6 +227,7 @@ fn dispatch_probe_value(rt: &Runtime) -> i32 {
     // fallback; all outlive the synchronous call.
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0,

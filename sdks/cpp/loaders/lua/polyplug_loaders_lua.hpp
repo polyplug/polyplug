@@ -6,16 +6,14 @@
 #include "../host/polyplug/runtime.hpp"
 
 extern "C" {
-    struct PolyplugLuaConfig { uint8_t _reserved; };
-    void* polyplug_lua_loader_create(const PolyplugLuaConfig* cfg);
+    void* polyplug_lua_loader_create();
     void  polyplug_lua_loader_free(void* ptr);
 }
 
 namespace polyplug::loaders {
 
 inline void register_lua(Runtime& rt) {
-    PolyplugLuaConfig cfg{0};
-    void* loader = polyplug_lua_loader_create(&cfg);
+    void* loader = polyplug_lua_loader_create();
     if (loader == nullptr) {
         throw std::runtime_error("polyplug: lua loader create failed");
     }

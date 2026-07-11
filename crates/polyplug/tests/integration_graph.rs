@@ -21,6 +21,7 @@ use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::in_process::reject_in_process_bundle;
 use polyplug_abi::{
     AbiError, AbiErrorCode, Array, BundleInitContext, DependencyInfo, DispatchMechanisms,
     DispatchType, GuestContractHandle, GuestContractInstance, GuestContractInterface, HostApi,
@@ -163,6 +164,7 @@ unsafe extern "C" fn noop_resolve_host_contract_interface(
 
 /// No-op create_instance for fake interface.
 unsafe extern "C" fn fake_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -176,6 +178,7 @@ unsafe extern "C" fn fake_create_instance(
 
 /// No-op destroy_instance for fake interface.
 unsafe extern "C" fn fake_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -297,6 +300,7 @@ fn load_and_init_plugin() -> Library {
     let host_interface: HostApi = HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: graph_register_callback,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: noop_alloc,
         free: noop_free,
         find_guest_contract: noop_find_guest_contract,
@@ -317,7 +321,7 @@ fn load_and_init_plugin() -> Library {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: ptr::null(),
     };
 
@@ -421,6 +425,7 @@ fn test_duplicate_registration_allowed() {
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance: fake_create_instance,
         destroy_instance: fake_destroy_instance,
         dispatch: DispatchMechanisms {
@@ -541,6 +546,6 @@ unsafe extern "C" fn stub_destroy_guest_instance(
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
-    ptr::null()
+unsafe extern "C" fn stub_registry_revision(_this: *const HostApi) -> u64 {
+    0
 }

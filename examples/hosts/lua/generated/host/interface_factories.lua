@@ -15,7 +15,8 @@ local AbiErrorCode = {
 
 local function cdef_guarded(decl)
 	local ok, err = pcall(ffi.cdef, decl)
-	if not ok and not string.find(err, "already defined", 1, true) then
+	local in_process_redefinition = string.find(err or "", "attempt to redefine 'PolyplugLuaInProcess", 1, true)
+	if not ok and not string.find(err, "already defined", 1, true) and not in_process_redefinition then
 		error(err, 2)
 	end
 end
@@ -28,7 +29,7 @@ cdef_guarded([[
         PolyplugLuaHostDispatchCallback callback;
         PolyplugLuaHostDestroyCallback destroy_callback;
     } PolyplugLuaHostDispatchBridge;
-    void polyplug_lua_host_vm_dispatch(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);
+    void polyplug_lua_host_vm_dispatch(void*, VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);
     void polyplug_lua_host_destroy_instance(const HostContractInterface*, HostContractInstance);
 ]])
 

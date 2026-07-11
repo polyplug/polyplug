@@ -21,7 +21,7 @@ use polyplug::loader::BundleSource;
 use polyplug::runtime::Runtime;
 use polyplug_abi::Array;
 use polyplug_abi::RuntimeConfig;
-use polyplug_abi::SupportedLanguage;
+
 use polyplug_abi::runtime::SignaturePolicy;
 use polyplug_abi::types::Ed25519PublicKey;
 use polyplug_abi::types::LogLevel;
@@ -37,10 +37,6 @@ struct NoopLoader;
 impl BundleLoader for NoopLoader {
     fn loader_name(&self) -> &'static str {
         "noop"
-    }
-
-    fn loader_language(&self) -> SupportedLanguage {
-        SupportedLanguage::Rust
     }
 
     fn supports_hot_reload(&self) -> bool {

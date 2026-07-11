@@ -24,6 +24,8 @@ function _ppEncodeUtf8(str: string): Uint8Array {
 
 /**
  * Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
+ *
+ * Logging service supplied by the host.
  */
 export class HostLoggerContract {
     private _minVersion: number;
@@ -49,7 +51,11 @@ export class HostLoggerContract {
         return !!(this._bridge && this._bridge.callHostContract);
     }
 
-    /** Call `log` */
+    /**
+     * Writes an informational log message.
+     * @param message Message text to write.
+     * @returns Logging has no return value.
+     */
     log(message: string): void {
         const polyplug = this._bridge;
         if (!polyplug || !polyplug.callHostContract) {

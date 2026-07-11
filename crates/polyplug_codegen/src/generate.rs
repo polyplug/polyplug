@@ -34,8 +34,8 @@ pub fn generate(config: GenerateConfig) -> Result<GenerateOutput, PolyplugcError
 /// Generate Rust guest bindings in an explicitly selected linking mode.
 ///
 /// The existing [`generate`] API always preserves disk-bundle output. Call this
-/// function with [`RustGuestMode::Embedded`] to generate a module-scoped
-/// `polyplug::EmbeddedBundle` constructor for an in-process Rust guest.
+/// function with [`RustGuestMode::InProcess`] to generate a runtime-local
+/// `polyplug::InProcessBundle` constructor for a Rust guest.
 pub fn generate_rust_guest(
     config: GenerateConfig,
     mode: RustGuestMode,
@@ -58,7 +58,7 @@ pub fn generate_ir_rust_guest(
     let mut files: GenerateOutput = GenerateOutput::default();
     match mode {
         RustGuestMode::Disk => RustGenerator.generate_guest(ir, &mut files)?,
-        RustGuestMode::Embedded { bundle_name } => {
+        RustGuestMode::InProcess { bundle_name } => {
             RustGenerator.generate_embedded_guest(ir, &bundle_name, &mut files)?
         }
     }

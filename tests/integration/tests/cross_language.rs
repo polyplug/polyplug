@@ -15,6 +15,8 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
+use core::ffi::c_void;
+
 use polyplug::runtime::Runtime;
 use polyplug_abi::Array;
 use polyplug_abi::BundleInitContext;
@@ -27,13 +29,14 @@ use polyplug_abi::HostContractInstance;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
+use polyplug_abi::in_process::reject_in_process_bundle;
 use polyplug_abi::{AbiError, AbiErrorCode};
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
-use polyplug_js::JsConfig;
+
 use polyplug_js::JsLoader;
-use polyplug_lua::LuaConfig;
+
 use polyplug_lua::LuaLoader;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
@@ -310,14 +313,15 @@ fn dispatch_add_and_verify(interface_ptr: *const GuestContractInterface) {
         let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
         // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
         let dispatch_fn: unsafe extern "C" fn(
+            *mut c_void,
             GuestContractInstance,
             *const (),
             *mut (),
             *mut AbiError,
         ) = unsafe { core::mem::transmute(fn_ptr) };
-        // SAFETY: args valid AddArgs; out valid u32 location; result receives the out-param.
         unsafe {
             dispatch_fn(
+                interface.adapter_context,
                 GuestContractInstance::null(),
                 &args as *const AddArgs as *const (),
                 &mut out as *mut u32 as *mut (),
@@ -328,6 +332,7 @@ fn dispatch_add_and_verify(interface_ptr: *const GuestContractInterface) {
         // SAFETY: dispatch_type is VirtualMachine, so .vm is valid; result receives the out-param.
         unsafe {
             (interface.dispatch.vm.call)(
+                interface.adapter_context,
                 interface.dispatch.vm.loader_data,
                 GuestContractInstance::null(),
                 0, // fn_id = 0 for add
@@ -378,6 +383,7 @@ fn test_rust_host_rust_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -397,7 +403,7 @@ fn test_rust_host_rust_guest() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -429,15 +435,16 @@ fn test_rust_host_rust_guest() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is transmuted to the frozen native dispatch signature; AddArgs matches the add function.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
     ) = unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args is a valid AddArgs; out is a valid u32 location; null stateless instance.
     let mut result: AbiError = AbiError::ok();
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -481,6 +488,7 @@ fn test_cpp_host_rust_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -500,7 +508,7 @@ fn test_cpp_host_rust_guest() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -532,15 +540,16 @@ fn test_cpp_host_rust_guest() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to the frozen native dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
     ) = unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location; null stateless instance.
     let mut result: AbiError = AbiError::ok();
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -584,6 +593,7 @@ fn test_csharp_host_rust_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -603,7 +613,7 @@ fn test_csharp_host_rust_guest() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -635,15 +645,16 @@ fn test_csharp_host_rust_guest() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to the frozen native dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
     ) = unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location; null stateless instance.
     let mut result: AbiError = AbiError::ok();
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -687,6 +698,7 @@ fn test_python_host_rust_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -706,7 +718,7 @@ fn test_python_host_rust_guest() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -738,15 +750,16 @@ fn test_python_host_rust_guest() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to the frozen native dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
     ) = unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location; null stateless instance.
     let mut result: AbiError = AbiError::ok();
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -790,6 +803,7 @@ fn test_lua_host_rust_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -809,7 +823,7 @@ fn test_lua_host_rust_guest() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -841,15 +855,16 @@ fn test_lua_host_rust_guest() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to the frozen native dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
     ) = unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location; null stateless instance.
     let mut result: AbiError = AbiError::ok();
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -893,6 +908,7 @@ fn test_js_host_rust_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -912,7 +928,7 @@ fn test_js_host_rust_guest() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -944,15 +960,16 @@ fn test_js_host_rust_guest() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to the frozen native dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
     ) = unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location; null stateless instance.
     let mut result: AbiError = AbiError::ok();
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -1002,6 +1019,7 @@ fn test_rust_host_cpp_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -1021,7 +1039,7 @@ fn test_rust_host_cpp_guest() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -1053,15 +1071,16 @@ fn test_rust_host_cpp_guest() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches cpp_test_add.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
     ) = unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
     let mut result: AbiError = AbiError::ok();
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -1105,6 +1124,7 @@ fn test_cpp_host_cpp_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -1124,7 +1144,7 @@ fn test_cpp_host_cpp_guest() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -1156,15 +1176,16 @@ fn test_cpp_host_cpp_guest() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
     ) = unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
     let mut result: AbiError = AbiError::ok();
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -1208,6 +1229,7 @@ fn test_csharp_host_cpp_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -1227,7 +1249,7 @@ fn test_csharp_host_cpp_guest() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -1259,15 +1281,16 @@ fn test_csharp_host_cpp_guest() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
     ) = unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
     let mut result: AbiError = AbiError::ok();
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -1311,6 +1334,7 @@ fn test_python_host_cpp_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -1330,7 +1354,7 @@ fn test_python_host_cpp_guest() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -1362,15 +1386,16 @@ fn test_python_host_cpp_guest() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
     ) = unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
     let mut result: AbiError = AbiError::ok();
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -1414,6 +1439,7 @@ fn test_lua_host_cpp_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -1433,7 +1459,7 @@ fn test_lua_host_cpp_guest() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -1465,15 +1491,16 @@ fn test_lua_host_cpp_guest() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
     ) = unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
     let mut result: AbiError = AbiError::ok();
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -1517,6 +1544,7 @@ fn test_js_host_cpp_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -1536,7 +1564,7 @@ fn test_js_host_cpp_guest() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: core::ptr::null(),
     };
     let ctx: BundleInitContext = BundleInitContext {
@@ -1568,15 +1596,16 @@ fn test_js_host_cpp_guest() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
     ) = unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
     let mut result: AbiError = AbiError::ok();
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -1691,15 +1720,16 @@ fn test_csharp_host_csharp_guest() {
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
     ) = unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
     let mut result: AbiError = AbiError::ok();
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -1933,7 +1963,7 @@ fn test_js_host_python_guest() {
 #[test]
 fn test_rust_host_lua_guest() {
     let runtime: Arc<Runtime> = Runtime::builder()
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(LuaLoader::new())
         .build()
         .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::RuntimeError> =
@@ -1950,7 +1980,7 @@ fn test_rust_host_lua_guest() {
 #[test]
 fn test_cpp_host_lua_guest() {
     let runtime: Arc<Runtime> = Runtime::builder()
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(LuaLoader::new())
         .build()
         .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::RuntimeError> =
@@ -1967,7 +1997,7 @@ fn test_cpp_host_lua_guest() {
 #[test]
 fn test_csharp_host_lua_guest() {
     let runtime: Arc<Runtime> = Runtime::builder()
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(LuaLoader::new())
         .build()
         .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::RuntimeError> =
@@ -1984,7 +2014,7 @@ fn test_csharp_host_lua_guest() {
 #[test]
 fn test_python_host_lua_guest() {
     let runtime: Arc<Runtime> = Runtime::builder()
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(LuaLoader::new())
         .build()
         .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::RuntimeError> =
@@ -2001,7 +2031,7 @@ fn test_python_host_lua_guest() {
 #[test]
 fn test_lua_host_lua_guest() {
     let runtime: Arc<Runtime> = Runtime::builder()
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(LuaLoader::new())
         .build()
         .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::RuntimeError> =
@@ -2018,7 +2048,7 @@ fn test_lua_host_lua_guest() {
 #[test]
 fn test_js_host_lua_guest() {
     let runtime: Arc<Runtime> = Runtime::builder()
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(LuaLoader::new())
         .build()
         .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::RuntimeError> =
@@ -2040,7 +2070,7 @@ fn test_js_host_lua_guest() {
 #[test]
 fn test_rust_host_js_guest() {
     let runtime: Arc<Runtime> = Runtime::builder()
-        .loader(JsLoader::new(JsConfig {}))
+        .loader(JsLoader::new())
         .build()
         .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::RuntimeError> =
@@ -2057,7 +2087,7 @@ fn test_rust_host_js_guest() {
 #[test]
 fn test_cpp_host_js_guest() {
     let runtime: Arc<Runtime> = Runtime::builder()
-        .loader(JsLoader::new(JsConfig {}))
+        .loader(JsLoader::new())
         .build()
         .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::RuntimeError> =
@@ -2074,7 +2104,7 @@ fn test_cpp_host_js_guest() {
 #[test]
 fn test_csharp_host_js_guest() {
     let runtime: Arc<Runtime> = Runtime::builder()
-        .loader(JsLoader::new(JsConfig {}))
+        .loader(JsLoader::new())
         .build()
         .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::RuntimeError> =
@@ -2091,7 +2121,7 @@ fn test_csharp_host_js_guest() {
 #[test]
 fn test_python_host_js_guest() {
     let runtime: Arc<Runtime> = Runtime::builder()
-        .loader(JsLoader::new(JsConfig {}))
+        .loader(JsLoader::new())
         .build()
         .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::RuntimeError> =
@@ -2108,7 +2138,7 @@ fn test_python_host_js_guest() {
 #[test]
 fn test_lua_host_js_guest() {
     let runtime: Arc<Runtime> = Runtime::builder()
-        .loader(JsLoader::new(JsConfig {}))
+        .loader(JsLoader::new())
         .build()
         .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::RuntimeError> =
@@ -2125,7 +2155,7 @@ fn test_lua_host_js_guest() {
 #[test]
 fn test_js_host_js_guest() {
     let runtime: Arc<Runtime> = Runtime::builder()
-        .loader(JsLoader::new(JsConfig {}))
+        .loader(JsLoader::new())
         .build()
         .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::RuntimeError> =
@@ -2167,6 +2197,6 @@ unsafe extern "C" fn stub_destroy_guest_instance(
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const polyplug_abi::HostApi) -> *const u64 {
-    core::ptr::null()
+unsafe extern "C" fn stub_registry_revision(_this: *const polyplug_abi::HostApi) -> u64 {
+    0
 }

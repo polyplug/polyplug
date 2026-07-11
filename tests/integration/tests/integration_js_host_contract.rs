@@ -36,7 +36,7 @@ use polyplug_abi::HostContractInterface;
 use polyplug_abi::NativeDispatch;
 use polyplug_abi::StringView;
 use polyplug_abi::Version;
-use polyplug_js::JsConfig;
+
 use polyplug_js::JsLoader;
 use polyplug_utils::HostContractId;
 use polyplug_utils::guest_contract_id;
@@ -266,7 +266,7 @@ fn write_temp_bundle(js_source: &str, bundle_name: &str) -> (tempfile::TempDir, 
 
     let bundle_id_val: u64 = polyplug_utils::bundle_id(bundle_name);
     let manifest: String = format!(
-        "id = {}\nname = \"{}\"\nloader = \"js-quickjs\"\nfile = \"bundle.js\"\n",
+        "id = {}\nname = \"{}\"\nloader = \"js-quickjs\"\nfile = \"bundle.js\"\nprovides = [\"test.probe@1\"]\n",
         bundle_id_val, bundle_name,
     );
     std::fs::write(dir.path().join("manifest.toml"), &manifest).expect("write manifest.toml");
@@ -293,7 +293,7 @@ fn js_guest_calls_real_host_contract() {
     let (tmp_dir, _bundle_js_path) = write_temp_bundle(&js_source, "js.host.contract.test");
 
     let rt: Arc<Runtime> = Runtime::builder()
-        .loader(JsLoader::new(JsConfig {}))
+        .loader(JsLoader::new())
         .build()
         .expect("build runtime");
 
@@ -333,6 +333,7 @@ fn js_guest_calls_real_host_contract() {
     let mut err: AbiError = AbiError::ok();
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0_u32,

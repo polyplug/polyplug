@@ -1,0 +1,27 @@
+[[plugin_contract]]
+name = "state.counter"
+version = "1.0.0"
+
+[[plugin_contract.functions]]
+name = "increment"
+return = "u32"
+
+[[plugin_contract.functions]]
+name = "value"
+return = "u32"
+
+[[plugin_contract]]
+name = "state.marker"
+version = "1.0.0"
+
+[[plugin_contract.functions]]
+name = "value"
+return = "u32"
+
+[[plugin_contract]]
+name = "state.dependent"
+version = "1.0.0"
+
+[[plugin_contract.functions]]
+name = "value"
+return = "u32"

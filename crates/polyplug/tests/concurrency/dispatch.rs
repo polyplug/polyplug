@@ -20,9 +20,10 @@
 //! step the reload driver runs after a bundle re-initializes;
 //! `swap_guest_contract_interface` is its single-slot, publicly reachable equivalent.
 
+use core::ffi::c_void;
 use core::hint::spin_loop;
 use core::mem::transmute;
-use core::ptr::{fn_addr_eq, null};
+use core::ptr::{fn_addr_eq, null, null_mut};
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use core::time::Duration;
 use std::path::{Path, PathBuf};
@@ -58,6 +59,7 @@ const MOCK_FNS: [*const (); 0] = [];
 /// `create_instance` for the pre-reload interface. Returns a tagged instance so
 /// readers can distinguish which interface version they resolved.
 unsafe extern "C" fn create_instance_v1(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -72,6 +74,7 @@ unsafe extern "C" fn create_instance_v1(
 /// `create_instance` for the reloaded interface — a distinct function pointer so
 /// callers can confirm the swap took effect.
 unsafe extern "C" fn create_instance_v2(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -84,6 +87,7 @@ unsafe extern "C" fn create_instance_v2(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -98,6 +102,7 @@ static INTERFACE_V1: GuestContractInterface = GuestContractInterface {
         patch: 0,
     },
     dispatch_type: DispatchType::Native,
+    adapter_context: null_mut(),
     create_instance: create_instance_v1,
     destroy_instance: noop_destroy_instance,
     dispatch: DispatchMechanisms {
@@ -116,6 +121,7 @@ static INTERFACE_V2: GuestContractInterface = GuestContractInterface {
         patch: 0,
     },
     dispatch_type: DispatchType::Native,
+    adapter_context: null_mut(),
     create_instance: create_instance_v2,
     destroy_instance: noop_destroy_instance,
     dispatch: DispatchMechanisms {
@@ -179,13 +185,20 @@ fn dispatch_concurrent_with_reload_is_safe() {
                         // concurrently on another thread.
                         unsafe {
                             let create_fn: unsafe extern "C" fn(
+                                *mut c_void,
                                 VmLoaderData,
                                 *const HostApi,
                                 *const (),
                                 *mut GuestContractInstance,
                             ) = (*interface_ptr).create_instance;
                             let mut instance: GuestContractInstance = GuestContractInstance::null();
-                            create_fn(VmLoaderData::null(), null(), null(), &mut instance);
+                            create_fn(
+                                null_mut(),
+                                VmLoaderData::null(),
+                                null(),
+                                null(),
+                                &mut instance,
+                            );
                             assert!(instance.is_null(), "mock create_instance returns null");
                         }
 
@@ -235,12 +248,14 @@ fn dispatch_concurrent_with_reload_is_safe() {
     // SAFETY: same retained slot interface; reading the function pointer field is
     // a plain pointer comparison against the known reloaded callback.
     let create_after: unsafe extern "C" fn(
+        *mut c_void,
         VmLoaderData,
         *const HostApi,
         *const (),
         *mut GuestContractInstance,
     ) = unsafe { (*interface_after).create_instance };
     let expected_create: unsafe extern "C" fn(
+        *mut c_void,
         VmLoaderData,
         *const HostApi,
         *const (),

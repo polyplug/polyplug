@@ -44,6 +44,7 @@ impl HostContractError {
 }
 
 /// Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
+/// Logging service supplied by the host.
 pub struct HostLoggerCaller {
     /// Vtable for the host contract: provides dispatch metadata and function pointers.
     /// Resolved via `HostApi::resolve_host_contract_interface`.
@@ -97,6 +98,11 @@ impl HostLoggerCaller {
     }
 
     /// Call host contract function `log` (function_id=0)
+    /// Writes an informational log message.
+    /// # Arguments
+    /// * `message` — Message text to write.
+    /// # Returns
+    /// Logging has no return value.
     pub fn log(&self, message: String) -> Result<(), HostContractError> {
         if self.interface.is_null() {
             return Err(HostContractError::new(AbiErrorCode::HostContractNotFound));
@@ -138,6 +144,7 @@ impl HostLoggerCaller {
                 }
                 DispatchType::VirtualMachine => {
                     (interface.dispatch.vm.call)(
+                        interface.user_data,
                         interface.dispatch.vm.loader_data,
                         GuestContractInstance::null(),
                         0_u32,
@@ -222,6 +229,7 @@ impl HostLoggerCaller {
                 }
                 DispatchType::VirtualMachine => {
                     (interface.dispatch.vm.call)(
+                        interface.user_data,
                         interface.dispatch.vm.loader_data,
                         GuestContractInstance::null(),
                         1_u32,

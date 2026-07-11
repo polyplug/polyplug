@@ -55,8 +55,9 @@ public static class Plugin
     // the stubs mirror the generated C# guest code: create returns a null-data
     // instance stamped with the contract id, destroy is a no-op.
     [UnmanagedCallersOnly]
-    private static void CreateInstanceStub(VmLoaderData loaderData, nint host, nint args, nint outInstance)
+    private static void CreateInstanceStub(nint adapterContext, VmLoaderData loaderData, nint host, nint args, nint outInstance)
     {
+        _ = adapterContext;
         _ = loaderData; // Native-dispatch contract ignores the VM loader handle.
         // Out-param ABI: the instance is written through the trailing pointer.
         if (outInstance == nint.Zero)
@@ -69,8 +70,9 @@ public static class Plugin
     }
 
     [UnmanagedCallersOnly]
-    private static void DestroyInstanceStub(VmLoaderData loaderData, nint host, GuestContractInstance instance)
+    private static void DestroyInstanceStub(nint adapterContext, VmLoaderData loaderData, nint host, GuestContractInstance instance)
     {
+        _ = adapterContext;
         _ = loaderData; // Native-dispatch contract ignores the VM loader handle.
         // Stateless contract — nothing to clean up.
     }
@@ -79,10 +81,10 @@ public static class Plugin
     {
         unsafe
         {
-            s_functions[0] = (IntPtr)(delegate* unmanaged<GuestContractInstance, nint, nint, nint, void>)&Add;
-            s_functions[1] = (IntPtr)(delegate* unmanaged<GuestContractInstance, nint, nint, nint, void>)&AddPrimitive;
-            s_functions[2] = (IntPtr)(delegate* unmanaged<GuestContractInstance, nint, nint, nint, void>)&Version;
-            s_functions[3] = (IntPtr)(delegate* unmanaged<GuestContractInstance, nint, nint, nint, void>)&Reset;
+            s_functions[0] = (IntPtr)(delegate* unmanaged<nint, GuestContractInstance, nint, nint, nint, void>)&Add;
+            s_functions[1] = (IntPtr)(delegate* unmanaged<nint, GuestContractInstance, nint, nint, nint, void>)&AddPrimitive;
+            s_functions[2] = (IntPtr)(delegate* unmanaged<nint, GuestContractInstance, nint, nint, nint, void>)&Version;
+            s_functions[3] = (IntPtr)(delegate* unmanaged<nint, GuestContractInstance, nint, nint, nint, void>)&Reset;
 
             s_functionsPin = GCHandle.Alloc(s_functions, GCHandleType.Pinned);
             s_functionsPtr = s_functionsPin.AddrOfPinnedObject();
@@ -96,8 +98,9 @@ public static class Plugin
                 ContractId = TEST_ADD_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1, Minor = 0, Patch = 0 },
                 DispatchType = DispatchType.Native,
-                CreateInstance = (IntPtr)(delegate* unmanaged<VmLoaderData, nint, nint, nint, void>)&CreateInstanceStub,
-                DestroyInstance = (IntPtr)(delegate* unmanaged<VmLoaderData, nint, GuestContractInstance, void>)&DestroyInstanceStub,
+                AdapterContext = nint.Zero,
+                CreateInstance = (IntPtr)(delegate* unmanaged<nint, VmLoaderData, nint, nint, nint, void>)&CreateInstanceStub,
+                DestroyInstance = (IntPtr)(delegate* unmanaged<nint, VmLoaderData, nint, GuestContractInstance, void>)&DestroyInstanceStub,
                 Dispatch = new DispatchMechanisms
                 {
                     Native = new NativeDispatch { FunctionCount = 4, Functions = s_functionsPtr }
@@ -122,8 +125,9 @@ public static class Plugin
     }
 
     [UnmanagedCallersOnly]
-    public static void Add(GuestContractInstance instance, nint args, nint result, nint outErr)
+    public static void Add(nint adapterContext, GuestContractInstance instance, nint args, nint result, nint outErr)
     {
+        _ = adapterContext;
         unsafe
         {
             var addArgs = (AddArgs*)args;
@@ -134,8 +138,9 @@ public static class Plugin
     }
 
     [UnmanagedCallersOnly]
-    public static void AddPrimitive(GuestContractInstance instance, nint args, nint result, nint outErr)
+    public static void AddPrimitive(nint adapterContext, GuestContractInstance instance, nint args, nint result, nint outErr)
     {
+        _ = adapterContext;
         unsafe
         {
             var addArgs = (AddArgs*)args;
@@ -146,8 +151,9 @@ public static class Plugin
     }
 
     [UnmanagedCallersOnly]
-    public static void Version(GuestContractInstance instance, nint args, nint result, nint outErr)
+    public static void Version(nint adapterContext, GuestContractInstance instance, nint args, nint result, nint outErr)
     {
+        _ = adapterContext;
         unsafe
         {
             var outPtr = (StringView*)result;
@@ -160,8 +166,9 @@ public static class Plugin
     }
 
     [UnmanagedCallersOnly]
-    public static void Reset(GuestContractInstance instance, nint args, nint result, nint outErr)
+    public static void Reset(nint adapterContext, GuestContractInstance instance, nint args, nint result, nint outErr)
     {
+        _ = adapterContext;
         // Deterministic guest→host log probe: routes through HostApi.Log via the
         // plugin-owned host pointer captured in PolyplugInit (the SDK stores no
         // host). Non-ASCII characters prove the UTF-16 → UTF-8 boundary

@@ -72,15 +72,14 @@ let runtime: Arc<Runtime> = Runtime::builder()
     .expect("runtime build");
 ```
 
-Register one loader per guest language. The config argument differs by loader —
-a unit struct (`JsConfig {}`) where there are no options, `Config::default()`
-otherwise:
+Register one loader per guest language. Loaders with no options construct directly;
+other loaders use their concrete configuration type:
 
 ```rust
 let runtime: Arc<Runtime> = Runtime::builder()
     .loader(NativeLoader::new(NativeConfig {}))
-    .loader(JsLoader::new(JsConfig {}))
-    .loader(LuaLoader::new(LuaConfig::default()))
+    .loader(JsLoader::new())
+    .loader(LuaLoader::new())
     .loader(PythonLoader::new(PythonConfig::default()))
     .loader(DotnetLoader::new(DotnetConfig::default()))
     .config(config)

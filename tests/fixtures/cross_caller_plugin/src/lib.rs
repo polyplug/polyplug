@@ -13,6 +13,7 @@
 //! reads the captured pointer from its instance handle — context flows through
 //! `host` + instance data only, never through globals or thread-locals.
 
+use core::{ffi::c_void, ptr};
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::*;
 use polyplug_utils::GuestContractId;
@@ -51,6 +52,7 @@ struct CallerInstance {
 /// `create_instance`. `args` must point to a valid `AddArgs`; `out` to a valid
 /// `u32`.
 unsafe extern "C" fn caller_cross_add(
+    _adapter_context: *mut c_void,
     instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
@@ -125,10 +127,15 @@ unsafe extern "C" fn caller_cross_add(
             };
         }
         // SAFETY: native dispatch slots have the frozen native ABI signature
-        // `extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)`;
+        // `extern "C" fn(*mut c_void, GuestContractInstance, *const (), *mut (), *mut AbiError)`;
         // `slot` is a non-null pointer to such a function.
-        let func: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
-            unsafe { core::mem::transmute(slot) };
+        let func: unsafe extern "C" fn(
+            *mut c_void,
+            GuestContractInstance,
+            *const (),
+            *mut (),
+            *mut AbiError,
+        ) = unsafe { core::mem::transmute(slot) };
 
         // The target's `add` is stateless: a null-`data` handle stamped with the
         // target contract id is a valid dispatch token.
@@ -143,7 +150,15 @@ unsafe extern "C" fn caller_cross_add(
         // SAFETY: the target function 0 expects `AddArgs` in / `u32` out, which
         // `args`/`out` satisfy (forwarded verbatim from this contract's caller);
         // `&mut err` is a valid out-param.
-        unsafe { func(target_instance, args, out, &mut err as *mut AbiError) };
+        unsafe {
+            func(
+                iface.adapter_context,
+                target_instance,
+                args,
+                out,
+                &mut err as *mut AbiError,
+            )
+        };
         err
     })();
     if !out_err.is_null() {
@@ -160,6 +175,7 @@ unsafe extern "C" fn caller_cross_add(
 /// `host` must be a valid non-null `HostApi` pointer for the runtime lifetime.
 /// `_args` is unused.
 unsafe extern "C" fn create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     host: *const HostApi,
     _args: *const (),
@@ -183,6 +199,7 @@ unsafe extern "C" fn create_instance(
 /// `instance.data` must be a pointer returned by this contract's
 /// `create_instance`, not yet destroyed.
 unsafe extern "C" fn destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     instance: GuestContractInstance,
@@ -218,6 +235,7 @@ fn caller_interface() -> GuestContractInterface {
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance,
         destroy_instance,
         dispatch: DispatchMechanisms {

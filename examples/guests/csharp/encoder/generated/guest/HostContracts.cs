@@ -27,6 +27,7 @@ public struct HostLoggerContractLogWithLevelArgs {
 /// <summary>
 /// Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
 /// Plugins use this class to call host-provided functionality.
+/// Logging service supplied by the host.
 /// </summary>
 public sealed class HostLoggerContract {
     private readonly IntPtr _instance;
@@ -61,6 +62,14 @@ public sealed class HostLoggerContract {
     /// <summary>Check if caller is valid (interface is non-null).</summary>
     public bool IsValid => _interface != IntPtr.Zero;
 
+    /// <summary>
+    /// Writes an informational log message.
+    /// </summary>
+    /// <param name="message">Message text to write.
+    /// </param>
+    /// <returns>
+    /// Logging has no return value.
+    /// </returns>
     /// <summary>Call host contract function `log` (function_id=0)</summary>
     public void Log(string message) {
         if (_interface == IntPtr.Zero) {
@@ -88,8 +97,8 @@ public sealed class HostLoggerContract {
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, uint, IntPtr, IntPtr, IntPtr, AbiError*, void>)contract->Dispatch.Vm.Call;
-                    vmFn(contract->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, IntPtr.Zero, &err);
+                    var vmFn = (delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, IntPtr, uint, IntPtr, IntPtr, IntPtr, AbiError*, void>)contract->Dispatch.Vm.Call;
+                    vmFn(contract->UserData, contract->Dispatch.Vm.LoaderData, _instance, 0u, argsPtr, outPtr, IntPtr.Zero, &err);
                     break;
                 }
                 default:
@@ -135,8 +144,8 @@ public sealed class HostLoggerContract {
                     break;
                 }
                 case DispatchType.VirtualMachine: {
-                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, uint, IntPtr, IntPtr, IntPtr, AbiError*, void>)contract->Dispatch.Vm.Call;
-                    vmFn(contract->Dispatch.Vm.LoaderData, _instance, 1u, argsPtr, outPtr, IntPtr.Zero, &err);
+                    var vmFn = (delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, IntPtr, uint, IntPtr, IntPtr, IntPtr, AbiError*, void>)contract->Dispatch.Vm.Call;
+                    vmFn(contract->UserData, contract->Dispatch.Vm.LoaderData, _instance, 1u, argsPtr, outPtr, IntPtr.Zero, &err);
                     break;
                 }
                 default:

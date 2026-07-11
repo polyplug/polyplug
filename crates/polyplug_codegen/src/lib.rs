@@ -67,15 +67,15 @@ pub enum Side {
 /// Selects how Rust guest bindings are linked into a consumer.
 ///
 /// [`Self::Disk`] preserves the `polyplugc` disk-bundle ABI, including the
-/// loader entry point and author factory symbols. [`Self::Embedded`] emits
-/// module-scoped factories and a `polyplug::EmbeddedBundle` constructor.
+/// loader entry point and author factory symbols. [`Self::InProcess`] emits
+/// runtime-local factories and an `InProcessBundle` constructor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RustGuestMode {
     /// Generate the disk-loaded guest ABI used by `polyplugc`.
     Disk,
-    /// Generate guest bindings linked directly into a Rust host executable.
-    Embedded {
-        /// Stable embedded bundle name used by the runtime to derive its ID.
+    /// Generate guest bindings registered by a Rust host at runtime.
+    InProcess {
+        /// Stable bundle name used by the runtime to derive its ID.
         bundle_name: String,
     },
 }

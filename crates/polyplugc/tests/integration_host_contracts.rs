@@ -588,16 +588,14 @@ fn test_python_host_caller_branches_on_dispatch_type() {
         content.contains("if interface.dispatch_type == DispatchType.Native:"),
         "host caller must branch on dispatch_type"
     );
-    // VM path: 6-arg call(loader_data, instance, fn_id, args, out, arena). The
-    // test contract's `do_work` returns a StringView (arena-backed), so the host
-    // caller resets and hands the guest this caller's per-call arena. Scalar-only
-    // functions would instead pass None (the host->alloc fallback) — see
-    // arena_parity.rs for the scalar-vs-arena split.
+    // VM path: context-first call(adapter_context, loader_data, instance, fn_id,
+    // args, out, arena, out_err). The test contract's `do_work` returns a
+    // StringView, so the host caller hands the guest its per-call arena.
     assert!(
         content.contains(
-            "interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance,"
+            "interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, self._instance,"
         ),
-        "VM dispatch must use the canonical 7-arg out-param call shape"
+        "VM dispatch must use the canonical context-first out-param call shape"
     );
     assert!(
         content.contains(", args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))"),
@@ -705,12 +703,13 @@ fn test_lua_host_contract_guest_generates_caller() {
         !content.contains(".header."),
         "must not read through a nonexistent .header field"
     );
-    // VM dispatch must use the canonical 7-arg out-param call with loader_data,
-    // a nil arena, and the trailing AbiError out-param.
+    // Host-contract VM dispatch uses the interface's user_data as adapter context,
+    // followed by loader_data, a nil arena, and the trailing error out-param.
     assert!(
-        content.contains("interface.dispatch.vm.call(interface.dispatch.vm.loader_data,")
-            && content.contains(", args_ptr, out_ptr, nil, err)"),
-        "VM dispatch must use the 7-arg call(loader_data, instance, fn_id, args, out, nil, err)"
+        content.contains(
+            "interface.dispatch.vm.call(interface.user_data, interface.dispatch.vm.loader_data,"
+        ) && content.contains(", args_ptr, out_ptr, nil, err)"),
+        "host VM dispatch must forward user_data before loader_data"
     );
     assert!(
         !content.contains("bridge_data"),

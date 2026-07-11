@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -57,14 +58,26 @@ using OnReloadFn = std::function<void(const ReloadPhase&)>;
 /// functor from `user_data` and invokes it. The runtime guarantees `phase` is
 /// non-null and valid for the duration of the call; the null check is pure
 /// defence-in-depth.
-inline void on_reload_trampoline(void* user_data, const ReloadPhase* phase) {
-    if (user_data != nullptr && phase != nullptr) {
+inline void on_reload_trampoline(void* user_data, const ReloadPhase* phase) noexcept {
+    if (user_data == nullptr || phase == nullptr) {
+        return;
+    }
+    try {
         auto* cb = static_cast<OnReloadFn*>(user_data);
         if (*cb) {
             (*cb)(*phase);
         }
+    } catch (...) {
     }
 }
+
+/// Base of generated in-process bundle residents. A resident owns every
+/// generated callback, interface table, typed factory, and implementation object
+/// that may be reached through a registered ABI table.
+class InProcessResident {
+public:
+    virtual ~InProcessResident() = default;
+};
 
 } // namespace detail
 
@@ -244,16 +257,21 @@ public:
 
     Runtime(Runtime&& other) noexcept
         : host_(other.host_), on_reload_cb_(std::move(other.on_reload_cb_)) {
+        std::lock_guard<std::mutex> lock(other.in_process_mutex_);
+        in_process_residents_ = std::move(other.in_process_residents_);
         other.host_ = nullptr;
     }
 
     Runtime& operator=(Runtime&& other) noexcept {
         if (this != &other) {
+            std::scoped_lock lock(in_process_mutex_, other.in_process_mutex_);
             if (host_ != nullptr) {
                 polyplug_runtime_destroy(host_);
             }
+            in_process_residents_.clear();
             host_ = other.host_;
             on_reload_cb_ = std::move(other.on_reload_cb_);
+            in_process_residents_ = std::move(other.in_process_residents_);
             other.host_ = nullptr;
         }
         return *this;
@@ -289,14 +307,57 @@ public:
         }
     }
 
+    /// Register a generated, runtime-local in-process bundle.
+    ///
+    /// `Bundle` is the generated `InProcessBundle` type. It retains all C++ state
+    /// until this call succeeds, then transfers exactly one resident to this Runtime.
+    /// The registration table is borrowed only for this synchronous ABI call.
+    template <typename Bundle>
+    uint64_t register_in_process_bundle(Bundle& bundle) {
+        ensure_host();
+        if (bundle.in_process_resident() == nullptr) {
+            throw std::runtime_error("register_in_process_bundle: bundle has no resident");
+        }
+        const InProcessBundleRegistration& registration = bundle.in_process_registration();
+
+        std::lock_guard<std::mutex> lock(in_process_mutex_);
+        // Allocate before publishing to core. After core succeeds, moving an owned
+        // resident into the reserved vector is noexcept, preserving atomic ownership.
+        in_process_residents_.reserve(in_process_residents_.size() + 1U);
+
+        AbiError result{};
+        uint64_t bundle_id = 0;
+        host_->register_in_process_bundle(host_, &registration, &bundle_id, &result);
+        if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
+            throw std::runtime_error("register_in_process_bundle failed: " + get_last_error());
+        }
+
+        std::unique_ptr<detail::InProcessResident> resident = bundle.take_in_process_resident();
+        if (resident == nullptr) {
+            throw std::logic_error("in-process bundle resident disappeared during registration");
+        }
+        in_process_residents_.push_back(ResidentEntry{bundle_id, std::move(resident)});
+        return bundle_id;
+    }
+
     /// Unload a plugin bundle by bundle ID.
-    /// Calls through HostApi.unload_bundle field.
+    ///
+    /// The resident remains owned by this Runtime when logical unload fails. Core
+    /// drains active calls, instances, and leases before it reports success; only
+    /// then is the backing C++ resident released.
     void unload_bundle(uint64_t bundle_id) {
         ensure_host();
+        std::lock_guard<std::mutex> lock(in_process_mutex_);
         AbiError result{};
         host_->unload_bundle(host_, bundle_id, &result);
         if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             throw std::runtime_error("unload_bundle failed: " + get_last_error());
+        }
+        for (auto it = in_process_residents_.begin(); it != in_process_residents_.end(); ++it) {
+            if (it->bundle_id == bundle_id) {
+                in_process_residents_.erase(it);
+                break;
+            }
         }
     }
 
@@ -375,6 +436,11 @@ public:
     }
 
 private:
+    struct ResidentEntry {
+        uint64_t bundle_id;
+        std::unique_ptr<detail::InProcessResident> resident;
+    };
+
     Runtime(const HostApi* h, std::unique_ptr<detail::OnReloadFn> cb) noexcept
         : host_(h), on_reload_cb_(std::move(cb)) {}
 
@@ -388,6 +454,8 @@ private:
     // Owns the on_reload functor referenced by RuntimeConfig.on_reload_user_data.
     // Must outlive the runtime so the trampoline's user_data stays valid.
     std::unique_ptr<detail::OnReloadFn> on_reload_cb_{};
+    std::mutex in_process_mutex_{};
+    std::vector<ResidentEntry> in_process_residents_{};
 };
 
 } // namespace polyplug

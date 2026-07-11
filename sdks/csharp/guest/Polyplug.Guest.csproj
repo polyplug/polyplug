@@ -9,5 +9,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\abi\Polyplug.Abi.csproj" />
+    <ProjectReference Include="..\host\Polyplug.Host.csproj" />
   </ItemGroup>
 </Project>

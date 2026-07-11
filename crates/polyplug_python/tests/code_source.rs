@@ -73,9 +73,9 @@ fn inline_manifest(name: &str) -> ManifestData {
         // (run by `load_bundle_from_source`) requires a non-empty placeholder.
         file: "<inline>".to_owned(),
         path: PathBuf::new(),
-        version: String::new(),
-        provides: Vec::new(),
-        function_count: HashMap::new(),
+        version: "1.0.0".to_owned(),
+        provides: vec!["code.contract@1.0.0".to_owned()],
+        function_count: HashMap::from([("code.contract@1".to_owned(), 1)]),
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
         bundle_dependencies: Vec::new(),
@@ -133,6 +133,7 @@ fn code_source_loads_resolves_and_dispatches() {
     // SAFETY: see above — out is valid, args/arena are null and ignored.
     unsafe {
         (vm.call)(
+            interface.adapter_context,
             vm.loader_data,
             GuestContractInstance::null(),
             0,

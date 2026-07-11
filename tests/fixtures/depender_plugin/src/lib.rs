@@ -6,6 +6,7 @@
 
 use core::sync::atomic::AtomicU32;
 use core::sync::atomic::Ordering;
+use core::{ffi::c_void, ptr};
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::*;
 use polyplug_utils::GuestContractId;
@@ -38,6 +39,7 @@ const POLYPLUG_ABI_VERSION: u32 = 1_u32;
 /// # Safety
 /// Test plugins don't need real instances; dispatch uses global state.
 unsafe extern "C" fn create_instance_stub(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -54,6 +56,7 @@ unsafe extern "C" fn create_instance_stub(
 /// # Safety
 /// Test plugins don't own instance data.
 unsafe extern "C" fn destroy_instance_stub(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -78,6 +81,7 @@ fn depender_test_interface() -> GuestContractInterface {
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance: create_instance_stub,
         destroy_instance: destroy_instance_stub,
         dispatch: DispatchMechanisms {

@@ -57,12 +57,9 @@ def _get_lib() -> ctypes.CDLL:
         lib_path: str = _resolve_lib_path("POLYPLUG_LUA_LIB", "polyplug_lua")
         _lib = ctypes.CDLL(lib_path)
         _lib.polyplug_lua_loader_create.restype = ctypes.c_void_p
-        _lib.polyplug_lua_loader_create.argtypes = [ctypes.c_void_p]
+        _lib.polyplug_lua_loader_create.argtypes = []
     return _lib
 
-
-class _LuaConfig(ctypes.Structure):
-    _fields_ = [("_reserved", ctypes.c_uint8)]
 
 
 _RUNTIME_NAME: str = "lua"
@@ -71,8 +68,7 @@ _RUNTIME_NAME: str = "lua"
 def register_lua_loader(runtime: Runtime) -> None:
     """Register the Lua loader with the runtime via HostApi.register_loader."""
     lib: ctypes.CDLL = _get_lib()
-    cfg = _LuaConfig(0)
-    loader_ptr: int = lib.polyplug_lua_loader_create(ctypes.byref(cfg))
+    loader_ptr: int = lib.polyplug_lua_loader_create()
     if not loader_ptr:
         raise RuntimeError("polyplug: lua loader create failed")
 

@@ -36,7 +36,7 @@ use polyplug_abi::RuntimeConfig;
 use polyplug_abi::types::LogLevel;
 use polyplug_abi::types::Version;
 use polyplug_common::ManifestData;
-use polyplug_js::JsConfig;
+
 use polyplug_js::JsLoader;
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
@@ -83,6 +83,30 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     )
 }
 
+/// Extract literal contract names from the hand-written single-file JS fixtures.
+///
+/// Generated fixtures bring their own manifest; these test sources use literal
+/// `contractName` fields, so the public Runtime API can validate their staged
+/// provider set without bypassing loader orchestration.
+fn fixture_contract_names(content: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut remainder: &str = content;
+    const PREFIX: &str = "contractName: \"";
+    while let Some(start) = remainder.find(PREFIX) {
+        let value_start: usize = start + PREFIX.len();
+        let after_prefix: &str = &remainder[value_start..];
+        let Some(end) = after_prefix.find('"') else {
+            break;
+        };
+        let name: &str = &after_prefix[..end];
+        if !names.iter().any(|existing| existing == name) {
+            names.push(name.to_owned());
+        }
+        remainder = &after_prefix[end + 1..];
+    }
+    names
+}
+
 /// Write `content` to a temp file and return the path.
 /// Also creates a minimal manifest.toml for the bundle.
 fn write_temp_bundle(content: &str) -> (tempfile::TempDir, PathBuf) {
@@ -96,13 +120,29 @@ fn write_temp_bundle_with_name(content: &str, name: &str) -> (tempfile::TempDir,
     fs::write(&path, content).expect("write bundle.js");
 
     let bundle_id: u64 = polyplug_utils::bundle_id(name);
+    let contracts: Vec<String> = fixture_contract_names(content);
+    let provides: String = contracts
+        .iter()
+        .map(|contract| format!("\"{contract}@1.0.0\""))
+        .collect::<Vec<String>>()
+        .join(", ");
+    let function_counts: String = contracts
+        .iter()
+        .map(|contract| format!("\"{contract}@1\" = 0"))
+        .collect::<Vec<String>>()
+        .join("\n");
     let manifest: String = format!(
         r#"id = {}
 name = "{}"
+version = "1.0.0"
 loader = "js-quickjs"
 file = "bundle.js"
+provides = [{}]
+
+[function_count]
+{}
 "#,
-        bundle_id, name
+        bundle_id, name, provides, function_counts
     );
     fs::write(dir.path().join("manifest.toml"), &manifest).expect("write manifest.toml");
 
@@ -111,7 +151,7 @@ file = "bundle.js"
 
 /// Create a JsLoader.
 fn make_loader() -> JsLoader {
-    JsLoader::new(JsConfig {})
+    JsLoader::new()
 }
 
 /// Create a minimal Runtime with the JsLoader registered.
@@ -172,6 +212,7 @@ fn assert_vm_function_count(vtable: &GuestContractInterface, expected: u32) {
         // null args/out pointers.
         unsafe {
             (vtable.dispatch.vm.call)(
+                vtable.adapter_context,
                 vtable.dispatch.vm.loader_data,
                 GuestContractInstance::null(),
                 fn_id,
@@ -191,6 +232,7 @@ fn assert_vm_function_count(vtable: &GuestContractInterface, expected: u32) {
     // SAFETY: dispatch.vm.call is js_dispatch.
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             expected,
@@ -205,6 +247,20 @@ fn assert_vm_function_count(vtable: &GuestContractInterface, expected: u32) {
         AbiErrorCode::FunctionNotAvailable as u32,
         "fn_id {expected} must report FunctionNotAvailable"
     );
+}
+
+/// Load through the public Runtime orchestration so registration is staged and
+/// committed transactionally. Existing assertions remain phrased as loader errors.
+fn load_path_via_runtime(runtime: &Runtime, manifest: &ManifestData) -> Result<(), LoaderError> {
+    runtime
+        .load_bundle(&manifest.path)
+        .map_err(|error| match error {
+            RuntimeError::Loader(loader) => loader,
+            other => LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: other.to_string(),
+            },
+        })
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -227,14 +283,9 @@ fn load_valid_bundle_registers_vtable() {
     let (_dir, path) = write_temp_bundle(&bundle);
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(result.is_ok(), "load must succeed: {result:?}");
 
     // Verify the plugin was registered by querying the registry.
@@ -243,6 +294,116 @@ fn load_valid_bundle_registers_vtable() {
         .find(GuestContractId::from_u64(contract_id), 0)
         .expect("plugin must be registered");
     assert!(!handle.is_null(), "handle must be valid");
+}
+
+/// Every registration returned by `polyplug_init` must become independently
+/// resolvable through its own VM-dispatch interface.
+#[test]
+fn load_two_contract_bundle_registers_every_registration() {
+    let first_id: u64 = polyplug_utils::guest_contract_id("test.multi.first", 1);
+    let second_id: u64 = polyplug_utils::guest_contract_id("test.multi.second", 1);
+    let bundle: String = format!(
+        r#"
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
+    function registration(lo, hi, name) {{
+        return {{
+            contractLo: lo, contractHi: hi, fnCount: 1, contractName: name,
+            version: 0x00010000,
+            interface: {{
+                factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
+                functions: [function(impl, args, out, arena, bridge) {{ return 0; }}]
+            }}
+        }};
+    }}
+    return [[
+        registration({}, {}, "test.multi.first"),
+        registration({}, {}, "test.multi.second")
+    ], {{ code: 0, message: "" }}];
+}}
+"#,
+        first_id as u32,
+        (first_id >> 32) as u32,
+        second_id as u32,
+        (second_id >> 32) as u32,
+    );
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        write_temp_bundle_with_name(&bundle, "js_multi_contract_success");
+    let runtime: Arc<Runtime> = make_runtime();
+    let mut manifest: ManifestData = make_manifest(&path, "js_multi_contract_success");
+    manifest.version = "1.0.0".to_owned();
+    manifest.provides = vec![
+        "test.multi.first@1.0.0".to_owned(),
+        "test.multi.second@1.0.0".to_owned(),
+    ];
+    manifest
+        .function_count
+        .insert("test.multi.first@1".to_owned(), 1);
+    manifest
+        .function_count
+        .insert("test.multi.second@1".to_owned(), 1);
+
+    runtime
+        .load_bundle_from_source(manifest, BundleSource::Code(bundle))
+        .expect("both registrations must load");
+
+    for contract_id in [first_id, second_id] {
+        let handle: GuestContractHandle = runtime
+            .registry()
+            .find(GuestContractId::from_u64(contract_id), 0)
+            .expect("every returned registration must resolve");
+        let interface: *const GuestContractInterface = runtime
+            .registry()
+            .resolve_guest_contract(handle)
+            .expect("registered contract must expose an interface");
+        // SAFETY: the registry owns the resolved interface while the runtime lives.
+        assert_vm_function_count(unsafe { &*interface }, 1);
+    }
+}
+
+/// The runtime stages all registrations until the entire bundle validates. A
+/// duplicate second registration must leave no first-contract publication behind.
+#[test]
+fn second_contract_failure_has_no_partial_registry_publication() {
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.multi.duplicate", 1);
+    let bundle: String = format!(
+        r#"
+function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
+    const iface = {{
+        factory: function(bridge, hostLo, hostHi) {{ return {{}}; }},
+        functions: [function(impl, args, out, arena, bridge) {{ return 0; }}]
+    }};
+    const registration = {{
+        contractLo: {}, contractHi: {}, fnCount: 1,
+        contractName: "test.multi.duplicate", version: 0x00010000, interface: iface
+    }};
+    return [[registration, registration], {{ code: 0, message: "" }}];
+}}
+"#,
+        contract_id as u32,
+        (contract_id >> 32) as u32,
+    );
+    let (_dir, path): (tempfile::TempDir, PathBuf) =
+        write_temp_bundle_with_name(&bundle, "js_multi_contract_failure");
+    let runtime: Arc<Runtime> = make_runtime();
+    let mut manifest: ManifestData = make_manifest(&path, "js_multi_contract_failure");
+    manifest.version = "1.0.0".to_owned();
+    manifest.provides = vec!["test.multi.duplicate@1.0.0".to_owned()];
+    manifest
+        .function_count
+        .insert("test.multi.duplicate@1".to_owned(), 1);
+
+    let result = runtime.load_bundle_from_source(manifest, BundleSource::Code(bundle));
+    assert!(
+        result.is_err(),
+        "the duplicate second registration must fail"
+    );
+    assert!(
+        runtime
+            .registry()
+            .find(GuestContractId::from_u64(contract_id), 0)
+            .is_err(),
+        "a failed staged bundle must publish no contract"
+    );
 }
 
 #[test]
@@ -292,14 +453,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     let (_dir, path) = write_temp_bundle(&bundle);
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(result.is_ok(), "load must succeed: {result:?}");
 
     // Verify the plugin was registered.
@@ -333,15 +489,19 @@ fn load_accepts_directory_path() {
     let manifest_toml: String = format!(
         r#"id = {}
 name = "test.dir"
+version = "1.0.0"
 loader = "js-quickjs"
 file = "bundle.js"
+provides = ["test.dir@1.0.0"]
+
+[function_count]
+"test.dir@1" = 1
 "#,
         bundle_id
     );
     fs::write(dir.path().join("manifest.toml"), &manifest_toml).expect("write manifest.toml");
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = ManifestData {
         id: bundle_id,
@@ -356,11 +516,7 @@ file = "bundle.js"
         needs_reinit_on_dep_reload: false,
         bundle_dependencies: Vec::new(),
     };
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(
         result.is_ok(),
         "load from directory path must succeed: {result:?}"
@@ -382,14 +538,9 @@ fn load_syntax_error_returns_error() {
     let (_dir, path) = write_temp_bundle(bundle);
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(result.is_err(), "syntax error bundle must return Err");
 
     // The error must be a JsRuntimePanic mentioning the eval failure.
@@ -411,14 +562,9 @@ fn load_runtime_error_returns_error() {
     let (_dir, path) = write_temp_bundle(bundle);
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(result.is_err(), "runtime error bundle must return Err");
 
     let err_str: String = result
@@ -439,14 +585,9 @@ fn load_bundle_without_polyplug_init_returns_error() {
     let (_dir, path) = write_temp_bundle(bundle);
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(
         result.is_err(),
         "bundle without polyplug_init must return Err"
@@ -468,7 +609,6 @@ fn load_nonexistent_file_returns_error() {
     let path: PathBuf = PathBuf::from("/tmp/polyplug_js_test_nonexistent_bundle_xyz.js");
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = ManifestData {
         id: 0,
@@ -486,11 +626,7 @@ fn load_nonexistent_file_returns_error() {
         needs_reinit_on_dep_reload: false,
         bundle_dependencies: Vec::new(),
     };
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(result.is_err(), "non-existent file must return Err");
 }
 
@@ -541,14 +677,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     let (_dir, path) = write_temp_bundle(&bundle);
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(
         result.is_ok(),
         "bundle reading bundlePath must succeed: {result:?}"
@@ -607,14 +738,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     let (_dir, path) = write_temp_bundle(&bundle);
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(
         result.is_ok(),
         "all polyplug methods must be present: {result:?}"
@@ -632,15 +758,9 @@ fn vtable_contract_id_roundtrip() {
     let (_dir, path) = write_temp_bundle(&bundle);
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = make_loader();
+
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    loader
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
-        .expect("load must succeed");
+    load_path_via_runtime(&runtime, &manifest).expect("load must succeed");
 
     // Verify the plugin was registered with the correct contract_id.
     let handle: GuestContractHandle = runtime
@@ -697,16 +817,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     let (_dir, path) = write_temp_bundle(&bundle);
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    loader
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
-        .expect("load must succeed");
+    load_path_via_runtime(&runtime, &manifest).expect("load must succeed");
 
     // Verify the plugin was registered and get its vtable.
     let handle: GuestContractHandle = runtime
@@ -782,14 +895,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     let (_dir, path) = write_temp_bundle(&bundle);
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(
         result.is_ok(),
         "bundle with alloc+free must succeed: {result:?}"
@@ -818,17 +926,12 @@ fn concurrent_loads_do_not_panic() {
                 let (_dir, path) = write_temp_bundle(&bundle);
 
                 let runtime: Arc<Runtime> = RuntimeBuilder::new()
-                    .loader(JsLoader::new(JsConfig {}))
+                    .loader(JsLoader::new())
                     .build()
                     .expect("runtime build must succeed");
-                let loader: JsLoader = JsLoader::new(JsConfig {});
 
                 let manifest: ManifestData = make_manifest(&path, "test.bundle");
-                if let Err(e) = loader.load(
-                    &manifest,
-                    &BundleSource::Path(manifest.path.clone()),
-                    &runtime,
-                ) {
+                if let Err(e) = load_path_via_runtime(&runtime, &manifest) {
                     let mut guard: MutexGuard<'_, Vec<String>> =
                         errors_clone.lock().unwrap_or_else(|e| e.into_inner());
                     guard.push(format!("thread {i}: {e}"));
@@ -860,22 +963,15 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
     // Create first runtime and load a plugin with contract_id A
     let contract_id_a: u64 = polyplug_utils::guest_contract_id("test.isolation.a", 1);
     let bundle_a: String = make_bundle_js(contract_id_a, 1, "test.isolation.a");
-    let (_dir_a, path_a) = write_temp_bundle(&bundle_a);
+    let (_dir_a, path_a) = write_temp_bundle_with_name(&bundle_a, "test.bundle.a");
 
     let runtime_a: Arc<Runtime> = RuntimeBuilder::new()
-        .loader(JsLoader::new(JsConfig {}))
+        .loader(JsLoader::new())
         .build()
         .expect("runtime_a build must succeed");
-    let loader_a: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest_a: ManifestData = make_manifest(&path_a, "test.bundle.a");
-    loader_a
-        .load(
-            &manifest_a,
-            &BundleSource::Path(manifest_a.path.clone()),
-            &runtime_a,
-        )
-        .expect("load runtime_a must succeed");
+    load_path_via_runtime(&runtime_a, &manifest_a).expect("load runtime_a must succeed");
 
     // Verify plugin A is registered in runtime_a
     let handle_a: GuestContractHandle = runtime_a
@@ -887,22 +983,15 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
     // Create second runtime on the SAME thread and load a plugin with contract_id B
     let contract_id_b: u64 = polyplug_utils::guest_contract_id("test.isolation.b", 1);
     let bundle_b: String = make_bundle_js(contract_id_b, 1, "test.isolation.b");
-    let (_dir_b, path_b) = write_temp_bundle(&bundle_b);
+    let (_dir_b, path_b) = write_temp_bundle_with_name(&bundle_b, "test.bundle.b");
 
     let runtime_b: Arc<Runtime> = RuntimeBuilder::new()
-        .loader(JsLoader::new(JsConfig {}))
+        .loader(JsLoader::new())
         .build()
         .expect("runtime_b build must succeed");
-    let loader_b: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest_b: ManifestData = make_manifest(&path_b, "test.bundle.b");
-    loader_b
-        .load(
-            &manifest_b,
-            &BundleSource::Path(manifest_b.path.clone()),
-            &runtime_b,
-        )
-        .expect("load runtime_b must succeed");
+    load_path_via_runtime(&runtime_b, &manifest_b).expect("load runtime_b must succeed");
 
     // Verify plugin B is registered in runtime_b
     let handle_b: GuestContractHandle = runtime_b
@@ -955,7 +1044,6 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
 #[test]
 fn sequential_loads_of_different_contracts_all_succeed() {
     // Sequential re-use of the same JsLoader for multiple bundles.
-    let loader: JsLoader = JsLoader::new(JsConfig {});
     let runtime: Arc<Runtime> = make_runtime();
 
     for i in 0..4_u32 {
@@ -963,14 +1051,10 @@ fn sequential_loads_of_different_contracts_all_succeed() {
             polyplug_utils::guest_contract_id(&format!("test.sequential.{i}"), 1);
 
         let bundle: String = make_bundle_js(contract_id, 1, &format!("test.sequential.{i}"));
-        let (_dir, path) = write_temp_bundle(&bundle);
-
-        let manifest: ManifestData = make_manifest(&path, "test.bundle");
-        let result: Result<(), LoaderError> = loader.load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        );
+        let bundle_name: String = format!("test.bundle.{i}");
+        let (_dir, path) = write_temp_bundle_with_name(&bundle, &bundle_name);
+        let manifest: ManifestData = make_manifest(&path, &bundle_name);
+        let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
         assert!(
             result.is_ok(),
             "sequential load {i} must succeed: {result:?}"
@@ -989,14 +1073,9 @@ fn dispatch_vm_call_works_correctly() {
     let (_dir, path) = write_temp_bundle(&bundle);
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(result.is_ok(), "load must succeed: {result:?}");
 
     let handle: GuestContractHandle = runtime
@@ -1019,6 +1098,7 @@ fn dispatch_vm_call_works_correctly() {
     // dispatch.vm.call is js_dispatch, loader_data is valid.
     unsafe {
         (vtable_ref.dispatch.vm.call)(
+            vtable_ref.adapter_context,
             vtable_ref.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0, // fn_id = 0 (first function)
@@ -1035,6 +1115,23 @@ fn dispatch_vm_call_works_correctly() {
         "dispatch.vm.call must return Ok, got code={}",
         call_result.code
     );
+
+    let mut context_error: AbiError = AbiError::ok();
+    // SAFETY: the VM loader data is valid, but the null adapter context must be
+    // rejected before the dispatch callback dereferences it.
+    unsafe {
+        (vtable_ref.dispatch.vm.call)(
+            ptr::null_mut(),
+            vtable_ref.dispatch.vm.loader_data,
+            GuestContractInstance::null(),
+            0,
+            ptr::null::<()>(),
+            ptr::null_mut::<()>(),
+            ptr::null_mut(),
+            &mut context_error,
+        );
+    }
+    assert_eq!(context_error.code, AbiErrorCode::InvalidPointer as u32);
 }
 
 // ── StringView.toString() Tests ────────────────────────────────────────────────
@@ -1088,14 +1185,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     let (_dir, path) = write_temp_bundle(&bundle);
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(result.is_ok(), "Empty string test must succeed: {result:?}");
 }
 
@@ -1269,6 +1361,7 @@ fn dispatch_add(runtime: &Runtime, contract_id: u64, a: i32, b: i32) -> i32 {
     // out at one valid i32, matching what the guest reads/writes.
     unsafe {
         (vtable_ref.dispatch.vm.call)(
+            vtable_ref.adapter_context,
             vtable_ref.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0,
@@ -1338,22 +1431,21 @@ fn load_bytes_source_valid_utf8_succeeds() {
 #[test]
 fn load_bytes_source_invalid_utf8_returns_structured_error() {
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = make_loader();
 
     // 0xFF is never valid in a UTF-8 sequence.
     let invalid: Vec<u8> = vec![0xFF, 0xFE, 0x00, 0x01];
     let manifest: ManifestData = fixture_manifest(PathBuf::new());
-    let result: Result<(), LoaderError> =
-        loader.load(&manifest, &BundleSource::Bytes(invalid), &runtime);
+    let result: Result<(), RuntimeError> =
+        runtime.load_bundle_from_source(manifest, BundleSource::Bytes(invalid));
 
     assert!(
         matches!(
             result,
-            Err(LoaderError::InvalidSourceEncoding {
+            Err(RuntimeError::Loader(LoaderError::InvalidSourceEncoding {
                 loader: "js-quickjs",
                 source_kind: "bytes",
                 ..
-            })
+            }))
         ),
         "invalid UTF-8 bytes must yield InvalidSourceEncoding: {result:?}"
     );
@@ -1528,6 +1620,7 @@ fn dispatch_host_caller(runtime: &Runtime, guest_contract_id: u64) -> u32 {
     // args/out pointers straight into callHostContract.
     unsafe {
         (vtable_ref.dispatch.vm.call)(
+            vtable_ref.adapter_context,
             vtable_ref.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0,
@@ -1706,6 +1799,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     let records: Arc<Mutex<Vec<(LogLevel, String, String)>>> = Arc::new(Mutex::new(Vec::new()));
     let records_clone: Arc<Mutex<Vec<(LogLevel, String, String)>>> = Arc::clone(&records);
     let runtime: Arc<Runtime> = RuntimeBuilder::new()
+        .loader(JsLoader::new())
         .logger(move |level: LogLevel, scope: &str, msg: &str| {
             records_clone.lock().expect("records lock").push((
                 level,
@@ -1715,16 +1809,8 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
         })
         .build()
         .expect("runtime build must succeed");
-
-    let loader: JsLoader = JsLoader::new(JsConfig {});
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    loader
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
-        .expect("logging bundle must load");
+    load_path_via_runtime(&runtime, &manifest).expect("logging bundle must load");
 
     let handle: GuestContractHandle = runtime
         .registry()
@@ -1742,6 +1828,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     // logging function never reads its (args, out) pointers.
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0,
@@ -1801,13 +1888,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {
     let (_dir, path) = write_temp_bundle_with_name(bundle, "test.initerr");
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = make_loader();
+
     let manifest: ManifestData = make_manifest(&path, "test.initerr");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(result.is_err(), "non-zero init code must fail the load");
     let err_str: String = result
         .expect_err("expected Err for non-zero init code")
@@ -1838,13 +1921,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {
     let (_dir, path) = write_temp_bundle_with_name(bundle, "test.initnum");
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = make_loader();
+
     let manifest: ManifestData = make_manifest(&path, "test.initnum");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(
         result.is_err(),
         "non-zero init code must fail the load even without a message"
@@ -1877,13 +1956,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {
     let (_dir, path) = write_temp_bundle_with_name(bundle, "test.malformed");
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = make_loader();
+
     let manifest: ManifestData = make_manifest(&path, "test.malformed");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(result.is_err(), "malformed interface must fail the load");
     let err_str: String = result
         .expect_err("expected Err for malformed interface")
@@ -1914,13 +1989,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {
     let (_dir, path) = write_temp_bundle_with_name(bundle, "test.short");
 
     let runtime: Arc<Runtime> = make_runtime();
-    let loader: JsLoader = make_loader();
+
     let manifest: ManifestData = make_manifest(&path, "test.short");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(result.is_err(), "short functions array must fail the load");
     let err_str: String = result
         .expect_err("expected Err for short functions array")

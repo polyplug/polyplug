@@ -76,10 +76,10 @@ terms inline.
   dispatch through the cached interface pointer; VM peers route by contract id (JS
   routes through the threaded bridge).
 
-- **revision counter** — A `u64` the runtime bumps on every load, reload, and unload.
-  The `HostApi.revision_counter` field returns a pointer to it; cached callers do one
-  acquire load *through that pointer* before each dispatch and re-resolve when it
-  changes, so a cached interface pointer never dangles after a reload or unload.
+- **registry revision** — A `u64` the runtime advances on every load, reload, and
+  unload. `HostApi.registry_revision` returns an acquire-synchronized value; cached
+  callers compare it before each dispatch and re-resolve when it changes, so a cached
+  interface pointer never dangles after a reload or unload.
 
 - **StringView** — The ABI string representation: a `(ptr, len)` pair over UTF-8
   bytes. Every string crossing the boundary is a `StringView` — never a null-terminated

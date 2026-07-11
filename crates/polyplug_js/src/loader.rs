@@ -27,7 +27,6 @@ use std::thread::ThreadId;
 use core::sync::atomic::AtomicUsize;
 #[cfg(test)]
 use polyplug::runtime::RuntimeBuilder as PolyplugRuntimeBuilder;
-#[cfg(test)]
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::Barrier;
@@ -62,7 +61,7 @@ use polyplug_abi::HostContractInterface;
 use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
-use polyplug_abi::SupportedLanguage;
+
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
 use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
@@ -73,16 +72,14 @@ use polyplug_common::ManifestData;
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
 
-use crate::config::JsConfig;
-
 // ─── Registration data returned by polyplug_init ──────────────────────────────
 
 /// Registration data extracted from `polyplug_init`'s return value.
 ///
 /// `polyplug_init` RETURNS `[registrations, abiError]` (nothing is deposited into
-/// any global or VM userdata — Rule 12); the loader reads `registrations[0]` and
-/// extracts these fields. The `Persistent` values are `'static`, so they travel
-/// out of the `Context::with` closure that built them.
+/// any global or VM userdata — Rule 12); the loader extracts every registration.
+/// The `Persistent` values are `'static`, so they travel out of the `Context::with`
+/// closure that built them.
 struct JsRegistrationData {
     contract_id: u64,
     contract_version: u32,
@@ -92,6 +89,17 @@ struct JsRegistrationData {
     /// to build the stateless default impl and once per `create_instance` for a
     /// live per-instance impl, threading the bridge + host vtable explicitly.
     factory: Persistent<Function<'static>>,
+}
+
+/// Fully validated QuickJS registrations, ready for sequential registry calls.
+struct JsInitData {
+    registrations: Vec<JsPreparedRegistration>,
+    bridge: Persistent<Object<'static>>,
+}
+
+struct JsPreparedRegistration {
+    registration: JsRegistrationData,
+    default_impl: Persistent<Value<'static>>,
 }
 
 // ─── JS Loader Data for VM Dispatch ───────────────────────────────────────────
@@ -168,7 +176,7 @@ pub struct JsLoaderData {
     /// from another thread concurrently — which proceeds. It lives on the per-VM
     /// `JsLoaderData`, never globally, so it is Rule-12 compliant. Contention is
     /// trivial: the vec holds 0..N concurrent caller threads and never duplicates.
-    pub in_dispatch_threads: Mutex<Vec<ThreadId>>,
+    pub in_dispatch_threads: Arc<Mutex<Vec<ThreadId>>>,
     /// Instance-owned copy of the runtime's logger, taken at load time.
     ///
     /// Dispatch-time diagnostics have no `&Runtime` back-reference, so the
@@ -261,6 +269,7 @@ impl Drop for JsDispatchGuard<'_> {
 ///   loaded).
 /// - `out_instance`, when non-null, must be writable per the ABI contract.
 unsafe extern "C" fn js_create_instance(
+    adapter_context: *mut c_void,
     loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -274,6 +283,11 @@ unsafe extern "C" fn js_create_instance(
     // contract id afterward). Write a null instance and return rather than deref a
     // null pointer.
     if loader_data.data.is_null() {
+        // SAFETY: out_instance is non-null (checked above) and writable per the ABI contract.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+        return;
+    }
+    if adapter_context != loader_data.data {
         // SAFETY: out_instance is non-null (checked above) and writable per the ABI contract.
         unsafe { out_instance.write(GuestContractInstance::null()) };
         return;
@@ -355,6 +369,7 @@ unsafe extern "C" fn js_create_instance(
 /// - `instance` must be a handle previously produced by [`js_create_instance`] for
 ///   this contract (or a null handle).
 unsafe extern "C" fn js_destroy_instance(
+    adapter_context: *mut c_void,
     loader_data: VmLoaderData,
     _host: *const HostApi,
     instance: GuestContractInstance,
@@ -366,6 +381,9 @@ unsafe extern "C" fn js_destroy_instance(
     // A null loader_data carries no per-contract registry to remove from (e.g. a
     // peer caller that passes a zeroed VmLoaderData). Nothing to drop.
     if loader_data.data.is_null() {
+        return;
+    }
+    if adapter_context != loader_data.data {
         return;
     }
     // SAFETY: loader_data wraps a valid JsLoaderData pointer created by the loader
@@ -393,6 +411,7 @@ unsafe extern "C" fn js_destroy_instance(
 ///   caller for this call. Values written by the guest into the arena (via
 ///   `polyplug.arenaAlloc`) are valid until the caller's next reset.
 unsafe extern "C" fn js_dispatch(
+    adapter_context: *mut c_void,
     loader_data: VmLoaderData,
     instance: GuestContractInstance,
     fn_id: u32,
@@ -401,10 +420,16 @@ unsafe extern "C" fn js_dispatch(
     arena: *mut CallArena,
     out_err: *mut AbiError,
 ) {
-    // SAFETY: loader_data wraps a valid pointer to JsLoaderData created by the
-    // loader; args/out/arena satisfy the ABI dispatch contract for this call.
-    let result: AbiError =
-        unsafe { js_dispatch_impl(loader_data, instance, fn_id, args, out, arena) };
+    let result: AbiError = if adapter_context == loader_data.data && !loader_data.data.is_null() {
+        // SAFETY: loader_data wraps a valid pointer to JsLoaderData created by the
+        // loader; args/out/arena satisfy the ABI dispatch contract for this call.
+        unsafe { js_dispatch_impl(loader_data, instance, fn_id, args, out, arena) }
+    } else {
+        AbiError {
+            code: AbiErrorCode::InvalidPointer as u32,
+            message: StringView::null(),
+        }
+    };
     if !out_err.is_null() {
         // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
         unsafe { out_err.write(result) };
@@ -451,7 +476,7 @@ unsafe fn js_dispatch_impl(
     // From here on this thread's id is registered; the guard removes it on every
     // exit path (early return, normal return, or panic unwind).
     let _dispatch_guard: JsDispatchGuard<'_> = JsDispatchGuard {
-        threads: &data.in_dispatch_threads,
+        threads: data.in_dispatch_threads.as_ref(),
     };
 
     let func_persistent: &Persistent<Function<'static>> = match data.functions.get(fn_id as usize) {
@@ -716,31 +741,17 @@ fn register_host_functions<'js>(
         })?;
 
     // ── revision ─────────────────────────────────────────────────────────────────
-    // Reads the runtime's monotonic registry revision counter (HostApi.revision_counter)
-    // with Acquire ordering and returns its current u64 value as [lo, hi] f64 halves
-    // (matching alloc/arenaAlloc — QuickJS numbers cannot carry a full u64 exactly).
-    // A generated peer caller compares this against the value cached at resolve time:
-    // a change means a load/reload/unload republished the registry, so the cached peer
-    // interface and instance may dangle and must be re-resolved before the next dispatch.
-    // QuickJS cannot deref the raw `*const u64`, so the read happens here on the Rust
-    // side; one bridge call per dispatch is negligible against microsecond VM dispatch.
+    // Reads the runtime's monotonic registry revision through the HostApi callback
+    // and returns it as [lo, hi] f64 halves (QuickJS numbers cannot carry a full
+    // u64 exactly). A generated peer caller compares it with its cached revision to
+    // decide whether to resolve a fresh peer interface and instance.
     let revision_fn: Function<'js> = Function::new(
         ctx.clone(),
         move |ctx: Ctx<'js>| -> Result<Array<'js>, QjsError> {
             let value: u64 = match host_from_usize(host_interface_usize) {
-                Some(hvt) => {
-                    // SAFETY: hvt points to 'static HostApi data; revision_counter is an ABI
-                    // function pointer satisfied by passing hvt as the self argument.
-                    let ptr: *const u64 = unsafe { ((*hvt).revision_counter)(hvt) };
-                    if ptr.is_null() {
-                        0_u64
-                    } else {
-                        // SAFETY: ptr was returned by revision_counter and points to the
-                        // runtime's revision counter — an AtomicU64 valid for the runtime's
-                        // lifetime. Acquire mirrors the host-side store ordering.
-                        unsafe { (*(ptr as *const AtomicU64)).load(Ordering::Acquire) }
-                    }
-                }
+                // SAFETY: hvt points to the owning runtime's HostApi, and
+                // registry_revision accepts that self-passing pointer.
+                Some(hvt) => unsafe { ((*hvt).registry_revision)(hvt) },
                 None => 0_u64,
             };
             let arr: Array<'js> = Array::new(ctx.clone())
@@ -812,6 +823,9 @@ fn register_host_functions<'js>(
             // SAFETY: iface is non-null (checked above); `dispatch_type` is a plain
             // field readable through a valid pointer.
             let peer_dt: DispatchType = unsafe { (*iface).dispatch_type };
+            // SAFETY: iface is non-null (checked above), so its opaque context is
+            // the exact value core forwards to every callback.
+            let peer_adapter_context: *mut c_void = unsafe { (*iface).adapter_context };
             let peer_loader_data: VmLoaderData = match peer_dt {
                 // SAFETY: iface is non-null; the `vm` union variant is active iff
                 // dispatch_type == VirtualMachine, which this arm establishes.
@@ -820,10 +834,16 @@ fn register_host_functions<'js>(
             };
             let mut instance: GuestContractInstance = GuestContractInstance::null();
             // SAFETY: iface is non-null and points to a valid GuestContractInterface
-            // returned by resolve_guest_contract; null ctx is accepted for stateless contracts;
-            // `instance` is a valid, writable out-param for the duration of the call.
+            // returned by resolve_guest_contract; `instance` is a valid, writable
+            // out-param for the duration of the call.
             unsafe {
-                ((*iface).create_instance)(peer_loader_data, hvt, ptr::null(), &mut instance)
+                ((*iface).create_instance)(
+                    peer_adapter_context,
+                    peer_loader_data,
+                    hvt,
+                    ptr::null(),
+                    &mut instance,
+                )
             };
             // A same-VM peer create is refused (null-id handle); the VM dispatch path
             // routes by instance.contract_id — stamp the id we resolved either way.
@@ -845,7 +865,14 @@ fn register_host_functions<'js>(
                         // SAFETY: iface produced `instance` via create_instance with the peer's
                         // own loader_data; destroying it with the same loader_data releases the
                         // per-instance impl before we bail out (a null-id handle is a no-op).
-                        unsafe { ((*iface).destroy_instance)(peer_loader_data, hvt, instance) };
+                        unsafe {
+                            ((*iface).destroy_instance)(
+                                peer_adapter_context,
+                                peer_loader_data,
+                                hvt,
+                                instance,
+                            )
+                        };
                         return AbiErrorCode::FunctionNotAvailable as u32;
                     }
                     // SAFETY: fn_id < function_count and functions is non-null, so the slot
@@ -854,15 +881,23 @@ fn register_host_functions<'js>(
                     if slot.is_null() {
                         // SAFETY: same as the bounds-check bail-out above — release the
                         // freshly created instance before returning.
-                        unsafe { ((*iface).destroy_instance)(peer_loader_data, hvt, instance) };
+                        unsafe {
+                            ((*iface).destroy_instance)(
+                                peer_adapter_context,
+                                peer_loader_data,
+                                hvt,
+                                instance,
+                            )
+                        };
                         return AbiErrorCode::FunctionNotAvailable as u32;
                     }
                     // SAFETY: native dispatch slots carry the frozen native ABI signature
-                    // `extern "C" fn(GuestContractInstance, *const c_void, *mut c_void, *mut AbiError)`
-                    // (see the polyplugc rust generator); `slot` is a non-null pointer to such a
-                    // function. The transmute reinterprets the type-erased `*const ()` as that
-                    // concrete fn pointer, the established native-call form.
+                    // `extern "C" fn(*mut c_void, GuestContractInstance, *const c_void,
+                    // *mut c_void, *mut AbiError)` (see the polyplugc rust generator).
+                    // `slot` is a non-null pointer to such a function. The transmute
+                    // reinterprets the type-erased pointer as that concrete ABI.
                     let dispatch_fn: unsafe extern "C" fn(
+                        *mut c_void,
                         GuestContractInstance,
                         *const c_void,
                         *mut c_void,
@@ -872,7 +907,7 @@ fn register_host_functions<'js>(
                     // this interface's table; `instance` belongs to this contract; args/out are
                     // caller-supplied addresses the generated peer_callers.ts aligns via
                     // polyplug.alloc; `err` is a valid, writable out-param for the call.
-                    unsafe { dispatch_fn(instance, args, out, &mut err) };
+                    unsafe { dispatch_fn(peer_adapter_context, instance, args, out, &mut err) };
                     err.code
                 }
                 DispatchType::VirtualMachine => {
@@ -883,6 +918,7 @@ fn register_host_functions<'js>(
                     // a caller that carries no per-call arena; `err` is a valid, writable out-param.
                     unsafe {
                         ((*iface).dispatch.vm.call)(
+                            peer_adapter_context,
                             (*iface).dispatch.vm.loader_data,
                             instance,
                             fn_id,
@@ -898,7 +934,9 @@ fn register_host_functions<'js>(
             // SAFETY: iface is non-null (checked above); instance was produced by create_instance
             // on this same interface, so destroying it with the same peer loader_data releases
             // the per-instance impl (a null-id handle is a no-op).
-            unsafe { ((*iface).destroy_instance)(peer_loader_data, hvt, instance) };
+            unsafe {
+                ((*iface).destroy_instance)(peer_adapter_context, peer_loader_data, hvt, instance)
+            };
             code
         },
     )
@@ -1330,6 +1368,7 @@ fn register_host_functions<'js>(
                     // `err` is a valid, writable out-param for the duration of the call.
                     unsafe {
                         ((*iface).dispatch.vm.call)(
+                            (*iface).user_data,
                             (*iface).dispatch.vm.loader_data,
                             GuestContractInstance::null(),
                             fn_id,
@@ -1492,31 +1531,32 @@ impl Drop for InitBundleGuard<'_> {
 
 /// QuickJS in-process JS plugin loader.
 pub struct JsLoader {
-    _config: JsConfig,
     /// Per-bundle VM state owned by the loader, keyed by [`BundleId`].
     ///
-    /// Each loaded bundle contributes one [`JsLoaderData`] (holding its own QuickJS
-    /// `Runtime` and `Context`). The boxes are owned here instead of leaked via
-    /// `Box::into_raw`, so [`JsLoader::unload`] can drop them and truly reclaim the
-    /// VM. The VM dispatch `bridge_data` points at the boxed `JsLoaderData`'s stable
-    /// heap address; the box is never moved out of the map while owned, so the
-    /// pointer stays valid for as long as the bundle is loaded — exactly the
-    /// guarantee the old leak provided. Reload appends rather than replaces so a
-    /// superseded VM stays alive for any in-flight dispatch.
+    /// Each loaded bundle contributes one [`JsLoaderData`] per registered
+    /// contract, sharing the bundle's QuickJS `Runtime` and `Context`. The boxes
+    /// are owned here instead of leaked via `Box::into_raw`, so
+    /// [`JsLoader::unload`] can reclaim every contract's VM state. The VM dispatch
+    /// `loader_data` points at a boxed `JsLoaderData`'s stable heap address; the
+    /// allocation remains stable for as long as the bundle is loaded. Reload
+    /// replaces the prior bundle state and schedules it for epoch-deferred reclaim.
     live: Mutex<HashMap<BundleId, Vec<SendVm>>>,
     /// Count of VM-state boxes scheduled for epoch-deferred reclamation.
     ///
     /// Test/diagnostic only: epoch collection timing is non-deterministic, but this
-    /// counter is incremented the instant a box is handed to
-    /// `crossbeam_epoch::pin().defer(...)`, so it deterministically proves the VM was
-    /// scheduled for reclaim — NOT parked alive forever. Instance state (Rule 12).
+    /// counter is incremented when a box is handed to `crossbeam_epoch::defer`.
     scheduled_reclaims: AtomicU64,
 }
 
+impl Default for JsLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl JsLoader {
-    pub fn new(config: JsConfig) -> JsLoader {
+    pub fn new() -> JsLoader {
         JsLoader {
-            _config: config,
             live: Mutex::new(HashMap::new()),
             scheduled_reclaims: AtomicU64::new(0),
         }
@@ -1611,31 +1651,17 @@ impl JsLoader {
             Some(dir) => dir.to_string_lossy().into_owned(),
             None => String::new(),
         };
-
-        // HostApi pointer split into f64 lo/hi halves, threaded explicitly to
-        // polyplug_init and each factory call (NOT set on a VM global — Rule 12).
-        // f64 avoids rquickjs sign-extending a u32 > INT32_MAX to a negative tagged int.
         let host_usize: usize = host_interface as usize;
         let host_lo: f64 = (host_usize as u32) as f64;
         let host_hi: f64 = ((host_usize >> 32) as u32) as f64;
-
-        // Build the bridge + call polyplug_init + extract the registration and build
-        // the default impl, all under one Context::with. The bridge is persisted and
-        // threaded into init / each factory call / every dispatch — it is NEVER set
-        // on `globalThis` (Rule 12). The `Persistent` values returned here are
-        // 'static, so they leave the closure to populate the JsLoaderData below.
-        type InitExtract = (
-            JsRegistrationData,
-            Persistent<Object<'static>>,
-            Persistent<Value<'static>>,
-        );
-        let init_extract: Result<InitExtract, LoaderError> = ctx.with(|ctx_ref: Ctx<'_>| {
+        // Build the bridge, call `polyplug_init`, validate every returned
+        // registration, and create each stateless default implementation while the
+        // VM context is active. No registry mutation occurs until this succeeds.
+        let init_extract: Result<JsInitData, LoaderError> = ctx.with(|ctx_ref: Ctx<'_>| {
             let polyplug_obj: Object<'_> =
-                Object::new(ctx_ref.clone()).map_err(|e: QjsError| {
-                    LoaderError::InitFailed {
-                        bundle: manifest.name.clone(),
-                        error: format!("JS runtime js-quickjs error: object creation failed: {e}"),
-                    }
+                Object::new(ctx_ref.clone()).map_err(|e: QjsError| LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!("JS runtime js-quickjs error: object creation failed: {e}"),
                 })?;
             register_host_functions(
                 &ctx_ref,
@@ -1648,50 +1674,35 @@ impl JsLoader {
             let set_bundle: String = format!("globalThis.bundlePath = {:?};", bundle_dir_str);
             ctx_ref
                 .eval::<Value<'_>, _>(set_bundle.as_str())
-                .map_err(|e: QjsError| {
-                    LoaderError::InitFailed {
-                        bundle: manifest.name.clone(),
-                        error: format!("JS runtime js-quickjs error: bundlePath injection failed: {e}"),
-                    }
+                .map_err(|e: QjsError| LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!(
+                        "JS runtime js-quickjs error: bundlePath injection failed: {e}"
+                    ),
                 })?;
-
             ctx_ref
                 .eval::<Value<'_>, _>(bundle_js)
-                .map_err(|e: QjsError| {
-                    LoaderError::InitFailed {
-                        bundle: manifest.name.clone(),
-                        error: format!("JS runtime js-quickjs error: bundle eval failed: {e}"),
-                    }
+                .map_err(|e: QjsError| LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!("JS runtime js-quickjs error: bundle eval failed: {e}"),
                 })?;
 
             let init_fn: Function<'_> = ctx_ref
                 .globals()
                 .get::<&str, Function<'_>>("polyplug_init")
-                .map_err(|_| {
-                    LoaderError::InitSymbolMissing {
-                        bundle: bundle_dir_str.clone(),
-                    }
+                .map_err(|_| LoaderError::InitSymbolMissing {
+                    bundle: bundle_dir_str.clone(),
                 })?;
-
-            // SAFETY: Intentionally leaked; bundle_path_static outlives this call.
-            let bundle_path_static: &'static str =
-                Box::leak(bundle_dir_str.clone().into_boxed_str());
             let plugin_ctx: BundleInitContext = BundleInitContext {
                 bundle_path: StringView {
-                    ptr: bundle_path_static.as_ptr(),
-                    len: bundle_path_static.len(),
+                    ptr: bundle_dir_str.as_ptr(),
+                    len: bundle_dir_str.len(),
                 },
                 bundle_id,
             };
-
-            // Pass HostApi and BundleInitContext pointers as 4 f64 arguments plus the
-            // bridge object: (host_lo, host_hi, ctx_lo, ctx_hi, bridge). The generated
-            // polyplug_init RETURNS [registrations, abiError]; nothing is deposited
-            // into any global / VM userdata (Rule 12).
             let ctx_usize: usize = &plugin_ctx as *const BundleInitContext as usize;
             let ctx_lo: f64 = (ctx_usize as u32) as f64;
             let ctx_hi: f64 = ((ctx_usize >> 32) as u32) as f64;
-
             let init_value: Array<'_> = init_fn
                 .call::<(f64, f64, f64, f64, Object<'_>), Array<'_>>((
                     host_lo,
@@ -1714,9 +1725,6 @@ impl JsLoader {
                     }
                 })?;
 
-            // init_value = [registrations, abiError]. Honor the AbiError first: a
-            // non-Ok code means the guest refused to initialize — fail the load,
-            // surfacing the guest's own message when present.
             let abi_error: Object<'_> = init_value.get::<Object<'_>>(1).map_err(|_| {
                 LoaderError::InitFailed {
                     bundle: manifest.name.clone(),
@@ -1740,9 +1748,6 @@ impl JsLoader {
                 });
             }
 
-            // Read registrations[0] — the loader registers a single contract per
-            // bundle (the single-JsLoaderData / single-live-entry model), exactly as
-            // the old registerVtable path did.
             let registrations: Array<'_> = init_value.get::<Array<'_>>(0).map_err(|_| {
                 LoaderError::InitFailed {
                     bundle: manifest.name.clone(),
@@ -1750,211 +1755,218 @@ impl JsLoader {
                         .to_owned(),
                 }
             })?;
-            let entry: Object<'_> = registrations.get::<Object<'_>>(0).map_err(|_| {
-                LoaderError::InitFailed {
+            if registrations.is_empty() {
+                return Err(LoaderError::InitFailed {
                     bundle: manifest.name.clone(),
                     error: "JS runtime js-quickjs error: polyplug_init returned an empty registrations array"
                         .to_owned(),
-                }
-            })?;
-
-            let contract_lo: u32 = entry.get::<&str, f64>("contractLo").unwrap_or(0.0_f64) as u32;
-            let contract_hi: u32 = entry.get::<&str, f64>("contractHi").unwrap_or(0.0_f64) as u32;
-            let contract_id: u64 = (contract_hi as u64) << 32 | contract_lo as u64;
-            let fn_count: u32 = entry.get::<&str, f64>("fnCount").unwrap_or(0.0_f64) as u32;
-            let fn_count_usize: usize = fn_count as usize;
-            let contract_name: String =
-                entry.get::<&str, String>("contractName").map_err(|_| {
-                    LoaderError::InitFailed {
-                        bundle: manifest.name.clone(),
-                        error: "JS runtime js-quickjs error: registration entry missing contractName"
-                            .to_owned(),
-                    }
-                })?;
-            let contract_version: u32 =
-                entry.get::<&str, f64>("version").unwrap_or(0.0_f64) as u32;
-
-            let interface: Object<'_> = entry.get::<&str, Object<'_>>("interface").map_err(|_| {
-                LoaderError::InitFailed {
-                    bundle: manifest.name.clone(),
-                    error: "JS runtime js-quickjs error: registration entry missing interface"
-                        .to_owned(),
-                }
-            })?;
-
-            let functions_array: Object<'_> = interface
-                .get::<&str, Object<'_>>("functions")
-                .map_err(|_| LoaderError::InitFailed {
-                    bundle: manifest.name.clone(),
-                    error: format!(
-                        "JS runtime js-quickjs error: interface for contract '{contract_name}' has no 'functions' array"
-                    ),
-                })?;
-            let mut functions: Vec<Persistent<Function<'static>>> =
-                Vec::with_capacity(fn_count_usize);
-            for i in 0..fn_count_usize {
-                let func: Function<'_> = functions_array
-                    .get::<u32, Function<'_>>(i as u32)
-                    .map_err(|_| LoaderError::InitFailed {
-                        bundle: manifest.name.clone(),
-                        error: format!(
-                            "JS runtime js-quickjs error: interface for contract '{contract_name}' declares fnCount={fn_count} but functions[{i}] is missing or not a function"
-                        ),
-                    })?;
-                functions.push(Persistent::save(&ctx_ref, func));
+                });
             }
 
-            let factory_fn: Function<'_> = interface
-                .get::<&str, Function<'_>>("factory")
-                .map_err(|_| LoaderError::InitFailed {
-                    bundle: manifest.name.clone(),
-                    error: format!(
-                        "JS runtime js-quickjs error: interface for contract '{contract_name}' has no 'factory' function (call setXFactory before registering)"
-                    ),
+            let bridge: Persistent<Object<'static>> = Persistent::save(&ctx_ref, polyplug_obj);
+            let mut prepared: Vec<JsPreparedRegistration> =
+                Vec::with_capacity(registrations.len());
+            for index in 0..registrations.len() {
+                let entry: Object<'_> = registrations.get::<Object<'_>>(index).map_err(|_| {
+                    LoaderError::InitFailed {
+                        bundle: manifest.name.clone(),
+                        error: format!(
+                            "JS runtime js-quickjs error: registrations[{index}] is not an object"
+                        ),
+                    }
                 })?;
-            let factory: Persistent<Function<'static>> = Persistent::save(&ctx_ref, factory_fn);
-
-            // Persist the bridge so dispatch / create_instance can thread it; build
-            // the stateless default impl once via the factory, passing (bridge,
-            // host_lo, host_hi). It serves dispatch on a null instance handle.
-            let bridge: Persistent<Object<'static>> = Persistent::save(&ctx_ref, polyplug_obj.clone());
-            let impl_val: Value<'_> = factory
-                .clone()
-                .restore(&ctx_ref)
-                .and_then(|f: Function<'_>| {
-                    f.call::<(Object<'_>, f64, f64), Value<'_>>((polyplug_obj, host_lo, host_hi))
-                })
-                .map_err(|e: QjsError| LoaderError::InitFailed {
-                    bundle: manifest.name.clone(),
-                    error: format!(
-                        "JS runtime js-quickjs error: default impl factory call failed: {e}"
-                    ),
-                })?;
-            let default_impl: Persistent<Value<'static>> = Persistent::save(&ctx_ref, impl_val);
-
-            let registration_data: JsRegistrationData = JsRegistrationData {
-                contract_id,
-                contract_version,
-                contract_name,
-                functions,
-                factory,
-            };
-            Ok((registration_data, bridge, default_impl))
+                let contract_lo: u32 =
+                    entry.get::<&str, f64>("contractLo").unwrap_or(0.0_f64) as u32;
+                let contract_hi: u32 =
+                    entry.get::<&str, f64>("contractHi").unwrap_or(0.0_f64) as u32;
+                let contract_id: u64 = (contract_hi as u64) << 32 | contract_lo as u64;
+                let fn_count: u32 = entry.get::<&str, f64>("fnCount").unwrap_or(0.0_f64) as u32;
+                let contract_name: String =
+                    entry
+                        .get::<&str, String>("contractName")
+                        .map_err(|_| LoaderError::InitFailed {
+                            bundle: manifest.name.clone(),
+                            error: format!(
+                                "JS runtime js-quickjs error: registrations[{index}] missing contractName"
+                            ),
+                        })?;
+                let contract_version: u32 =
+                    entry.get::<&str, f64>("version").unwrap_or(0.0_f64) as u32;
+                let interface: Object<'_> =
+                    entry
+                        .get::<&str, Object<'_>>("interface")
+                        .map_err(|_| LoaderError::InitFailed {
+                            bundle: manifest.name.clone(),
+                            error: format!(
+                                "JS runtime js-quickjs error: registration entry for '{contract_name}' missing interface"
+                            ),
+                        })?;
+                let functions_array: Object<'_> =
+                    interface
+                        .get::<&str, Object<'_>>("functions")
+                        .map_err(|_| LoaderError::InitFailed {
+                            bundle: manifest.name.clone(),
+                            error: format!(
+                                "JS runtime js-quickjs error: interface for contract '{contract_name}' has no 'functions' array"
+                            ),
+                        })?;
+                let mut functions: Vec<Persistent<Function<'static>>> =
+                    Vec::with_capacity(fn_count as usize);
+                for function_index in 0..fn_count {
+                    let function: Function<'_> = functions_array
+                        .get::<u32, Function<'_>>(function_index)
+                        .map_err(|_| LoaderError::InitFailed {
+                            bundle: manifest.name.clone(),
+                            error: format!(
+                                "JS runtime js-quickjs error: interface for contract '{contract_name}' declares fnCount={fn_count} but functions[{function_index}] is missing or not a function"
+                            ),
+                        })?;
+                    functions.push(Persistent::save(&ctx_ref, function));
+                }
+                let factory: Persistent<Function<'static>> = Persistent::save(
+                    &ctx_ref,
+                    interface
+                        .get::<&str, Function<'_>>("factory")
+                        .map_err(|_| LoaderError::InitFailed {
+                            bundle: manifest.name.clone(),
+                            error: format!(
+                                "JS runtime js-quickjs error: interface for contract '{contract_name}' has no 'factory' function"
+                            ),
+                        })?,
+                );
+                let default_impl: Persistent<Value<'static>> = Persistent::save(
+                    &ctx_ref,
+                    factory
+                        .clone()
+                        .restore(&ctx_ref)
+                        .and_then(|factory: Function<'_>| {
+                            factory.call::<(Object<'_>, f64, f64), Value<'_>>((
+                                bridge.clone().restore(&ctx_ref)?,
+                                host_lo,
+                                host_hi,
+                            ))
+                        })
+                        .map_err(|e: QjsError| LoaderError::InitFailed {
+                            bundle: manifest.name.clone(),
+                            error: format!(
+                                "JS runtime js-quickjs error: default impl factory call failed: {e}"
+                            ),
+                        })?,
+                );
+                prepared.push(JsPreparedRegistration {
+                    registration: JsRegistrationData {
+                        contract_id,
+                        contract_version,
+                        contract_name,
+                        functions,
+                        factory,
+                    },
+                    default_impl,
+                });
+            }
+            Ok(JsInitData {
+                registrations: prepared,
+                bridge,
+            })
         });
 
-        let (registration_data, bridge, default_impl): InitExtract = init_extract?;
-
-        let loader_data: SendVm = SendVm(Box::new(JsLoaderData {
-            functions: registration_data.functions,
-            factory: registration_data.factory,
+        let JsInitData {
+            registrations,
             bridge,
-            host_lo,
-            host_hi,
-            default_impl,
-            instances: Mutex::new(HashMap::new()),
-            next_id: AtomicU64::new(1),
-            contract_id: registration_data.contract_id,
-            ctx,
-            _runtime: qjs_runtime,
-            in_dispatch_threads: Mutex::new(Vec::new()),
-            logger: runtime.logger(),
-        }));
-
-        // The box's heap address is stable across later moves of the `SendVm`/`Box`
-        // (moving them moves the pointer, not the allocation), so it stays valid
-        // once the box is owned by the loader's `live` map below.
-        let loader_data_ptr: *const JsLoaderData = loader_data.as_ptr();
-
-        let contract_id: GuestContractId = GuestContractId::from_u64(registration_data.contract_id);
-        let major_version: u32 = registration_data.contract_version >> 16;
-
-        let plugin_interface: GuestContractInterface = GuestContractInterface {
-            contract_id,
-            contract_version: Version {
-                major: major_version,
-                minor: 0,
-                patch: 0,
-            },
-            dispatch_type: DispatchType::VirtualMachine,
-            create_instance: js_create_instance,
-            destroy_instance: js_destroy_instance,
-            dispatch: DispatchMechanisms {
-                vm: VmDispatch {
-                    call: js_dispatch,
-                    loader_data: VmLoaderData {
-                        data: loader_data_ptr as *mut JsLoaderData as *mut c_void,
+        }: JsInitData = init_extract?;
+        let shared_dispatch_threads: Arc<Mutex<Vec<ThreadId>>> = Arc::new(Mutex::new(Vec::new()));
+        let mut published: Vec<SendVm> = Vec::with_capacity(registrations.len());
+        for prepared in registrations {
+            let contract_id: GuestContractId =
+                GuestContractId::from_u64(prepared.registration.contract_id);
+            let major_version: u32 = prepared.registration.contract_version >> 16;
+            let loader_data: SendVm = SendVm(Box::new(JsLoaderData {
+                functions: prepared.registration.functions,
+                factory: prepared.registration.factory,
+                bridge: bridge.clone(),
+                host_lo,
+                host_hi,
+                default_impl: prepared.default_impl,
+                instances: Mutex::new(HashMap::new()),
+                next_id: AtomicU64::new(1),
+                contract_id: prepared.registration.contract_id,
+                ctx: ctx.clone(),
+                _runtime: qjs_runtime.clone(),
+                in_dispatch_threads: Arc::clone(&shared_dispatch_threads),
+                logger: runtime.logger(),
+            }));
+            let plugin_interface: GuestContractInterface = GuestContractInterface {
+                contract_id,
+                contract_version: Version {
+                    major: major_version,
+                    minor: 0,
+                    patch: 0,
+                },
+                dispatch_type: DispatchType::VirtualMachine,
+                adapter_context: loader_data.as_ptr() as *mut c_void,
+                create_instance: js_create_instance,
+                destroy_instance: js_destroy_instance,
+                dispatch: DispatchMechanisms {
+                    vm: VmDispatch {
+                        call: js_dispatch,
+                        loader_data: VmLoaderData {
+                            data: loader_data.as_ptr() as *mut c_void,
+                        },
                     },
                 },
-            },
-        };
-
-        // register_guest_contract COPIES every field into the registry's own
-        // `Arc<GuestContractInterface>` during the synchronous call (the copy's
-        // `dispatch.vm.bridge_data` still points at our owned `JsLoaderData` box).
-        // The registry never retains this pointer, so a stack value valid for the
-        // call is sufficient — no leak, which keeps a load→unload→load loop bounded.
-        let interface_for_reg: GuestContractInterface = plugin_interface;
-        let static_interface: *const GuestContractInterface =
-            &interface_for_reg as *const GuestContractInterface;
-
-        // The contract name's StringView is copied into an owned String by the
-        // registry during the call, so a stack-owned String suffices — no leak.
-        let contract_name_owned: String = registration_data.contract_name;
-        let descriptor: PluginDescriptor = PluginDescriptor {
-            name: StringView::from_static(b"js-quickjs-plugin"),
-            contract_name: StringView {
-                ptr: contract_name_owned.as_ptr(),
-                len: contract_name_owned.len(),
-            },
-            version: Version {
-                major: major_version,
-                minor: 0,
-                patch: 0,
-            },
-        };
-
-        let mut abi_result: AbiError = AbiError::ok();
-        // SAFETY: host_interface, descriptor, and static_interface are valid for this call.
-        // The register_guest_contract function uses self-passing pattern; `abi_result`
-        // is a valid, writable out-param for the duration of the call.
-        unsafe {
-            ((*host_interface).register_guest_contract)(
-                host_interface,
-                &descriptor,
-                static_interface,
-                &mut abi_result,
-            )
-        };
-
-        if !abi_result.is_ok() {
-            // The registry copy made during register_guest_contract may already point
-            // at this box's heap address; schedule it for epoch-deferred drop rather
-            // than dropping it inline here, which would dangle the registry's
-            // bridge_data while a reader is pinned.
-            self.schedule_reclaim(vec![loader_data]);
-            return Err(LoaderError::InitFailed {
-                bundle: manifest.name.clone(),
-                error: format!(
-                    "JS runtime js-quickjs error: register_guest_contract returned error code {:?}",
-                    abi_result.code
-                ),
-            });
+            };
+            let contract_name: String = prepared.registration.contract_name;
+            let descriptor: PluginDescriptor = PluginDescriptor {
+                name: StringView::from_static(b"js-quickjs-plugin"),
+                contract_name: StringView {
+                    ptr: contract_name.as_ptr(),
+                    len: contract_name.len(),
+                },
+                version: Version {
+                    major: major_version,
+                    minor: 0,
+                    patch: 0,
+                },
+            };
+            let mut abi_result: AbiError = AbiError::ok();
+            // SAFETY: host_interface, descriptor, and plugin_interface are valid for
+            // this synchronous call. The registry copies the interface fields.
+            unsafe {
+                ((*host_interface).register_guest_contract)(
+                    host_interface,
+                    &descriptor,
+                    &plugin_interface,
+                    &mut abi_result,
+                )
+            };
+            if !abi_result.is_ok() {
+                self.schedule_reclaim(vec![loader_data]);
+                if !published.is_empty() {
+                    let mut live: MutexGuard<'_, HashMap<BundleId, Vec<SendVm>>> =
+                        self.live.lock().unwrap_or_else(PoisonError::into_inner);
+                    live.entry(BundleId::from_u64(bundle_id))
+                        .or_default()
+                        .append(&mut published);
+                }
+                return Err(LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!(
+                        "JS runtime js-quickjs error: register_guest_contract returned error code {:?}",
+                        abi_result.code
+                    ),
+                });
+            }
+            published.push(loader_data);
         }
 
-        // Take ownership of this bundle's VM state. A reload of the same bundle id
-        // REPLACES the prior VM entry and schedules the superseded VM for epoch-deferred
-        // reclaim (mirroring the native loader): the global epoch keeps the old VM alive
-        // for any in-flight dispatch and frees it once no reader is pinned, rather than
-        // parking it until unload.
         let superseded: Option<Vec<SendVm>> = {
             let mut live: MutexGuard<'_, HashMap<BundleId, Vec<SendVm>>> =
                 self.live.lock().unwrap_or_else(PoisonError::into_inner);
-            live.insert(BundleId::from_u64(bundle_id), vec![loader_data])
+            live.insert(BundleId::from_u64(bundle_id), published)
         };
         if let Some(old_state) = superseded {
             self.schedule_reclaim(old_state);
         }
-
         Ok(())
     }
 
@@ -1978,10 +1990,6 @@ impl JsLoader {
 impl BundleLoader for JsLoader {
     fn loader_name(&self) -> &'static str {
         "js-quickjs"
-    }
-
-    fn loader_language(&self) -> SupportedLanguage {
-        SupportedLanguage::JavaScript
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -2072,7 +2080,7 @@ mod tests {
 
     #[test]
     fn js_quickjs_loader_name() {
-        let loader: JsLoader = JsLoader::new(JsConfig {});
+        let loader: JsLoader = JsLoader::new();
         assert_eq!(loader.loader_name(), "js-quickjs");
     }
 
@@ -2129,9 +2137,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     /// epoch keeps the VM alive until that reader's pin clears).
     #[test]
     fn unload_removes_live_and_schedules_reclaim() {
-        let loader: JsLoader = JsLoader::new(JsConfig {});
+        let loader: JsLoader = JsLoader::new();
         let runtime: Arc<PolyplugRuntime> = PolyplugRuntimeBuilder::new()
-            .loader(JsLoader::new(JsConfig {}))
+            .loader(JsLoader::new())
             .build()
             .expect("runtime build must succeed");
         let (_dir, manifest): (tempfile::TempDir, ManifestData) =
@@ -2170,9 +2178,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     /// map unboundedly: reclaim keeps memory bounded at one entry.
     #[test]
     fn unload_load_loop_is_bounded() {
-        let loader: JsLoader = JsLoader::new(JsConfig {});
+        let loader: JsLoader = JsLoader::new();
         let runtime: Arc<PolyplugRuntime> = PolyplugRuntimeBuilder::new()
-            .loader(JsLoader::new(JsConfig {}))
+            .loader(JsLoader::new())
             .build()
             .expect("runtime build must succeed");
         let (_dir, manifest): (tempfile::TempDir, ManifestData) =
@@ -2225,9 +2233,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     /// supersede path a real reload takes.
     #[test]
     fn reload_replaces_live_and_reclaims_superseded_vm() {
-        let loader: JsLoader = JsLoader::new(JsConfig {});
+        let loader: JsLoader = JsLoader::new();
         let runtime: Arc<PolyplugRuntime> = PolyplugRuntimeBuilder::new()
-            .loader(JsLoader::new(JsConfig {}))
+            .loader(JsLoader::new())
             .build()
             .expect("runtime build must succeed");
         let (_dir, manifest): (tempfile::TempDir, ManifestData) =
@@ -2286,9 +2294,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     /// alive until the call completes, so unload never parks the state forever.
     #[test]
     fn unload_schedules_reclaim_even_when_in_flight() {
-        let loader: JsLoader = JsLoader::new(JsConfig {});
+        let loader: JsLoader = JsLoader::new();
         let runtime: Arc<PolyplugRuntime> = PolyplugRuntimeBuilder::new()
-            .loader(JsLoader::new(JsConfig {}))
+            .loader(JsLoader::new())
             .build()
             .expect("runtime build must succeed");
         let (_dir, manifest): (tempfile::TempDir, ManifestData) =
@@ -2341,9 +2349,9 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
     /// is RED on the pre-fix loader.
     #[test]
     fn js_guest_f64_param_and_return_round_trip() {
-        let loader: JsLoader = JsLoader::new(JsConfig {});
+        let loader: JsLoader = JsLoader::new();
         let runtime: Arc<PolyplugRuntime> = PolyplugRuntimeBuilder::new()
-            .loader(JsLoader::new(JsConfig {}))
+            .loader(JsLoader::new())
             .build()
             .expect("runtime build must succeed");
 
@@ -2411,6 +2419,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
         unsafe {
             assert_eq!((*iface).dispatch_type, DispatchType::VirtualMachine);
             ((*iface).dispatch.vm.call)(
+                (*iface).adapter_context,
                 (*iface).dispatch.vm.loader_data,
                 GuestContractInstance::null(),
                 0,
@@ -2479,7 +2488,7 @@ function polyplug_init(host_lo, host_hi, ctx_lo, ctx_hi, bridge) {{
             contract_id: 0,
             ctx,
             _runtime: runtime,
-            in_dispatch_threads: Mutex::new(Vec::new()),
+            in_dispatch_threads: Arc::new(Mutex::new(Vec::new())),
             logger: LoggerHandle::default_stderr(),
         });
         let ptr: *mut JsLoaderData = Box::into_raw(boxed);

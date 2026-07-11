@@ -37,6 +37,7 @@ inline void log_call_failure(const HostApi* host, const char* scope, const char*
 
 /// Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
 /// Plugins use this class to call host-provided functionality.
+/// Logging service supplied by the host.
 class HostLoggerContract {
 public:
     // Factory method - creates caller from HostApi or nullopt if not found.
@@ -61,6 +62,9 @@ public:
     explicit operator bool() const noexcept { return interface_ != nullptr && instance_.data != nullptr; }
 
     // Call host contract function `log` (function_id=0)
+    // Writes an informational log message.
+    // @param message Message text to write.
+    // @return Logging has no return value.
     void log(std::string_view message) noexcept {
         if (interface_ == nullptr) {
             detail::log_call_failure(host_, "guest.host_caller", "HostLoggerContract.log", static_cast<uint32_t>(AbiErrorCode::InvalidPointer));
@@ -82,7 +86,7 @@ public:
                 break;
             }
             case DispatchType::VirtualMachine: {
-                (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, GuestContractInstance{}, 0U, args_ptr, out_ptr, nullptr, &err);
+                (interface_->dispatch.vm.call)(interface_->user_data, interface_->dispatch.vm.loader_data, GuestContractInstance{}, 0U, args_ptr, out_ptr, nullptr, &err);
                 break;
             }
         }
@@ -116,7 +120,7 @@ public:
                 break;
             }
             case DispatchType::VirtualMachine: {
-                (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, GuestContractInstance{}, 1U, args_ptr, out_ptr, nullptr, &err);
+                (interface_->dispatch.vm.call)(interface_->user_data, interface_->dispatch.vm.loader_data, GuestContractInstance{}, 1U, args_ptr, out_ptr, nullptr, &err);
                 break;
             }
         }

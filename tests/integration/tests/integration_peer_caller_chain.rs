@@ -24,7 +24,7 @@ use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
-use polyplug_lua::LuaConfig;
+
 use polyplug_lua::LuaLoader;
 use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
@@ -151,7 +151,7 @@ local function new_consumer(host)
         local err = ffi.new("AbiError")
         -- Dispatch DIRECTLY through the cached interface (Lua peers are VM dispatch).
         if interface.dispatch_type == 1 then
-            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, peer_instance, 0, in_ptr, ffi.cast("void*", peer_out), nil, err)
+            interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, peer_instance, 0, in_ptr, ffi.cast("void*", peer_out), nil, err)
         else
             err.code = 1
         end
@@ -204,6 +204,7 @@ fn dispatch(rt: &Runtime, contract: &str, input: &[u8]) -> String {
     let mut err: AbiError = AbiError::ok();
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0_u32,
@@ -232,7 +233,7 @@ fn dispatch(rt: &Runtime, contract: &str, input: &[u8]) -> String {
 
 fn build_runtime() -> Arc<Runtime> {
     Runtime::builder()
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(LuaLoader::new())
         .build()
         .expect("build runtime")
 }

@@ -43,6 +43,7 @@ use polyplug_abi::StringView;
 use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::in_process::reject_in_process_bundle;
 use polyplug_abi::types::Version;
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
@@ -341,6 +342,7 @@ fn build_host_interface() -> HostApi {
     HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: bench_register_callback,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: bench_alloc,
         free: bench_free,
         find_guest_contract: bench_find_guest_contract,
@@ -360,7 +362,7 @@ fn build_host_interface() -> HostApi {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: ptr::null(),
     }
 }
@@ -494,6 +496,7 @@ fn bench_ffi_find_all_empty_result(c: &mut Criterion) {
 
 /// Stub create_instance for the synthetic sweep interfaces.
 unsafe extern "C" fn sweep_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -507,6 +510,7 @@ unsafe extern "C" fn sweep_create_instance(
 
 /// Stub destroy_instance for the synthetic sweep interfaces.
 unsafe extern "C" fn sweep_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -524,6 +528,7 @@ fn leak_sweep_interface(contract_id: u64) -> &'static GuestContractInterface {
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance: sweep_create_instance,
         destroy_instance: sweep_destroy_instance,
         dispatch: DispatchMechanisms {
@@ -661,6 +666,6 @@ unsafe extern "C" fn stub_destroy_guest_instance(
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
-    ptr::null()
+unsafe extern "C" fn stub_registry_revision(_this: *const HostApi) -> u64 {
+    0
 }

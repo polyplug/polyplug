@@ -84,6 +84,7 @@ for d in "${TSC_DIRS[@]}"; do
   echo "    tsc -p $d/tsconfig.json"
   ( cd "$JS_DIR/$d" && tsc -p tsconfig.json )
 done
+node "$JS_DIR/abi/fix_declarations.mjs" "${TSC_DIRS[@]/#/$JS_DIR/}"/dist
 
 # Sanity: the transpiled entry points must exist as .js (proves tsc ran).
 [ -f "$JS_DIR/abi/dist/polyplug_abi.js" ]      || fail "abi did not transpile (dist/polyplug_abi.js missing)"

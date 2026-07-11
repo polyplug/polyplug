@@ -290,7 +290,17 @@ impl LuaGenerator {
     fn format_c_comment(doc: &str, indent: usize) -> String {
         let indent_str: String = " ".repeat(indent);
         doc.lines()
-            .map(|line: &str| format!("{}// {}\n", indent_str, line))
+            .map(|line: &str| {
+                format!(
+                    "{}//{}\n",
+                    indent_str,
+                    if line.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {line}")
+                    }
+                )
+            })
             .collect::<Vec<String>>()
             .join("")
     }

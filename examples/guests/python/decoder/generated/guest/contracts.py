@@ -13,7 +13,9 @@ from polyplug_guest import AbiError, AbiErrorCode, alloc_string_arena, register_
 POLYPLUG_ABI_VERSION: int = 1
 
 class DECODERPipelineDecoderPlugin:
+    """Decodes CSV input into the pipeline representation."""
     def decode(self, input: str) -> str:
+        """Decodes one CSV record.\n\nArgs:\n    input: The CSV record to decode.\n\nReturns:\n    The decoded pipeline record."""
         raise NotImplementedError
 
 _decoder_FACTORY: Callable[[int], DECODERPipelineDecoderPlugin] | None = None

@@ -23,10 +23,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use polyplug::Runtime;
-use polyplug::error::{LoaderError, RegistryError, RuntimeError};
+use polyplug::error::{LoaderError, RuntimeError};
 use polyplug::loader::{BundleLoader, BundleSource};
-use polyplug_abi::HostApi;
-use polyplug_abi::SupportedLanguage;
+use polyplug_abi::{AbiError, HostApi};
+
 use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::dispatch::{DispatchMechanisms, DispatchType, NativeDispatch};
 use polyplug_abi::guest::{GuestContractInstance, GuestContractInterface};
@@ -41,6 +41,7 @@ const CONTRACT_NAME: &str = "compat.test";
 const BUNDLE_NAME: &str = "compat_test_bundle";
 
 unsafe extern "C" fn noop_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _ctx: *const (),
@@ -53,11 +54,30 @@ unsafe extern "C" fn noop_create_instance(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
 }
+unsafe extern "C" fn noop_dispatch(
+    _instance: GuestContractInstance,
+    _args: *const (),
+    _out: *mut (),
+    out_err: *mut AbiError,
+) {
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable by the caller.
+        unsafe { out_err.write(AbiError::ok()) };
+    }
+}
+
+struct NativeFunctionTable([*const (); 1]);
+
+// SAFETY: the table contains one immutable `'static` function pointer.
+unsafe impl Sync for NativeFunctionTable {}
+
+static NATIVE_FUNCTIONS: NativeFunctionTable = NativeFunctionTable([noop_dispatch as *const ()]);
 
 /// Leak a Native-dispatch interface that reports exactly `function_count`
 /// exported functions. The leak is intentional: the ABI requires the interface
@@ -72,12 +92,13 @@ fn leak_native_interface(function_count: u32) -> &'static GuestContractInterface
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance: noop_create_instance,
         destroy_instance: noop_destroy_instance,
         dispatch: DispatchMechanisms {
             native: NativeDispatch {
                 function_count,
-                functions: ptr::null(),
+                functions: NATIVE_FUNCTIONS.0.as_ptr(),
             },
         },
     }))
@@ -93,10 +114,6 @@ struct CompatTestLoader {
 impl BundleLoader for CompatTestLoader {
     fn loader_name(&self) -> &'static str {
         "compat-test"
-    }
-
-    fn loader_language(&self) -> SupportedLanguage {
-        SupportedLanguage::Rust
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -123,27 +140,25 @@ impl BundleLoader for CompatTestLoader {
                 patch: 0,
             },
         };
-        // SAFETY: interface is leaked and lives for the process lifetime, satisfying
-        // the ABI requirement that the pointer outlive the bundle.
-        let result: Result<_, _> = unsafe {
-            runtime.registry().register_guest_contract(
-                descriptor,
-                interface,
-                CONTRACT_NAME.to_owned(),
-                bundle_id,
-            )
-        };
-
+        let host: *const HostApi = runtime.host_abi();
+        let mut registration: AbiError = AbiError::ok();
+        // SAFETY: the runtime owns `host`; the descriptor and leaked interface remain
+        // valid for this synchronous registration callback.
+        unsafe {
+            ((*host).register_guest_contract)(host, &descriptor, interface, &mut registration);
+        }
         runtime.pop_init_bundle_id();
-
-        // The mock's "init" is the registration call; a registry rejection (e.g. the
-        // function-count mismatch this test drives) is therefore an init failure.
-        result
-            .map(|_| ())
-            .map_err(|e: RegistryError| LoaderError::InitFailed {
+        if registration.is_ok() {
+            Ok(())
+        } else {
+            Err(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
-                error: e.to_string(),
+                error: format!(
+                    "guest registration failed with ABI code {}",
+                    registration.code
+                ),
             })
+        }
     }
 
     fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {

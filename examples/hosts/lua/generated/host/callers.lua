@@ -28,8 +28,8 @@ M.PIPELINE_VALIDATOR_CONTRACT_ID = PIPELINE_VALIDATOR_CONTRACT_ID
 
 -- Cached FFI types for hot path performance
 local NativeDispatchFnType = ffi.typeof("void (*)(GuestContractInstance, const void*, void*, AbiError*)")
-local ConstUint64Ptr = ffi.typeof("const uint64_t*")
 
+--- Decodes CSV input into the pipeline representation.
 -- Methods for PipelineDecoderContract (instance wrapper)
 local PipelineDecoderContract_methods = {
     is_valid = function(self)
@@ -37,10 +37,7 @@ local PipelineDecoderContract_methods = {
     end,
 
     live_revision = function(self)
-        if self._revision_ptr == nil then
-            return self._cached_revision
-        end
-        return ffi.cast(ConstUint64Ptr, self._revision_ptr)[0]
+        return self._host.registry_revision(self._host)
     end,
 
     revalidate = function(self)
@@ -82,6 +79,12 @@ local PipelineDecoderContract_methods = {
         end
     end,
 
+    --- Decodes one CSV record.
+    ---@param self table
+    --- The CSV record to decode.
+    ---@param input StringView The CSV record to decode.
+    --- The decoded pipeline record.
+    ---@return StringView The decoded pipeline record.
     decode = function(self, input)
         if self._interface == nil or self._destroyed then
             error("invalid caller: interface is nil", 2)
@@ -106,7 +109,7 @@ local PipelineDecoderContract_methods = {
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
             fn(self._instance, args_ptr, out_ptr, err)
         else
-            self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
+            self._interface.dispatch.vm.call(self._interface.adapter_context, self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
         end
         if err.code ~= AbiErrorCode.Ok then
             error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
@@ -138,20 +141,12 @@ function M.PipelineDecoderContract_create(runtime, host)
     -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
     local instance = ffi.new("GuestContractInstance")
     host.create_guest_instance(host, interface, nil, instance)
-    local revision_ptr = nil
-    local cached_revision = 0
-    if host ~= nil then
-        revision_ptr = host.revision_counter(host)
-        if revision_ptr ~= nil then
-            cached_revision = ffi.cast(ConstUint64Ptr, revision_ptr)[0]
-        end
-    end
+    local cached_revision = host.registry_revision(host)
     local wrapper = {
         _interface = interface,
         _instance = instance,
         _host = host,
         _handle = handle,
-        _revision_ptr = revision_ptr,
         _cached_revision = cached_revision,
         _destroyed = false
     }
@@ -166,10 +161,7 @@ local DataTransformerContract_methods = {
     end,
 
     live_revision = function(self)
-        if self._revision_ptr == nil then
-            return self._cached_revision
-        end
-        return ffi.cast(ConstUint64Ptr, self._revision_ptr)[0]
+        return self._host.registry_revision(self._host)
     end,
 
     revalidate = function(self)
@@ -235,7 +227,7 @@ local DataTransformerContract_methods = {
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
             fn(self._instance, args_ptr, out_ptr, err)
         else
-            self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
+            self._interface.dispatch.vm.call(self._interface.adapter_context, self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
         end
         if err.code ~= AbiErrorCode.Ok then
             error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
@@ -267,20 +259,12 @@ function M.DataTransformerContract_create(runtime, host)
     -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
     local instance = ffi.new("GuestContractInstance")
     host.create_guest_instance(host, interface, nil, instance)
-    local revision_ptr = nil
-    local cached_revision = 0
-    if host ~= nil then
-        revision_ptr = host.revision_counter(host)
-        if revision_ptr ~= nil then
-            cached_revision = ffi.cast(ConstUint64Ptr, revision_ptr)[0]
-        end
-    end
+    local cached_revision = host.registry_revision(host)
     local wrapper = {
         _interface = interface,
         _instance = instance,
         _host = host,
         _handle = handle,
-        _revision_ptr = revision_ptr,
         _cached_revision = cached_revision,
         _destroyed = false
     }
@@ -295,10 +279,7 @@ local PipelineEncoderContract_methods = {
     end,
 
     live_revision = function(self)
-        if self._revision_ptr == nil then
-            return self._cached_revision
-        end
-        return ffi.cast(ConstUint64Ptr, self._revision_ptr)[0]
+        return self._host.registry_revision(self._host)
     end,
 
     revalidate = function(self)
@@ -364,7 +345,7 @@ local PipelineEncoderContract_methods = {
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
             fn(self._instance, args_ptr, out_ptr, err)
         else
-            self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
+            self._interface.dispatch.vm.call(self._interface.adapter_context, self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
         end
         if err.code ~= AbiErrorCode.Ok then
             error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
@@ -396,20 +377,12 @@ function M.PipelineEncoderContract_create(runtime, host)
     -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
     local instance = ffi.new("GuestContractInstance")
     host.create_guest_instance(host, interface, nil, instance)
-    local revision_ptr = nil
-    local cached_revision = 0
-    if host ~= nil then
-        revision_ptr = host.revision_counter(host)
-        if revision_ptr ~= nil then
-            cached_revision = ffi.cast(ConstUint64Ptr, revision_ptr)[0]
-        end
-    end
+    local cached_revision = host.registry_revision(host)
     local wrapper = {
         _interface = interface,
         _instance = instance,
         _host = host,
         _handle = handle,
-        _revision_ptr = revision_ptr,
         _cached_revision = cached_revision,
         _destroyed = false
     }
@@ -424,10 +397,7 @@ local DataReporterContract_methods = {
     end,
 
     live_revision = function(self)
-        if self._revision_ptr == nil then
-            return self._cached_revision
-        end
-        return ffi.cast(ConstUint64Ptr, self._revision_ptr)[0]
+        return self._host.registry_revision(self._host)
     end,
 
     revalidate = function(self)
@@ -493,7 +463,7 @@ local DataReporterContract_methods = {
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
             fn(self._instance, args_ptr, out_ptr, err)
         else
-            self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
+            self._interface.dispatch.vm.call(self._interface.adapter_context, self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
         end
         if err.code ~= AbiErrorCode.Ok then
             error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
@@ -525,20 +495,12 @@ function M.DataReporterContract_create(runtime, host)
     -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
     local instance = ffi.new("GuestContractInstance")
     host.create_guest_instance(host, interface, nil, instance)
-    local revision_ptr = nil
-    local cached_revision = 0
-    if host ~= nil then
-        revision_ptr = host.revision_counter(host)
-        if revision_ptr ~= nil then
-            cached_revision = ffi.cast(ConstUint64Ptr, revision_ptr)[0]
-        end
-    end
+    local cached_revision = host.registry_revision(host)
     local wrapper = {
         _interface = interface,
         _instance = instance,
         _host = host,
         _handle = handle,
-        _revision_ptr = revision_ptr,
         _cached_revision = cached_revision,
         _destroyed = false
     }
@@ -553,10 +515,7 @@ local PipelineValidatorContract_methods = {
     end,
 
     live_revision = function(self)
-        if self._revision_ptr == nil then
-            return self._cached_revision
-        end
-        return ffi.cast(ConstUint64Ptr, self._revision_ptr)[0]
+        return self._host.registry_revision(self._host)
     end,
 
     revalidate = function(self)
@@ -622,7 +581,7 @@ local PipelineValidatorContract_methods = {
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
             fn(self._instance, args_ptr, out_ptr, err)
         else
-            self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
+            self._interface.dispatch.vm.call(self._interface.adapter_context, self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
         end
         if err.code ~= AbiErrorCode.Ok then
             error("polyplug call failed (code " .. tonumber(err.code) .. ")", 2)
@@ -654,25 +613,426 @@ function M.PipelineValidatorContract_create(runtime, host)
     -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
     local instance = ffi.new("GuestContractInstance")
     host.create_guest_instance(host, interface, nil, instance)
-    local revision_ptr = nil
-    local cached_revision = 0
-    if host ~= nil then
-        revision_ptr = host.revision_counter(host)
-        if revision_ptr ~= nil then
-            cached_revision = ffi.cast(ConstUint64Ptr, revision_ptr)[0]
-        end
-    end
+    local cached_revision = host.registry_revision(host)
     local wrapper = {
         _interface = interface,
         _instance = instance,
         _host = host,
         _handle = handle,
-        _revision_ptr = revision_ptr,
         _cached_revision = cached_revision,
         _destroyed = false
     }
     setmetatable(wrapper, PipelineValidatorContract_mt)
     return wrapper
+end
+
+-- In-process Lua guest adapters.
+local function cdef_guarded(decl)
+	local ok, err = pcall(ffi.cdef, decl)
+	local in_process_redefinition = string.find(err or "", "attempt to redefine 'PolyplugLuaInProcess", 1, true)
+	if not ok and not string.find(err, "already defined", 1, true) and not in_process_redefinition then
+		error(err, 2)
+	end
+end
+
+cdef_guarded([[
+typedef uint32_t (*PolyplugLuaInProcessDispatchCallback)(void*, uint32_t, const void*, void*);
+typedef void (*PolyplugLuaInProcessDestroyCallback)(void*);
+typedef uint64_t (*PolyplugLuaInProcessCreateCallback)(const HostApi*, const void*);
+typedef struct PolyplugLuaInProcessBridge {
+    PolyplugLuaInProcessDispatchCallback callback;
+    PolyplugLuaInProcessDestroyCallback destroy_callback;
+    PolyplugLuaInProcessCreateCallback create_callback;
+    uint64_t contract_id;
+} PolyplugLuaInProcessBridge;
+void polyplug_lua_in_process_vm_dispatch(void*, VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);
+void polyplug_lua_in_process_create_instance(void*, VmLoaderData, const HostApi*, const void*, GuestContractInstance*);
+void polyplug_lua_in_process_destroy_instance(void*, VmLoaderData, const HostApi*, GuestContractInstance);
+]])
+
+local function in_process_factory(provider, contract_name)
+    if type(provider) == "function" then return provider end
+    if type(provider) == "table" then return function() return provider end end
+    error("in_process_bundle: " .. contract_name .. " needs a table or factory", 3)
+end
+
+function M.in_process_bundle(spec, lua_bridge_lib)
+    if type(spec) ~= "table" or type(spec.name) ~= "string" or spec.name == "" then
+        error("in_process_bundle: spec.name must be a non-empty string", 2)
+    end
+    local implementations = spec.implementations
+    if type(implementations) ~= "table" then error("in_process_bundle: spec.implementations must be a table", 2) end
+    if lua_bridge_lib == nil then error("in_process_bundle: lua_bridge_lib is nil (pass require('polyplug.loaders.lua').bridge_lib())", 2) end
+    local version = spec.version or { major = 1, minor = 0, patch = 0 }
+    local resident = { callbacks = {}, bridges = {}, interfaces = {}, instances = {}, factories = {}, strings = {}, output_strings = {}, next_id = 1 }
+    local records = ffi.new("InProcessContractRegistration[?]", 5)
+    resident.records = records
+    do -- pipeline.Decoder
+        local provider = implementations["pipeline.Decoder"]
+        local factory = in_process_factory(provider, "pipeline.Decoder")
+        resident.factories["pipeline.Decoder"] = factory
+        resident.instances["pipeline.Decoder"] = {}
+        resident.strings["pipeline.Decoder"] = { plugin_name = spec.plugin_names and spec.plugin_names["pipeline.Decoder"] or "pipeline_Decoder_plugin", contract_name = "pipeline.Decoder" }
+        local bridge = ffi.new("PolyplugLuaInProcessBridge")
+        bridge.contract_id = 0xE1D7DE773BE6E7F7ULL
+        local function create(host, _args)
+            local ok, implementation = pcall(factory, host)
+            if not ok or type(implementation) ~= "table" then return 0ULL end
+            local id = resident.next_id
+            resident.next_id = id + 1
+            resident.instances["pipeline.Decoder"][id] = implementation
+            return id
+        end
+        local function destroy(instance_data)
+            local id = tonumber(ffi.cast("uintptr_t", instance_data))
+            if id ~= 0 then resident.instances["pipeline.Decoder"][id] = nil end
+        end
+        local function dispatch(instance_data, fn_id, args, out_ptr)
+            local ok, code = pcall(function()
+                local id = tonumber(ffi.cast("uintptr_t", instance_data))
+                local impl = resident.instances["pipeline.Decoder"][id]
+                if fn_id == 0 then
+                local input_sv = ffi.cast("const StringView*", args)[0]
+                local input = ffi.string(input_sv.ptr, input_sv.len)
+                local result = impl:decode(input)
+                if type(result) ~= "string" then error("in-process implementation must return a Lua string") end
+                resident.output_strings[#resident.output_strings + 1] = result
+                local output = ffi.cast("StringView*", out_ptr)[0]
+                output.ptr = ffi.cast("const uint8_t*", result)
+                output.len = #result
+                    return AbiErrorCode.Ok
+                end
+                return AbiErrorCode.Generic
+            end)
+            return ok and code or AbiErrorCode.Generic
+        end
+        local dispatch_cb = ffi.cast("PolyplugLuaInProcessDispatchCallback", dispatch)
+        local create_cb = ffi.cast("PolyplugLuaInProcessCreateCallback", create)
+        local destroy_cb = ffi.cast("PolyplugLuaInProcessDestroyCallback", destroy)
+        bridge.callback = dispatch_cb
+        bridge.create_callback = create_cb
+        bridge.destroy_callback = destroy_cb
+        local interface = ffi.new("GuestContractInterface")
+        interface.contract_id = 0xE1D7DE773BE6E7F7ULL
+        interface.contract_version.major = 1
+        interface.contract_version.minor = 0
+        interface.contract_version.patch = 0
+        interface.dispatch_type = ffi.C.DispatchType_VirtualMachine
+        interface.adapter_context = ffi.cast("void*", bridge)
+        interface.create_instance = lua_bridge_lib.polyplug_lua_in_process_create_instance
+        interface.destroy_instance = lua_bridge_lib.polyplug_lua_in_process_destroy_instance
+        interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_in_process_vm_dispatch
+        interface.dispatch.vm.loader_data.data = nil
+        records[0].descriptor.name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Decoder"].plugin_name)
+        records[0].descriptor.name.len = #resident.strings["pipeline.Decoder"].plugin_name
+        records[0].descriptor.contract_name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Decoder"].contract_name)
+        records[0].descriptor.contract_name.len = #resident.strings["pipeline.Decoder"].contract_name
+        records[0].descriptor.version.major = 1
+        records[0].descriptor.version.minor = 0
+        records[0].descriptor.version.patch = 0
+        records[0].interface = interface
+        records[0].adapter_context = ffi.cast("void*", bridge)
+        resident.bridges["pipeline.Decoder"] = bridge
+        resident.interfaces["pipeline.Decoder"] = interface
+        resident.callbacks["pipeline.Decoder"] = { dispatch_cb, create_cb, destroy_cb }
+    end
+    do -- data.Transformer
+        local provider = implementations["data.Transformer"]
+        local factory = in_process_factory(provider, "data.Transformer")
+        resident.factories["data.Transformer"] = factory
+        resident.instances["data.Transformer"] = {}
+        resident.strings["data.Transformer"] = { plugin_name = spec.plugin_names and spec.plugin_names["data.Transformer"] or "data_Transformer_plugin", contract_name = "data.Transformer" }
+        local bridge = ffi.new("PolyplugLuaInProcessBridge")
+        bridge.contract_id = 0x4775991362CD68EEULL
+        local function create(host, _args)
+            local ok, implementation = pcall(factory, host)
+            if not ok or type(implementation) ~= "table" then return 0ULL end
+            local id = resident.next_id
+            resident.next_id = id + 1
+            resident.instances["data.Transformer"][id] = implementation
+            return id
+        end
+        local function destroy(instance_data)
+            local id = tonumber(ffi.cast("uintptr_t", instance_data))
+            if id ~= 0 then resident.instances["data.Transformer"][id] = nil end
+        end
+        local function dispatch(instance_data, fn_id, args, out_ptr)
+            local ok, code = pcall(function()
+                local id = tonumber(ffi.cast("uintptr_t", instance_data))
+                local impl = resident.instances["data.Transformer"][id]
+                if fn_id == 0 then
+                local input_sv = ffi.cast("const StringView*", args)[0]
+                local input = ffi.string(input_sv.ptr, input_sv.len)
+                local result = impl:transform(input)
+                if type(result) ~= "string" then error("in-process implementation must return a Lua string") end
+                resident.output_strings[#resident.output_strings + 1] = result
+                local output = ffi.cast("StringView*", out_ptr)[0]
+                output.ptr = ffi.cast("const uint8_t*", result)
+                output.len = #result
+                    return AbiErrorCode.Ok
+                end
+                return AbiErrorCode.Generic
+            end)
+            return ok and code or AbiErrorCode.Generic
+        end
+        local dispatch_cb = ffi.cast("PolyplugLuaInProcessDispatchCallback", dispatch)
+        local create_cb = ffi.cast("PolyplugLuaInProcessCreateCallback", create)
+        local destroy_cb = ffi.cast("PolyplugLuaInProcessDestroyCallback", destroy)
+        bridge.callback = dispatch_cb
+        bridge.create_callback = create_cb
+        bridge.destroy_callback = destroy_cb
+        local interface = ffi.new("GuestContractInterface")
+        interface.contract_id = 0x4775991362CD68EEULL
+        interface.contract_version.major = 1
+        interface.contract_version.minor = 0
+        interface.contract_version.patch = 0
+        interface.dispatch_type = ffi.C.DispatchType_VirtualMachine
+        interface.adapter_context = ffi.cast("void*", bridge)
+        interface.create_instance = lua_bridge_lib.polyplug_lua_in_process_create_instance
+        interface.destroy_instance = lua_bridge_lib.polyplug_lua_in_process_destroy_instance
+        interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_in_process_vm_dispatch
+        interface.dispatch.vm.loader_data.data = nil
+        records[1].descriptor.name.ptr = ffi.cast("const uint8_t*", resident.strings["data.Transformer"].plugin_name)
+        records[1].descriptor.name.len = #resident.strings["data.Transformer"].plugin_name
+        records[1].descriptor.contract_name.ptr = ffi.cast("const uint8_t*", resident.strings["data.Transformer"].contract_name)
+        records[1].descriptor.contract_name.len = #resident.strings["data.Transformer"].contract_name
+        records[1].descriptor.version.major = 1
+        records[1].descriptor.version.minor = 0
+        records[1].descriptor.version.patch = 0
+        records[1].interface = interface
+        records[1].adapter_context = ffi.cast("void*", bridge)
+        resident.bridges["data.Transformer"] = bridge
+        resident.interfaces["data.Transformer"] = interface
+        resident.callbacks["data.Transformer"] = { dispatch_cb, create_cb, destroy_cb }
+    end
+    do -- pipeline.Encoder
+        local provider = implementations["pipeline.Encoder"]
+        local factory = in_process_factory(provider, "pipeline.Encoder")
+        resident.factories["pipeline.Encoder"] = factory
+        resident.instances["pipeline.Encoder"] = {}
+        resident.strings["pipeline.Encoder"] = { plugin_name = spec.plugin_names and spec.plugin_names["pipeline.Encoder"] or "pipeline_Encoder_plugin", contract_name = "pipeline.Encoder" }
+        local bridge = ffi.new("PolyplugLuaInProcessBridge")
+        bridge.contract_id = 0xFC50F9D1D3DB629FULL
+        local function create(host, _args)
+            local ok, implementation = pcall(factory, host)
+            if not ok or type(implementation) ~= "table" then return 0ULL end
+            local id = resident.next_id
+            resident.next_id = id + 1
+            resident.instances["pipeline.Encoder"][id] = implementation
+            return id
+        end
+        local function destroy(instance_data)
+            local id = tonumber(ffi.cast("uintptr_t", instance_data))
+            if id ~= 0 then resident.instances["pipeline.Encoder"][id] = nil end
+        end
+        local function dispatch(instance_data, fn_id, args, out_ptr)
+            local ok, code = pcall(function()
+                local id = tonumber(ffi.cast("uintptr_t", instance_data))
+                local impl = resident.instances["pipeline.Encoder"][id]
+                if fn_id == 0 then
+                local input_sv = ffi.cast("const StringView*", args)[0]
+                local input = ffi.string(input_sv.ptr, input_sv.len)
+                local result = impl:encode(input)
+                if type(result) ~= "string" then error("in-process implementation must return a Lua string") end
+                resident.output_strings[#resident.output_strings + 1] = result
+                local output = ffi.cast("StringView*", out_ptr)[0]
+                output.ptr = ffi.cast("const uint8_t*", result)
+                output.len = #result
+                    return AbiErrorCode.Ok
+                end
+                return AbiErrorCode.Generic
+            end)
+            return ok and code or AbiErrorCode.Generic
+        end
+        local dispatch_cb = ffi.cast("PolyplugLuaInProcessDispatchCallback", dispatch)
+        local create_cb = ffi.cast("PolyplugLuaInProcessCreateCallback", create)
+        local destroy_cb = ffi.cast("PolyplugLuaInProcessDestroyCallback", destroy)
+        bridge.callback = dispatch_cb
+        bridge.create_callback = create_cb
+        bridge.destroy_callback = destroy_cb
+        local interface = ffi.new("GuestContractInterface")
+        interface.contract_id = 0xFC50F9D1D3DB629FULL
+        interface.contract_version.major = 1
+        interface.contract_version.minor = 0
+        interface.contract_version.patch = 0
+        interface.dispatch_type = ffi.C.DispatchType_VirtualMachine
+        interface.adapter_context = ffi.cast("void*", bridge)
+        interface.create_instance = lua_bridge_lib.polyplug_lua_in_process_create_instance
+        interface.destroy_instance = lua_bridge_lib.polyplug_lua_in_process_destroy_instance
+        interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_in_process_vm_dispatch
+        interface.dispatch.vm.loader_data.data = nil
+        records[2].descriptor.name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Encoder"].plugin_name)
+        records[2].descriptor.name.len = #resident.strings["pipeline.Encoder"].plugin_name
+        records[2].descriptor.contract_name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Encoder"].contract_name)
+        records[2].descriptor.contract_name.len = #resident.strings["pipeline.Encoder"].contract_name
+        records[2].descriptor.version.major = 1
+        records[2].descriptor.version.minor = 0
+        records[2].descriptor.version.patch = 0
+        records[2].interface = interface
+        records[2].adapter_context = ffi.cast("void*", bridge)
+        resident.bridges["pipeline.Encoder"] = bridge
+        resident.interfaces["pipeline.Encoder"] = interface
+        resident.callbacks["pipeline.Encoder"] = { dispatch_cb, create_cb, destroy_cb }
+    end
+    do -- data.Reporter
+        local provider = implementations["data.Reporter"]
+        local factory = in_process_factory(provider, "data.Reporter")
+        resident.factories["data.Reporter"] = factory
+        resident.instances["data.Reporter"] = {}
+        resident.strings["data.Reporter"] = { plugin_name = spec.plugin_names and spec.plugin_names["data.Reporter"] or "data_Reporter_plugin", contract_name = "data.Reporter" }
+        local bridge = ffi.new("PolyplugLuaInProcessBridge")
+        bridge.contract_id = 0x76BB4643A9F5AD68ULL
+        local function create(host, _args)
+            local ok, implementation = pcall(factory, host)
+            if not ok or type(implementation) ~= "table" then return 0ULL end
+            local id = resident.next_id
+            resident.next_id = id + 1
+            resident.instances["data.Reporter"][id] = implementation
+            return id
+        end
+        local function destroy(instance_data)
+            local id = tonumber(ffi.cast("uintptr_t", instance_data))
+            if id ~= 0 then resident.instances["data.Reporter"][id] = nil end
+        end
+        local function dispatch(instance_data, fn_id, args, out_ptr)
+            local ok, code = pcall(function()
+                local id = tonumber(ffi.cast("uintptr_t", instance_data))
+                local impl = resident.instances["data.Reporter"][id]
+                if fn_id == 0 then
+                local input_sv = ffi.cast("const StringView*", args)[0]
+                local input = ffi.string(input_sv.ptr, input_sv.len)
+                local result = impl:report(input)
+                if type(result) ~= "string" then error("in-process implementation must return a Lua string") end
+                resident.output_strings[#resident.output_strings + 1] = result
+                local output = ffi.cast("StringView*", out_ptr)[0]
+                output.ptr = ffi.cast("const uint8_t*", result)
+                output.len = #result
+                    return AbiErrorCode.Ok
+                end
+                return AbiErrorCode.Generic
+            end)
+            return ok and code or AbiErrorCode.Generic
+        end
+        local dispatch_cb = ffi.cast("PolyplugLuaInProcessDispatchCallback", dispatch)
+        local create_cb = ffi.cast("PolyplugLuaInProcessCreateCallback", create)
+        local destroy_cb = ffi.cast("PolyplugLuaInProcessDestroyCallback", destroy)
+        bridge.callback = dispatch_cb
+        bridge.create_callback = create_cb
+        bridge.destroy_callback = destroy_cb
+        local interface = ffi.new("GuestContractInterface")
+        interface.contract_id = 0x76BB4643A9F5AD68ULL
+        interface.contract_version.major = 1
+        interface.contract_version.minor = 0
+        interface.contract_version.patch = 0
+        interface.dispatch_type = ffi.C.DispatchType_VirtualMachine
+        interface.adapter_context = ffi.cast("void*", bridge)
+        interface.create_instance = lua_bridge_lib.polyplug_lua_in_process_create_instance
+        interface.destroy_instance = lua_bridge_lib.polyplug_lua_in_process_destroy_instance
+        interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_in_process_vm_dispatch
+        interface.dispatch.vm.loader_data.data = nil
+        records[3].descriptor.name.ptr = ffi.cast("const uint8_t*", resident.strings["data.Reporter"].plugin_name)
+        records[3].descriptor.name.len = #resident.strings["data.Reporter"].plugin_name
+        records[3].descriptor.contract_name.ptr = ffi.cast("const uint8_t*", resident.strings["data.Reporter"].contract_name)
+        records[3].descriptor.contract_name.len = #resident.strings["data.Reporter"].contract_name
+        records[3].descriptor.version.major = 1
+        records[3].descriptor.version.minor = 0
+        records[3].descriptor.version.patch = 0
+        records[3].interface = interface
+        records[3].adapter_context = ffi.cast("void*", bridge)
+        resident.bridges["data.Reporter"] = bridge
+        resident.interfaces["data.Reporter"] = interface
+        resident.callbacks["data.Reporter"] = { dispatch_cb, create_cb, destroy_cb }
+    end
+    do -- pipeline.Validator
+        local provider = implementations["pipeline.Validator"]
+        local factory = in_process_factory(provider, "pipeline.Validator")
+        resident.factories["pipeline.Validator"] = factory
+        resident.instances["pipeline.Validator"] = {}
+        resident.strings["pipeline.Validator"] = { plugin_name = spec.plugin_names and spec.plugin_names["pipeline.Validator"] or "pipeline_Validator_plugin", contract_name = "pipeline.Validator" }
+        local bridge = ffi.new("PolyplugLuaInProcessBridge")
+        bridge.contract_id = 0x45173A959EEC57C5ULL
+        local function create(host, _args)
+            local ok, implementation = pcall(factory, host)
+            if not ok or type(implementation) ~= "table" then return 0ULL end
+            local id = resident.next_id
+            resident.next_id = id + 1
+            resident.instances["pipeline.Validator"][id] = implementation
+            return id
+        end
+        local function destroy(instance_data)
+            local id = tonumber(ffi.cast("uintptr_t", instance_data))
+            if id ~= 0 then resident.instances["pipeline.Validator"][id] = nil end
+        end
+        local function dispatch(instance_data, fn_id, args, out_ptr)
+            local ok, code = pcall(function()
+                local id = tonumber(ffi.cast("uintptr_t", instance_data))
+                local impl = resident.instances["pipeline.Validator"][id]
+                if fn_id == 0 then
+                local input_sv = ffi.cast("const StringView*", args)[0]
+                local input = ffi.string(input_sv.ptr, input_sv.len)
+                local result = impl:validate(input)
+                if type(result) ~= "string" then error("in-process implementation must return a Lua string") end
+                resident.output_strings[#resident.output_strings + 1] = result
+                local output = ffi.cast("StringView*", out_ptr)[0]
+                output.ptr = ffi.cast("const uint8_t*", result)
+                output.len = #result
+                    return AbiErrorCode.Ok
+                end
+                return AbiErrorCode.Generic
+            end)
+            return ok and code or AbiErrorCode.Generic
+        end
+        local dispatch_cb = ffi.cast("PolyplugLuaInProcessDispatchCallback", dispatch)
+        local create_cb = ffi.cast("PolyplugLuaInProcessCreateCallback", create)
+        local destroy_cb = ffi.cast("PolyplugLuaInProcessDestroyCallback", destroy)
+        bridge.callback = dispatch_cb
+        bridge.create_callback = create_cb
+        bridge.destroy_callback = destroy_cb
+        local interface = ffi.new("GuestContractInterface")
+        interface.contract_id = 0x45173A959EEC57C5ULL
+        interface.contract_version.major = 1
+        interface.contract_version.minor = 0
+        interface.contract_version.patch = 0
+        interface.dispatch_type = ffi.C.DispatchType_VirtualMachine
+        interface.adapter_context = ffi.cast("void*", bridge)
+        interface.create_instance = lua_bridge_lib.polyplug_lua_in_process_create_instance
+        interface.destroy_instance = lua_bridge_lib.polyplug_lua_in_process_destroy_instance
+        interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_in_process_vm_dispatch
+        interface.dispatch.vm.loader_data.data = nil
+        records[4].descriptor.name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Validator"].plugin_name)
+        records[4].descriptor.name.len = #resident.strings["pipeline.Validator"].plugin_name
+        records[4].descriptor.contract_name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Validator"].contract_name)
+        records[4].descriptor.contract_name.len = #resident.strings["pipeline.Validator"].contract_name
+        records[4].descriptor.version.major = 1
+        records[4].descriptor.version.minor = 0
+        records[4].descriptor.version.patch = 0
+        records[4].interface = interface
+        records[4].adapter_context = ffi.cast("void*", bridge)
+        resident.bridges["pipeline.Validator"] = bridge
+        resident.interfaces["pipeline.Validator"] = interface
+        resident.callbacks["pipeline.Validator"] = { dispatch_cb, create_cb, destroy_cb }
+    end
+    local dependencies = spec.dependencies or {}
+    local dependency_ids = nil
+    if #dependencies > 0 then
+        dependency_ids = ffi.new("uint64_t[?]", #dependencies)
+        for i = 1, #dependencies do dependency_ids[i - 1] = dependencies[i] end
+        resident.dependency_ids = dependency_ids
+    end
+    resident.strings.bundle_name = spec.name
+    local registration = ffi.new("InProcessBundleRegistration")
+    registration.metadata.name.ptr = ffi.cast("const uint8_t*", resident.strings.bundle_name)
+    registration.metadata.name.len = #resident.strings.bundle_name
+    registration.metadata.version.major = version.major or 1
+    registration.metadata.version.minor = version.minor or 0
+    registration.metadata.version.patch = version.patch or 0
+    registration.metadata.runtime = ffi.C.SupportedLanguage_Lua
+    registration.dependency_ids = dependency_ids
+    registration.dependency_count = #dependencies
+    registration.contracts = records
+    registration.contract_count = 5
+    resident.registration = registration
+    return { registration = registration, resident = resident }
 end
 
 return M

@@ -3,6 +3,7 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
+use core::ffi::c_void;
 use core::mem;
 use core::ptr;
 use std::collections::HashMap;
@@ -634,6 +635,7 @@ fn bytes_source_loads_fixture_and_dispatches() {
     // SAFETY: fn_ptr is the add wrapper; its ABI is the frozen native dispatch
     // signature `(instance, args, out, *mut AbiError) -> void` (out-param convention).
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
@@ -645,6 +647,7 @@ fn bytes_source_loads_fixture_and_dispatches() {
     // is a valid, writable out-param for the call's AbiError.
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             ptr::addr_of!(args) as *const (),
             ptr::addr_of_mut!(out) as *mut (),
@@ -741,6 +744,7 @@ fn assert_add_dispatch_works(runtime: &Runtime) {
     // SAFETY: fn_ptr is the add wrapper; its ABI is the frozen native dispatch
     // signature `(instance, args, out, *mut AbiError) -> void` (out-param convention).
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
@@ -751,6 +755,7 @@ fn assert_add_dispatch_works(runtime: &Runtime) {
     // is stateless so a null instance handle is valid; `result` is a valid out-param.
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             ptr::addr_of!(args) as *const (),
             ptr::addr_of_mut!(out) as *mut (),

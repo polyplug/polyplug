@@ -32,7 +32,7 @@ use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
-use polyplug_lua::LuaConfig;
+
 use polyplug_lua::LuaLoader;
 use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
@@ -170,7 +170,7 @@ local function new_consumer(host)
         -- Out-param ABI: the AbiError is written through a trailing pointer.
         local err = ffi.new("AbiError")
         if interface.dispatch_type == 1 then
-            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, instance, 0, args_ptr_v, out_ptr_v, nil, err)
+            interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, instance, 0, args_ptr_v, out_ptr_v, nil, err)
         end
 
         -- Destroy instance through the host (stateless no-op, but honour the lifecycle).
@@ -259,7 +259,7 @@ fn lua_peer_caller_echo_roundtrip() {
 
     // Build the runtime with the Lua loader.
     let rt: Arc<Runtime> = Runtime::builder()
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(LuaLoader::new())
         .build()
         .expect("build runtime");
 
@@ -301,6 +301,7 @@ fn lua_peer_caller_echo_roundtrip() {
     let mut err: AbiError = AbiError::ok();
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0_u32,

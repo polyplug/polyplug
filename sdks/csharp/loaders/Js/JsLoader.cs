@@ -13,15 +13,10 @@ public static partial class JsLoaderExtensions
 {
     private const string NativeLoaderLib = "polyplug_js";
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct JsLoaderConfig
-    {
-        public byte Reserved;
-    }
 
     [LibraryImport(NativeLoaderLib, EntryPoint = "polyplug_js_loader_create")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    private static partial nint PolyplugJsLoaderCreate(nint cfgPtr);
+    private static partial nint PolyplugJsLoaderCreate();
 
     /// <summary>
     /// Registers the JavaScript (QuickJS) loader with the runtime.
@@ -35,26 +30,16 @@ public static partial class JsLoaderExtensions
             throw new ArgumentNullException(nameof(runtime));
         }
 
-        JsLoaderConfig cfg = new JsLoaderConfig { Reserved = 0 };
-        nint cfgPtr = Marshal.AllocHGlobal(Marshal.SizeOf<JsLoaderConfig>());
-        try
+        nint loaderPtr = PolyplugJsLoaderCreate();
+        if (loaderPtr == nint.Zero)
         {
-            Marshal.StructureToPtr(cfg, cfgPtr, false);
-            nint loaderPtr = PolyplugJsLoaderCreate(cfgPtr);
-            if (loaderPtr == nint.Zero)
-            {
-                throw new InvalidOperationException("polyplug: js loader create failed");
-            }
-
-            uint err = runtime.RegisterLoader(loaderPtr);
-            if (err != 0u)
-            {
-                Runtime.ThrowLastError($"polyplug: js loader register failed: {err}");
-            }
+            throw new InvalidOperationException("polyplug: js loader create failed");
         }
-        finally
+
+        uint err = runtime.RegisterLoader(loaderPtr);
+        if (err != 0u)
         {
-            Marshal.FreeHGlobal(cfgPtr);
+            Runtime.ThrowLastError($"polyplug: js loader register failed: {err}");
         }
     }
 }

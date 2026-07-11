@@ -22,20 +22,22 @@ uint32_t polyplug_abi_version(void);
 ```c
 AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx);
 ```
-**Called by:** Host immediately after dlopen
+**Called by:** Host while a bundle load is preparing
 **Parameters:**
 - `host`: The `HostApi` function table; the plugin registers by calling `host->register_guest_contract(host, &descriptor, &interface)`
 - `ctx`: Context containing bundle_id and bundle_path
-**Purpose:** Plugin constructor - registers contracts with the runtime
+**Purpose:** Plugin constructor - prepares contracts for the runtime
 
 ### BundleInitContext
 ```c
 typedef struct {
     uint64_t   bundle_id;    // Bundle ID for dependency enforcement during init
-    StringView bundle_path;  // Absolute canonical path to the bundle directory
+    StringView bundle_path;  // Canonical bundle directory, or empty for in-memory sources
 } BundleInitContext;
 ```
-24 bytes total: `bundle_id` (8) + `bundle_path` (16).
+24 bytes total: `bundle_id` (8) + `bundle_path` (16). The context and its
+`StringView` are borrowed for the synchronous `polyplug_init` call only. A guest
+that needs the path after init copies it into loader-owned state.
 
 ## Host ABI (libpolyplug Exports)
 
@@ -97,14 +99,20 @@ void host->free(const HostApi* host, uint8_t* ptr, size_t size, size_t align);
 
 ### All Other Operations (via HostApi fields)
 
-`polyplug_runtime_create` returns a pointer to `HostApi`, a `184`-byte
-`#[repr(C)]` struct: one opaque runtime pointer plus 21 function-pointer fields
-(`unload_bundle` at offset 136, `log` at offset 144,
-`create_guest_instance` at offset 152, `destroy_guest_instance` at offset 160,
-`revision_counter` at offset 168) followed by a trailing `reserved: *const c_void` data pointer at
-offset 176 (producers set null; consumers must not read it). Host applications
+`polyplug_runtime_create` returns a pointer to `HostApi`, a `192`-byte
+`#[repr(C)]` struct: one opaque runtime pointer plus 22 function-pointer fields.
+`register_in_process_bundle` is at offset 16; `unload_bundle` is at offset 144,
+`log` at offset 152, `create_guest_instance` at offset 160,
+`destroy_guest_instance` at offset 168, and `registry_revision` at offset 176.
+A trailing `reserved: *const c_void` data pointer is at offset 184 (producers set
+null; consumers must not read it). Host applications
 and plugins call these fields using the self-passing pattern, e.g.
 `host->load_bundle(host, path, path_len)`.
+
+`registry_revision(host)` returns the current runtime-wide registry revision as
+`u64`. The runtime performs its acquire atomic load before returning that value,
+so callers in every supported host language receive the same synchronization
+without observing Rust atomic storage through a foreign pointer.
 The fields cover bundle lifecycle (`load_bundle`, `reload_bundle`, `unload_bundle`),
 contract discovery (`find_guest_contract`, `find_all_guest_contracts`,
 `resolve_guest_contract`), instance lifecycle (`create_guest_instance`,

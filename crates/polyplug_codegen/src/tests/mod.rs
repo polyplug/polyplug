@@ -2,8 +2,8 @@
 
 mod arena_parity;
 mod documentation;
-mod embedded_rust;
 mod generator_correctness;
+mod in_process_rust;
 mod incremental_write;
 mod parser_errors;
 mod toml_malformed;

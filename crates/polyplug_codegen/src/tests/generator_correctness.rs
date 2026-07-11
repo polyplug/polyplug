@@ -565,3 +565,56 @@ fn multiple_contracts_have_independent_fns_arrays() {
          got {fns_array_count}:\n{interfaces}"
     );
 }
+
+/// Every generated host caller obtains a synchronized revision value from the
+/// same HostApi callback and never reads foreign revision storage directly.
+#[test]
+fn host_callers_use_registry_revision_value_callback() {
+    let ir: ValidatedIr = make_ir(
+        "revision.test",
+        1,
+        vec![make_fn(
+            "add",
+            0,
+            vec![
+                prim_param("left", PrimitiveType::U32),
+                prim_param("right", PrimitiveType::U32),
+            ],
+            Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+        )],
+    );
+
+    let languages: [Lang; 6] = [
+        Lang::Rust,
+        Lang::Cpp,
+        Lang::CSharp,
+        Lang::Python,
+        Lang::Lua,
+        Lang::JsQuickJs,
+    ];
+
+    for language in languages {
+        let output: GenerateOutput =
+            generate::generate_ir(&ir, language, Side::Host).expect("generate host callers");
+        let rendered: String = output
+            .files
+            .iter()
+            .map(|file: &GeneratedFile| file.content.as_str())
+            .collect();
+
+        assert!(
+            rendered.contains("registry_revision")
+                || rendered.contains("RegistryRevision")
+                || rendered.contains("registryRevision"),
+            "{language:?} host callers must invoke the registry revision callback:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("revision_ptr")
+                && !rendered.contains("revisionPtr")
+                && !rendered.contains("_revisionPtr")
+                && !rendered.contains("revisionCounter")
+                && !rendered.contains("RevisionCounter"),
+            "{language:?} host callers must not retain or read a raw revision pointer:\n{rendered}"
+        );
+    }
+}

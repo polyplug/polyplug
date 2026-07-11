@@ -604,6 +604,8 @@ jobs:
           for d in native python lua js dotnet; do
             ( cd "sdks/js/loaders/$d" && tsc -p tsconfig.json )
           done
+          node sdks/js/abi/fix_declarations.mjs \
+            sdks/js/abi/dist sdks/js/host/dist sdks/js/loaders/*/dist
 
       # Embed the core native into @polyplug/host's transpiled dist (the only JS
       # package with natives; loaders resolve their native via the OS loader /

@@ -19,6 +19,19 @@ public static class EncoderInterfaces {
     /// </summary>
     public static void SetEncoderFactory(Func<IntPtr, IPipelineEncoderGuestContract> factory) { _factory_encoder = factory; }
 
+    private sealed class EncoderAdapterState { public Func<IntPtr, IPipelineEncoderGuestContract> Factory = null!; }
+    public static GuestContractInterface CreateInProcessInterface(Func<IntPtr, IPipelineEncoderGuestContract> factory) {
+        ArgumentNullException.ThrowIfNull(factory);
+        var context = GCHandle.Alloc(new EncoderAdapterState { Factory = factory });
+        var iface = ENCODER_INTERFACE;
+        iface.AdapterContext = GCHandle.ToIntPtr(context);
+        return iface;
+    }
+
+    public static void ReleaseInProcessInterface(GuestContractInterface iface) {
+        if (iface.AdapterContext != IntPtr.Zero) GCHandle.FromIntPtr(iface.AdapterContext).Free();
+    }
+
     /// <summary>Per-instance payload carried in GuestContractInstance.Data (via GCHandle).</summary>
     private sealed class EncoderInstanceState {
         // Host pointer captured at instance creation — routes every host call
@@ -29,7 +42,7 @@ public static class EncoderInterfaces {
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static unsafe void ENCODER_CreateInstance(VmLoaderData loaderData, IntPtr host, IntPtr args, GuestContractInstance* outInstance) {
+    private static unsafe void ENCODER_CreateInstance(IntPtr adapterContext, VmLoaderData loaderData, IntPtr host, IntPtr args, GuestContractInstance* outInstance) {
         _ = loaderData;  // Native-dispatch contracts ignore the VM loader handle.
         // Calls the author factory and carries the payload in instance.Data as a
         // normal (non-pinned) GCHandle — an opaque token the host never
@@ -37,7 +50,7 @@ public static class EncoderInterfaces {
         // was not registered, or it throws.
         if (outInstance == null) return;
         try {
-            var factory = _factory_encoder;
+            var factory = adapterContext == IntPtr.Zero ? _factory_encoder : ((EncoderAdapterState)GCHandle.FromIntPtr(adapterContext).Target!).Factory;
             if (host == IntPtr.Zero || factory is null) {
                 *outInstance = new GuestContractInstance { Data = IntPtr.Zero };
                 return;
@@ -54,8 +67,9 @@ public static class EncoderInterfaces {
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void ENCODER_DestroyInstance(VmLoaderData loaderData, IntPtr host, GuestContractInstance instance) {
+    private static void ENCODER_DestroyInstance(IntPtr adapterContext, VmLoaderData loaderData, IntPtr host, GuestContractInstance instance) {
         _ = loaderData;  // Native-dispatch contracts ignore the VM loader handle.
+        _ = adapterContext;
         // Frees the GCHandle allocated by CreateInstance; the payload becomes
         // collectible. The host calls destroy exactly once per instance.
         if (instance.Data == IntPtr.Zero) return;
@@ -67,7 +81,8 @@ public static class EncoderInterfaces {
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static unsafe void encoder_encode_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {
+    private static unsafe void encoder_encode_abi(IntPtr adapterContext, GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr, AbiError* outErr) {
+        _ = adapterContext;
         if (outErr == null) return;
         try {
             if (instance.Data == IntPtr.Zero) {
@@ -109,15 +124,16 @@ public static class EncoderInterfaces {
     static EncoderInterfaces() {
         unsafe {
             ENCODER_FNS = new IntPtr[] {
-                (IntPtr)(delegate* unmanaged[Cdecl]<GuestContractInstance, IntPtr, IntPtr, AbiError*, void>)&encoder_encode_abi,
+                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, IntPtr, IntPtr, AbiError*, void>)&encoder_encode_abi,
             };
             _ENCODER_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(ENCODER_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
             ENCODER_INTERFACE = new GuestContractInterface {
                 ContractId = PIPELINE_ENCODER_CONTRACT_ID,
                 ContractVersion = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u },
                 DispatchType = DispatchType.Native,
-                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, IntPtr, GuestContractInstance*, void>)&ENCODER_CreateInstance,
-                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, GuestContractInstance, void>)&ENCODER_DestroyInstance,
+                AdapterContext = IntPtr.Zero,
+                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, IntPtr, IntPtr, GuestContractInstance*, void>)&ENCODER_CreateInstance,
+                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, IntPtr, GuestContractInstance, void>)&ENCODER_DestroyInstance,
                 Dispatch = new DispatchMechanisms {
                     Native = new NativeDispatch {
                         FunctionCount = 1u,

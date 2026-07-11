@@ -5,6 +5,7 @@
 local M = {}
 
 -- Host contract `host.logger` (id=0xF53EB5F2845853BB)
+--- Logging service supplied by the host.
 HostLogger = {}
 HostLogger.__index = HostLogger
 
@@ -15,16 +16,19 @@ function HostLogger:new()
     return obj
 end
 
+--- Writes an informational log message.
 --- @param self table
---- @param message string
---- @return nil
+--- Message text to write.
+---@param message string Message text to write.
+--- Logging has no return value.
+---@return nil Logging has no return value.
 function HostLogger:log(message)
     error("abstract method: log must be implemented by host", 2)
 end
 
 --- @param self table
---- @param level userdata
---- @param message string
+---@param level userdata
+---@param message string
 --- @return nil
 function HostLogger:log_with_level(level, message)
     error("abstract method: log_with_level must be implemented by host", 2)

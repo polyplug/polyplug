@@ -3,6 +3,5 @@
 // Runtime: js-quickjs
 
 // Main entry point for bundling
+export { TEST_ADDER_INTERFACE, setTestAdderFactory } from './contracts';
 export { polyplug_init } from './init';
-export { TEST_ADDER_INTERFACE } from './contracts';
-export { setTestAdderFactory } from './contracts';

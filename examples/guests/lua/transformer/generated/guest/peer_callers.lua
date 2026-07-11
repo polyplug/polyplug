@@ -6,7 +6,6 @@ local ffi = require("ffi")
 local polyplug_abi = require("polyplug_abi")
 local polyplug_guest = require("polyplug_guest")
 
-local ConstUint64Ptr = ffi.typeof("const uint64_t*")
 
 local M = {}
 
@@ -14,8 +13,8 @@ local M = {}
 PipelineValidatorPeer = {}
 PipelineValidatorPeer.__index = PipelineValidatorPeer
 
-function PipelineValidatorPeer:new(interface, instance, host, handle, revision_ptr, cached_revision)
-    local obj = { _interface = interface, _instance = instance, _host = host, _handle = handle, _revision_ptr = revision_ptr, _cached_revision = cached_revision }
+function PipelineValidatorPeer:new(interface, instance, host, handle, cached_revision)
+    local obj = { _interface = interface, _instance = instance, _host = host, _handle = handle, _cached_revision = cached_revision }
     setmetatable(obj, self)
     return obj
 end
@@ -34,12 +33,8 @@ function PipelineValidatorPeer.resolve(host_ptr)
     -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.
     local instance = ffi.new("GuestContractInstance")
     host.create_guest_instance(host, interface, nil, instance)
-    local revision_ptr = host.revision_counter(host)
-    local cached_revision = 0
-    if revision_ptr ~= nil then
-        cached_revision = ffi.cast(ConstUint64Ptr, revision_ptr)[0]
-    end
-    return PipelineValidatorPeer:new(interface, instance, host, handle, revision_ptr, cached_revision)
+    local cached_revision = host.registry_revision(host)
+    return PipelineValidatorPeer:new(interface, instance, host, handle, cached_revision)
 end
 
 function PipelineValidatorPeer:is_valid()
@@ -47,10 +42,7 @@ function PipelineValidatorPeer:is_valid()
 end
 
 function PipelineValidatorPeer:live_revision()
-    if self._revision_ptr == nil then
-        return self._cached_revision
-    end
-    return ffi.cast(ConstUint64Ptr, self._revision_ptr)[0]
+    return self._host.registry_revision(self._host)
 end
 
 function PipelineValidatorPeer:revalidate()
@@ -92,7 +84,7 @@ function PipelineValidatorPeer:validate(input)
         local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
         fn(self._instance, args_ptr, out_ptr, err)
     elseif dispatch_type == 1 then
-        interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
+        interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
     else
         return nil
     end

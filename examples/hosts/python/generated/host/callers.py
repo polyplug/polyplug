@@ -60,17 +60,11 @@ class _AbiError(ctypes.Structure):
         ('message_len', ctypes.c_size_t),
     ]
 
-_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
-_DISPATCH_FN_TYPE: TypeAlias = Callable[[GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], None]
+_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+_DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], None]
 
 class PipelineDecoderContractCaller:
-    """Host caller for contract `pipeline.Decoder` with instance lifecycle management.
-
-    RAII wrapper that manages instance lifecycle:
-    - `create()`: resolves handle and calls `create_instance`
-    - `__del__`: calls `destroy_instance` to clean up
-    - dispatch: passes `_instance` to all method calls
-    """
+    """Host caller for contract `pipeline.Decoder` with instance lifecycle management.\n\nDecodes CSV input into the pipeline representation.\n\nRAII wrapper that manages instance lifecycle:\n- `create()`: resolves handle and calls `create_instance`\n- `__del__`: calls `destroy_instance` to clean up\n- dispatch: passes `_instance` to all method calls"""
 
     def __init__(self, handle: int, host: ctypes.c_void_p, owner: object | None = None) -> None:
         """Create instance wrapper from handle and host interface.
@@ -103,12 +97,8 @@ class PipelineDecoderContractCaller:
         # Retain the handle so the cache can re-resolve after a hot-reload (which
         # swaps a new interface into the same slot) or report a gone contract.
         self._handle: int = handle
-        # Fetch the registry revision counter ONCE, then read its current value, so
-        # every later call can detect a reload/unload with a direct atomic load (one
-        # aligned 64-bit load through the cached pointer, no call into the runtime)
-        # and re-resolve before dispatching.
-        self._revision_ptr: int = host_iface.contents.revision_counter(host) or 0
-        self._cached_revision: int = self._live_revision()
+        # Capture the synchronized registry revision for the resolved interface.
+        self._cached_revision: int = host_iface.contents.registry_revision(host)
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
         self._owner: object | None = owner
@@ -175,14 +165,9 @@ class PipelineDecoderContractCaller:
         return bool(getattr(self, "_interface", None))
 
     def _live_revision(self) -> int:
-        """Read the registry revision through the cached pointer — one aligned
-        atomic load, no call into the runtime. Returns the cached value (i.e.
-        "unchanged") when there is no counter (null host/runtime), so the
-        staleness check is then a no-op.
-        """
-        if not self._revision_ptr:
-            return self._cached_revision
-        return ctypes.c_uint64.from_address(self._revision_ptr).value
+        """Read the synchronized registry revision through HostApi."""
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+        return int(host_iface.contents.registry_revision(self._host))
 
     def _revalidate(self) -> bool:
         """Re-resolve the cached interface after the registry changed under us.
@@ -225,6 +210,7 @@ class PipelineDecoderContractCaller:
         return self.is_valid()
 
     def decode(self, input: StringView) -> StringView:
+        """Decodes one CSV record.\n\nArgs:\n    input: The CSV record to decode.\n\nReturns:\n    The decoded pipeline record."""
         if self._live_revision() != self._cached_revision and not self._revalidate():
             raise ContractError("contract not found", AbiErrorCode.NotFound)
         # Returns a value borrowing this caller's arena; it stays valid until
@@ -248,11 +234,11 @@ class PipelineDecoderContractCaller:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
             # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
-            dispatch_fn(self._instance, args_ptr, out_ptr, ctypes.byref(err))
+            dispatch_fn(interface.adapter_context, self._instance, args_ptr, out_ptr, ctypes.byref(err))
         else:
             # SAFETY: the union's vm variant is active per dispatch_type; args/out
             # are valid per the ABI contract. The arena was reset at call start.
-            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
+            interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
         if err.code != AbiErrorCode.Ok:
             raise ContractError(f"polyplug call failed (code {err.code})", err.code)
         return out_val
@@ -298,12 +284,8 @@ class DataTransformerContractCaller:
         # Retain the handle so the cache can re-resolve after a hot-reload (which
         # swaps a new interface into the same slot) or report a gone contract.
         self._handle: int = handle
-        # Fetch the registry revision counter ONCE, then read its current value, so
-        # every later call can detect a reload/unload with a direct atomic load (one
-        # aligned 64-bit load through the cached pointer, no call into the runtime)
-        # and re-resolve before dispatching.
-        self._revision_ptr: int = host_iface.contents.revision_counter(host) or 0
-        self._cached_revision: int = self._live_revision()
+        # Capture the synchronized registry revision for the resolved interface.
+        self._cached_revision: int = host_iface.contents.registry_revision(host)
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
         self._owner: object | None = owner
@@ -370,14 +352,9 @@ class DataTransformerContractCaller:
         return bool(getattr(self, "_interface", None))
 
     def _live_revision(self) -> int:
-        """Read the registry revision through the cached pointer — one aligned
-        atomic load, no call into the runtime. Returns the cached value (i.e.
-        "unchanged") when there is no counter (null host/runtime), so the
-        staleness check is then a no-op.
-        """
-        if not self._revision_ptr:
-            return self._cached_revision
-        return ctypes.c_uint64.from_address(self._revision_ptr).value
+        """Read the synchronized registry revision through HostApi."""
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+        return int(host_iface.contents.registry_revision(self._host))
 
     def _revalidate(self) -> bool:
         """Re-resolve the cached interface after the registry changed under us.
@@ -443,11 +420,11 @@ class DataTransformerContractCaller:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
             # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
-            dispatch_fn(self._instance, args_ptr, out_ptr, ctypes.byref(err))
+            dispatch_fn(interface.adapter_context, self._instance, args_ptr, out_ptr, ctypes.byref(err))
         else:
             # SAFETY: the union's vm variant is active per dispatch_type; args/out
             # are valid per the ABI contract. The arena was reset at call start.
-            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
+            interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
         if err.code != AbiErrorCode.Ok:
             raise ContractError(f"polyplug call failed (code {err.code})", err.code)
         return out_val
@@ -493,12 +470,8 @@ class PipelineEncoderContractCaller:
         # Retain the handle so the cache can re-resolve after a hot-reload (which
         # swaps a new interface into the same slot) or report a gone contract.
         self._handle: int = handle
-        # Fetch the registry revision counter ONCE, then read its current value, so
-        # every later call can detect a reload/unload with a direct atomic load (one
-        # aligned 64-bit load through the cached pointer, no call into the runtime)
-        # and re-resolve before dispatching.
-        self._revision_ptr: int = host_iface.contents.revision_counter(host) or 0
-        self._cached_revision: int = self._live_revision()
+        # Capture the synchronized registry revision for the resolved interface.
+        self._cached_revision: int = host_iface.contents.registry_revision(host)
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
         self._owner: object | None = owner
@@ -565,14 +538,9 @@ class PipelineEncoderContractCaller:
         return bool(getattr(self, "_interface", None))
 
     def _live_revision(self) -> int:
-        """Read the registry revision through the cached pointer — one aligned
-        atomic load, no call into the runtime. Returns the cached value (i.e.
-        "unchanged") when there is no counter (null host/runtime), so the
-        staleness check is then a no-op.
-        """
-        if not self._revision_ptr:
-            return self._cached_revision
-        return ctypes.c_uint64.from_address(self._revision_ptr).value
+        """Read the synchronized registry revision through HostApi."""
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+        return int(host_iface.contents.registry_revision(self._host))
 
     def _revalidate(self) -> bool:
         """Re-resolve the cached interface after the registry changed under us.
@@ -638,11 +606,11 @@ class PipelineEncoderContractCaller:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
             # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
-            dispatch_fn(self._instance, args_ptr, out_ptr, ctypes.byref(err))
+            dispatch_fn(interface.adapter_context, self._instance, args_ptr, out_ptr, ctypes.byref(err))
         else:
             # SAFETY: the union's vm variant is active per dispatch_type; args/out
             # are valid per the ABI contract. The arena was reset at call start.
-            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
+            interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
         if err.code != AbiErrorCode.Ok:
             raise ContractError(f"polyplug call failed (code {err.code})", err.code)
         return out_val
@@ -688,12 +656,8 @@ class DataReporterContractCaller:
         # Retain the handle so the cache can re-resolve after a hot-reload (which
         # swaps a new interface into the same slot) or report a gone contract.
         self._handle: int = handle
-        # Fetch the registry revision counter ONCE, then read its current value, so
-        # every later call can detect a reload/unload with a direct atomic load (one
-        # aligned 64-bit load through the cached pointer, no call into the runtime)
-        # and re-resolve before dispatching.
-        self._revision_ptr: int = host_iface.contents.revision_counter(host) or 0
-        self._cached_revision: int = self._live_revision()
+        # Capture the synchronized registry revision for the resolved interface.
+        self._cached_revision: int = host_iface.contents.registry_revision(host)
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
         self._owner: object | None = owner
@@ -760,14 +724,9 @@ class DataReporterContractCaller:
         return bool(getattr(self, "_interface", None))
 
     def _live_revision(self) -> int:
-        """Read the registry revision through the cached pointer — one aligned
-        atomic load, no call into the runtime. Returns the cached value (i.e.
-        "unchanged") when there is no counter (null host/runtime), so the
-        staleness check is then a no-op.
-        """
-        if not self._revision_ptr:
-            return self._cached_revision
-        return ctypes.c_uint64.from_address(self._revision_ptr).value
+        """Read the synchronized registry revision through HostApi."""
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+        return int(host_iface.contents.registry_revision(self._host))
 
     def _revalidate(self) -> bool:
         """Re-resolve the cached interface after the registry changed under us.
@@ -833,11 +792,11 @@ class DataReporterContractCaller:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
             # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
-            dispatch_fn(self._instance, args_ptr, out_ptr, ctypes.byref(err))
+            dispatch_fn(interface.adapter_context, self._instance, args_ptr, out_ptr, ctypes.byref(err))
         else:
             # SAFETY: the union's vm variant is active per dispatch_type; args/out
             # are valid per the ABI contract. The arena was reset at call start.
-            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
+            interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
         if err.code != AbiErrorCode.Ok:
             raise ContractError(f"polyplug call failed (code {err.code})", err.code)
         return out_val
@@ -883,12 +842,8 @@ class PipelineValidatorContractCaller:
         # Retain the handle so the cache can re-resolve after a hot-reload (which
         # swaps a new interface into the same slot) or report a gone contract.
         self._handle: int = handle
-        # Fetch the registry revision counter ONCE, then read its current value, so
-        # every later call can detect a reload/unload with a direct atomic load (one
-        # aligned 64-bit load through the cached pointer, no call into the runtime)
-        # and re-resolve before dispatching.
-        self._revision_ptr: int = host_iface.contents.revision_counter(host) or 0
-        self._cached_revision: int = self._live_revision()
+        # Capture the synchronized registry revision for the resolved interface.
+        self._cached_revision: int = host_iface.contents.registry_revision(host)
         # Pin the runtime: refcounting then guarantees the owner outlives this
         # caller, so __del__ tears down through a still-live host.
         self._owner: object | None = owner
@@ -955,14 +910,9 @@ class PipelineValidatorContractCaller:
         return bool(getattr(self, "_interface", None))
 
     def _live_revision(self) -> int:
-        """Read the registry revision through the cached pointer — one aligned
-        atomic load, no call into the runtime. Returns the cached value (i.e.
-        "unchanged") when there is no counter (null host/runtime), so the
-        staleness check is then a no-op.
-        """
-        if not self._revision_ptr:
-            return self._cached_revision
-        return ctypes.c_uint64.from_address(self._revision_ptr).value
+        """Read the synchronized registry revision through HostApi."""
+        host_iface: ctypes.POINTER(HostApi) = ctypes.cast(self._host, ctypes.POINTER(HostApi))
+        return int(host_iface.contents.registry_revision(self._host))
 
     def _revalidate(self) -> bool:
         """Re-resolve the cached interface after the registry changed under us.
@@ -1028,11 +978,11 @@ class PipelineValidatorContractCaller:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             # SAFETY: instance is valid for the wrapper lifetime; args_ptr points
             # to valid args, out_ptr to a valid return-type buffer per the ABI contract.
-            dispatch_fn(self._instance, args_ptr, out_ptr, ctypes.byref(err))
+            dispatch_fn(interface.adapter_context, self._instance, args_ptr, out_ptr, ctypes.byref(err))
         else:
             # SAFETY: the union's vm variant is active per dispatch_type; args/out
             # are valid per the ABI contract. The arena was reset at call start.
-            interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
+            interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, ctypes.byref(self._arena), ctypes.byref(err))
         if err.code != AbiErrorCode.Ok:
             raise ContractError(f"polyplug call failed (code {err.code})", err.code)
         return out_val

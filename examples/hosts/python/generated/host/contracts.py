@@ -8,8 +8,10 @@ from abc import ABC, abstractmethod
 
 # Host contract `host.logger` (id=0xF53EB5F2845853BB)
 class HostLogger(ABC):
+    """Logging service supplied by the host."""
     @abstractmethod
     def log(self, message: str) -> None:
+        """Writes an informational log message.\n\nArgs:\n    message: Message text to write.\n\nReturns:\n    Logging has no return value."""
         pass
 
     @abstractmethod

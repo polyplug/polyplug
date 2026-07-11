@@ -2,16 +2,24 @@
 
 #![allow(clippy::expect_used)]
 
+use core::ffi::c_void;
+use core::ptr;
+
 use polyplug::error::GraphError;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::BundleSource;
 use polyplug::runtime::Runtime;
-use polyplug_abi::SupportedLanguage;
+
 use polyplug_abi::runtime::Compatibility;
 use polyplug_abi::types::LogLevel;
+use polyplug_abi::{
+    AbiError, DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface,
+    HostApi, NativeDispatch, PluginDescriptor, StringView, Version, VmLoaderData,
+};
 use polyplug_common::ManifestData;
+use polyplug_utils::GuestContractId;
 use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
 use std::fs;
@@ -20,15 +28,50 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tempfile::TempDir;
 
+unsafe extern "C" fn noop_create_instance(
+    _adapter_context: *mut c_void,
+    _loader_data: VmLoaderData,
+    _host: *const HostApi,
+    _args: *const (),
+    out_instance: *mut GuestContractInstance,
+) {
+    if !out_instance.is_null() {
+        // SAFETY: the caller provided a writable instance out-parameter.
+        unsafe { out_instance.write(GuestContractInstance::null()) };
+    }
+}
+
+unsafe extern "C" fn noop_destroy_instance(
+    _adapter_context: *mut c_void,
+    _loader_data: VmLoaderData,
+    _host: *const HostApi,
+    _instance: GuestContractInstance,
+) {
+}
+
+unsafe extern "C" fn noop_dispatch(
+    _adapter_context: *mut c_void,
+    _instance: GuestContractInstance,
+    _args: *const (),
+    _out: *mut (),
+    out_error: *mut AbiError,
+) {
+    if !out_error.is_null() {
+        // SAFETY: the caller provided a writable error out-parameter.
+        unsafe { out_error.write(AbiError::ok()) };
+    }
+}
+
+type DispatchFn =
+    unsafe extern "C" fn(*mut c_void, GuestContractInstance, *const (), *mut (), *mut AbiError);
+
+static NOOP_FUNCTIONS: [DispatchFn; 16] = [noop_dispatch; 16];
+
 struct NoopLoader;
 
 impl BundleLoader for NoopLoader {
     fn loader_name(&self) -> &'static str {
         "test-noop"
-    }
-
-    fn loader_language(&self) -> SupportedLanguage {
-        SupportedLanguage::Rust
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -37,11 +80,70 @@ impl BundleLoader for NoopLoader {
 
     fn load(
         &self,
-        _manifest: &ManifestData,
+        manifest: &ManifestData,
         _source: &BundleSource,
-        _runtime: &Runtime,
+        runtime: &Runtime,
     ) -> Result<(), LoaderError> {
-        Ok(())
+        runtime.push_init_bundle_id(manifest.id);
+        let result: Result<(), LoaderError> = (|| {
+            for provided in &manifest.provides {
+                let (contract_name, major): (&str, u32) = provided
+                    .split_once('@')
+                    .map(|(name, version)| {
+                        let major: u32 = version
+                            .split('.')
+                            .next()
+                            .and_then(|value| value.parse().ok())
+                            .unwrap_or(1);
+                        (name, major)
+                    })
+                    .unwrap_or((provided.as_str(), 1));
+                let key: String = format!("{contract_name}@{major}");
+                let function_count: u32 = manifest.function_count.get(&key).copied().unwrap_or(0);
+                let interface: GuestContractInterface = GuestContractInterface {
+                    contract_id: GuestContractId::new(contract_name, major),
+                    contract_version: Version {
+                        major,
+                        minor: 0,
+                        patch: 0,
+                    },
+                    dispatch_type: DispatchType::Native,
+                    adapter_context: ptr::null_mut(),
+                    create_instance: noop_create_instance,
+                    destroy_instance: noop_destroy_instance,
+                    dispatch: DispatchMechanisms {
+                        native: NativeDispatch {
+                            function_count,
+                            functions: NOOP_FUNCTIONS.as_ptr().cast(),
+                        },
+                    },
+                };
+                let descriptor: PluginDescriptor = PluginDescriptor {
+                    name: StringView::from_static(b"version-test"),
+                    contract_name: StringView {
+                        ptr: contract_name.as_ptr(),
+                        len: contract_name.len(),
+                    },
+                    version: interface.contract_version,
+                };
+                let host: *const HostApi = runtime.host_abi();
+                let mut error: AbiError = AbiError::ok();
+                // SAFETY: every argument remains live for this synchronous
+                // registration callback and the host belongs to `runtime`.
+                unsafe {
+                    ((*host).register_guest_contract)(host, &descriptor, &interface, &mut error);
+                }
+                if !error.is_ok() {
+                    return Err(LoaderError::InitFailed {
+                        bundle: manifest.name.clone(),
+                        error: format!("registration failed with ABI code {}", error.code),
+                    });
+                }
+            }
+            Ok(())
+        })();
+        runtime.pop_init_bundle_id();
+        result
     }
 
     fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {

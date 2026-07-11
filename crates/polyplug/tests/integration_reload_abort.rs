@@ -12,6 +12,7 @@
 //! mock loader whose `reload` registers a pending contract and then returns an
 //! error, simulating an init that fails after partial registration.
 
+use core::ffi::c_void;
 use core::ptr;
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::Ordering;
@@ -25,8 +26,8 @@ use polyplug::loader::BundleSource;
 use polyplug::runtime::Runtime;
 use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::{
-    Compatibility, DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface,
-    HostApi, NativeDispatch, PluginDescriptor, RuntimeConfig, StringView, SupportedLanguage,
+    AbiError, Compatibility, DispatchMechanisms, DispatchType, GuestContractInstance,
+    GuestContractInterface, HostApi, NativeDispatch, PluginDescriptor, RuntimeConfig, StringView,
     Version,
 };
 use polyplug_common::ManifestData;
@@ -36,6 +37,7 @@ use tempfile::TempDir;
 const MOCK_FNS_EMPTY: [*const (); 0] = [];
 
 unsafe extern "C" fn noop_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -48,6 +50,7 @@ unsafe extern "C" fn noop_create_instance(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -65,25 +68,25 @@ struct AbortLoader {
 }
 
 impl AbortLoader {
-    fn register(&self, manifest: &ManifestData, runtime: &Runtime) {
-        let interface: &'static GuestContractInterface =
-            Box::leak(Box::new(GuestContractInterface {
-                contract_id: GuestContractId::from_u64(self.contract_id),
-                contract_version: Version {
-                    major: 1,
-                    minor: 0,
-                    patch: 0,
+    fn register(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), LoaderError> {
+        let interface: GuestContractInterface = GuestContractInterface {
+            contract_id: GuestContractId::from_u64(self.contract_id),
+            contract_version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            dispatch_type: DispatchType::Native,
+            adapter_context: ptr::null_mut(),
+            create_instance: noop_create_instance,
+            destroy_instance: noop_destroy_instance,
+            dispatch: DispatchMechanisms {
+                native: NativeDispatch {
+                    function_count: 0,
+                    functions: MOCK_FNS_EMPTY.as_ptr(),
                 },
-                dispatch_type: DispatchType::Native,
-                create_instance: noop_create_instance,
-                destroy_instance: noop_destroy_instance,
-                dispatch: DispatchMechanisms {
-                    native: NativeDispatch {
-                        function_count: 0,
-                        functions: MOCK_FNS_EMPTY.as_ptr(),
-                    },
-                },
-            }));
+            },
+        };
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView::from_static(b"abort"),
             contract_name: StringView::from_static(b"abort.contract"),
@@ -93,27 +96,30 @@ impl AbortLoader {
                 patch: 0,
             },
         };
-        let bundle_id: BundleId = BundleId::new(&manifest.name);
-        // SAFETY: interface is leaked and lives for the process lifetime.
+        let host: *const HostApi = runtime.host_abi();
+        let mut registration: AbiError = AbiError::ok();
+        // SAFETY: the host belongs to runtime; descriptor, interface, and error
+        // output remain valid for the synchronous registration call.
         unsafe {
-            runtime.registry().register_guest_contract(
-                descriptor,
-                interface,
-                "abort.contract".to_owned(),
-                bundle_id,
-            )
+            ((*host).register_guest_contract)(host, &descriptor, &interface, &mut registration);
         }
-        .expect("contract registration should succeed");
+        if registration.is_ok() {
+            Ok(())
+        } else {
+            Err(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!(
+                    "guest registration failed with ABI code {}",
+                    registration.code
+                ),
+            })
+        }
     }
 }
 
 impl BundleLoader for AbortLoader {
     fn loader_name(&self) -> &'static str {
         "abort-loader"
-    }
-
-    fn loader_language(&self) -> SupportedLanguage {
-        SupportedLanguage::Rust
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -126,21 +132,28 @@ impl BundleLoader for AbortLoader {
         _source: &BundleSource,
         runtime: &Runtime,
     ) -> Result<(), LoaderError> {
-        self.register(manifest, runtime);
-        Ok(())
+        runtime.push_init_bundle_id(BundleId::new(&manifest.name).id());
+        let result: Result<(), LoaderError> = self.register(manifest, runtime);
+        runtime.pop_init_bundle_id();
+        result
     }
 
     fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), LoaderError> {
         // Register the contract first — this creates a pending slot exactly as a
         // real plugin's polyplug_init would before its init logic fails.
-        self.register(manifest, runtime);
-        if self.fail_reload.load(Ordering::SeqCst) {
-            return Err(LoaderError::InitFailed {
-                bundle: manifest.name.clone(),
-                error: "simulated init failure after partial registration".to_owned(),
-            });
-        }
-        Ok(())
+        runtime.push_init_bundle_id(BundleId::new(&manifest.name).id());
+        let result: Result<(), LoaderError> = (|| {
+            self.register(manifest, runtime)?;
+            if self.fail_reload.load(Ordering::SeqCst) {
+                return Err(LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: "simulated init failure after partial registration".to_owned(),
+                });
+            }
+            Ok(())
+        })();
+        runtime.pop_init_bundle_id();
+        result
     }
 }
 
@@ -165,7 +178,8 @@ fn write_bundle(temp: &TempDir, bundle_name: &str) -> PathBuf {
          name = \"{bundle_name}\"\n\
          loader = \"abort-loader\"\n\
          file = \"dummy.so\"\n\
-         version = \"1.0\"\n"
+         version = \"1.0\"\n\
+         provides = [\"abort.contract\"]\n"
     );
     fs::write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
     bundle_dir

@@ -10,6 +10,9 @@ import {
     HOST_API_SIZE,
     HOST_CONTRACT_INSTANCE_SIZE,
     HOST_CONTRACT_INTERFACE_SIZE,
+    IN_PROCESS_BUNDLE_METADATA_SIZE,
+    IN_PROCESS_CONTRACT_REGISTRATION_SIZE,
+    IN_PROCESS_BUNDLE_REGISTRATION_SIZE,
     GUEST_CONTRACT_HANDLE_SIZE,
     BUNDLE_INIT_CONTEXT_SIZE,
     PLUGIN_DESCRIPTOR_SIZE,
@@ -42,12 +45,12 @@ test("GuestContractInstance is 16 bytes", () => {
     assertStrictEquals(GUEST_CONTRACT_INSTANCE_SIZE, 16);
 });
 
-test("GuestContractInterface is 56 bytes", () => {
-    assertStrictEquals(GUEST_CONTRACT_INTERFACE_SIZE, 56);
+test("GuestContractInterface is 64 bytes", () => {
+    assertStrictEquals(GUEST_CONTRACT_INTERFACE_SIZE, 64);
 });
 
-test("HostApi is 184 bytes", () => {
-    assertStrictEquals(HOST_API_SIZE, 184);
+test("HostApi is 192 bytes", () => {
+    assertStrictEquals(HOST_API_SIZE, 192);
 });
 
 test("HostContractInstance is 8 bytes", () => {
@@ -56,6 +59,18 @@ test("HostContractInstance is 8 bytes", () => {
 
 test("HostContractInterface is 80 bytes", () => {
     assertStrictEquals(HOST_CONTRACT_INTERFACE_SIZE, 80);
+});
+
+test("InProcessBundleMetadata is 32 bytes", () => {
+    assertStrictEquals(IN_PROCESS_BUNDLE_METADATA_SIZE, 32);
+});
+
+test("InProcessContractRegistration is 64 bytes", () => {
+    assertStrictEquals(IN_PROCESS_CONTRACT_REGISTRATION_SIZE, 64);
+});
+
+test("InProcessBundleRegistration is 64 bytes", () => {
+    assertStrictEquals(IN_PROCESS_BUNDLE_REGISTRATION_SIZE, 64);
 });
 
 test("GuestContractHandle is 8 bytes", () => {

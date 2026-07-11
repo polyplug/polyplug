@@ -43,6 +43,27 @@ if (decoder.HasValue)
 }
 ```
 
+## In-process host registration
+
+Generated guest bindings expose a typed `InProcessBundleFactory`. Pass ordinary
+C# factories; the generated adapter creates the complete
+`InProcessBundleRegistration` and retains its tables, delegates, factories, and
+implementation objects in the runtime-owned resident:
+
+```csharp
+var bundle = transformer.InProcessBundleFactory.CreateInProcessBundle(
+    host => new TransformerImpl(host));
+ulong bundleId = runtime.RegisterInProcessBundle(bundle);
+```
+
+Registration is one synchronous native transaction. The runtime keeps the
+resident rooted only after that transaction succeeds. Successful registration
+transfers the bundle exactly once; the same bundle object cannot be registered
+with another runtime. A rejected registration leaves it reusable.
+`UnloadBundle(bundleId)` releases the resident only after logical unload
+succeeds; a failed unload leaves the bundle and its managed state available to
+existing callers.
+
 ## Plugin author
 
 Implement the generated `I<Contract>GuestContract` and register a factory at

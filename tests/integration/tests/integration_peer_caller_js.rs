@@ -31,7 +31,7 @@ use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
-use polyplug_js::JsConfig;
+
 use polyplug_js::JsLoader;
 use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
@@ -237,7 +237,7 @@ fn js_peer_caller_echo_roundtrip() {
     );
 
     let rt: Arc<Runtime> = Runtime::builder()
-        .loader(JsLoader::new(JsConfig {}))
+        .loader(JsLoader::new())
         .build()
         .expect("build runtime");
 
@@ -293,6 +293,7 @@ fn js_peer_caller_echo_roundtrip() {
     let mut err: AbiError = AbiError::ok();
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0_u32,

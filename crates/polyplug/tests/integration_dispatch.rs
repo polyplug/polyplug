@@ -16,6 +16,7 @@ use libloading::{Library, Symbol};
 use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::in_process::reject_in_process_bundle;
 use polyplug_abi::{
     AbiError, AbiErrorCode, Array, BundleInitContext, DependencyInfo, GuestContractHandle,
     GuestContractInstance, GuestContractInterface, HostApi, HostContractInstance,
@@ -274,6 +275,7 @@ fn test_dispatch_add_function() {
     let host_interface: HostApi = HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: registry_register_callback,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: noop_alloc,
         free: noop_free,
         find_guest_contract: noop_find_guest_contract,
@@ -293,7 +295,7 @@ fn test_dispatch_add_function() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: ptr::null(),
     };
 
@@ -345,16 +347,23 @@ fn test_dispatch_add_function() {
     //   extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError)
     // SAFETY: dispatch is a union, accessing .native requires unsafe since dispatch_type is Native.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
-        // SAFETY: fn_ptr is cast to the frozen native dispatch signature. Arg
-        // types are enforced by the test (AddArgs matches what test_plugin expects).
-        unsafe { mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = {
+        // SAFETY: function 0 has the exact generated native dispatch ABI declared above.
+        unsafe { mem::transmute(fn_ptr) }
+    };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: args is a valid AddArgs, out is a valid u32 location. The instance
     // is a null stateless handle, which test.add's stateless add ignores.
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -397,6 +406,7 @@ fn test_dispatch_add_with_zero() {
     let host_interface: HostApi = HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: registry_register_callback,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: noop_alloc,
         free: noop_free,
         find_guest_contract: noop_find_guest_contract,
@@ -416,7 +426,7 @@ fn test_dispatch_add_with_zero() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: ptr::null(),
     };
 
@@ -447,9 +457,16 @@ fn test_dispatch_add_with_zero() {
 
     // SAFETY: interface_ptr is valid.
     let fn_ptr: *const () = unsafe { *(*interface_ptr).dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
-        // SAFETY: fn_ptr is the add function with the frozen native signature.
-        unsafe { mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = {
+        // SAFETY: function 0 has the exact generated native dispatch ABI declared above.
+        unsafe { mem::transmute(fn_ptr) }
+    };
 
     let args: AddArgs = AddArgs { a: 0, b: 0 };
     let mut out: u32 = 99_u32;
@@ -458,6 +475,7 @@ fn test_dispatch_add_with_zero() {
     // SAFETY: args and out are valid and correctly typed; null stateless instance.
     unsafe {
         dispatch_fn(
+            (*interface_ptr).adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -494,6 +512,7 @@ fn test_dispatch_add_wrapping_overflow() {
     let host_interface: HostApi = HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: registry_register_callback,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: noop_alloc,
         free: noop_free,
         find_guest_contract: noop_find_guest_contract,
@@ -513,7 +532,7 @@ fn test_dispatch_add_wrapping_overflow() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: ptr::null(),
     };
 
@@ -544,9 +563,16 @@ fn test_dispatch_add_wrapping_overflow() {
 
     // SAFETY: interface_ptr is valid.
     let fn_ptr: *const () = unsafe { *(*interface_ptr).dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
-        // SAFETY: fn_ptr is the add function with the frozen native signature.
-        unsafe { mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = {
+        // SAFETY: function 0 has the exact generated native dispatch ABI declared above.
+        unsafe { mem::transmute(fn_ptr) }
+    };
 
     // u32::MAX + 1 wraps to 0 (wrapping_add).
     let args: AddArgs = AddArgs { a: u32::MAX, b: 1 };
@@ -556,6 +582,7 @@ fn test_dispatch_add_wrapping_overflow() {
     // SAFETY: args and out are valid and correctly typed; null stateless instance.
     unsafe {
         dispatch_fn(
+            (*interface_ptr).adapter_context,
             GuestContractInstance::null(),
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -597,6 +624,6 @@ unsafe extern "C" fn stub_destroy_guest_instance(
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
-    ptr::null()
+unsafe extern "C" fn stub_registry_revision(_this: *const HostApi) -> u64 {
+    0
 }

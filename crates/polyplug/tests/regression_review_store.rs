@@ -20,8 +20,9 @@
 
 use std::sync::Arc;
 
+use core::ffi::c_void;
 use core::mem::size_of;
-use core::ptr::null;
+use core::ptr::{self, null};
 
 use polyplug::Runtime;
 use polyplug::error::RegistryError;
@@ -40,6 +41,7 @@ const MOCK_FUNCTIONS: [*const (); 0] = [];
 
 /// No-op create_instance callback.
 unsafe extern "C" fn noop_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -53,6 +55,7 @@ unsafe extern "C" fn noop_create_instance(
 
 /// No-op destroy_instance callback.
 unsafe extern "C" fn noop_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -68,6 +71,7 @@ fn make_interface(contract_id: u64, major: u32) -> GuestContractInterface {
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance: noop_create_instance,
         destroy_instance: noop_destroy_instance,
         dispatch: DispatchMechanisms {

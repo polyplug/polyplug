@@ -1,6 +1,5 @@
 use polyplug_utils::BundleId;
 
-use polyplug_abi::SupportedLanguage;
 use polyplug_common::ManifestData;
 
 use crate::{error::LoaderError, loader::bundle_source::BundleSource, runtime::Runtime};
@@ -14,17 +13,6 @@ pub trait BundleLoader: Send + Sync {
     ///
     /// Must match the `loader` field in `manifest.toml` exactly (case-sensitive).
     fn loader_name(&self) -> &'static str;
-
-    /// The plugin language/runtime this loader serves.
-    ///
-    /// A capability claim for language-aware introspection and routing: it lets
-    /// callers identify a loader by language without string-matching
-    /// [`BundleLoader::loader_name`]. Currently informational — no runtime path
-    /// consumes it yet; it exists as the typed seam for future language-aware
-    /// dispatch. (Each loader's once-per-process external-runtime state, where it
-    /// has any, lives in that loader's own crate as a documented Rule 12
-    /// limitation — not in shared runtime state.)
-    fn loader_language(&self) -> SupportedLanguage;
 
     /// Whether this loader supports hot-reload.
     ///
@@ -45,6 +33,17 @@ pub trait BundleLoader: Send + Sync {
     /// - [`BundleSource::Code`] / [`BundleSource::Bytes`] - in-memory sources with no
     ///   bundle directory. The native loader rejects these; VM loaders reject them
     ///   until they gain real in-memory support.
+    ///
+    /// The runtime stages every `register_guest_contract` callback made during this
+    /// call. It validates the complete provider and function sets, metadata, and
+    /// dependencies before publishing one registry snapshot after `load` returns
+    /// `Ok(())`. A loader must not call `load` directly in tests or hosts; use
+    /// `Runtime::load_bundle` or `Runtime::load_bundle_from_source` so that
+    /// transaction exists.
+    ///
+    /// `BundleInitContext` and its `bundle_path` view are borrowed for the
+    /// synchronous `polyplug_init` invocation only. Loader and guest code must copy
+    /// any needed bytes during init and must not retain either pointer.
     ///
     /// # Errors
     /// Returns `Err(LoaderError::...)` on any failure, including

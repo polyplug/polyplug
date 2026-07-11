@@ -31,6 +31,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::ffi as abi_ffi;
+use polyplug_abi::in_process::reject_in_process_bundle;
 use polyplug_utils::BundleId;
 use std::fs;
 use std::io;
@@ -459,6 +460,7 @@ fn smoke_rust_codegen_dispatch() {
     let host_abi: HostApi = HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: capture_interface_callback,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -478,7 +480,7 @@ fn smoke_rust_codegen_dispatch() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: ptr::null(),
     };
 
@@ -531,6 +533,7 @@ fn smoke_rust_codegen_dispatch() {
     // types are enforced by the test: AddArgs matches what the generated wrapper expects.
     // The signature carries GuestContractInstance first and the AbiError out-param last.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
@@ -543,6 +546,7 @@ fn smoke_rust_codegen_dispatch() {
     // SAFETY: host_abi outlives the instance; create_instance is the generated factory thunk.
     unsafe {
         (interface.create_instance)(
+            interface.adapter_context,
             VmLoaderData::null(),
             &host_abi as *const HostApi,
             ptr::null(),
@@ -560,6 +564,7 @@ fn smoke_rust_codegen_dispatch() {
     // the AbiError through the trailing out-param.
     unsafe {
         dispatch_fn(
+            interface.adapter_context,
             instance,
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
@@ -569,7 +574,12 @@ fn smoke_rust_codegen_dispatch() {
 
     // SAFETY: instance was created by create_instance; destroy exactly once.
     unsafe {
-        (interface.destroy_instance)(VmLoaderData::null(), &host_abi as *const HostApi, instance)
+        (interface.destroy_instance)(
+            interface.adapter_context,
+            VmLoaderData::null(),
+            &host_abi as *const HostApi,
+            instance,
+        )
     };
 
     assert_eq!(
@@ -696,6 +706,6 @@ unsafe extern "C" fn stub_destroy_guest_instance(
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
-    ptr::null()
+unsafe extern "C" fn stub_registry_revision(_this: *const HostApi) -> u64 {
+    0
 }

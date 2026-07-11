@@ -63,6 +63,15 @@ sys.path.insert(0, str(Path(__file__).parent / "generated"))
 from host.contracts import HostLogger  # noqa: E402  (sys.path setup above)
 from host.interface_factories import create_host_logger_interface  # noqa: E402
 from host.types import LogLevel  # noqa: E402
+from host.in_process import InProcessBundle  # noqa: E402
+
+
+class InProcessDecoder:
+    """Small Python implementation used when POLYPLUG_IN_PROCESS_DEMO is set."""
+
+    def decode(self, input: str) -> str:
+        return input.replace(",", "|")
+
 
 
 class ConsoleLogger(HostLogger):
@@ -113,6 +122,14 @@ def main():
     # Config and reload callback are per-instance constructor arguments
     # (no class-level statics shared across runtimes).
     rt = Runtime(config=config, on_reload=handle_reload)
+    if os.environ.get("POLYPLUG_IN_PROCESS_DEMO"):
+        bundle_id = rt.register_in_process_bundle(
+            InProcessBundle("example.python.decoder").add_pipeline_decoder(
+                InProcessDecoder
+            )
+        )
+        print(f"registered in-process Python decoder: 0x{bundle_id:016X}")
+
 
     # Register loaders for every runtime the example plugins may use. Loaders
     # whose backing package or cdylib is unavailable are skipped so the host

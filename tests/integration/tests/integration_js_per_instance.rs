@@ -38,7 +38,7 @@ use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
-use polyplug_js::JsConfig;
+
 use polyplug_js::JsLoader;
 use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
@@ -156,6 +156,7 @@ fn dispatch_no_arg_i32(
     // produced by this contract's create_instance. All outlive the call.
     unsafe {
         (vtable.dispatch.vm.call)(
+            vtable.adapter_context,
             vtable.dispatch.vm.loader_data,
             instance,
             fn_id,
@@ -183,7 +184,7 @@ fn two_instances_of_one_js_contract_have_independent_state() {
     let tmp: tempfile::TempDir = tempfile::TempDir::new().expect("tempdir");
     let bundle: PathBuf = write_counter_bundle(tmp.path());
 
-    let loader: JsLoader = JsLoader::new(JsConfig {});
+    let loader: JsLoader = JsLoader::new();
     let rt: Arc<Runtime> = Runtime::builder()
         .loader(loader)
         .build()

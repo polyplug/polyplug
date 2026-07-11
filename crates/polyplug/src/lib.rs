@@ -3,7 +3,6 @@
 pub mod compatibility;
 pub mod error;
 pub mod ffi;
-pub mod host_bridge;
 pub mod loader;
 pub mod logger;
 pub mod reload;
@@ -13,5 +12,5 @@ pub mod runtime_store;
 
 pub use reload::ReloadEvent;
 
-/// Rust host APIs for loader-backed and statically linked guest bundles.
-pub use runtime::{EmbeddedBundle, EmbeddedContract, Runtime};
+/// Rust host APIs for loader-backed and in-process guest bundles.
+pub use runtime::{InProcessBundle, Runtime};

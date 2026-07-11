@@ -10,9 +10,13 @@ namespace polyplug_plugin {
 struct RuntimeError { uint32_t code; };
 
 /// Abstract plugin base for contract `pipeline.Decoder` (id=0xE1D7DE773BE6E7F7)
+/// Decodes CSV input into the pipeline representation.
 class PipelineDecoderGuestContract {
 public:
     virtual ~PipelineDecoderGuestContract() = default;
+    // Decodes one CSV record.
+    // @param input The CSV record to decode.
+    // @return The decoded pipeline record.
     virtual StringView decode(StringView input) = 0;
 };
 

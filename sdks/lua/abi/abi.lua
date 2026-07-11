@@ -14,6 +14,9 @@ ffi.cdef[[
     typedef struct HostApi HostApi;
     typedef struct HostContractInstance HostContractInstance;
     typedef struct HostContractInterface HostContractInterface;
+    typedef struct InProcessBundleMetadata InProcessBundleMetadata;
+    typedef struct InProcessContractRegistration InProcessContractRegistration;
+    typedef struct InProcessBundleRegistration InProcessBundleRegistration;
     typedef struct GuestContractHandle GuestContractHandle;
     typedef struct BundleInitContext BundleInitContext;
     typedef struct PluginDescriptor PluginDescriptor;
@@ -40,14 +43,14 @@ ffi.cdef[[
     typedef union DispatchMechanisms DispatchMechanisms;
 
     //  Native dispatch data — direct function pointer array.
-    // 
+    //
     //  Used when `dispatch_type == DispatchType::Native`.
     //  The `functions` array contains `function_count` function pointers.
     typedef struct NativeDispatch {
         //  Number of valid entries in the dispatch array.
         uint32_t function_count;
         //  Pointer to a static array of function pointers, indexed by function_id.
-        // 
+        //
         //  # Nullability
         //  Typed as a raw pointer (not `Option` — `Option<*const T>` has no null
         //  niche and is not FFI-safe). Null is the sentinel for "no functions" and
@@ -58,10 +61,10 @@ ffi.cdef[[
     // Expected size: 16 bytes
 
     //  Opaque handle to VM loader-specific data.
-    // 
+    //
     //  Wraps VM-specific state managed by each loader (Python, Lua, JS).
     //  Opaque to core runtime — loaders know their own state layout.
-    // 
+    //
     //  # OWNERSHIP
     //  Owned by the loader. Lives for the lifetime of the loaded plugin.
     typedef struct VmLoaderData {
@@ -71,38 +74,38 @@ ffi.cdef[[
     // Expected size: 8 bytes
 
     //  Opaque handle to a guest contract instance.
-    // 
+    //
     //  Created by `GuestContractInterface::create_instance`, destroyed by `destroy_instance`.
-    // 
+    //
     //  # Who provides
     //  Guest code creates instances via create_instance factory.
     //  The guest owns the underlying data.
-    // 
+    //
     //  # Who calls
     //  Host code passes instances to dispatch functions and destroy_instance.
-    // 
+    //
     //  # Ownership
     //  This is an owned handle - the instance must be destroyed via
     //  `GuestContractInterface::destroy_instance` before hot-reload.
     //  Failure to destroy causes memory leaks and prevents safe hot-reload.
-    // 
+    //
     //  # Lifetime
     //  Lives until `destroy_instance` is called. Must be destroyed before
     //  the bundle is unloaded or hot-reloaded.
-    // 
+    //
     //  # Layout
     //  - `data`: Opaque instance pointer (owned by guest)
     //  - `contract_id`: Contract ID stamped at instance creation
     typedef struct GuestContractInstance {
         //  Opaque instance data pointer.
         //  The actual data is owned by the guest plugin.
-        // 
+        //
         //  # Ownership
         //  Guest owns the memory. Host must not free or modify.
         //  Must be freed via GuestContractInterface::destroy_instance.
         void* data;
         //  Contract ID stamped at instance creation.
-        // 
+        //
         //  # Purpose
         //  Identifies which contract an instance belongs to. Set by `create_instance`.
         uint64_t contract_id;
@@ -110,6 +113,7 @@ ffi.cdef[[
     // Expected size: 16 bytes
 
     typedef void (*HostApi_register_guest_contract_fn)(const HostApi*, const PluginDescriptor*, const GuestContractInterface*, AbiError*);
+    typedef void (*HostApi_register_in_process_bundle_fn)(const HostApi*, const InProcessBundleRegistration*, uint64_t*, AbiError*);
     typedef uint8_t* (*HostApi_alloc_fn)(const HostApi*, size_t, size_t);
     typedef void (*HostApi_free_fn)(const HostApi*, uint8_t*, size_t, size_t);
     typedef GuestContractHandle (*HostApi_find_guest_contract_fn)(const HostApi*, uint64_t, uint32_t);
@@ -129,18 +133,18 @@ ffi.cdef[[
     typedef void (*HostApi_log_fn)(const HostApi*, uint32_t, StringView, StringView);
     typedef void (*HostApi_create_guest_instance_fn)(const HostApi*, const GuestContractInterface*, const void*, GuestContractInstance*);
     typedef void (*HostApi_destroy_guest_instance_fn)(const HostApi*, const GuestContractInterface*, GuestContractInstance);
-    typedef const uint64_t* (*HostApi_revision_counter_fn)(const HostApi*);
+    typedef uint64_t (*HostApi_registry_revision_fn)(const HostApi*);
     //  Host Interface — function table passed to guests during initialization.
-    // 
+    //
     //  Contains an opaque runtime pointer and function pointers for guest calls.
     //  All functions use self-passing pattern (receive HostApi pointer as first parameter).
-    //  `HostApi` is `184 bytes` (1 opaque runtime pointer + 21 function pointer fields + 1 reserved data pointer).
-    //  Tail offsets: `create_guest_instance` @152, `destroy_guest_instance` @160, `revision_counter` @168, `reserved` @176.
-    // 
+    //  `HostApi` contains an opaque runtime pointer, callback table, and one reserved pointer.
+    //  Producers set every callback to a valid function and set `reserved` to null.
+    //
     //  # Who provides
     //  The runtime creates this struct and passes it to `polyplug_init()`.
     //  The struct is allocated using `Box::leak()` for `'static` lifetime.
-    // 
+    //
     //  # Nullability
     //  Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
     //  is the sole producer of this struct and populates all 21 callbacks at
@@ -148,40 +152,40 @@ ffi.cdef[[
     //  `runtime` pointer can become null (it is swapped to null by
     //  `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
     //  is a null placeholder by contract.
-    // 
+    //
     //  # Who calls
     //  Guest (plugin) code calls these functions to interact with the runtime.
     //  SDK-generated wrappers handle the self-passing pattern automatically.
-    // 
+    //
     //  # Ownership
     //  The struct is statically allocated by the runtime. The pointer is valid
     //  until the runtime is destroyed. Guest must NOT free this pointer.
-    // 
+    //
     //  # Lifetime
     //  Lives as long as the runtime that created it.
-    // 
+    //
     //  # Thread Safety
     //  All functions are safe to call from any thread. The runtime uses
     //  internal synchronization (RwLock/Mutex) for shared state.
-    // 
+    //
     //  # Self-passing pattern
     //  Each function receives the interface pointer as its first parameter,
     //  allowing guests to call: `host->find_guest_contract(host, id, ver)`
     //  SDKs hide this pattern: `host.find_guest_contract(id, ver)`
     typedef struct HostApi {
         //  Opaque pointer to Runtime.
-        // 
+        //
         //  Set during interface creation. Provides access to runtime state
         //  for dependency enforcement and resource management.
-        // 
+        //
         //  # Ownership
         //  Owned by the runtime. Guests must NOT free or modify this pointer.
         void* runtime;
         //  Register a guest contract implementation.
-        // 
+        //
         //  Called by plugins during `polyplug_init()` to register their contracts.
         //  Returns error if contract_id collision detected or ABI version mismatch.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `descriptor`: Plugin descriptor with contract metadata
@@ -189,23 +193,32 @@ ffi.cdef[[
         //  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
         //    success, an error otherwise). Never null.
         HostApi_register_guest_contract_fn register_guest_contract;
+        //  Register every contract and metadata record in one in-process bundle transaction.
+        //
+        //  The host retains language-specific implementation objects in its own
+        //  runtime-local resident. Core synchronously copies and validates `registration`;
+        //  it never receives an implementation-object pointer.
+        //
+        //  On success, `out_bundle_id` receives the derived nonzero bundle ID. `out_err`
+        //  is always written when non-null.
+        HostApi_register_in_process_bundle_fn register_in_process_bundle;
         //  Allocate memory using the host allocator.
-        // 
+        //
         //  Memory allocated here must be freed via `free`.
         //  Returns null on allocation failure.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `size`: Number of bytes to allocate
         //  - `align`: Alignment requirement (must be power of 2)
-        // 
+        //
         //  # Returns
         //  Pointer to allocated memory, or null on failure.
         HostApi_alloc_fn alloc;
         //  Free memory allocated via `alloc`.
-        // 
+        //
         //  Must pass the same size and align used for allocation.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `ptr`: Pointer to memory to free
@@ -213,97 +226,97 @@ ffi.cdef[[
         //  - `align`: Alignment used for allocation
         HostApi_free_fn free;
         //  Find a guest contract by contract_id and minimum version.
-        // 
+        //
         //  Returns a GuestContractHandle that can be resolved to an interface.
         //  Returns null handle if no matching contract found.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `contract_id`: Contract identifier hash
         //  - `min_version`: Minimum version required
-        // 
+        //
         //  # Returns
         //  GuestContractHandle for the first matching contract, or null handle.
         HostApi_find_guest_contract_fn find_guest_contract;
         //  Find all guest contracts matching contract_id and minimum version.
-        // 
+        //
         //  Returns an Array of GuestContractHandle. Caller must free via `host->free`.
         //  Use when multiple implementations of the same contract may exist.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `contract_id`: Contract identifier hash
         //  - `min_version`: Minimum version required
-        // 
+        //
         //  # Returns
         //  Array of GuestContractHandle. Caller owns and must free.
         HostApi_find_all_guest_contracts_fn find_all_guest_contracts;
         //  Resolve a GuestContractHandle to a GuestContractInterface pointer.
-        // 
+        //
         //  Returns null if the handle is invalid or contract was unloaded.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `handle`: GuestContractHandle from find_guest_contract
-        // 
+        //
         //  # Returns
         //  Pointer to GuestContractInterface, or null if invalid/stale.
         HostApi_resolve_guest_contract_fn resolve_guest_contract;
         //  Get a host contract instance by contract_id and minimum version.
-        // 
+        //
         //  For singleton host contracts, returns the same instance every time.
         //  For multi-instance host contracts, returns a new instance each time.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `contract_id`: Host contract identifier hash
         //  - `min_version`: Minimum version required
-        // 
+        //
         //  # Returns
         //  HostContractInstance for the contract.
         HostApi_get_host_contract_fn get_host_contract;
         //  Resolve a host contract interface by contract_id and minimum version.
-        // 
+        //
         //  Returns the HostContractInterface pointer for the contract.
         //  This is needed to access dispatch metadata (dispatch_type, function_count, functions).
         //  Returns null if no matching contract found.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `contract_id`: Host contract identifier hash
         //  - `min_version`: Minimum version required
-        // 
+        //
         //  # Returns
         //  Pointer to HostContractInterface, or null if invalid/not found.
         HostApi_resolve_host_contract_interface_fn resolve_host_contract_interface;
         //  List all loaded bundles.
-        // 
+        //
         //  Returns an Array of BundleId. Caller must free via `host->free`.
         //  Bundle IDs are stable for the lifetime of the runtime.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
-        // 
+        //
         //  # Returns
         //  Array of BundleId. Caller owns and must free.
         HostApi_list_bundles_fn list_bundles;
         //  Get dependencies for the calling bundle.
-        // 
+        //
         //  Uses bundle_id from current BundleInitContext (TLS) to look up declared deps.
         //  Returns an Array of DependencyInfo. Caller must free via `host->free`.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
-        // 
+        //
         //  # Returns
         //  Array of DependencyInfo. Caller owns and must free.
         //  Returns empty array if called outside bundle init context.
         HostApi_get_dependencies_fn get_dependencies;
         //  Load a plugin bundle from a path.
-        // 
+        //
         //  Host applications call this to load a bundle at runtime.
         //  The loader matching the bundle's runtime type is used.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `path`: UTF-8 path to bundle directory (not null-terminated)
@@ -312,10 +325,10 @@ ffi.cdef[[
         //    success, an error otherwise). Never null.
         HostApi_load_bundle_fn load_bundle;
         //  Reload a plugin bundle (hot-reload).
-        // 
+        //
         //  Replaces the bundle's contracts with new versions from the updated binary.
         //  All instances must be destroyed before calling this.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `path`: UTF-8 path to bundle directory (not null-terminated)
@@ -324,9 +337,9 @@ ffi.cdef[[
         //    success, an error otherwise). Never null.
         HostApi_reload_bundle_fn reload_bundle;
         //  Register a host contract interface.
-        // 
+        //
         //  Host applications register their contracts for plugins to consume.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `interface`: HostContractInterface to register
@@ -334,65 +347,65 @@ ffi.cdef[[
         //    success, an error otherwise). Never null.
         HostApi_register_host_contract_fn register_host_contract;
         //  Register a language loader.
-        // 
+        //
         //  Host applications register loaders for each runtime language they support.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `loader_ptr`: Opaque pointer to the loader implementation
         //  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
         //    success, an error otherwise). Never null.
-        // 
+        //
         //  The loader's name comes from its own `BundleLoader::loader_name()`
         //  implementation — the single source of truth — so it is not passed here.
         HostApi_register_loader_fn register_loader;
         //  Get last error message.
-        // 
+        //
         //  Returns the most recent error message from this runtime.
         //  Copies up to buf_len bytes into buf.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `buf`: Buffer to write error message into
         //  - `buf_len`: Maximum bytes to write
-        // 
+        //
         //  # Returns
         //  Number of bytes written (0 if no error or buffer too small).
         HostApi_get_last_error_fn get_last_error;
         //  Get last error message length.
-        // 
+        //
         //  Returns the byte length of the most recent error message.
         //  Use to allocate buffer before calling get_last_error.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
-        // 
+        //
         //  # Returns
         //  Length of last error message (0 if no error).
         HostApi_get_error_len_fn get_error_len;
         //  Unload a guest bundle, invalidating its handles and freeing its resources.
-        // 
+        //
         //  This performs **true unload**: the bundle's slots have their generation bumped,
         //  the bundle is removed from the registry indices, and the superseded interface
         //  `Arc` together with the underlying dylib mapping or VM state are reclaimed through
         //  crossbeam-epoch deferred reclamation — the memory is freed once no reader is still
         //  pinned in the epoch that preceded the unload. There is no opt-in mode; unload
         //  always reclaims when safe.
-        // 
+        //
         //  A raw `GuestContractInterface` pointer cached before the unload and dereferenced
         //  after it is **undefined behaviour**: the host must quiesce the bundle (ensure no
         //  thread is calling into it or holds a pointer into it) before unloading. Runtime-
         //  mediated calls — `create_guest_instance`, `destroy_guest_instance` — pin the epoch
         //  across dispatch and are therefore safe against a concurrent unload.
-        // 
+        //
         //  After unload, every handle that was minted for this bundle resolves to
         //  `AbiErrorCode::StaleHandle`, and `find_guest_contract` / `find_all_guest_contracts`
         //  no longer return it.
-        // 
+        //
         //  # Obtaining the bundle_id
         //  The host obtains the `bundle_id` either from `list_bundles`, or by hashing the
         //  bundle name via `BundleId::new(name)`.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `bundle_id`: Identifier of the bundle to unload
@@ -402,21 +415,21 @@ ffi.cdef[[
         //    provides). Never null.
         HostApi_unload_bundle_fn unload_bundle;
         //  Log a guest diagnostic into the host's logging funnel.
-        // 
+        //
         //  Routes to the same sink as `RuntimeConfig::log`: the host-installed
         //  callback when one is set, otherwise the stderr default (Error/Warn
         //  visibility only). `level` is a `LogLevel` discriminant; unknown values
         //  are clamped to `LogLevel::Error`. `scope` is a short stable tag — guest
         //  plugins should use `"guest.<plugin-name>"` or similar.
-        // 
+        //
         //  The runtime always provides this function — guests may call it
         //  unconditionally via the self-passing pattern:
         //  `host->log(host, level, scope, message)`.
-        // 
+        //
         //  # Ownership
         //  `scope` and `message` are borrowed views, read only for the duration of
         //  the call; the runtime copies what it needs. Null/empty views are legal.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
         //  - `level`: `LogLevel` discriminant (`1 = Error` .. `5 = Trace`)
@@ -424,7 +437,7 @@ ffi.cdef[[
         //  - `message`: UTF-8 log message
         HostApi_log_fn log;
         //  Create a guest contract instance through the runtime (host-mediated).
-        // 
+        //
         //  The host/peer caller passes the resolved `interface` pointer (from
         //  `resolve_guest_contract`) and the constructor `args`. The runtime invokes the
         //  interface's `create_instance` under an epoch pin (so a concurrent unload cannot
@@ -433,60 +446,40 @@ ffi.cdef[[
         //  `out_instance` (a null `data` denotes a stateless instance).
         HostApi_create_guest_instance_fn create_guest_instance;
         //  Destroy a guest contract instance through the runtime (host-mediated).
-        // 
+        //
         //  Mirror of `create_guest_instance`: the runtime invokes the interface's
         //  `destroy_instance` under an epoch pin and updates its live-instance accounting.
         HostApi_destroy_guest_instance_fn destroy_guest_instance;
-        //  Return a pointer to the runtime's monotonic registry revision counter — the
-        //  shared word a generated host→guest caller polls to keep its cached interface
-        //  safe with NO per-call function call.
-        // 
-        //  Generated callers resolve a contract once and cache the interface pointer so
-        //  the hot path is a direct indirect call with no per-call resolve. To keep that
-        //  cache safe without making the user track dangling pointers, the caller invokes
-        //  THIS function exactly once — at construction — to obtain the address of the
-        //  counter, caches that pointer alongside the counter's current value, and then
-        //  before every dispatch reads the counter *directly through the cached pointer*
-        //  (a single aligned atomic load — one instruction, no call into the runtime).
-        //  While the value is unchanged the cached interface is guaranteed current and the
-        //  caller dispatches directly; when it changes (a bundle was loaded, hot-reloaded,
-        //  or unloaded) the caller re-resolves and refreshes its cache. This is what turns
-        //  the "raw interface pointer cached after reload/unload is UB" footgun into an
-        //  automatically managed, safe cache that costs a memory load per call, not a
-        //  function call.
-        // 
-        //  The pointed-to value is an opaque monotonic counter; callers must treat it only
-        //  as "equal ⇒ unchanged" and never ascribe meaning to its magnitude or deltas. It
-        //  is deliberately a runtime-wide revision rather than a per-slot generation: a
-        //  hot-reload swaps a new interface into the *same* slot WITHOUT bumping that
-        //  slot's generation (so existing handles survive a reload), which a generation
-        //  check would miss — the revision changes on every mutation, so reload is
-        //  detected.
-        // 
-        //  # Memory model
-        //  The runtime bumps the counter under its write lock with `Release` ordering;
-        //  readers should load with `Acquire` where the language allows (Rust/C++/C#). On
-        //  every supported 64-bit target an aligned 64-bit load is itself atomic, so
-        //  languages that cannot express ordering (Python/Lua) still observe a coherent,
-        //  monotonically advancing value. The counter lives inside the `Runtime` (held
-        //  behind an `Arc`, so its address is stable) and is valid for the whole lifetime
-        //  of the runtime — i.e. for as long as any caller may dispatch.
-        // 
+        //  Return the runtime's monotonic registry revision with acquire synchronization.
+        //
+        //  Generated host callers cache a resolved contract interface for direct dispatch.
+        //  Before every dispatch they call this callback once and compare its value with
+        //  the revision captured when the interface was resolved. A change means a bundle
+        //  was loaded, reloaded, or unloaded, so the caller re-resolves before using its
+        //  cached interface.
+        //
+        //  The runtime publishes a new registry view before it advances this revision with
+        //  `Release` ordering. This callback performs the matching `Acquire` load inside
+        //  Rust, so every maintained host language gets the same synchronization without
+        //  reading Rust atomic storage through a foreign ABI.
+        //
+        //  Callers must treat the result only as "equal means unchanged"; its magnitude
+        //  and deltas have no meaning. The revision is runtime-wide instead of per-slot so
+        //  a hot-reload that replaces an interface in the same slot is detected.
+        //
         //  # Arguments
         //  - `this`: HostApi pointer (self-passing)
-        // 
+        //
         //  # Returns
-        //  A pointer to the `u64` revision counter, or null if `this` is null. A caller
-        //  that receives null treats its cache as always-current (it has no runtime to
-        //  mediate reloads against).
-        HostApi_revision_counter_fn revision_counter;
+        //  The current registry revision, or zero when `this` is null.
+        HostApi_registry_revision_fn registry_revision;
         //  Reserved. Producers must set this to null; consumers must not read it.
         const void* reserved;
     } HostApi;
-    // Expected size: 184 bytes
+    // Expected size: 192 bytes
 
     //  Opaque handle to a host contract instance.
-    // 
+    //
     //  Created by `HostContractInterface::create_instance`, destroyed by `destroy_instance`.
     //  For singleton host contracts, the same instance is returned for all callers.
     typedef struct HostContractInstance {
@@ -497,21 +490,21 @@ ffi.cdef[[
     // Expected size: 8 bytes
 
     //  Opaque handle to a registered guest contract.
-    // 
+    //
     //  The handle pairs the slot `index` with the `generation` the slot held when the
     //  handle was minted. `resolve_guest_contract` rejects a handle whose `generation`
     //  no longer matches the slot's current generation (the slot was vacated on unload
     //  and the index possibly reused), returning `StaleHandle`. Out-of-bounds or empty-slot
     //  indices return InvalidHandle.
-    // 
+    //
     //  # Naming
     //  Named `GuestContractHandle` for consistency with `GuestContractInterface`
     //  and `GuestContractInstance`.
-    // 
+    //
     //  # Layout
     //  - `index`: Slot index in the registry (u32, offset 0)
     //  - `generation`: Slot generation the handle was minted against (u32, offset 4)
-    // 
+    //
     //  # Safety
     //  Handles become stale after unload. Call `resolve_guest_contract` to validate.
     //  Returns null pointer if the handle is invalid.
@@ -524,37 +517,37 @@ ffi.cdef[[
     // Expected size: 8 bytes
 
     //  FFI-safe array with caller-frees ownership model.
-    // 
+    //
     //  # Memory Management
     //  - Allocated via `host->alloc(self, len * sizeof(T), align)`
     //  - Freed via `host->free(self, items, len * sizeof(T), align)`
-    // 
+    //
     //  # Ownership
     //  Caller owns the memory and must free via host allocator.
     //  CodeGen generates RAII wrappers in each language SDK:
     //  - Rust: `Drop` impl calls `host->free`
     //  - Python: `__del__` calls free
     //  - C#: `IDisposable.Dispose` calls free
-    // 
+    //
     //  # Safety
     //  The `align` field is required for proper freeing. Generic code must
     //  track alignment of `T` to free correctly.
-    // 
+    //
     //  # Thread Safety
     //  Safe to read from multiple threads if underlying data is immutable.
     //  Send/Sync implemented for T: Send/Sync.
     typedef struct Array {
         //  Pointer to elements, allocated via host allocator.
-        // 
+        //
         //  # Ownership
         //  Caller owns. Must be freed via `host->free` with same size/align.
         void* items;
         //  Number of elements.
-        // 
+        //
         //  Used to calculate total size for freeing: `len * sizeof(T)`.
         size_t len;
         //  Alignment of T, for proper freeing.
-        // 
+        //
         //  # Purpose
         //  Required because generic code may not know T's alignment at runtime.
         //  Must match `align_of::<T>()` used during allocation.
@@ -562,7 +555,7 @@ ffi.cdef[[
     } Array;
 
     //  Owning byte buffer.
-    // 
+    //
     //  OWNERSHIP: `ptr` is always allocated through the host allocator — the
     //  `alloc` field on `HostApi`. The owner releases it through the matching
     //  `free` field (`(host.free)(host, ptr, cap, align)`) when done. There are
@@ -577,7 +570,7 @@ ffi.cdef[[
     // Expected size: 24 bytes
 
     //  Header prepended to every host-allocated overflow block.
-    // 
+    //
     //  Overflow blocks form a singly linked list rooted at `CallArena.first_overflow`.
     //  Each block stores the total `capacity` it was allocated with (including this
     //  header) so the arena can free it with the exact size/align the host expects.
@@ -598,15 +591,15 @@ ffi.cdef[[
     // Expected size: 24 bytes
 
     //  Per-call bump allocator handed to a VM dispatch call.
-    // 
+    //
     //  # Layout
-    // 
+    //
     //  `#[repr(C)]` with five pointer-sized fields (40 bytes, align 8). The first
     //  three fields define the primary bump region `[base, end)` with `cur` as the
     //  next free byte. When the primary region is exhausted, `alloc` walks the
     //  retained overflow chain for a block with spare room; if none fits, it requests
     //  a fresh block from `host->alloc`, chains it, and serves from it.
-    // 
+    //
     //  A null `CallArena*` passed to a dispatch function means "no arena": the bridge
     //  falls back to per-value `host->alloc`.
     typedef struct CallArena {
@@ -624,37 +617,37 @@ ffi.cdef[[
     // Expected size: 40 bytes
 
     //  Dependency information returned by get_dependencies introspection API.
-    // 
+    //
     //  Mirrors `manifest.toml` `\[dependency\]` table structure for plugins to query
     //  their own declared dependencies at runtime.
-    // 
+    //
     //  # Who provides
     //  Runtime returns this from `HostApi::get_dependencies`.
-    // 
+    //
     //  # Who calls
     //  Guest (plugin) code calls `get_dependencies` during initialization
     //  to discover available dependencies.
-    // 
+    //
     //  # Ownership
     //  Returned in an Array that caller owns and must free via `host->free`.
-    // 
+    //
     //  # Fields
     //  - `contract_id`: The contract being depended upon
     //  - `min_version`: Minimum version required
     //  - `bundle_id`: Specific bundle if ByBundle, 0 if ByContract
     typedef struct DependencyInfo {
         //  Contract ID of the dependency.
-        // 
+        //
         //  FNV-1a hash of the contract name and major version.
         //  Use this to find matching contracts via `find_guest_contract`.
         uint64_t contract_id;
         //  Minimum version required.
-        // 
+        //
         //  Used for version compatibility checks during contract lookup.
         //  Contracts with version >= min_version will match.
         uint32_t min_version;
         //  Bundle ID if dependency is ByBundle, 0 if ByContract.
-        // 
+        //
         //  # ByBundle vs ByContract
         //  - `bundle_id != 0`: Dependency is on a specific bundle
         //  - `bundle_id == 0`: Dependency is on any bundle providing the contract
@@ -663,7 +656,7 @@ ffi.cdef[[
     // Expected size: 24 bytes
 
     //  Raw Ed25519 public-key bytes (the 32-byte compressed Edwards point encoding).
-    // 
+    //
     //  # Layout
     //  `#[repr(C)]`, 32 bytes, align 1 — a bare byte array with no padding.
     typedef struct Ed25519PublicKey {
@@ -673,7 +666,7 @@ ffi.cdef[[
     // Expected size: 32 bytes
 
     //  Non-owning UTF-8 string view.
-    // 
+    //
     //  OWNERSHIP: borrowed reference. `ptr` must remain valid for the duration
     //  of the call. Never freed by the receiver.
     typedef struct StringView {
@@ -753,7 +746,7 @@ ffi.cdef[[
     } SupportedLanguage;
 
     //  ABI error codes (reserved: 0-255 runtime, 256+ plugin-defined).
-    // 
+    //
     //  These codes are returned by all ABI functions to indicate success or failure.
     //  The `code` field of `AbiError` uses these values.
     typedef enum AbiErrorCode {
@@ -792,7 +785,7 @@ ffi.cdef[[
     } AbiErrorCode;
 
     //  Log severity levels for the host-supplied logger callback (`RuntimeConfig::log`).
-    // 
+    //
     //  Numeric ordering is significant: lower values are more severe. A message is
     //  delivered to the callback only when `level as u32 <= RuntimeConfig::log_max_level`.
     typedef enum LogLevel {
@@ -813,17 +806,18 @@ ffi.cdef[[
         ParseVersionError_InvalidInt = 1,
     } ParseVersionError;
 
-    typedef void (*VmDispatch_call_fn)(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);
+    typedef void (*VmDispatch_call_fn)(void*, VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);
     //  VM dispatch data — call through a dispatch function.
-    // 
+    //
     //  Used when `dispatch_type == DispatchType::VirtualMachine`.
     //  The `call` function receives `loader_data` which contains VM-specific state.
     typedef struct VmDispatch {
         //  Dispatch function called for every VM function invocation.
-        // 
+        //
         //  # Arguments
+        //  - `adapter_context`: opaque generated-adapter context copied from the
+        //    contract interface; the runtime forwards it unchanged.
         //  - `loader_data`: VmLoaderData handle containing VM-specific state
-        //  - `instance`: The guest contract instance (opaque handle)
         //  - `fn_id`: Function index within the contract
         //  - `args`: Pointer to packed arguments (ABI-specific layout)
         //  - `out`: Pointer to output buffer for return value
@@ -834,7 +828,7 @@ ffi.cdef[[
         //    call on the same caller.
         //  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
         //    success, an error otherwise). Never null.
-        // 
+        //
         //  # Nullability
         //  REQUIRED whenever `dispatch_type == VirtualMachine` — never null in
         //  that case (registration rejects a null `call`). When
@@ -846,8 +840,38 @@ ffi.cdef[[
     } VmDispatch;
     // Expected size: 16 bytes
 
+    //  Metadata shared by every contract in one in-process bundle registration.
+    typedef struct InProcessBundleMetadata {
+        //  Stable UTF-8 bundle name. Core derives the nonzero bundle ID from this value.
+        StringView name;
+        //  Bundle semantic version.
+        Version version;
+        //  Language owning the resident and interface implementation.
+        SupportedLanguage runtime;
+    } InProcessBundleMetadata;
+    // Expected size: 32 bytes
+
+    //  Complete, one-shot in-process bundle registration input.
+    //
+    //  All pointers are borrowed only for the synchronous registration call. If a count is
+    //  nonzero, its corresponding pointer is required to be non-null and valid for that many
+    //  elements. `dependency_ids` contains canonical `GuestContractId` numeric values.
+    typedef struct InProcessBundleRegistration {
+        //  Bundle-level metadata.
+        InProcessBundleMetadata metadata;
+        //  Declared guest-contract dependency IDs.
+        const uint64_t* dependency_ids;
+        //  Number of dependency IDs.
+        size_t dependency_count;
+        //  Contract descriptors and interface-table pointers.
+        const InProcessContractRegistration* contracts;
+        //  Number of supplied contracts.
+        size_t contract_count;
+    } InProcessBundleRegistration;
+    // Expected size: 64 bytes
+
     //  Context passed to every guest `polyplug_init()` function.
-    // 
+    //
     //  # OWNERSHIP
     //  The `bundle_path` pointer is runtime-owned and valid for the lifetime of the `PluginRuntime`.
     //  **Plugin must not store the raw pointer** — copy the string value if persistence is needed.
@@ -860,7 +884,7 @@ ffi.cdef[[
     // Expected size: 24 bytes
 
     //  Metadata about a plugin within a bundle.
-    // 
+    //
     //  # OWNERSHIP
     //  value type passed by pointer during init. The `name` and
     //  `contract_name` StringViews are borrowed from the plugin's static memory.
@@ -876,10 +900,10 @@ ffi.cdef[[
     // Expected size: 48 bytes
 
     //  FFI-safe reload phase for hot-reload callbacks.
-    // 
+    //
     //  Tagged union style struct — `phase_type` indicates which variant is active.
     //  Uses `StringView` for FFI compatibility (non-owning borrows).
-    // 
+    //
     //  # Lifetime
     //  `StringView` fields are borrowed from the caller's strings.
     //  The callback must not store these views beyond the callback scope.
@@ -891,7 +915,7 @@ ffi.cdef[[
         //  Bundle name (borrowed string).
         StringView bundle_name;
         //  Failure reason (only for Failed phase).
-        // 
+        //
         //  # Nullability
         //  A null view (`StringView::null()`, i.e. `is_null()` returns true) unless
         //  `phase_type == ReloadPhaseType::Failed`. `Option<StringView>` is not
@@ -904,7 +928,7 @@ ffi.cdef[[
     typedef void (*RuntimeConfig_on_reload_fn)(void*, const ReloadPhase*);
     typedef void (*RuntimeConfig_log_fn)(void*, uint32_t, StringView, StringView);
     //  Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
-    // 
+    //
     //  # OWNERSHIP
     //  Borrowed for the duration of the runtime build only.
     //  The runtime copies any data it needs to retain.
@@ -914,11 +938,11 @@ ffi.cdef[[
         //  Whether hot-reload is enabled.
         uint8_t hot_reload_enabled;
         //  Optional hot-reload callback, or null for no callback.
-        // 
+        //
         //  The first argument is the opaque `on_reload_user_data` pointer, forwarded
         //  unchanged on every invocation. The second argument is a pointer to the
         //  [`ReloadPhase`] describing the phase.
-        // 
+        //
         //  # Callback contract
         //  - The runtime ALWAYS passes a non-null, properly aligned `ReloadPhase`
         //    pointer — callbacks never receive null.
@@ -926,30 +950,30 @@ ffi.cdef[[
         //    duration of the call — copy the data to retain it.
         RuntimeConfig_on_reload_fn on_reload;
         //  Opaque user-data pointer forwarded to `on_reload` as its first argument.
-        // 
+        //
         //  # Ownership
         //  Owned by the host that supplies the callback. The runtime never reads,
         //  writes, or frees the pointee — it only forwards the pointer.
         void* on_reload_user_data;
         //  Optional logger callback, or null for the default behaviour.
-        // 
+        //
         //  The runtime routes every diagnostic message through this callback as
         //  `(log_user_data, level, scope, message)`, where `level` is a
         //  [`LogLevel`] discriminant and `scope` is a short stable subsystem tag
         //  (examples: `"registry"`, `"loader.lua"`, `"reload"`).
-        // 
+        //
         //  # Default (null callback)
         //  Messages at [`LogLevel::Error`] and [`LogLevel::Warn`] are written to
         //  stderr; all other levels are dropped. Hosts wanting full silence must
         //  install a no-op callback.
-        // 
+        //
         //  # Callback contract
         //  - May be invoked from any thread.
         //  - Must NOT re-enter the runtime (calling any HostApi / runtime function
         //    from inside the callback may deadlock).
         //  - The `scope` and `message` `StringView`s are valid only for the
         //    duration of the call — copy the bytes to retain them.
-        // 
+        //
         //  # Language note (LuaJIT hosts)
         //  The by-value `StringView` parameters are deliberate — the hot path
         //  stays copy-free. LuaJIT FFI callbacks cannot receive structs by value,
@@ -959,7 +983,7 @@ ffi.cdef[[
         //  in `log_user_data`.
         RuntimeConfig_log_fn log;
         //  Opaque user-data pointer forwarded to `log` as its first argument.
-        // 
+        //
         //  # Ownership
         //  Owned by the host that supplies the callback. The runtime never reads,
         //  writes, or frees the pointee — it only forwards the pointer. The host
@@ -967,27 +991,27 @@ ffi.cdef[[
         //  runtime's entire lifetime.
         void* log_user_data;
         //  Maximum [`LogLevel`] (as `u32`) delivered to the `log` callback.
-        // 
+        //
         //  Messages with a level value greater than this are skipped before any
         //  formatting work is performed (zero cost for disabled levels). Ignored
         //  when `log` is null — the stderr default is always capped at
         //  [`LogLevel::Warn`].
         uint32_t log_max_level;
         //  Bundle signature enforcement policy.
-        // 
+        //
         //  Controls whether `bundle.sig` is required and how violations are handled.
         //  Defaults to [`SignaturePolicy::Off`], preserving existing behavior for
         //  unsigned bundles.
-        // 
+        //
         //  # Layout note
         //  Placed at offset 0x2C (44), filling the 4-byte tail padding that existed
         //  after `log_max_level` at 0x28.
         SignaturePolicy signature_policy;
         //  Host-configured trusted Ed25519 verifying-key allowlist (key pinning).
-        // 
+        //
         //  Controls signing-key authenticity on top of the integrity guarantee that
         //  [`signature_policy`](Self::signature_policy) provides:
-        // 
+        //
         //  - **Empty (default)** — Trust-On-First-Use (TOFU). The runtime trusts the
         //    verifying key embedded in each bundle's `bundle.sig`; signature
         //    verification proves the bundle is internally consistent and untampered,
@@ -996,18 +1020,18 @@ ffi.cdef[[
         //    runtime additionally requires the bundle's embedded verifying key to be
         //    a member of this allowlist; a bundle re-signed with an attacker key is
         //    rejected even though its self-consistent signature is valid.
-        // 
+        //
         //  Only public (verifying) keys are pinned — the private signing key stays
         //  offline. This field is read alongside `signature_policy`; with policy
         //  [`SignaturePolicy::Off`](crate::runtime::SignaturePolicy::Off) no
         //  verification runs and the allowlist is not consulted.
-        // 
+        //
         //  # Ownership
         //  Borrowed for the duration of `polyplug_runtime_create` only. The runtime
         //  COPIES the key bytes it needs out of this buffer during construction and
         //  never retains the pointer — the host may free the backing storage as soon
         //  as `create` returns.
-        // 
+        //
         //  # Layout note
         //  Placed at offset 0x30 (48), immediately after `signature_policy` plus its
         //  4 bytes of pre-existing tail padding. The struct grows to 72 bytes,
@@ -1019,7 +1043,7 @@ ffi.cdef[[
     // Expected size: 72 bytes
 
     //  ABI error — returned by value from all ABI calls.
-    // 
+    //
     //  CODE: a raw `u32`, NOT the [`AbiErrorCode`] enum. Plugins are untrusted and
     //  return `AbiError` by value across the C ABI, so any 32-bit pattern can land
     //  here — including values that are not declared discriminants of the frozen
@@ -1028,7 +1052,7 @@ ffi.cdef[[
     //  with `AbiErrorCode::X as u32` and interpret it with
     //  [`AbiErrorCode::from_u32`], which is total and safe. The layout is identical
     //  to the `#[repr(u32)]` enum (4 bytes at offset 0), so the C ABI is unchanged.
-    // 
+    //
     //  OWNERSHIP: `message` is always a static or runtime-owned string. The receiver
     //  must NEVER free it. Rich, allocated error detail is retrieved separately via
     //  `get_last_error`.
@@ -1042,7 +1066,7 @@ ffi.cdef[[
     // Expected size: 24 bytes
 
     //  Union of dispatch mechanisms — use based on `dispatch_type`.
-    // 
+    //
     //  # Safety
     //  Access the correct variant based on `GuestContractInterface::dispatch_type`:
     //  - `dispatch_type == Native` → access `.native`
@@ -1052,53 +1076,64 @@ ffi.cdef[[
         VmDispatch vm;
     } DispatchMechanisms;
 
-    typedef void (*GuestContractInterface_create_instance_fn)(VmLoaderData, const HostApi*, const void*, GuestContractInstance*);
-    typedef void (*GuestContractInterface_destroy_instance_fn)(VmLoaderData, const HostApi*, GuestContractInstance);
+    typedef void (*GuestContractInterface_create_instance_fn)(void*, VmLoaderData, const HostApi*, const void*, GuestContractInstance*);
+    typedef void (*GuestContractInterface_destroy_instance_fn)(void*, VmLoaderData, const HostApi*, GuestContractInstance);
     //  Guest Contract Interface — one per contract implemented by a guest (plugin).
-    // 
+    //
     //  # Who provides
     //  Guest (plugin) code creates this struct and registers it via `register_guest_contract`.
     //  Must be `'static` or intentionally leaked.
-    // 
+    //
     //  # Who calls
     //  Host code calls `create_instance`, `destroy_instance`, and dispatch functions.
-    // 
+    //
     //  # Ownership
     //  Must be `'static`. Never stack-allocated. Never freed while runtime lives.
     //  Typically created as `static` or via `Box::leak()`.
-    // 
+    //
     //  # Lifetime
     //  Lives for the entire runtime lifetime. Must survive hot-reload.
-    // 
+    //
     //  # Instance Lifecycle
     //  - `create_instance`: Factory function to create new instances
     //  - `destroy_instance`: Destructor to clean up instances before hot-reload
-    // 
+    //
     //  # Dispatch
     //  - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id](instance, args, out, out_err)`
     //  - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err)`
     typedef struct GuestContractInterface {
         //  FNV-1a hash of "guest_contract:name@major_version".
-        // 
+        //
         //  Generated by polyplugc from contract name and major version.
         //  Used for contract lookup via `find_guest_contract`.
         uint64_t contract_id;
         //  Contract version (major, minor, patch).
-        // 
+        //
         //  Used for version compatibility checks during lookup.
         Version contract_version;
         //  Dispatch mechanism type (Native or VirtualMachine).
-        // 
+        //
         //  Determines how dispatch functions are invoked:
         //  - Native: Direct function pointer call
         //  - VirtualMachine: VM-specific dispatch via loader
         DispatchType dispatch_type;
+        //  Opaque context owned by the generated adapter that registered this contract.
+        //
+        //  Core copies and forwards this pointer unchanged, but never dereferences,
+        //  writes, or frees it. Every lifecycle and dispatch callback receives this
+        //  exact value as its first argument.
+        //
+        //  The registrant keeps the pointee alive until logical unload completes and
+        //  all callbacks have quiesced.
+        void* adapter_context;
         //  Create a new instance of this contract.
-        // 
+        //
         //  Factory function called by host to create instances.
         //  Returns null handle on failure.
-        // 
+        //
         //  # Arguments
+        //  - `adapter_context`: opaque generated-adapter state copied from this
+        //    interface and forwarded unchanged by core
         //  - `loader_data`: the VM loader's per-(bundle,runtime) data handle (the same
         //    handle carried in `dispatch.vm.loader_data`). Native-dispatch contracts
         //    ignore it — their generated factory is statically linked. VM-dispatch
@@ -1112,21 +1147,23 @@ ffi.cdef[[
         //  - `args`: Optional initialization arguments (contract-specific)
         //  - `out_instance`: out-param; the new instance handle is written here. A
         //    null `data` denotes a stateless instance or construction failure.
-        // 
+        //
         //  # Nullability
         //  REQUIRED — never null. Failure is signalled by writing a null
         //  *instance handle*, not by a null callback. `register_guest_contract`
         //  rejects interfaces whose `create_instance` bits are null.
-        // 
+        //
         //  # Thread Safety
         //  May be called from any thread. Implementation must handle synchronization.
         GuestContractInterface_create_instance_fn create_instance;
         //  Destroy an instance of this contract.
-        // 
+        //
         //  MUST be called before hot-reload for all instances.
         //  Failure to destroy instances causes memory leaks.
-        // 
+        //
         //  # Arguments
+        //  - `adapter_context`: opaque generated-adapter state copied from this
+        //    interface and forwarded unchanged by core
         //  - `loader_data`: the VM loader's per-(bundle,runtime) data handle (mirrors
         //    `create_instance`). Native contracts ignore it; VM contracts use it to
         //    reach the per-instance registry the handle was minted into. The runtime
@@ -1134,127 +1171,143 @@ ffi.cdef[[
         //    null handle for native contracts.
         //  - `host`: HostApi pointer
         //  - `instance`: Instance handle to destroy
-        // 
+        //
         //  # Nullability
         //  REQUIRED — never null. Stateless contracts must supply a no-op
         //  function. `register_guest_contract` rejects interfaces whose
         //  `destroy_instance` bits are null.
-        // 
+        //
         //  # Safety
         //  After calling destroy_instance, the instance handle is invalid.
         GuestContractInterface_destroy_instance_fn destroy_instance;
         //  Union of dispatch mechanisms — access based on dispatch_type.
-        // 
-        //  For Native dispatch: use `dispatch.native.functions[fn_id]`.
-        //  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err)`.
+        //
+        //  For Native dispatch: call a function as
+        //  `fn(adapter_context, instance, args, out, out_err)`.
+        //  For VM dispatch: call
+        //  `dispatch.vm.call(adapter_context, loader_data, instance, fn_id, args, out, arena, out_err)`.
         DispatchMechanisms dispatch;
     } GuestContractInterface;
-    // Expected size: 56 bytes
+    // Expected size: 64 bytes
 
     typedef void (*HostContractInterface_create_instance_fn)(const HostContractInterface*, const void*, HostContractInstance*);
     typedef void (*HostContractInterface_destroy_instance_fn)(const HostContractInterface*, HostContractInstance);
     //  Host Contract Interface — for host-provided services.
-    // 
+    //
     //  Host contracts are services provided by the host application to plugins.
-    // 
+    //
     //  # Who provides
     //  Host application code creates this struct and registers it with the runtime.
     //  Must be `'static` or intentionally leaked.
-    // 
+    //
     //  # Who calls
     //  Guest (plugin) code calls the dispatch functions after obtaining an instance
     //  via `HostApi::get_host_contract()`.
-    // 
+    //
     //  # Ownership
     //  Must be `'static`. The runtime holds a reference for the plugin lifetime.
     //  Never freed while runtime lives.
-    // 
+    //
     //  # Lifetime
     //  Lives for the entire runtime lifetime. Must survive hot-reload.
-    // 
+    //
     //  # Singleton Mode
     //  - `singleton == true`: Same instance returned for all callers
     //  - `singleton == false`: New instance per caller (caller must destroy)
-    // 
+    //
     //  # Self-Passing Pattern
     //  `create_instance` and `destroy_instance` take `self: *const HostContractInterface`.
     //  The runtime field provides access to runtime services.
     typedef struct HostContractInterface {
         //  FNV-1a hash of "host_contract:name@major_version".
-        // 
+        //
         //  Generated by polyplugc from contract name and major version.
         //  Used for contract lookup via `get_host_contract`.
         uint64_t contract_id;
         //  Contract version (major, minor, patch).
-        // 
+        //
         //  Used for version compatibility checks during lookup.
         Version contract_version;
         //  Whether this contract provides a singleton instance.
-        // 
+        //
         //  If true, `get_host_contract` returns the same instance for all callers.
         //  If false, each call returns a new instance that caller must destroy.
         uint8_t singleton;
         //  Dispatch mechanism type (Native or VirtualMachine).
-        // 
+        //
         //  Host contracts typically use Native dispatch for direct calls.
         DispatchType dispatch_type;
         //  Opaque pointer to Runtime.
-        // 
+        //
         //  Host contracts can use this for runtime-specific operations.
         //  Set during interface registration.
-        // 
+        //
         //  # Ownership
         //  Owned by the runtime. Host contract implementations must not free.
         void* runtime;
         //  Opaque per-interface user-data pointer.
-        // 
+        //
         //  `create_instance` and `destroy_instance` can read it via their `this`
         //  parameter (`(*this).user_data`) to recover registrant-owned context.
-        // 
+        //
         //  # Ownership
         //  Owned by the registrant (the host application). The runtime never reads,
         //  writes, or frees the pointee — it only stores the pointer.
         void* user_data;
         //  Create a new instance of this host contract.
-        // 
+        //
         //  For singleton contracts, this is typically called once and the instance
         //  is cached. For multi-instance contracts, called for each get_host_contract.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostContractInterface pointer (self-passing pattern)
         //  - `args`: Optional initialization arguments (contract-specific)
         //  - `out_instance`: out-param; the new instance handle is written here. A
         //    null `data` denotes a stateless instance or construction failure.
-        // 
+        //
         //  # Nullability
         //  REQUIRED — never null. Failure is signalled by writing a null
         //  *instance handle*, not by a null callback. `register_host_contract`
         //  rejects interfaces whose `create_instance` bits are null.
         HostContractInterface_create_instance_fn create_instance;
         //  Destroy an instance of this host contract.
-        // 
+        //
         //  For singleton contracts, this is typically a no-op (singleton lives forever).
         //  For multi-instance contracts, caller must destroy after use.
-        // 
+        //
         //  # Arguments
         //  - `this`: HostContractInterface pointer (self-passing pattern)
         //  - `instance`: Instance handle to destroy
-        // 
+        //
         //  # Nullability
         //  REQUIRED — never null. Singleton/stateless contracts must supply a
         //  no-op function. `register_host_contract` rejects interfaces whose
         //  `destroy_instance` bits are null.
-        // 
+        //
         //  # Safety
         //  After calling destroy_instance, the instance handle is invalid.
         HostContractInterface_destroy_instance_fn destroy_instance;
         //  Union of dispatch mechanisms — access based on dispatch_type.
-        // 
+        //
         //  For Native dispatch: use `dispatch.native.functions[fn_id]`.
         //  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out, arena, out_err)`.
         DispatchMechanisms dispatch;
     } HostContractInterface;
     // Expected size: 80 bytes
+
+    //  One contract supplied by an in-process bundle.
+    typedef struct InProcessContractRegistration {
+        //  Provider and contract metadata copied by core during registration.
+        PluginDescriptor descriptor;
+        //  Canonical guest interface table copied and validated by core during registration.
+        const GuestContractInterface* interface;
+        //  Opaque generated-adapter context copied into the registered interface.
+        //
+        //  Core never dereferences, writes, or frees this pointer. Generated lifecycle
+        //  and dispatch thunks receive it as their first callback argument.
+        void* adapter_context;
+    } InProcessContractRegistration;
+    // Expected size: 64 bytes
 
 ]]
 

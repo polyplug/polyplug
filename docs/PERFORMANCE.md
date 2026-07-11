@@ -42,45 +42,33 @@ unloaded is undefined behaviour — the host must quiesce (no thread calling int
 holding a pointer into the bundle) before unloading it. To observe a *new* version
 after a hot-reload, re-`find_guest_contract` + re-`resolve_guest_contract`.
 
-### Anatomy of a native dispatch — the three operations
+### Anatomy of a native dispatch — synchronized cache guard plus direct dispatch
 
-Once the interface pointer is cached, a native call is **three machine operations**,
-and that is the whole of polyplug's per-call cost (~2.4 ns measured):
+Once the interface pointer is cached, each call first makes one inexpensive
+`HostApi.registry_revision` callback. The callback performs the runtime's acquire
+atomic load and returns the revision value; the caller compares it with the value
+captured when the interface was resolved. If it changed, the caller re-resolves and
+rebuilds its instance *before* dispatching. Keeping the atomic operation in the
+runtime makes this rule identical for Rust, C++, C#, Python, Lua, and JavaScript.
 
-1. **One guard load.** An acquire-ordered atomic load of the runtime's **registry
-   revision counter** — a single `u64` the runtime bumps on every load, reload, and
-   unload — read through a pointer the caller fetched once via `HostApi.revision_counter`,
-   then compared against the revision captured when the interface was resolved. If it
-   is unchanged (the overwhelmingly common case) the cached interface pointer is still
-   valid and the call proceeds; if it changed, the caller re-resolves the interface and
-   rebuilds its instance *before* dispatching. On x86-64 an acquire load is a plain
-   `mov` (no fence); on AArch64 a `ldar`. Cost: a fraction of a nanosecond.
-2. **One pointer dereference.** Read the function pointer out of the cached
+The steady-state dispatch then performs two direct operations:
+
+1. **One pointer dereference.** Read the function pointer out of the cached
    `*const GuestContractInterface`'s `functions[fn_id]` table.
-3. **One indirect call.** Call through that function pointer —
+2. **One indirect call.** Call through that function pointer —
    `fn_ptr(instance, args, out, …)`.
 
-#### What the guard load buys, and whether it can go away
+#### What the synchronized guard buys
 
-The guard load is the price of caching a raw interface pointer **safely** across
+The callback is the price of caching a raw interface pointer **safely** across
 hot-reload and unload. Without it, a cached pointer used after the owning bundle was
 reloaded or unloaded would dangle — documented undefined behaviour. The guard turns
-that into a checked, lock-free re-resolve.
+that into a checked re-resolve with one uniform ABI call and no foreign read of Rust
+atomic storage.
 
-It is already the cheapest *correct* mechanism: the only alternatives — pinning a
-crossbeam-epoch guard on every call, or taking a lock — cost **more**, not less. So
-removing the guard does not make dispatch faster; it makes it unsound. Two cases where
-it costs effectively nothing anyway:
-
-- **Reload and unload statically disabled.** When neither can happen, the interface
-  pointer can never move for the runtime's lifetime, so the guard is provably
-  unnecessary and could be elided entirely. It is a real but *sub-nanosecond*
-  optimization, intentionally not taken today — the path is already a thin tower (see
-  [Profiling](PROFILING.md)) and a branch on "is this runtime frozen" is not worth the
-  complexity until a workload proves it.
-- **Host supplies no counter.** If `HostApi.revision_counter` returns null, the caller
-  treats the revision as always-unchanged — the guard short-circuits to nothing. A host
-  that opts out of reload safety pays zero for it.
+It remains cheaper than pinning a crossbeam-epoch guard or taking a lock on every
+call. When reload and unload are statically disabled, an application can use a
+non-caching integration path that does not require revalidation.
 
 ### Two boundaries, two charts
 
@@ -1018,7 +1006,7 @@ epoch; that memory is reclaimed once no reader is still pinned in the prior epoc
 (see "Resolve once, reuse the interface pointer" above). Native bundles `dlclose`
 / `FreeLibrary` the `Library`, Lua/JS drop the per-bundle VM, Python purges its
 `sys.modules` entries, and .NET unloads its collectible `AssemblyLoadContext` —
-all on the same epoch-deferred path. A `Runtime`'s own `HostApi` table (184
+all on the same epoch-deferred path. A `Runtime`'s own `HostApi` table (192
 bytes) is owned by the `Runtime` and reclaimed at **`Runtime` teardown** (`Drop`).
 The leak test cycles the whole runtime: each iteration builds a *fresh* `Runtime`,
 loads, dispatches, unloads, then **drops the runtime fully** (dropping the loader,
@@ -1050,8 +1038,8 @@ python3 scripts/gen_bench_charts.py --soak target/soak/soak_rss.txt \
 ### Leak found and fixed — `HostApi` is reclaimed at teardown
 
 The soak surfaced a genuine **core leak in the `Runtime` lifecycle**, ~184 bytes
-per runtime built-and-dropped (the `HostApi` was 184 bytes at the time, and is
-184 bytes today). It was **not** in load, unload, dispatch, or the
+per runtime built-and-dropped (the `HostApi` was 184 bytes at the time and is 192
+bytes in the current ABI). It was **not** in load, unload, dispatch, or the
 `dlopen`/`dlclose` machinery (a build-and-drop-only bisection leaked at the same
 slope; a pure `dlopen`+`dlclose` loop with no runtime is flat). Root cause:
 `RuntimeBuilder::build` used `Box::leak(Box::new(HostApi { … }))` to obtain the

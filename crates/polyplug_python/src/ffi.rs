@@ -67,6 +67,7 @@ pub struct PolyplugPythonHostDispatchBridge {
 /// contract and are passed through untouched.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_python_host_vm_dispatch(
+    _adapter_context: *mut c_void,
     loader_data: VmLoaderData,
     _instance: GuestContractInstance,
     fn_id: u32,

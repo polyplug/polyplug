@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use core::ffi::c_void;
-use core::ptr::{NonNull, null, null_mut};
+use core::ptr::{self, NonNull, null, null_mut};
 
 use polyplug::Runtime;
 use polyplug::compatibility::CapabilityGraph;
@@ -32,7 +32,7 @@ use polyplug_abi::runtime::{Compatibility, ReloadPhaseType, RuntimeConfig};
 use polyplug_abi::{
     AbiError, AbiErrorCode, DispatchMechanisms, DispatchType, GuestContractInstance,
     GuestContractInterface, HostApi, HostContractInstance, HostContractInterface, NativeDispatch,
-    PluginDescriptor, StringView, SupportedLanguage, Version,
+    PluginDescriptor, StringView, Version,
 };
 use polyplug_common::{ManifestData, ManifestError, RawManifestDependency};
 use polyplug_utils::{BundleId, GuestContractId, HostContractId, bundle_id};
@@ -41,6 +41,7 @@ use tempfile::TempDir;
 // ─── Shared guest-interface helpers ──────────────────────────────────────────
 
 unsafe extern "C" fn noop_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -53,14 +54,15 @@ unsafe extern "C" fn noop_create_instance(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
 }
 
-fn leak_guest_interface(contract_id: u64) -> &'static GuestContractInterface {
-    Box::leak(Box::new(GuestContractInterface {
+fn guest_interface(contract_id: u64) -> GuestContractInterface {
+    GuestContractInterface {
         contract_id: GuestContractId::from_u64(contract_id),
         contract_version: Version {
             major: 1,
@@ -68,6 +70,7 @@ fn leak_guest_interface(contract_id: u64) -> &'static GuestContractInterface {
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance: noop_create_instance,
         destroy_instance: noop_destroy_instance,
         dispatch: DispatchMechanisms {
@@ -76,7 +79,7 @@ fn leak_guest_interface(contract_id: u64) -> &'static GuestContractInterface {
                 functions: null(),
             },
         },
-    }))
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -99,10 +102,6 @@ impl BundleLoader for DepProbeLoader {
         "dep-probe"
     }
 
-    fn loader_language(&self) -> SupportedLanguage {
-        SupportedLanguage::Rust
-    }
-
     fn supports_hot_reload(&self) -> bool {
         false
     }
@@ -116,21 +115,22 @@ impl BundleLoader for DepProbeLoader {
         let host_abi: *const HostApi = runtime.host_abi();
         let bundle_id: BundleId = BundleId::new(&manifest.name);
         runtime.push_init_bundle_id(bundle_id.id());
-
-        if manifest.name == self.probing_bundle {
-            // SAFETY: host_abi is a valid HostApi from the runtime.
-            let handle = unsafe {
-                ((*host_abi).find_guest_contract)(host_abi, self.declared_contract_id, 0_u32)
-            };
-            *self.declared_resolved.lock().unwrap() = Some(!handle.is_null());
-        } else {
-            // Provider bundle "A": register the contract it provides so the
-            // dependent can resolve it.
-            register_provider_for_loader(runtime, self.declared_contract_id, bundle_id.id());
-        }
-
+        let result: Result<(), LoaderError> = (|| {
+            if manifest.name == self.probing_bundle {
+                // SAFETY: host_abi is a valid HostApi from the runtime.
+                let handle = unsafe {
+                    ((*host_abi).find_guest_contract)(host_abi, self.declared_contract_id, 0_u32)
+                };
+                *self.declared_resolved.lock().unwrap() = Some(!handle.is_null());
+            } else {
+                // Provider bundle "A": register the contract it provides so the
+                // dependent can resolve it.
+                register_provider_for_loader(runtime, self.declared_contract_id)?;
+            }
+            Ok(())
+        })();
         runtime.pop_init_bundle_id();
-        Ok(())
+        result
     }
 
     fn reload(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
@@ -140,10 +140,9 @@ impl BundleLoader for DepProbeLoader {
     }
 }
 
-/// Register a provider from inside a loader's init window (bundle_id is the
-/// caller's). Mirrors how a real plugin's `polyplug_init` registers its contract.
-fn register_provider_for_loader(runtime: &Runtime, contract_id: u64, bundle_id: u64) {
-    let interface: &'static GuestContractInterface = leak_guest_interface(contract_id);
+/// Register a provider through the runtime-owned HostApi during a loader init.
+fn register_provider_for_loader(runtime: &Runtime, contract_id: u64) -> Result<(), LoaderError> {
+    let interface: GuestContractInterface = guest_interface(contract_id);
     let descriptor: PluginDescriptor = PluginDescriptor {
         name: StringView::from_static(b"provider-A"),
         contract_name: StringView::from_static(b"declared.dep"),
@@ -153,16 +152,24 @@ fn register_provider_for_loader(runtime: &Runtime, contract_id: u64, bundle_id: 
             patch: 0,
         },
     };
-    // SAFETY: interface is leaked and lives for the process lifetime.
+    let host_abi: *const HostApi = runtime.host_abi();
+    let mut registration: AbiError = AbiError::ok();
+    // SAFETY: the host belongs to runtime; descriptor, interface, and error
+    // output remain valid for the synchronous registration call.
     unsafe {
-        runtime.registry().register_guest_contract(
-            descriptor,
-            interface,
-            "declared.dep".to_owned(),
-            BundleId::from_u64(bundle_id),
-        )
+        ((*host_abi).register_guest_contract)(host_abi, &descriptor, &interface, &mut registration);
     }
-    .expect("provider registration should succeed");
+    if registration.is_ok() {
+        Ok(())
+    } else {
+        Err(LoaderError::InitFailed {
+            bundle: "bundle_a_provider".to_owned(),
+            error: format!(
+                "guest registration failed with ABI code {}",
+                registration.code
+            ),
+        })
+    }
 }
 
 fn write_provider_bundle(dir: &Path, name: &str) -> PathBuf {
@@ -267,18 +274,10 @@ fn build_bare_runtime() -> Arc<Runtime> {
 fn register_guest_contract_null_descriptor_is_invalid_pointer() {
     let runtime: Arc<Runtime> = build_bare_runtime();
     let host_abi: *const HostApi = runtime.host_abi();
-    let interface: &'static GuestContractInterface =
-        leak_guest_interface(GuestContractId::new("x", 1).id());
+    let interface: GuestContractInterface = guest_interface(GuestContractId::new("x", 1).id());
     let mut err: AbiError = AbiError::ok();
     // SAFETY: host_abi valid; descriptor deliberately null to exercise the guard.
-    unsafe {
-        ((*host_abi).register_guest_contract)(
-            host_abi,
-            null(),
-            interface as *const GuestContractInterface,
-            &mut err,
-        )
-    };
+    unsafe { ((*host_abi).register_guest_contract)(host_abi, null(), &interface, &mut err) };
     assert_eq!(err.code, AbiErrorCode::InvalidPointer as u32);
 }
 
@@ -547,9 +546,7 @@ impl BundleLoader for NeverLoadsLoader {
     fn loader_name(&self) -> &'static str {
         "reload-probe"
     }
-    fn loader_language(&self) -> SupportedLanguage {
-        SupportedLanguage::Rust
-    }
+
     fn supports_hot_reload(&self) -> bool {
         true
     }
@@ -695,7 +692,7 @@ fn register_guest_contract_duplicate_returns_duplicate_provider_code() {
     let runtime: Arc<Runtime> = build_bare_runtime();
     let host_abi: *const HostApi = runtime.host_abi();
     let contract_id: u64 = GuestContractId::new("dup.contract", 1).id();
-    let interface: &'static GuestContractInterface = leak_guest_interface(contract_id);
+    let interface: GuestContractInterface = guest_interface(contract_id);
     let descriptor: PluginDescriptor = PluginDescriptor {
         name: StringView::from_static(b"dup-plugin"),
         contract_name: StringView::from_static(b"dup.contract"),
@@ -710,25 +707,13 @@ fn register_guest_contract_duplicate_returns_duplicate_provider_code() {
     // a loader's init window would.
     runtime.push_init_bundle_id(0xD0D0_u64);
     let mut first: AbiError = AbiError::ok();
-    // SAFETY: host_abi is valid; descriptor and interface are valid 'static refs.
-    unsafe {
-        ((*host_abi).register_guest_contract)(
-            host_abi,
-            &descriptor as *const PluginDescriptor,
-            interface as *const GuestContractInterface,
-            &mut first,
-        )
-    };
+    // SAFETY: host_abi is valid; descriptor and interface are valid for each call.
+    unsafe { ((*host_abi).register_guest_contract)(host_abi, &descriptor, &interface, &mut first) };
     assert_eq!(first.code, AbiErrorCode::Ok as u32, "first must register");
     let mut second: AbiError = AbiError::ok();
     // SAFETY: same as above — deliberate same-bundle duplicate registration.
     unsafe {
-        ((*host_abi).register_guest_contract)(
-            host_abi,
-            &descriptor as *const PluginDescriptor,
-            interface as *const GuestContractInterface,
-            &mut second,
-        )
+        ((*host_abi).register_guest_contract)(host_abi, &descriptor, &interface, &mut second)
     };
     runtime.pop_init_bundle_id();
 

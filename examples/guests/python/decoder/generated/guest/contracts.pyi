@@ -11,7 +11,10 @@ from polyplug_guest import AbiError
 POLYPLUG_ABI_VERSION: int
 
 class DECODERPipelineDecoderPlugin:
-    def decode(self, input: str) -> str: ...
+    """Decodes CSV input into the pipeline representation."""
+    def decode(self, input: str) -> str:
+        """Decodes one CSV record.\n\nArgs:\n    input: The CSV record to decode.\n\nReturns:\n    The decoded pipeline record."""
+        ...
 
 def set_decoder_factory(factory: Callable[[int], DECODERPipelineDecoderPlugin]) -> None: ...
 

@@ -15,7 +15,13 @@ use polyplug_guest::GuestError;
 use super::types::*;
 
 /// Guest trait for contract `pipeline.Decoder` (id=0xE1D7DE773BE6E7F7)
+/// Decodes CSV input into the pipeline representation.
 pub trait PipelineDecoderGuestContract: Send + Sync {
+    /// Decodes one CSV record.
+    /// # Arguments
+    /// * `input` — The CSV record to decode.
+    /// # Returns
+    /// The decoded pipeline record.
     fn decode(&self, input: StringView) -> Result<StringView, GuestError>;
 }
 

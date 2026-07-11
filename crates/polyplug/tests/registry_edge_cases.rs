@@ -8,6 +8,8 @@
 //! - find_guest_contract with multiple implementations
 //! - swap_interface during active resolve
 
+use core::ffi::c_void;
+use core::ptr;
 use std::sync::Arc;
 use std::sync::Barrier;
 use std::thread;
@@ -27,6 +29,7 @@ const MOCK_FUNCTIONS: [*const (); 0] = [];
 
 /// No-op create_instance callback.
 unsafe extern "C" fn noop_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -40,6 +43,7 @@ unsafe extern "C" fn noop_create_instance(
 
 /// No-op destroy_instance callback.
 unsafe extern "C" fn noop_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -52,6 +56,7 @@ macro_rules! make_interface {
             contract_id: GuestContractId::from_u64($contract_id),
             contract_version: $version,
             dispatch_type: DispatchType::Native,
+            adapter_context: ptr::null_mut(),
             create_instance: noop_create_instance,
             destroy_instance: noop_destroy_instance,
             dispatch: DispatchMechanisms {

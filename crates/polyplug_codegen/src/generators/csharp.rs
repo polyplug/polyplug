@@ -18,6 +18,7 @@ use crate::ir::EnumDef;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
+use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -661,6 +662,7 @@ fn render_cs_abi_wrapper(
     render_cs_defn_method(
         abi_method.to_owned(),
         cs_params(&[
+            ("IntPtr", "adapterContext"),
             ("GuestContractInstance", "instance"),
             ("IntPtr", "argsPtr"),
             ("IntPtr", "outPtr"),
@@ -806,7 +808,7 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> Result<String, PolyplugcErr
                 let fn_name: String = func.name.replace('-', "_");
                 let abi_method: String = format!("{lower}_{fn_name}_abi");
                 out.push_str(&format!(
-                    "                (IntPtr)(delegate* unmanaged[Cdecl]<GuestContractInstance, IntPtr, IntPtr, AbiError*, void>)&{abi_method},\n"
+                    "                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, IntPtr, IntPtr, AbiError*, void>)&{abi_method},\n"
                 ));
             }
             out.push_str("            };\n");
@@ -824,11 +826,12 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> Result<String, PolyplugcErr
             ));
             // No bundle info is available here, so default to native dispatch.
             out.push_str("                DispatchType = DispatchType.Native,\n");
+            out.push_str("                AdapterContext = IntPtr.Zero,\n");
             out.push_str(&format!(
-                "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, IntPtr, GuestContractInstance*, void>)&{upper}_CreateInstance,\n"
+                "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, IntPtr, IntPtr, GuestContractInstance*, void>)&{upper}_CreateInstance,\n"
             ));
             out.push_str(&format!(
-                "                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstance,\n"
+                "                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstance,\n"
             ));
             out.push_str("                Dispatch = new DispatchMechanisms {\n");
             out.push_str("                    Native = new NativeDispatch {\n");
@@ -944,7 +947,7 @@ fn generate_cs_guest_plugin_interface(
         let fn_name: String = func.name.replace('-', "_");
         let abi_method: String = format!("{lower}_{fn_name}_abi", lower = plugin_lower);
         out.push_str(&format!(
-            "                (IntPtr)(delegate* unmanaged[Cdecl]<GuestContractInstance, IntPtr, IntPtr, AbiError*, void>)&{abi_method},\n"
+            "                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, IntPtr, IntPtr, AbiError*, void>)&{abi_method},\n"
         ));
     }
     out.push_str("            };\n");
@@ -972,12 +975,13 @@ fn generate_cs_guest_plugin_interface(
     // always emits Native (see CLAUDE.md: "C# and Python GUESTS are
     // native-dispatch").
     out.push_str("                DispatchType = DispatchType.Native,\n");
+    out.push_str("                AdapterContext = IntPtr.Zero,\n");
     out.push_str(&format!(
-        "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, IntPtr, GuestContractInstance*, void>)&{upper}_CreateInstance,\n",
+        "                CreateInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, IntPtr, IntPtr, GuestContractInstance*, void>)&{upper}_CreateInstance,\n",
         upper = plugin_upper
     ));
     out.push_str(&format!(
-        "                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstance,\n",
+        "                DestroyInstance = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstance,\n",
         upper = plugin_upper
     ));
     out.push_str("                Dispatch = new DispatchMechanisms {\n");
@@ -1034,6 +1038,26 @@ fn emit_cs_guest_instance_machinery(
         "    public static void Set{class_pascal}Factory(Func<IntPtr, {iface_name}> factory) {{ _factory_{lower} = factory; }}\n\n"
     ));
 
+    out.push_str(&format!(
+        "    private sealed class {class_pascal}AdapterState {{ public Func<IntPtr, {iface_name}> Factory = null!; }}\n"
+    ));
+    out.push_str(&format!(
+        "    public static GuestContractInterface CreateInProcessInterface(Func<IntPtr, {iface_name}> factory) {{\n"
+    ));
+    out.push_str("        ArgumentNullException.ThrowIfNull(factory);\n");
+    out.push_str(&format!(
+        "        var context = GCHandle.Alloc(new {class_pascal}AdapterState {{ Factory = factory }});\n"
+    ));
+    out.push_str(&format!("        var iface = {upper}_INTERFACE;\n"));
+    out.push_str("        iface.AdapterContext = GCHandle.ToIntPtr(context);\n");
+    out.push_str("        return iface;\n");
+    out.push_str("    }\n\n");
+    out.push_str(
+        "    public static void ReleaseInProcessInterface(GuestContractInterface iface) {\n",
+    );
+    out.push_str("        if (iface.AdapterContext != IntPtr.Zero) GCHandle.FromIntPtr(iface.AdapterContext).Free();\n");
+    out.push_str("    }\n\n");
+
     out.push_str("    /// <summary>Per-instance payload carried in GuestContractInstance.Data (via GCHandle).</summary>\n");
     out.push_str(&format!(
         "    private sealed class {class_pascal}InstanceState {{\n"
@@ -1066,7 +1090,9 @@ fn emit_cs_guest_instance_machinery(
     create_body.push_str("        // was not registered, or it throws.\n");
     create_body.push_str("        if (outInstance == null) return;\n");
     create_body.push_str("        try {\n");
-    create_body.push_str(&format!("            var factory = _factory_{lower};\n"));
+    create_body.push_str(&format!(
+        "            var factory = adapterContext == IntPtr.Zero ? _factory_{lower} : (({class_pascal}AdapterState)GCHandle.FromIntPtr(adapterContext).Target!).Factory;\n"
+    ));
     create_body.push_str("            if (host == IntPtr.Zero || factory is null) {\n");
     create_body.push_str(
         "                *outInstance = new GuestContractInstance { Data = IntPtr.Zero };\n",
@@ -1094,6 +1120,7 @@ fn emit_cs_guest_instance_machinery(
     out.push_str(&render_cs_defn_method(
         format!("{upper}_CreateInstance"),
         cs_params(&[
+            ("IntPtr", "adapterContext"),
             ("VmLoaderData", "loaderData"),
             ("IntPtr", "host"),
             ("IntPtr", "args"),
@@ -1108,6 +1135,7 @@ fn emit_cs_guest_instance_machinery(
     destroy_body.push_str(
         "        _ = loaderData;  // Native-dispatch contracts ignore the VM loader handle.\n",
     );
+    destroy_body.push_str("        _ = adapterContext;\n");
     destroy_body.push_str(
         "        // Frees the GCHandle allocated by CreateInstance; the payload becomes\n",
     );
@@ -1126,6 +1154,7 @@ fn emit_cs_guest_instance_machinery(
     out.push_str(&render_cs_defn_method(
         format!("{upper}_DestroyInstance"),
         cs_params(&[
+            ("IntPtr", "adapterContext"),
             ("VmLoaderData", "loaderData"),
             ("IntPtr", "host"),
             ("GuestContractInstance", "instance"),
@@ -1151,6 +1180,7 @@ fn emit_cs_guest_dispatch_body(
     let method_name: String = pascal_case(&func.name);
     let has_return: bool = func.returns.is_some();
     let has_params: bool = !func.params.is_empty();
+    out.push_str("        _ = adapterContext;\n");
 
     out.push_str("        if (outErr == null) return;\n");
     out.push_str("        try {\n");
@@ -1241,6 +1271,165 @@ fn emit_cs_guest_dispatch_body(
         "            *outErr = new AbiError { Code = (uint)AbiErrorCode.Panic, Message = msg };\n",
     );
     out.push_str("        }\n");
+}
+
+/// Generate a runtime-owned C# in-process bundle adapter for bundled guests.
+fn generate_cs_in_process_file(ir: &ValidatedIr) -> Option<String> {
+    let bundle: &ResolvedBundle = ir.bundle.as_ref()?;
+    let mut entries: Vec<(&str, &ResolvedContract)> = Vec::new();
+    for plugin in &bundle.plugins {
+        for implemented in &plugin.implements {
+            if let Some(contract) = ir.contracts.iter().find(|contract| {
+                implemented
+                    == &format!(
+                        "{}@{}.{}",
+                        contract.name, contract.version.major, contract.version.minor
+                    )
+            }) {
+                entries.push((plugin.name.as_str(), contract));
+            }
+        }
+    }
+    let mut out: String = String::new();
+    out.push_str(CS_HEADER);
+    out.push_str(&csharp_using_block(&[
+        &["System", "System.Runtime.InteropServices", "System.Text"],
+        &["Polyplug.Abi", "Polyplug.Host"],
+    ]));
+    out.push('\n');
+    if let Some(ns) = cs_assembly_namespace(&bundle.file) {
+        out.push_str(&format!("namespace {ns};\n\n"));
+    }
+    out.push_str("public static class InProcessBundleFactory {\n");
+    out.push_str("    public static InProcessBundle CreateInProcessBundle(\n");
+    for (index, (plugin, contract)) in entries.iter().enumerate() {
+        let parameter: String = format!(
+            "{}_{}Factory",
+            plugin.to_lowercase().replace(['.', '-'], "_"),
+            contract.name.to_lowercase().replace(['.', '-'], "_")
+        );
+        let separator: &str = if index + 1 == entries.len() { "" } else { "," };
+        out.push_str(&format!(
+            "        Func<IntPtr, {}> {parameter}{separator}\n",
+            contract_name_to_cs_interface(&contract.name)
+        ));
+    }
+    out.push_str("    ) {\n");
+    out.push_str("        var resident = new Resident(\n");
+    for (index, (plugin, contract)) in entries.iter().enumerate() {
+        let parameter: String = format!(
+            "{}_{}Factory",
+            plugin.to_lowercase().replace(['.', '-'], "_"),
+            contract.name.to_lowercase().replace(['.', '-'], "_")
+        );
+        let separator: &str = if index + 1 == entries.len() { "" } else { "," };
+        let _ = contract;
+        out.push_str(&format!("            {parameter}{separator}\n"));
+    }
+    out.push_str("        );\n");
+    out.push_str("        return new InProcessBundle(resident.Registration, resident);\n");
+    out.push_str("    }\n\n");
+    out.push_str("    private sealed class Resident : IDisposable {\n");
+    out.push_str("        private readonly GuestContractInterface[] _interfaces;\n");
+    out.push_str("        private readonly InProcessContractRegistration[] _contracts;\n");
+    out.push_str("        private readonly byte[][] _strings;\n");
+    out.push_str("        private readonly GCHandle[] _pins;\n");
+    out.push_str("        private bool _disposed;\n");
+    out.push_str("        internal InProcessBundleRegistration Registration { get; }\n\n");
+    out.push_str("        internal Resident(\n");
+    for (index, (plugin, contract)) in entries.iter().enumerate() {
+        let parameter: String = format!(
+            "{}_{}Factory",
+            plugin.to_lowercase().replace(['.', '-'], "_"),
+            contract.name.to_lowercase().replace(['.', '-'], "_")
+        );
+        let separator: &str = if index + 1 == entries.len() { "" } else { "," };
+        out.push_str(&format!(
+            "            Func<IntPtr, {}> {parameter}{separator}\n",
+            contract_name_to_cs_interface(&contract.name)
+        ));
+    }
+    out.push_str("        ) {\n");
+    out.push_str("            _interfaces = [\n");
+    for (plugin, contract) in &entries {
+        let plugin_pascal: String = pascal_case(plugin);
+        let plugin_upper: String = plugin.to_uppercase().replace(['.', '-'], "_");
+        let parameter: String = format!(
+            "{}_{}Factory",
+            plugin.to_lowercase().replace(['.', '-'], "_"),
+            contract.name.to_lowercase().replace(['.', '-'], "_")
+        );
+        out.push_str(&format!(
+            "                {plugin_pascal}Interfaces.CreateInProcessInterface({parameter}),\n"
+        ));
+        let _ = plugin_upper;
+    }
+    out.push_str("            ];\n");
+    out.push_str("            _strings = [\n");
+    out.push_str(&format!(
+        "                Encoding.UTF8.GetBytes({:?}),\n",
+        bundle.name
+    ));
+    for (plugin, contract) in &entries {
+        out.push_str(&format!(
+            "                Encoding.UTF8.GetBytes({plugin:?}),\n"
+        ));
+        out.push_str(&format!(
+            "                Encoding.UTF8.GetBytes({:?}),\n",
+            format!("{}@{}", contract.name, contract.version.major)
+        ));
+    }
+    out.push_str("            ];\n");
+    out.push_str("            _pins = new GCHandle[_strings.Length + 3];\n");
+    out.push_str("            for (var index = 0; index < _strings.Length; index++) _pins[index] = GCHandle.Alloc(_strings[index], GCHandleType.Pinned);\n");
+    out.push_str("            _pins[^3] = GCHandle.Alloc(_interfaces, GCHandleType.Pinned);\n");
+    out.push_str(
+        "            _contracts = new InProcessContractRegistration[_interfaces.Length];\n",
+    );
+    out.push_str("            _pins[^2] = GCHandle.Alloc(_contracts, GCHandleType.Pinned);\n");
+    for (index, (_, contract)) in entries.iter().enumerate() {
+        let string_index: usize = 1 + index * 2;
+        out.push_str(&format!(
+            "            _contracts[{index}] = new InProcessContractRegistration {{ Descriptor = new PluginDescriptor {{ Name = new StringView {{ Ptr = _pins[{string_index}].AddrOfPinnedObject(), Len = (nuint)_strings[{string_index}].Length }}, ContractName = new StringView {{ Ptr = _pins[{}].AddrOfPinnedObject(), Len = (nuint)_strings[{}].Length }}, Version = new Polyplug.Abi.Version {{ Major = {}u, Minor = {}u, Patch = {}u }} }}, Interface = _pins[^3].AddrOfPinnedObject() + {index} * Marshal.SizeOf<GuestContractInterface>(), AdapterContext = _interfaces[{index}].AdapterContext }};\n",
+            string_index + 1, string_index + 1, contract.version.major, contract.version.minor, contract.version.patch
+        ));
+    }
+    let dependencies: Vec<u64> = bundle
+        .dependencies
+        .iter()
+        .map(|dependency| match dependency {
+            ResolvedDependency::ByContract { contract_id, .. }
+            | ResolvedDependency::ByBundle { contract_id, .. } => *contract_id,
+        })
+        .collect();
+    out.push_str(&format!(
+        "            ulong[] dependencies = [{}];\n",
+        dependencies
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<String>>()
+            .join(", ")
+    ));
+    out.push_str("            _pins[^1] = GCHandle.Alloc(dependencies, GCHandleType.Pinned);\n");
+    out.push_str("            Registration = new InProcessBundleRegistration { Metadata = new InProcessBundleMetadata { Name = new StringView { Ptr = _pins[0].AddrOfPinnedObject(), Len = (nuint)_strings[0].Length }, Version = new Polyplug.Abi.Version {");
+    out.push_str(&format!(
+        " Major = {}u, Minor = {}u, Patch = {}u ",
+        bundle.version.major, bundle.version.minor, bundle.version.patch
+    ));
+    out.push_str("}, Runtime = SupportedLanguage.Dotnet }, DependencyIds = _pins[^1].AddrOfPinnedObject(), DependencyCount = (nuint)dependencies.Length, Contracts = _pins[^2].AddrOfPinnedObject(), ContractCount = (nuint)_contracts.Length };\n");
+    out.push_str("        }\n\n");
+    out.push_str("        public void Dispose() {\n");
+    out.push_str("            if (_disposed) return;\n");
+    out.push_str("            _disposed = true;\n");
+    for (index, (plugin, _)) in entries.iter().enumerate() {
+        let plugin_pascal: String = pascal_case(plugin);
+        out.push_str(&format!("            {plugin_pascal}Interfaces.ReleaseInProcessInterface(_interfaces[{index}]);\n"));
+    }
+    out.push_str("            foreach (GCHandle pin in _pins) if (pin.IsAllocated) pin.Free();\n");
+    out.push_str("        }\n");
+    out.push_str("    }\n");
+    out.push_str("}\n");
+    Some(out)
 }
 
 /// Generate `guest/Init.cs` — the [UnmanagedCallersOnly] PolyplugInit entry point.
@@ -1492,23 +1681,13 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str("    /// gone contract.</summary>\n");
         out.push_str("    private readonly GuestContractHandle _handle;\n");
         out.push_str(
-            "    /// <summary>Pointer to the runtime's registry revision counter, fetched once\n",
+            "    /// <summary>Registry revision value captured when this caller resolved its\n",
         );
         out.push_str(
-            "    /// via HostApi.RevisionCounter. Polled directly before each dispatch (one\n",
+            "    /// interface. The HostApi callback performs acquire synchronization; each\n",
         );
         out.push_str(
-            "    /// atomic load, no call into the runtime); IntPtr.Zero when there is no runtime.</summary>\n",
-        );
-        out.push_str("    private readonly IntPtr _revisionPtr;\n");
-        out.push_str(
-            "    /// <summary>Revision value read when the interface was resolved. Compared\n",
-        );
-        out.push_str(
-            "    /// before each dispatch against the live counter to detect a reload/unload and\n",
-        );
-        out.push_str(
-            "    /// re-resolve, so the cached interface pointer never dangles.</summary>\n",
+            "    /// dispatch compares its current value before using the cached interface.</summary>\n",
         );
         out.push_str("    private ulong _cachedRevision;\n");
         if needs_arena {
@@ -1529,14 +1708,13 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         // Private constructor
         if needs_arena {
             out.push_str(&format!(
-                "    private {caller_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {{\n"
+                "    private {caller_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, ulong cachedRevision) {{\n"
             ));
             out.push_str("        _interface = iface;\n");
             out.push_str("        _instance = inst;\n");
             out.push_str("        _host = host;\n");
             out.push_str("        _disposed = false;\n");
             out.push_str("        _handle = handle;\n");
-            out.push_str("        _revisionPtr = revisionPtr;\n");
             out.push_str("        _cachedRevision = cachedRevision;\n");
             out.push_str(
                 "        // C-heap allocation: cross-boundary arena data must not live on the managed heap.\n",
@@ -1548,14 +1726,13 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
             out.push_str("    }\n\n");
         } else {
             out.push_str(&format!(
-                "    private {caller_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {{\n"
+                "    private {caller_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, ulong cachedRevision) {{\n"
             ));
             out.push_str("        _interface = iface;\n");
             out.push_str("        _instance = inst;\n");
             out.push_str("        _host = host;\n");
             out.push_str("        _disposed = false;\n");
             out.push_str("        _handle = handle;\n");
-            out.push_str("        _revisionPtr = revisionPtr;\n");
             out.push_str("        _cachedRevision = cachedRevision;\n");
             out.push_str("    }\n\n");
         }
@@ -1593,18 +1770,14 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<HostApi*, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;\n");
         out.push_str("        GuestContractInstance inst = default;\n");
         out.push_str("        createFn(host, iface, null, &inst);\n");
-        // Fetch the registry revision counter ONCE, then read its current value, so
-        // every later call can detect a reload/unload with a direct atomic load (no
-        // call back into the runtime) and re-resolve before dispatching.
+        // Capture the acquire-synchronized registry revision value for this resolved
+        // interface. Each later dispatch invokes the same HostApi callback before use.
         out.push_str(
-            "        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, IntPtr>)host->RevisionCounter;\n",
+            "        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, ulong>)host->RegistryRevision;\n",
         );
-        out.push_str("        IntPtr revisionPtr = revisionFn(host);\n");
-        out.push_str("        ulong cachedRevision = revisionPtr == IntPtr.Zero\n");
-        out.push_str("            ? 0UL\n");
-        out.push_str("            : System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)revisionPtr));\n");
+        out.push_str("        ulong cachedRevision = revisionFn(host);\n");
         out.push_str(&format!(
-            "        return new {caller_name}(iface, inst, host, handle, revisionPtr, cachedRevision);\n"
+            "        return new {caller_name}(iface, inst, host, handle, cachedRevision);\n"
         ));
         out.push_str("    }\n\n");
 
@@ -1612,19 +1785,14 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str("    /// <summary>Check if this caller holds a resolved contract interface.</summary>\n");
         out.push_str("    public bool IsValid => !_disposed && _interface != null;\n\n");
 
-        // LiveRevision helper — one acquire atomic load through the cached pointer,
-        // no call into the runtime. Returns the cached value (i.e. "unchanged") when
-        // there is no counter (IntPtr.Zero), so the staleness check is then a no-op.
+        // LiveRevision invokes the HostApi callback, which performs the acquire load.
         out.push_str(
-            "    /// <summary>Read the registry revision through the cached pointer — one\n",
+            "    /// <summary>Read the acquire-synchronized registry revision through HostApi.\n",
         );
-        out.push_str(
-            "    /// acquire atomic load, no call into the runtime. Returns the cached value\n",
-        );
-        out.push_str("    /// (\"unchanged\") when there is no counter (IntPtr.Zero).</summary>\n");
+        out.push_str("    /// The runtime callback returns the current value.</summary>\n");
         out.push_str("    private ulong LiveRevision() {\n");
-        out.push_str("        if (_revisionPtr == IntPtr.Zero) { return _cachedRevision; }\n");
-        out.push_str("        return System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)_revisionPtr));\n");
+        out.push_str("        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, ulong>)_host->RegistryRevision;\n");
+        out.push_str("        return revisionFn(_host);\n");
         out.push_str("    }\n\n");
 
         // Revalidate — re-resolve via the retained handle after the registry changed.
@@ -1891,26 +2059,26 @@ fn generate_host_fn_caller(
     out.push_str(&format!(
         "                    nint funcPtr = ((nint*)funcsArray)[{fn_id}];\n"
     ));
-    out.push_str("                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;\n");
-    out.push_str("                    dispatch(_instance, argsPtr, outPtr, &err);\n");
+    out.push_str("                    var dispatch = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;\n");
+    out.push_str("                    dispatch(_interface->AdapterContext, _instance, argsPtr, outPtr, &err);\n");
     out.push_str("                    break;\n");
     out.push_str("                }\n");
     out.push_str("                case DispatchType.VirtualMachine: {\n");
-    // Canonical VM dispatch signature: (loader_data, instance, fn_id, args, out, arena, out_err).
-    out.push_str("                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;\n");
+    // Canonical VM dispatch signature: (adapter_context, loader_data, instance, fn_id, args, out, arena, out_err).
+    out.push_str("                    var vmFn = (delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;\n");
     if needs_arena {
         // Arena-backed functions hand the guest this caller's per-call arena so it
         // can write variable-size returns without per-value host->alloc.
         out.push_str("                    fixed (CallArena* arenaPtr = &_arena) {\n");
         out.push_str(&format!(
-            "                        vmFn(_interface->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, arenaPtr, &err);\n"
+            "                        vmFn(_interface->AdapterContext, _interface->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, arenaPtr, &err);\n"
         ));
         out.push_str("                    }\n");
     } else {
         // No variable-size output: a null arena makes the VM bridge fall back to
         // per-value host allocation.
         out.push_str(&format!(
-            "                    vmFn(_interface->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, (CallArena*)null, &err);\n"
+            "                    vmFn(_interface->AdapterContext, _interface->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, (CallArena*)null, &err);\n"
         ));
     }
     out.push_str("                    break;\n");
@@ -2263,15 +2431,15 @@ fn generate_cs_guest_host_contract_method(
     out.push_str("                    break;\n");
     out.push_str("                }\n");
     out.push_str("                case DispatchType.VirtualMachine: {\n");
-    // Canonical VM dispatch signature: (loader_data, instance, fn_id, args, out, arena, out_err).
+    // Host-contract VM dispatch uses `UserData` as its adapter context.
     out.push_str(
-        "                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, IntPtr, uint, IntPtr, IntPtr, IntPtr, AbiError*, void>)contract->Dispatch.Vm.Call;\n",
+        "                    var vmFn = (delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, IntPtr, uint, IntPtr, IntPtr, IntPtr, AbiError*, void>)contract->Dispatch.Vm.Call;\n",
     );
     // A null arena (IntPtr.Zero) makes the VM bridge fall back to per-value host
     // allocation. C# guests are dispatched through native function pointers, so the
     // host-side caller has no per-call arena to publish here.
     out.push_str(&format!(
-        "                    vmFn(contract->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, IntPtr.Zero, &err);\n"
+        "                    vmFn(contract->UserData, contract->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, IntPtr.Zero, &err);\n"
     ));
     out.push_str("                    break;\n");
     out.push_str("                }\n");
@@ -3296,22 +3464,14 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
         out.push_str("    /// gone peer.</summary>\n");
         out.push_str("    private readonly GuestContractHandle _handle;\n");
         out.push_str(
-            "    /// <summary>Pointer to the runtime's registry revision counter, fetched once\n",
+            "    /// <summary>Registry revision value captured when this peer resolved its\n",
         );
         out.push_str(
-            "    /// via HostApi.RevisionCounter. Polled directly before each dispatch (one\n",
+            "    /// interface. The HostApi callback performs acquire synchronization; each\n",
         );
         out.push_str(
-            "    /// atomic load, no call into the runtime); IntPtr.Zero when there is no runtime.</summary>\n",
+            "    /// dispatch compares its current value before using the cached peer interface.</summary>\n",
         );
-        out.push_str("    private readonly IntPtr _revisionPtr;\n");
-        out.push_str(
-            "    /// <summary>Revision value read when the peer was resolved. Compared before each\n",
-        );
-        out.push_str(
-            "    /// dispatch against the live counter to detect a reload/unload and re-resolve, so\n",
-        );
-        out.push_str("    /// the cached interface pointer and instance never dangle.</summary>\n");
         out.push_str("    private ulong _cachedRevision;\n");
         if needs_arena {
             out.push_str(
@@ -3330,14 +3490,13 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
 
         // Private constructor
         out.push_str(&format!(
-            "    private {peer_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, IntPtr revisionPtr, ulong cachedRevision) {{\n"
+            "    private {peer_name}(GuestContractInterface* iface, GuestContractInstance inst, HostApi* host, GuestContractHandle handle, ulong cachedRevision) {{\n"
         ));
         out.push_str("        _interface = iface;\n");
         out.push_str("        _instance = inst;\n");
         out.push_str("        _host = host;\n");
         out.push_str("        _disposed = false;\n");
         out.push_str("        _handle = handle;\n");
-        out.push_str("        _revisionPtr = revisionPtr;\n");
         out.push_str("        _cachedRevision = cachedRevision;\n");
         if needs_arena {
             out.push_str(
@@ -3388,18 +3547,14 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
         out.push_str("        var createFn = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInterface*, void*, GuestContractInstance*, void>)host->CreateGuestInstance;\n");
         out.push_str("        GuestContractInstance inst = default;\n");
         out.push_str("        createFn(hostPtr, iface, null, &inst);\n");
-        // Fetch the registry revision counter ONCE, then read its current value, so
-        // every later call can detect a reload/unload with a direct atomic load (no
-        // call back into the runtime) and re-resolve before dispatching.
+        // Capture the acquire-synchronized registry revision value for this resolved
+        // peer interface. Each later dispatch invokes the same HostApi callback before use.
         out.push_str(
-            "        var revisionFn = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr>)host->RevisionCounter;\n",
+            "        var revisionFn = (delegate* unmanaged[Cdecl]<IntPtr, ulong>)host->RegistryRevision;\n",
         );
-        out.push_str("        IntPtr revisionPtr = revisionFn(hostPtr);\n");
-        out.push_str("        ulong cachedRevision = revisionPtr == IntPtr.Zero\n");
-        out.push_str("            ? 0UL\n");
-        out.push_str("            : System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)revisionPtr));\n");
+        out.push_str("        ulong cachedRevision = revisionFn(hostPtr);\n");
         out.push_str(&format!(
-            "        return new {peer_name}(iface, inst, host, handle, revisionPtr, cachedRevision);\n"
+            "        return new {peer_name}(iface, inst, host, handle, cachedRevision);\n"
         ));
         out.push_str("    }\n\n");
 
@@ -3409,19 +3564,14 @@ fn generate_cs_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) 
         );
         out.push_str("    public bool IsValid => !_disposed && _interface != null;\n\n");
 
-        // LiveRevision helper — one acquire atomic load through the cached pointer,
-        // no call into the runtime. Returns the cached value ("unchanged") when there
-        // is no counter (IntPtr.Zero), making the check a no-op.
+        // LiveRevision invokes the HostApi callback, which performs the acquire load.
         out.push_str(
-            "    /// <summary>Read the registry revision through the cached pointer — one\n",
+            "    /// <summary>Read the acquire-synchronized registry revision through HostApi.\n",
         );
-        out.push_str(
-            "    /// acquire atomic load, no call into the runtime. Returns the cached value\n",
-        );
-        out.push_str("    /// (\"unchanged\") when there is no counter (IntPtr.Zero).</summary>\n");
+        out.push_str("    /// The runtime callback returns the current value.</summary>\n");
         out.push_str("    private ulong LiveRevision() {\n");
-        out.push_str("        if (_revisionPtr == IntPtr.Zero) { return _cachedRevision; }\n");
-        out.push_str("        return System.Threading.Volatile.Read(ref System.Runtime.CompilerServices.Unsafe.AsRef<ulong>((void*)_revisionPtr));\n");
+        out.push_str("        var revisionFn = (delegate* unmanaged[Cdecl]<HostApi*, ulong>)_host->RegistryRevision;\n");
+        out.push_str("        return revisionFn(_host);\n");
         out.push_str("    }\n\n");
 
         // Revalidate — re-resolve the cached peer interface via the retained handle after
@@ -3665,26 +3815,26 @@ fn generate_peer_fn_caller_cs(
     out.push_str(&format!(
         "                    nint funcPtr = ((nint*)funcsArray)[{fn_id}];\n"
     ));
-    out.push_str("                    var dispatch = (delegate* unmanaged[Cdecl]<GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;\n");
-    out.push_str("                    dispatch(_instance, argsPtr, outPtr, &err);\n");
+    out.push_str("                    var dispatch = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, nint, nint, AbiError*, void>)funcPtr;\n");
+    out.push_str("                    dispatch(_interface->AdapterContext, _instance, argsPtr, outPtr, &err);\n");
     out.push_str("                    break;\n");
     out.push_str("                }\n");
     out.push_str("                case DispatchType.VirtualMachine: {\n");
-    // Canonical VM dispatch signature: (loader_data, instance, fn_id, args, out, arena, out_err).
-    out.push_str("                    var vmFn = (delegate* unmanaged[Cdecl]<VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;\n");
+    // Canonical VM dispatch signature: (adapter_context, loader_data, instance, fn_id, args, out, arena, out_err).
+    out.push_str("                    var vmFn = (delegate* unmanaged[Cdecl]<IntPtr, VmLoaderData, GuestContractInstance, uint, nint, nint, CallArena*, AbiError*, void>)_interface->Dispatch.Vm.Call;\n");
     if needs_arena && peer_needs_arena {
         // Arena-backed functions hand the guest this peer's per-call arena so it
         // can write variable-size returns without per-value host->alloc.
         out.push_str("                    fixed (CallArena* arenaPtr = &_arena) {\n");
         out.push_str(&format!(
-            "                        vmFn(_interface->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, arenaPtr, &err);\n"
+            "                        vmFn(_interface->AdapterContext, _interface->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, arenaPtr, &err);\n"
         ));
         out.push_str("                    }\n");
     } else {
         // No variable-size output: a null arena makes the VM bridge fall back to
         // per-value host allocation.
         out.push_str(&format!(
-            "                    vmFn(_interface->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, (CallArena*)null, &err);\n"
+            "                    vmFn(_interface->AdapterContext, _interface->Dispatch.Vm.LoaderData, _instance, {fn_id}u, argsPtr, outPtr, (CallArena*)null, &err);\n"
         ));
     }
     out.push_str("                    break;\n");
@@ -3770,6 +3920,13 @@ impl CodeGenerator for CSharpGenerator {
             content: generate_cs_guest_init(ir),
             force_regenerate: true,
         });
+        if let Some(content) = generate_cs_in_process_file(ir) {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/InProcess.cs"),
+                content,
+                force_regenerate: false,
+            });
+        }
         if ir.bundle.is_some() {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/BundleConstants.cs"),

@@ -4,8 +4,19 @@
 using Polyplug.Abi;
 using Polyplug.Guest;
 
+/// <summary>
+/// Decodes CSV input into the pipeline representation.
+/// </summary>
 /// Guest interface for contract `pipeline.Decoder` (id=0xE1D7DE773BE6E7F7)
 public interface IPipelineDecoderGuestContract {
+    /// <summary>
+    /// Decodes one CSV record.
+    /// </summary>
+    /// <param name="input">The CSV record to decode.
+    /// </param>
+    /// <returns>
+    /// The decoded pipeline record.
+    /// </returns>
     Polyplug.Abi.StringView Decode(Polyplug.Abi.StringView input);
 }
 

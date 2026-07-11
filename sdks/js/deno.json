@@ -10,7 +10,8 @@
     "./loaders/dotnet"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "**/dist"
   ],
   "compilerOptions": {
     "lib": ["deno.unstable", "deno.ns", "deno.worker"],

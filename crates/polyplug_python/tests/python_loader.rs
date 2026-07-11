@@ -37,8 +37,8 @@ use std::thread::JoinHandle;
 use tempfile::TempDir;
 
 use polyplug::error::LoaderError;
+use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
-use polyplug::loader::BundleSource;
 use polyplug::runtime::Runtime;
 use polyplug::runtime_builder::RuntimeBuilder;
 use polyplug_abi::AbiError;
@@ -74,17 +74,54 @@ fn write_bundle(name: &str, content: &str) -> (TempDir, PathBuf) {
     fs::write(&path, content).expect("write bundle.py");
 
     let bundle_id: u64 = bundle_id(name);
+    let contracts: Vec<String> = fixture_contract_specs(content);
+    let provides: String = contracts
+        .iter()
+        .map(|contract| format!("\"{contract}\""))
+        .collect::<Vec<String>>()
+        .join(", ");
+    let function_counts: String = contracts
+        .iter()
+        .map(|contract| format!("\"{contract}\" = 0"))
+        .collect::<Vec<String>>()
+        .join("\n");
     let manifest: String = format!(
         r#"id = {}
 name = "{}"
+bundle_name = "{}"
+version = "1.0.0"
 loader = "python"
 file = "bundle.py"
+provides = [{}]
+
+[function_count]
+{}
 "#,
-        bundle_id, name
+        bundle_id, name, name, provides, function_counts
     );
     fs::write(dir.path().join("manifest.toml"), &manifest).expect("write manifest.toml");
 
     (dir, path)
+}
+
+/// Extract canonical contract declarations from the hand-written Python fixtures.
+fn fixture_contract_specs(content: &str) -> Vec<String> {
+    let mut contracts: Vec<String> = Vec::new();
+    let mut remainder: &str = content;
+    const PREFIX: &str = "\"contract\": \"";
+    while let Some(start) = remainder.find(PREFIX) {
+        let value_start: usize = start + PREFIX.len();
+        let after_prefix: &str = &remainder[value_start..];
+        let Some(end) = after_prefix.find('"') else {
+            break;
+        };
+        let contract: &str = &after_prefix[..end];
+        if !contracts.iter().any(|existing| existing == contract) {
+            contracts.push(contract.to_owned());
+        }
+        remainder = &after_prefix[end + 1..];
+    }
+    contracts
 }
 
 fn make_runtime() -> Arc<Runtime> {
@@ -155,6 +192,7 @@ unsafe fn dispatch(
     // wraps a live leaked PythonLoaderData; args/out are caller-provided.
     unsafe {
         (vm.call)(
+            interface.adapter_context,
             vm.loader_data,
             GuestContractInstance::null(),
             fn_id,
@@ -165,6 +203,19 @@ unsafe fn dispatch(
         );
     }
     err
+}
+
+/// Load through Runtime so the core owns one staged registration transaction.
+fn load_path_via_runtime(runtime: &Runtime, manifest: &ManifestData) -> Result<(), LoaderError> {
+    runtime
+        .load_bundle(&manifest.path)
+        .map_err(|error| match error {
+            RuntimeError::Loader(loader) => loader,
+            other => LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: other.to_string(),
+            },
+        })
 }
 
 /// Like [`dispatch`], but passes a real per-call `arena` pointer through to the
@@ -200,6 +251,7 @@ unsafe fn dispatch_with_arena(
     // caller-provided and valid for this call.
     unsafe {
         (vm.call)(
+            interface.adapter_context,
             vm.loader_data,
             GuestContractInstance::null(),
             fn_id,
@@ -238,6 +290,38 @@ def polyplug_init(host_interface: int, ctx: int):
             "functions": [_fn0],
         },
     ], _ABI_OK
+"#;
+
+/// Two independently dispatchable registrations returned from one Python bundle.
+const TWO_CONTRACT_PLUGIN_SRC: &str = r#"
+import ctypes
+
+_ABI_OK = type("AbiError", (), {"code": 0})()
+
+def _first(impl, args_ptr, out_ptr, arena_ptr, arena_alloc):
+    ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int32))[0] = 11
+
+def _second(impl, args_ptr, out_ptr, arena_ptr, arena_alloc):
+    ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_int32))[0] = 22
+
+def polyplug_init(host_interface: int, ctx: int):
+    return [
+        {"contract": "twofirst@1", "factory": lambda host_ptr: None, "functions": [_first]},
+        {"contract": "twosecond@1", "factory": lambda host_ptr: None, "functions": [_second]},
+    ], _ABI_OK
+"#;
+
+/// The duplicate second entry forces the current sequential core registration
+/// path to fail after it has accepted the first entry.
+const DUPLICATE_SECOND_CONTRACT_PLUGIN_SRC: &str = r#"
+_ABI_OK = type("AbiError", (), {"code": 0})()
+
+def _fn0(impl, args_ptr, out_ptr, arena_ptr, arena_alloc):
+    pass
+
+def polyplug_init(host_interface: int, ctx: int):
+    registration = {"contract": "twoduplicate@1", "factory": lambda host_ptr: None, "functions": [_fn0]}
+    return [registration, registration], _ABI_OK
 "#;
 
 /// Contract id for `writeout@1`.
@@ -327,14 +411,10 @@ def polyplug_init(_host_interface: int, _ctx: int) -> None:
 #[test]
 fn test_interpreter_initializes_without_panic() {
     let (_dir, path) = write_bundle("noop_init", WRITE_OUT_PLUGIN_SRC);
-    let loader: PythonLoader = PythonLoader::default();
+
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "noop_init");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(result.is_ok(), "unexpected error: {result:?}");
 }
 
@@ -346,11 +426,7 @@ fn test_default_config_version_check_passes() {
         .build()
         .expect("runtime build must succeed");
     let manifest: ManifestData = make_manifest(&path, "ver_check");
-    let result: Result<(), LoaderError> = PythonLoader::new(PythonConfig::default()).load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(result.is_ok(), "version check failed: {result:?}");
 }
 
@@ -361,17 +437,12 @@ fn test_version_too_old_returns_version_mismatch() {
         min_version: (99, 0),
     };
     let runtime: Arc<Runtime> = RuntimeBuilder::new()
-        .loader(PythonLoader::new(config.clone()))
+        .loader(PythonLoader::new(config))
         .build()
         .expect("runtime build must succeed");
     let manifest: ManifestData = make_manifest(&path, "ver_mismatch");
-    let err: LoaderError = PythonLoader::new(config)
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
-        .expect_err("expected version mismatch");
+    let err: LoaderError =
+        load_path_via_runtime(&runtime, &manifest).expect_err("expected version mismatch");
     match err {
         LoaderError::InitFailed { bundle, error } => {
             assert_eq!(bundle, "python");
@@ -392,14 +463,10 @@ fn test_version_too_old_returns_version_mismatch() {
 #[test]
 fn test_valid_plugin_registers_vm_contract() {
     let (_dir, path) = write_bundle("valid_plugin", WRITE_OUT_PLUGIN_SRC);
-    let loader: PythonLoader = PythonLoader::default();
+
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "valid_plugin");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(result.is_ok(), "load failed: {result:?}");
 
     let cid: GuestContractId = GuestContractId::from_u64(writeout_contract_id());
@@ -420,20 +487,65 @@ fn test_valid_plugin_registers_vm_contract() {
     );
 }
 
+#[test]
+fn two_contract_bundle_registers_every_registration() {
+    let (_dir, path) = write_bundle("two_contract_success", TWO_CONTRACT_PLUGIN_SRC);
+
+    let runtime: Arc<Runtime> = make_runtime();
+    let manifest: ManifestData = make_manifest(&path, "two_contract_success");
+
+    load_path_via_runtime(&runtime, &manifest).expect("both registrations must load");
+
+    for (contract_name, expected) in [("twofirst", 11_i32), ("twosecond", 22_i32)] {
+        let mut out: i32 = 0;
+        // SAFETY: the test callable writes one i32 to the supplied output buffer.
+        let error: AbiError = unsafe {
+            dispatch(
+                &runtime,
+                GuestContractId::new(contract_name, 1).id(),
+                0,
+                ptr::null(),
+                (&mut out as *mut i32).cast::<()>(),
+            )
+        };
+        assert!(error.is_ok(), "{contract_name} dispatch must succeed");
+        assert_eq!(
+            out, expected,
+            "{contract_name} must retain its own callable"
+        );
+    }
+}
+
+/// A duplicate second registration fails the complete staged bundle, so no
+/// contract becomes visible in the registry.
+#[test]
+fn second_contract_failure_has_no_partial_registry_publication() {
+    let (_dir, path) = write_bundle("two_contract_failure", DUPLICATE_SECOND_CONTRACT_PLUGIN_SRC);
+    let runtime: Arc<Runtime> = make_runtime();
+    let manifest: ManifestData = make_manifest(&path, "two_contract_failure");
+
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
+    assert!(
+        result.is_err(),
+        "the duplicate second registration must fail"
+    );
+    assert!(
+        runtime
+            .registry()
+            .find(GuestContractId::new("twoduplicate", 1), 0)
+            .is_err(),
+        "a failed staged bundle must publish no contract"
+    );
+}
+
 /// VM dispatch happy path: the callable writes into `out` and returns Ok.
 #[test]
 fn test_vm_dispatch_writes_out_and_returns_ok() {
     let (_dir, path) = write_bundle("writeout_disp", WRITE_OUT_PLUGIN_SRC);
-    let loader: PythonLoader = PythonLoader::default();
+
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "writeout_disp");
-    loader
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
-        .expect("load must succeed");
+    load_path_via_runtime(&runtime, &manifest).expect("load must succeed");
 
     let mut out_buf: i32 = 0;
     // SAFETY: out points at a valid i32; the callable writes a 4-byte int there.
@@ -458,16 +570,10 @@ fn test_vm_dispatch_writes_out_and_returns_ok() {
 #[test]
 fn test_vm_dispatch_exception_maps_to_generic() {
     let (_dir, path) = write_bundle("raiser_disp", RAISING_FN_PLUGIN_SRC);
-    let loader: PythonLoader = PythonLoader::default();
+
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "raiser_disp");
-    loader
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
-        .expect("load must succeed");
+    load_path_via_runtime(&runtime, &manifest).expect("load must succeed");
 
     // SAFETY: the callable ignores args/out, so null is sound.
     let err: AbiError = unsafe {
@@ -490,16 +596,10 @@ fn test_vm_dispatch_exception_maps_to_generic() {
 #[test]
 fn test_vm_dispatch_fn_id_out_of_range() {
     let (_dir, path) = write_bundle("range_disp", WRITE_OUT_PLUGIN_SRC);
-    let loader: PythonLoader = PythonLoader::default();
+
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "range_disp");
-    loader
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
-        .expect("load must succeed");
+    load_path_via_runtime(&runtime, &manifest).expect("load must succeed");
 
     // Only fn_id 0 exists; fn_id 5 is out of range.
     // SAFETY: out-of-range fn_id returns before touching args/out.
@@ -523,16 +623,10 @@ fn test_vm_dispatch_fn_id_out_of_range() {
 #[test]
 fn test_vm_dispatch_arena_forwarded_zero_when_null() {
     let (_dir, path) = write_bundle("arena_disp", ARENA_FORWARD_PLUGIN_SRC);
-    let loader: PythonLoader = PythonLoader::default();
+
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "arena_disp");
-    loader
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
-        .expect("load must succeed");
+    load_path_via_runtime(&runtime, &manifest).expect("load must succeed");
 
     let mut out_buf: i64 = -1;
     // `dispatch` always passes a null arena, so the callable must observe 0.
@@ -557,15 +651,10 @@ fn test_vm_dispatch_arena_forwarded_zero_when_null() {
 #[test]
 fn test_syntax_error_returns_init_failed() {
     let (_dir, path) = write_bundle("syntax_err", SYNTAX_ERROR_PLUGIN_SRC);
-    let loader: PythonLoader = PythonLoader::default();
+
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "syntax_err");
-    let err: LoaderError = loader
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
+    let err: LoaderError = load_path_via_runtime(&runtime, &manifest)
         .expect_err("expected failure for syntax error plugin");
     assert!(matches!(err, LoaderError::InitFailed { .. }));
 }
@@ -573,15 +662,10 @@ fn test_syntax_error_returns_init_failed() {
 #[test]
 fn test_import_error_returns_init_failed() {
     let (_dir, path) = write_bundle("import_err", IMPORT_ERROR_PLUGIN_SRC);
-    let loader: PythonLoader = PythonLoader::default();
+
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "import_err");
-    let err: LoaderError = loader
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
+    let err: LoaderError = load_path_via_runtime(&runtime, &manifest)
         .expect_err("expected failure for import-error plugin");
     assert!(matches!(err, LoaderError::InitFailed { .. }));
 }
@@ -589,32 +673,22 @@ fn test_import_error_returns_init_failed() {
 #[test]
 fn test_missing_init_returns_init_symbol_missing() {
     let (_dir, path) = write_bundle("no_init", MISSING_INIT_PLUGIN_SRC);
-    let loader: PythonLoader = PythonLoader::default();
+
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "no_init");
-    let err: LoaderError = loader
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
-        .expect_err("expected failure");
+    let err: LoaderError =
+        load_path_via_runtime(&runtime, &manifest).expect_err("expected failure");
     assert!(matches!(err, LoaderError::InitSymbolMissing { .. }));
 }
 
 #[test]
 fn test_raising_init_returns_init_failed() {
     let (_dir, path) = write_bundle("raising_init", RAISING_INIT_PLUGIN_SRC);
-    let loader: PythonLoader = PythonLoader::default();
+
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "raising_init");
-    let err: LoaderError = loader
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
-        .expect_err("expected failure");
+    let err: LoaderError =
+        load_path_via_runtime(&runtime, &manifest).expect_err("expected failure");
     match err {
         LoaderError::InitFailed { error, .. } => {
             assert!(
@@ -630,15 +704,10 @@ fn test_raising_init_returns_init_failed() {
 #[test]
 fn test_missing_registrations_attr_fails() {
     let (_dir, path) = write_bundle("no_regs", NO_REGISTRATIONS_PLUGIN_SRC);
-    let loader: PythonLoader = PythonLoader::default();
+
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "no_regs");
-    let err: LoaderError = loader
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
+    let err: LoaderError = load_path_via_runtime(&runtime, &manifest)
         .expect_err("expected failure for non-tuple polyplug_init return");
     match err {
         LoaderError::InitFailed { error, .. } => {
@@ -655,15 +724,10 @@ fn test_missing_registrations_attr_fails() {
 #[test]
 fn test_empty_registrations_fails() {
     let (_dir, path) = write_bundle("empty_regs", EMPTY_REGISTRATIONS_PLUGIN_SRC);
-    let loader: PythonLoader = PythonLoader::default();
+
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "empty_regs");
-    let err: LoaderError = loader
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
+    let err: LoaderError = load_path_via_runtime(&runtime, &manifest)
         .expect_err("expected failure for empty registrations");
     assert!(matches!(err, LoaderError::InitFailed { .. }));
 }
@@ -683,17 +747,12 @@ fn test_loader_is_send_sync() {
 /// Sequential loads on the same loader all succeed (no GIL leak / state leak).
 #[test]
 fn test_many_sequential_loads() {
-    let loader: PythonLoader = PythonLoader::default();
     let runtime: Arc<Runtime> = make_runtime();
     for i in 0u32..8u32 {
         let name: String = format!("seq_{i}");
         let (_dir, path) = write_bundle(&name, WRITE_OUT_PLUGIN_SRC);
         let manifest: ManifestData = make_manifest(&path, &name);
-        let result: Result<(), LoaderError> = loader.load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        );
+        let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
         // Only the first load registers `writeout@1`; later loads collide on the
         // contract id. The point of this test is interpreter stability, so accept
         // either Ok or a duplicate-registration InitFailed without panicking.
@@ -709,28 +768,17 @@ fn test_many_sequential_loads() {
 fn test_valid_load_after_failed_load_succeeds() {
     let (_dir1, bad_path) = write_bundle("bad_recover", SYNTAX_ERROR_PLUGIN_SRC);
     let (_dir2, good_path) = write_bundle("good_after_bad", WRITE_OUT_PLUGIN_SRC);
-    let loader: PythonLoader = PythonLoader::default();
     let runtime: Arc<Runtime> = make_runtime();
 
     let bad_manifest: ManifestData = make_manifest(&bad_path, "bad_recover");
     let good_manifest: ManifestData = make_manifest(&good_path, "good_after_bad");
 
     assert!(
-        loader
-            .load(
-                &bad_manifest,
-                &BundleSource::Path(bad_manifest.path.clone()),
-                &runtime
-            )
-            .is_err(),
+        load_path_via_runtime(&runtime, &bad_manifest).is_err(),
         "bad load should fail"
     );
 
-    let result: Result<(), LoaderError> = loader.load(
-        &good_manifest,
-        &BundleSource::Path(good_manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &good_manifest);
     assert!(result.is_ok(), "recovery load failed: {result:?}");
 }
 
@@ -759,14 +807,10 @@ def polyplug_init(_host_interface: int, ctx_addr: int):
 "#;
 
     let (_dir, path) = write_bundle("ctx_check", plugin_src);
-    let loader: PythonLoader = PythonLoader::default();
+
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "ctx_check");
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(result.is_ok(), "context check plugin failed: {result:?}");
 }
 
@@ -814,16 +858,25 @@ from _splitmod_helper import polyplug_init
     fs::write(dir.path().join("_splitmod_helper.py"), helper_src).expect("write helper module");
     let entry_path: PathBuf = dir.path().join("bundle.py");
     fs::write(&entry_path, entry_src).expect("write entry module");
+    let manifest_toml: String = format!(
+        r#"id = {}
+name = "splitmod"
+version = "1.0.0"
+loader = "python"
+file = "bundle.py"
+provides = ["splitmod@1.0.0"]
+
+[function_count]
+"splitmod@1" = 1
+"#,
+        bundle_id("splitmod")
+    );
+    fs::write(dir.path().join("manifest.toml"), manifest_toml).expect("write manifest.toml");
 
     let manifest: ManifestData = make_manifest(&entry_path, "splitmod");
-    let loader: PythonLoader = PythonLoader::default();
     let runtime: Arc<Runtime> = make_runtime();
 
-    let result: Result<(), LoaderError> = loader.load(
-        &manifest,
-        &BundleSource::Path(manifest.path.clone()),
-        &runtime,
-    );
+    let result: Result<(), LoaderError> = load_path_via_runtime(&runtime, &manifest);
     assert!(result.is_ok(), "split-module load failed: {result:?}");
 
     let mut out_buf: i32 = 0;
@@ -893,6 +946,20 @@ def polyplug_init(host_interface: int, ctx: int):
     fs::write(dir.path().join(format!("{helper_module}.py")), helper_src).expect("write helper");
     let entry_path: PathBuf = dir.path().join("bundle.py");
     fs::write(&entry_path, entry_src).expect("write entry");
+    let manifest: String = format!(
+        r#"id = {}
+name = "{name}"
+version = "1.0.0"
+loader = "python"
+file = "bundle.py"
+provides = ["{contract}.0.0"]
+
+[function_count]
+"{contract}" = 1
+"#,
+        bundle_id(name)
+    );
+    fs::write(dir.path().join("manifest.toml"), manifest).expect("write manifest");
     (dir, entry_path)
 }
 
@@ -905,17 +972,10 @@ fn unload_purges_bundle_modules_from_sys_modules() {
     let helper_module: &str = "_reclaim_purge_helper";
     let (_dir, path) = write_split_bundle(bundle_name, helper_module, "reclaimpurge@1");
 
-    let loader: PythonLoader = PythonLoader::default();
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, bundle_name);
 
-    loader
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
-        .expect("load must succeed");
+    load_path_via_runtime(&runtime, &manifest).expect("load must succeed");
 
     let before: usize = count_bundle_modules(helper_module);
     assert!(
@@ -923,8 +983,8 @@ fn unload_purges_bundle_modules_from_sys_modules() {
         "bundle's helper module must be re-keyed into sys.modules after load"
     );
 
-    loader
-        .unload(BundleId::from_u64(bundle_id(bundle_name)), &runtime)
+    runtime
+        .unload_bundle(BundleId::from_u64(bundle_id(bundle_name)))
         .expect("unload must succeed");
 
     let after: usize = count_bundle_modules(helper_module);
@@ -993,16 +1053,10 @@ fn nestedarena_contract_id() -> u64 {
 fn test_nested_dispatch_preserves_outer_arena() {
     let contract_id: u64 = nestedarena_contract_id();
     let (_dir, path) = write_bundle("nested_arena", NESTED_ARENA_PLUGIN_SRC);
-    let loader: PythonLoader = PythonLoader::default();
+
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "nested_arena");
-    loader
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
-        .expect("load must succeed");
+    load_path_via_runtime(&runtime, &manifest).expect("load must succeed");
 
     // Inject a builtin `__polyplug_test_nested_dispatch()` that performs a real
     // nested VM dispatch of fn_id 1 (null arena) from Rust. Putting it in
@@ -1107,16 +1161,10 @@ fn arenaecho_contract_id() -> u64 {
 fn test_concurrent_dispatch_distinct_arenas_isolated() {
     let contract_id: u64 = arenaecho_contract_id();
     let (_dir, path) = write_bundle("arena_echo", ARENA_ECHO_PLUGIN_SRC);
-    let loader: PythonLoader = PythonLoader::default();
+
     let runtime: Arc<Runtime> = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "arena_echo");
-    loader
-        .load(
-            &manifest,
-            &BundleSource::Path(manifest.path.clone()),
-            &runtime,
-        )
-        .expect("load must succeed");
+    load_path_via_runtime(&runtime, &manifest).expect("load must succeed");
 
     // Two disjoint 4 KiB buffers + arenas, leaked so their addresses are valid
     // across both worker threads (null host: 64-byte allocs fit the primary region).
@@ -1253,11 +1301,18 @@ fn write_shared_name_bundle(contract_name: &str, value: i32) -> (TempDir, PathBu
     let manifest: String = format!(
         r#"id = {}
 name = "{}"
+version = "1.0.0"
 loader = "python"
 file = "bundle.py"
+provides = ["{}@1.0.0"]
+
+[function_count]
+"{}@1" = 1
 "#,
         bundle_id(name),
-        name
+        name,
+        contract_name,
+        contract_name
     );
     fs::write(dir.path().join("manifest.toml"), &manifest).expect("write manifest.toml");
 
@@ -1283,28 +1338,14 @@ fn two_runtimes_same_named_bundle_do_not_collide_in_sys_modules() {
     let (_dir_a, path_a) = write_shared_name_bundle("alpha_contract", 0x11);
     let (_dir_b, path_b) = write_shared_name_bundle("beta_contract", 0x22);
 
-    let loader_a: PythonLoader = PythonLoader::default();
-    let loader_b: PythonLoader = PythonLoader::default();
     let runtime_a: Arc<Runtime> = make_runtime();
     let runtime_b: Arc<Runtime> = make_runtime();
 
     let manifest_a: ManifestData = make_manifest(&path_a, name);
     let manifest_b: ManifestData = make_manifest(&path_b, name);
 
-    loader_a
-        .load(
-            &manifest_a,
-            &BundleSource::Path(manifest_a.path.clone()),
-            &runtime_a,
-        )
-        .expect("runtime A load must succeed");
-    loader_b
-        .load(
-            &manifest_b,
-            &BundleSource::Path(manifest_b.path.clone()),
-            &runtime_b,
-        )
-        .expect("runtime B load must succeed");
+    load_path_via_runtime(&runtime_a, &manifest_a).expect("runtime A load must succeed");
+    load_path_via_runtime(&runtime_b, &manifest_b).expect("runtime B load must succeed");
 
     let alpha_cid: u64 = GuestContractId::new("alpha_contract", 1).id();
     let beta_cid: u64 = GuestContractId::new("beta_contract", 1).id();

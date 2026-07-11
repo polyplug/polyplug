@@ -9,6 +9,8 @@
 //! find_all_guest_contracts(). DuplicateProvider is only raised when the SAME bundle_id
 //! tries to register the SAME contract_id twice (outside a reload window).
 
+use core::ffi::c_void;
+
 use core::mem;
 use core::ops::ControlFlow;
 use core::ptr;
@@ -18,7 +20,9 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::thread;
+use std::thread::ThreadId;
 
 use crossbeam_epoch::{Atomic, Guard as EpochGuard, Owned, Shared, pin as epoch_pin};
 
@@ -26,9 +30,10 @@ use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::dispatch::dispatch_type::DispatchType;
 use polyplug_abi::types::{StringView, Version};
 use polyplug_abi::{
-    GuestContractHandle, GuestContractInstance, GuestContractInterface, HostApi, PluginDescriptor,
-    SupportedLanguage,
+    GuestContractHandle, GuestContractInstance, GuestContractInterface, HostApi,
+    InProcessBundleRegistration, PluginDescriptor, SupportedLanguage,
 };
+use polyplug_common::ManifestData;
 use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::RegistryError;
@@ -43,6 +48,7 @@ use crate::logger::{LoggerHandle, RecoverPoisoned, RecoveringGuard};
 /// every host caller can safely call `create_instance` on any registered
 /// interface. It returns the canonical stateless dispatch token (null data).
 unsafe extern "C" fn stateless_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -56,43 +62,11 @@ unsafe extern "C" fn stateless_create_instance(
 
 /// Built-in no-op `destroy_instance` stub, paired with `stateless_create_instance`.
 unsafe extern "C" fn stateless_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
-}
-
-/// Static guest contract implementation registered directly by a host process.
-///
-/// The interface and its dispatch tables must remain valid for the registration's
-/// lifetime. Requiring a `'static` reference preserves that requirement without
-/// widening a shorter-lived reference.
-pub struct EmbeddedContract {
-    /// Human-readable provider name.
-    pub plugin_name: &'static str,
-    /// Full contract name used for collision detection.
-    pub contract_name: &'static str,
-    /// Provider version.
-    pub version: Version,
-    /// Statically linked guest interface.
-    pub interface: &'static GuestContractInterface,
-}
-
-/// Atomic description of one statically linked, in-process bundle.
-///
-/// `dependencies` declares guest contracts this bundle needs, using the same
-/// dependency enforcement and unload rules as loader-backed bundles.
-pub struct EmbeddedBundle {
-    /// Stable bundle name used to derive [`BundleId`].
-    pub name: &'static str,
-    /// Bundle version shown by runtime introspection.
-    pub version: Version,
-    /// Language recorded in bundle metadata.
-    pub runtime: SupportedLanguage,
-    /// Guest contracts this bundle declares as dependencies.
-    pub dependencies: &'static [GuestContractId],
-    /// Guest contract implementations supplied by this bundle.
-    pub contracts: &'static [EmbeddedContract],
 }
 
 /// Bundle metadata stored in RuntimeStore.
@@ -205,11 +179,38 @@ pub(crate) struct PluginSlot {
     pub generation: u32,
 }
 
-struct PreparedGuestContract {
+/// A contract copied from a loader callback before the bundle is published.
+///
+/// The registry owns the interface copy while this value is staged, so loader
+/// initialization can fail without making a partially registered interface visible.
+pub(crate) struct PreparedGuestContract {
     contract_id: GuestContractId,
     descriptor: OwnedPluginDescriptor,
     contract_name: String,
     interface: Arc<GuestContractInterface>,
+}
+
+// SAFETY: a prepared interface is immutable and is only moved between the
+// per-runtime load transaction mutex and the registry's write lock.
+unsafe impl Send for PreparedGuestContract {}
+
+/// Complete loader-owned registration staged until a loader has finished initialization.
+pub(crate) struct PreparedBundleRegistration {
+    manifest: ManifestData,
+    runtime: SupportedLanguage,
+    contracts: Vec<PreparedGuestContract>,
+}
+
+// SAFETY: the registration is protected by RuntimeStore's per-instance mutex and
+// contains only immutable interface copies.
+unsafe impl Send for PreparedBundleRegistration {}
+
+impl PreparedBundleRegistration {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (ManifestData, SupportedLanguage, Vec<PreparedGuestContract>) {
+        (self.manifest, self.runtime, self.contracts)
+    }
 }
 
 /// Internal data protected by a single RwLock.
@@ -410,6 +411,12 @@ impl ReadView {
 pub struct RuntimeStore {
     /// Single RwLock protecting all mutable registry state.
     data: RwLock<RuntimeStoreData>,
+    /// Per-thread nested loader registrations that have not yet been published.
+    ///
+    /// This is instance-owned and exists only while a loader initializes a bundle.
+    /// It lets dependency lookups see the manifest during init without publishing
+    /// dependency declarations or contracts before the complete bundle validates.
+    prepared_bundles: Mutex<HashMap<ThreadId, Vec<PreparedBundleRegistration>>>,
     /// Lock-free read snapshot of the registry's resolvable state.
     ///
     /// Hot read methods pin an epoch guard, atomically load this view, and serve
@@ -419,16 +426,12 @@ pub struct RuntimeStore {
     /// published view always mirrors `data`. The superseded view is deferred for
     /// epoch reclamation so any reader still observing it stays valid.
     published: Atomic<ReadView>,
-    /// Monotonic registry revision, bumped on every mutation (the tail of every
-    /// [`RuntimeStore::publish`]). A generated host→guest caller fetches this word's
-    /// address ONCE (via the `revision_counter` ABI callback, see
-    /// [`RuntimeStore::revision_ptr`]) and then reads it directly before each dispatch:
-    /// while it is unchanged, the caller's cached interface pointer is guaranteed
-    /// current, so it dispatches directly; any change (load / reload-swap / unload)
-    /// tells the caller to re-resolve. This is the one piece of shared state the cheap
-    /// per-call staleness check reads — a single atomic load, no lock, no epoch pin and
-    /// no call back into the runtime — which is why reload (which
-    /// keeps slot generations stable so handles survive it) is still detected.
+    /// Monotonic registry revision, advanced after each published registry view.
+    ///
+    /// [`RuntimeStore::current_revision`] performs the acquire load that
+    /// `HostApi::registry_revision` exposes to every generated host caller. Keeping
+    /// the atomic access in Rust gives all foreign callers the same release/acquire
+    /// synchronization before they re-resolve a cached interface.
     revision: AtomicU64,
     /// Instance-owned copy of the host logging configuration. The store has no
     /// back-reference to its `Runtime`, so the handle is copied in at
@@ -441,6 +444,7 @@ impl RuntimeStore {
     pub fn new() -> RuntimeStore {
         RuntimeStore {
             data: RwLock::new(RuntimeStoreData::new()),
+            prepared_bundles: Mutex::new(HashMap::new()),
             published: Atomic::new(ReadView::empty()),
             revision: AtomicU64::new(0),
             logger: LoggerHandle::default_stderr(),
@@ -452,6 +456,7 @@ impl RuntimeStore {
         RuntimeStore {
             data: RwLock::new(RuntimeStoreData::new()),
             published: Atomic::new(ReadView::empty()),
+            prepared_bundles: Mutex::new(HashMap::new()),
             revision: AtomicU64::new(0),
             logger,
         }
@@ -488,16 +493,109 @@ impl RuntimeStore {
         self.revision.load(Ordering::Acquire)
     }
 
-    /// A stable pointer to the registry revision counter, for a generated caller to
-    /// poll directly each dispatch (one aligned atomic load) instead of calling back
-    /// into the runtime. The counter lives inside the `RuntimeStore` — itself owned by
-    /// the `Arc<Runtime>`, whose payload never moves — so the address is valid for the
-    /// whole lifetime of the runtime, i.e. for as long as any caller can dispatch.
-    /// See the `revision_counter` `HostApi` callback.
-    pub fn revision_ptr(&self) -> *const u64 {
-        // AtomicU64 is `#[repr(C)]`-compatible with u64 (same size/alignment, no extra
-        // state), so the address of the atomic is a valid `*const u64` for reads.
-        ptr::addr_of!(self.revision).cast::<u64>()
+    /// Begin staging one loader-backed bundle on the current thread.
+    pub(crate) fn begin_prepared_bundle(&self, manifest: ManifestData, runtime: SupportedLanguage) {
+        let thread_id: ThreadId = thread::current().id();
+        let mut prepared: RecoveringGuard<
+            MutexGuard<'_, HashMap<ThreadId, Vec<PreparedBundleRegistration>>>,
+        > = self
+            .prepared_bundles
+            .lock()
+            .recover_poisoned(self.logger, "store");
+        prepared
+            .entry(thread_id)
+            .or_default()
+            .push(PreparedBundleRegistration {
+                manifest,
+                runtime,
+                contracts: Vec::new(),
+            });
+    }
+
+    /// Copy a loader registration into the current bundle's staging area.
+    ///
+    /// # Safety
+    /// `interface_ptr` must remain valid for the registration lifetime.
+    pub(crate) unsafe fn stage_guest_contract(
+        &self,
+        bundle_id: BundleId,
+        descriptor: PluginDescriptor,
+        interface_ptr: *const GuestContractInterface,
+        contract_name: String,
+    ) -> Result<(), RegistryError> {
+        // SAFETY: upheld by this function's caller.
+        let adapter_context: *mut c_void = unsafe { (*interface_ptr).adapter_context };
+        // SAFETY: the caller guarantees the interface remains valid for the
+        // registration lifetime; the helper copies every retained field.
+        let contract: PreparedGuestContract = unsafe {
+            Self::prepare_guest_contract(descriptor, interface_ptr, contract_name, adapter_context)?
+        };
+        let thread_id: ThreadId = thread::current().id();
+        let mut prepared: RecoveringGuard<
+            MutexGuard<'_, HashMap<ThreadId, Vec<PreparedBundleRegistration>>>,
+        > = self
+            .prepared_bundles
+            .lock()
+            .recover_poisoned(self.logger, "store");
+        let registration: &mut PreparedBundleRegistration = prepared
+            .get_mut(&thread_id)
+            .and_then(|registrations| {
+                registrations
+                    .iter_mut()
+                    .rev()
+                    .find(|registration| registration.manifest.id == bundle_id.id())
+            })
+            .ok_or(RegistryError::MissingBundleMetadata {
+                bundle_id: bundle_id.id(),
+            })?;
+        registration.contracts.push(contract);
+        Ok(())
+    }
+
+    /// Return the manifest currently staged for `bundle_id` on this thread.
+    pub(crate) fn prepared_manifest(&self, bundle_id: BundleId) -> Option<ManifestData> {
+        let thread_id: ThreadId = thread::current().id();
+        let prepared: RecoveringGuard<
+            MutexGuard<'_, HashMap<ThreadId, Vec<PreparedBundleRegistration>>>,
+        > = self
+            .prepared_bundles
+            .lock()
+            .recover_poisoned(self.logger, "store");
+        prepared.get(&thread_id).and_then(|registrations| {
+            registrations
+                .iter()
+                .rev()
+                .find(|registration| registration.manifest.id == bundle_id.id())
+                .map(|registration| registration.manifest.clone())
+        })
+    }
+
+    /// Remove and return a completed staged bundle for validation and publication.
+    pub(crate) fn take_prepared_bundle(
+        &self,
+        bundle_id: BundleId,
+    ) -> Option<PreparedBundleRegistration> {
+        let thread_id: ThreadId = thread::current().id();
+        let mut prepared: RecoveringGuard<
+            MutexGuard<'_, HashMap<ThreadId, Vec<PreparedBundleRegistration>>>,
+        > = self
+            .prepared_bundles
+            .lock()
+            .recover_poisoned(self.logger, "store");
+        let registrations: &mut Vec<PreparedBundleRegistration> = prepared.get_mut(&thread_id)?;
+        let index: usize = registrations
+            .iter()
+            .rposition(|registration| registration.manifest.id == bundle_id.id())?;
+        let registration: PreparedBundleRegistration = registrations.remove(index);
+        if registrations.is_empty() {
+            prepared.remove(&thread_id);
+        }
+        Some(registration)
+    }
+
+    /// Discard a failed loader's uncommitted registrations.
+    pub(crate) fn discard_prepared_bundle(&self, bundle_id: BundleId) {
+        let _discarded: Option<PreparedBundleRegistration> = self.take_prepared_bundle(bundle_id);
     }
 
     /// Register a plugin interface.
@@ -514,8 +612,12 @@ impl RuntimeStore {
         bundle_id: BundleId,
     ) -> Result<GuestContractHandle, RegistryError> {
         // SAFETY: upheld by this function's caller.
-        let contract: PreparedGuestContract =
-            unsafe { Self::prepare_guest_contract(descriptor, interface_ptr, contract_name)? };
+        let adapter_context: *mut c_void = unsafe { (*interface_ptr).adapter_context };
+        // SAFETY: the caller guarantees the interface remains valid for the
+        // registration lifetime; the helper copies every retained field.
+        let contract: PreparedGuestContract = unsafe {
+            Self::prepare_guest_contract(descriptor, interface_ptr, contract_name, adapter_context)?
+        };
         let mut data: RecoveringGuard<RwLockWriteGuard<'_, RuntimeStoreData>> =
             self.data.write().recover_poisoned(self.logger, "store");
         let is_reloading: bool = data.reloading_bundles.contains(&bundle_id);
@@ -527,87 +629,33 @@ impl RuntimeStore {
         Ok(handle)
     }
 
-    /// Register every contract in an in-process bundle as one registry mutation.
+    /// Publish a prepared bundle in one registry mutation.
     ///
-    /// All descriptor and collision checks complete before the store changes. The
-    /// single write lock then installs bundle metadata, dependency declarations, and
-    /// contract slots before publishing one snapshot.
-    pub(crate) fn register_embedded_bundle(
+    /// Preparation owns every copied interface before this method takes the store
+    /// lock. Validation completes before metadata, dependencies, or slots mutate, and
+    /// one snapshot exposes the finished bundle.
+    pub(crate) fn register_prepared_bundle(
         &self,
-        bundle: &EmbeddedBundle,
+        descriptor: BundleDescriptor,
+        dependencies: HashSet<GuestContractId>,
+        contracts: Vec<PreparedGuestContract>,
     ) -> Result<(), RegistryError> {
-        if bundle.name.is_empty() {
-            return Err(RegistryError::EmptyEmbeddedBundleName);
-        }
-        if bundle.contracts.is_empty() {
-            return Err(RegistryError::EmptyEmbeddedBundle);
-        }
+        let bundle_id: BundleId = descriptor.id;
+        Self::validate_prepared_bundle_contracts(&contracts)?;
 
-        let bundle_id: BundleId = BundleId::new(bundle.name);
-        if bundle_id.id() == 0 {
-            return Err(RegistryError::ReservedEmbeddedBundleId {
-                bundle: bundle.name.to_owned(),
-            });
-        }
-
-        let mut contracts: Vec<PreparedGuestContract> = Vec::with_capacity(bundle.contracts.len());
-        for (index, embedded) in bundle.contracts.iter().enumerate() {
-            if embedded.contract_name.is_empty() {
-                return Err(RegistryError::EmptyEmbeddedContract { index });
-            }
-            let descriptor: PluginDescriptor = PluginDescriptor {
-                name: StringView::from_static(embedded.plugin_name.as_bytes()),
-                contract_name: StringView::from_static(embedded.contract_name.as_bytes()),
-                version: embedded.version,
-            };
-            // SAFETY: EmbeddedContract exposes only a 'static interface reference.
-            let contract: PreparedGuestContract = unsafe {
-                Self::prepare_guest_contract(
-                    descriptor,
-                    embedded.interface as *const GuestContractInterface,
-                    embedded.contract_name.to_owned(),
-                )?
-            };
-
-            for existing in &contracts {
-                if existing.contract_id != contract.contract_id {
-                    continue;
-                }
-                if existing.contract_name != contract.contract_name {
-                    return Err(RegistryError::ContractIdCollision {
-                        id: contract.contract_id.id(),
-                        name_a: existing.contract_name.clone(),
-                        name_b: contract.contract_name,
-                    });
-                }
-                return Err(RegistryError::DuplicateProvider {
-                    contract: contract.contract_name,
-                    existing: existing.descriptor.name.clone(),
-                });
-            }
-            contracts.push(contract);
-        }
-
-        let descriptor: BundleDescriptor = BundleDescriptor {
-            id: bundle_id,
-            name: bundle.name.to_owned(),
-            version: bundle.version,
-            runtime: bundle.runtime,
-            file_path: PathBuf::new(),
-            dependencies: Vec::new(),
-        };
-        let dependencies: HashSet<GuestContractId> = bundle.dependencies.iter().copied().collect();
         let mut data: RecoveringGuard<RwLockWriteGuard<'_, RuntimeStoreData>> =
             self.data.write().recover_poisoned(self.logger, "store");
+        let is_reloading: bool = data.reloading_bundles.contains(&bundle_id);
         for contract in &contracts {
-            Self::validate_guest_contract_registration(&data, contract, bundle_id, false)?;
+            Self::validate_guest_contract_registration(&data, contract, bundle_id, is_reloading)?;
         }
         if data.bundle_data.contains_key(&bundle_id) {
             return Err(RegistryError::BundleAlreadyRegistered {
-                bundle: bundle.name.to_owned(),
+                bundle: descriptor.name.clone(),
             });
         }
 
+        let bundle_name: String = descriptor.name.clone();
         data.bundle_data.insert(
             bundle_id,
             BundleData {
@@ -616,22 +664,156 @@ impl RuntimeStore {
             },
         );
         data.bundle_name_index
-            .entry(bundle.name.to_owned())
+            .entry(bundle_name)
             .or_default()
             .push(bundle_id);
         data.bundle_declared_deps.insert(bundle_id, dependencies);
         for contract in contracts {
-            let _handle: GuestContractHandle =
-                Self::insert_prepared_guest_contract(&mut data, contract, bundle_id, true)?;
+            let _handle: GuestContractHandle = Self::insert_prepared_guest_contract(
+                &mut data,
+                contract,
+                bundle_id,
+                !is_reloading,
+            )?;
         }
         self.publish(&data);
         Ok(())
     }
 
-    unsafe fn prepare_guest_contract(
+    /// Copy and validate a complete in-process registration before publishing it.
+    ///
+    /// # Safety
+    ///
+    /// Every non-null pointer in `registration` must be valid for its documented
+    /// element count for the duration of this call. The store copies all data it
+    /// retains before returning.
+    pub(crate) unsafe fn register_in_process_bundle(
+        &self,
+        registration: &InProcessBundleRegistration,
+    ) -> Result<BundleId, RegistryError> {
+        // SAFETY: the registration contract guarantees its metadata name is a
+        // valid StringView for this synchronous copy.
+        let bundle_name: String = unsafe {
+            string_view_to_owned_string(
+                &registration.metadata.name,
+                "InProcessBundleMetadata.name",
+            )?
+        };
+        if bundle_name.is_empty() {
+            return Err(RegistryError::EmptyInProcessBundleName);
+        }
+        if registration.contract_count == 0 {
+            return Err(RegistryError::EmptyInProcessBundle);
+        }
+        if registration.contracts.is_null() {
+            return Err(RegistryError::InvalidPointer {
+                context: "InProcessBundleRegistration.contracts".to_owned(),
+            });
+        }
+        if registration.dependency_count > 0 && registration.dependency_ids.is_null() {
+            return Err(RegistryError::InvalidPointer {
+                context: "InProcessBundleRegistration.dependency_ids".to_owned(),
+            });
+        }
+
+        let bundle_id: BundleId = BundleId::new(&bundle_name);
+        if bundle_id.id() == 0 {
+            return Err(RegistryError::ReservedInProcessBundleId {
+                bundle: bundle_name,
+            });
+        }
+
+        // SAFETY: non-nullness and the documented element count were validated
+        // above; the caller keeps the array alive for this synchronous copy.
+        let registrations: &[polyplug_abi::InProcessContractRegistration] =
+            unsafe { slice::from_raw_parts(registration.contracts, registration.contract_count) };
+        let dependency_ids: &[u64] = if registration.dependency_count == 0 {
+            &[]
+        } else {
+            // SAFETY: non-nullness was validated when the count is nonzero, and
+            // the caller keeps the array alive for this synchronous copy.
+            unsafe {
+                slice::from_raw_parts(registration.dependency_ids, registration.dependency_count)
+            }
+        };
+        let mut contracts: Vec<PreparedGuestContract> = Vec::with_capacity(registrations.len());
+        for (index, contract) in registrations.iter().enumerate() {
+            if contract.interface.is_null() {
+                return Err(RegistryError::InvalidPointer {
+                    context: format!("InProcessContractRegistration.interface[{index}]"),
+                });
+            }
+            // SAFETY: each descriptor belongs to the validated registration array
+            // and remains alive for this synchronous copy.
+            let contract_name: String = unsafe {
+                string_view_to_owned_string(
+                    &contract.descriptor.contract_name,
+                    "PluginDescriptor.contract_name",
+                )?
+            };
+            if contract_name.is_empty() {
+                return Err(RegistryError::EmptyInProcessContract { index });
+            }
+            // SAFETY: the interface pointer was checked non-null and the caller
+            // keeps the registration storage alive for this synchronous copy.
+            contracts.push(unsafe {
+                Self::prepare_guest_contract(
+                    contract.descriptor,
+                    contract.interface,
+                    contract_name,
+                    contract.adapter_context,
+                )?
+            });
+        }
+
+        self.register_prepared_bundle(
+            BundleDescriptor {
+                id: bundle_id,
+                name: bundle_name,
+                version: registration.metadata.version,
+                runtime: registration.metadata.runtime,
+                file_path: PathBuf::new(),
+                dependencies: Vec::new(),
+            },
+            dependency_ids
+                .iter()
+                .copied()
+                .map(GuestContractId::from_u64)
+                .collect(),
+            contracts,
+        )?;
+        Ok(bundle_id)
+    }
+
+    fn validate_prepared_bundle_contracts(
+        contracts: &[PreparedGuestContract],
+    ) -> Result<(), RegistryError> {
+        for (index, contract) in contracts.iter().enumerate() {
+            for existing in &contracts[..index] {
+                if existing.contract_id != contract.contract_id {
+                    continue;
+                }
+                if existing.contract_name != contract.contract_name {
+                    return Err(RegistryError::ContractIdCollision {
+                        id: contract.contract_id.id(),
+                        name_a: existing.contract_name.clone(),
+                        name_b: contract.contract_name.clone(),
+                    });
+                }
+                return Err(RegistryError::DuplicateProvider {
+                    contract: contract.contract_name.clone(),
+                    existing: existing.descriptor.name.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) unsafe fn prepare_guest_contract(
         descriptor: PluginDescriptor,
         interface_ptr: *const GuestContractInterface,
         contract_name: String,
+        adapter_context: *mut c_void,
     ) -> Result<PreparedGuestContract, RegistryError> {
         // SAFETY: upheld by the caller.
         let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
@@ -653,6 +835,7 @@ impl RuntimeStore {
             let destroy_raw: *const () =
                 ptr::read(ptr::addr_of!((*interface_ptr).destroy_instance) as *const *const ());
             let create_instance: unsafe extern "C" fn(
+                *mut c_void,
                 VmLoaderData,
                 *const HostApi,
                 *const (),
@@ -663,6 +846,7 @@ impl RuntimeStore {
                 mem::transmute::<
                     *const (),
                     unsafe extern "C" fn(
+                        *mut c_void,
                         VmLoaderData,
                         *const HostApi,
                         *const (),
@@ -671,6 +855,7 @@ impl RuntimeStore {
                 >(create_raw)
             };
             let destroy_instance: unsafe extern "C" fn(
+                *mut c_void,
                 VmLoaderData,
                 *const HostApi,
                 GuestContractInstance,
@@ -679,13 +864,19 @@ impl RuntimeStore {
             } else {
                 mem::transmute::<
                     *const (),
-                    unsafe extern "C" fn(VmLoaderData, *const HostApi, GuestContractInstance),
+                    unsafe extern "C" fn(
+                        *mut c_void,
+                        VmLoaderData,
+                        *const HostApi,
+                        GuestContractInstance,
+                    ),
                 >(destroy_raw)
             };
             GuestContractInterface {
                 contract_id: (*interface_ptr).contract_id,
                 contract_version: (*interface_ptr).contract_version,
                 dispatch_type,
+                adapter_context,
                 create_instance,
                 destroy_instance,
                 dispatch: ptr::read(ptr::addr_of!((*interface_ptr).dispatch)),
@@ -1472,6 +1663,41 @@ impl RuntimeStore {
             .unwrap_or_default()
     }
 
+    /// Collect registered provider names and versions before publication.
+    pub(crate) fn prepared_provider_specs(
+        contracts: &[PreparedGuestContract],
+    ) -> Vec<(String, Version)> {
+        contracts
+            .iter()
+            .map(|contract: &PreparedGuestContract| {
+                (contract.contract_name.clone(), contract.descriptor.version)
+            })
+            .collect()
+    }
+
+    /// Collect native function counts from contracts that have not yet been published.
+    pub(crate) fn prepared_native_function_counts(
+        contracts: &[PreparedGuestContract],
+    ) -> Vec<(String, u32, Option<u32>)> {
+        contracts
+            .iter()
+            .map(|contract: &PreparedGuestContract| {
+                let interface: &GuestContractInterface = &contract.interface;
+                let native_count: Option<u32> = if interface.dispatch_type == DispatchType::Native {
+                    // SAFETY: dispatch_type selects the active union arm.
+                    Some(unsafe { interface.dispatch.native.function_count })
+                } else {
+                    None
+                };
+                (
+                    contract.contract_name.clone(),
+                    interface.contract_version.major,
+                    native_count,
+                )
+            })
+            .collect()
+    }
+
     /// Collect, for each slot registered by `bundle_id`, the registered contract
     /// name, the interface's major version, and the actual native function count.
     ///
@@ -1754,11 +1980,13 @@ mod tests {
     use super::*;
     use polyplug_abi::{
         DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface, HostApi,
-        NativeDispatch, PluginDescriptor, StringView, Version,
+        InProcessBundleMetadata, InProcessBundleRegistration, InProcessContractRegistration,
+        NativeDispatch, PluginDescriptor, StringView, SupportedLanguage, Version,
     };
 
     /// No-op create_instance callback.
     unsafe extern "C" fn noop_create_instance(
+        _adapter_context: *mut c_void,
         _loader_data: VmLoaderData,
         _host: *const HostApi,
         _args: *const (),
@@ -1772,6 +2000,7 @@ mod tests {
 
     /// No-op destroy_instance callback.
     unsafe extern "C" fn noop_destroy_instance(
+        _adapter_context: *mut c_void,
         _loader_data: VmLoaderData,
         _host: *const HostApi,
         _instance: GuestContractInstance,
@@ -1787,6 +2016,7 @@ mod tests {
                 patch: 0,
             },
             dispatch_type: DispatchType::Native,
+            adapter_context: ptr::null_mut(),
             create_instance: noop_create_instance,
             destroy_instance: noop_destroy_instance,
             dispatch: DispatchMechanisms {
@@ -1808,6 +2038,83 @@ mod tests {
                 patch: 0,
             },
         }
+    }
+
+    #[test]
+    fn in_process_registration_is_atomic_when_a_contract_is_invalid() {
+        let registry: RuntimeStore = RuntimeStore::new();
+        let contract_id: u64 = 0xA173_3A09_4E01_0001;
+        let interface: GuestContractInterface = mock_interface(contract_id);
+        let mut adapter_context_token: u8 = 0;
+        let registrations: [InProcessContractRegistration; 2] = [
+            InProcessContractRegistration {
+                descriptor: make_descriptor("atomic-provider", "atomic.contract"),
+                interface: &interface,
+                adapter_context: (&mut adapter_context_token as *mut u8).cast(),
+            },
+            InProcessContractRegistration {
+                descriptor: make_descriptor("invalid-provider", "invalid.contract"),
+                interface: ptr::null(),
+                adapter_context: ptr::null_mut(),
+            },
+        ];
+        let invalid: InProcessBundleRegistration = InProcessBundleRegistration {
+            metadata: InProcessBundleMetadata {
+                name: StringView::from_static(b"atomic-in-process-bundle"),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                runtime: SupportedLanguage::Rust,
+            },
+            dependency_ids: ptr::null(),
+            dependency_count: 0,
+            contracts: registrations.as_ptr(),
+            contract_count: registrations.len(),
+        };
+        let revision_before: u64 = registry.current_revision();
+
+        // SAFETY: all non-null pointers in `invalid` remain live through this call.
+        let rejected: Result<BundleId, RegistryError> =
+            unsafe { registry.register_in_process_bundle(&invalid) };
+        assert!(matches!(
+            rejected,
+            Err(RegistryError::InvalidPointer { .. })
+        ));
+        assert_eq!(registry.current_revision(), revision_before);
+        assert!(
+            registry
+                .find(GuestContractId::from_u64(contract_id), 0)
+                .is_err()
+        );
+
+        let valid: InProcessBundleRegistration = InProcessBundleRegistration {
+            contract_count: 1,
+            ..invalid
+        };
+        // SAFETY: the sole non-null contract record and its interface remain live through this call.
+        let bundle_id: BundleId = unsafe { registry.register_in_process_bundle(&valid) }
+            .expect("valid complete registration publishes once");
+        assert_eq!(bundle_id, BundleId::new("atomic-in-process-bundle"));
+        assert_eq!(registry.current_revision(), revision_before + 1);
+        let handle: GuestContractHandle = registry
+            .find(GuestContractId::from_u64(contract_id), 0)
+            .expect("registered contract must resolve");
+        let copied: *const GuestContractInterface = registry
+            .resolve_guest_contract(handle)
+            .expect("registered interface must resolve");
+        // SAFETY: `copied` is the registry-owned interface valid while `registry` lives.
+        let copied_context: *mut c_void = unsafe { (*copied).adapter_context };
+        assert_eq!(
+            copied_context,
+            (&mut adapter_context_token as *mut u8).cast()
+        );
+        assert!(
+            registry
+                .find(GuestContractId::from_u64(contract_id), 0)
+                .is_ok()
+        );
     }
 
     #[test]

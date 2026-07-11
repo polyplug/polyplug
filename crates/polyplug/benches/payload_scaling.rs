@@ -80,6 +80,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::in_process::reject_in_process_bundle;
 use polyplug_utils::BundleId;
 
 const MEMORY_PLUGIN_SO: &str = env!("MEMORY_PLUGIN_SO");
@@ -307,6 +308,7 @@ fn capture_host() -> HostApi {
     HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: capture_register_callback,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find,
@@ -326,7 +328,7 @@ fn capture_host() -> HostApi {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: ptr::null(),
     }
 }
@@ -335,7 +337,8 @@ fn capture_host() -> HostApi {
 /// for `memory.test` fn 0 (`fill_preallocated_buffer`) plus the kept-alive lib.
 fn load_fill_dispatch() -> (
     Library,
-    unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError),
+    unsafe extern "C" fn(*mut c_void, GuestContractInstance, *const (), *mut (), *mut AbiError),
+    *mut c_void,
 ) {
     // SAFETY: MEMORY_PLUGIN_SO is a valid cdylib built by build_all.sh.
     let library: Library = unsafe { Library::new(MEMORY_PLUGIN_SO).expect("load memory plugin") };
@@ -369,13 +372,16 @@ fn load_fill_dispatch() -> (
     // SAFETY: the registered fn has the native dispatch signature
     // `fn(GuestContractInstance, *const (), *mut (), *mut AbiError)`.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { mem::transmute(fn_ptr) };
-
-    (library, dispatch_fn)
+    ) = {
+        // SAFETY: the pointer comes from the generated dispatch table and is cast to that function's exact ABI.
+        unsafe { mem::transmute(fn_ptr) }
+    };
+    (library, dispatch_fn, interface.adapter_context)
 }
 
 // ─── Benchmark ───────────────────────────────────────────────────────────────
@@ -386,9 +392,10 @@ fn bench_payload_scaling(c: &mut Criterion) {
     let buf_ptr: *mut u8 = polyplug_host_alloc(MAX_SIZE, 8);
     assert!(!buf_ptr.is_null(), "bench alloc failed");
 
-    let (library, dispatch_fn): (
+    let (library, dispatch_fn, adapter_context): (
         Library,
-        unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError),
+        unsafe extern "C" fn(*mut c_void, GuestContractInstance, *const (), *mut (), *mut AbiError),
+        *mut c_void,
     ) = load_fill_dispatch();
 
     let mut group: BenchmarkGroup<'_, WallTime> = c.benchmark_group("payload_scaling");
@@ -438,6 +445,7 @@ fn bench_payload_scaling(c: &mut Criterion) {
                     // err is a valid writable out-param.
                     unsafe {
                         black_box(dispatch_fn)(
+                            adapter_context,
                             black_box(GuestContractInstance::null()),
                             black_box(args as *const FillArgs as *const ()),
                             black_box(&mut out as *mut u32 as *mut ()),
@@ -490,6 +498,6 @@ unsafe extern "C" fn stub_destroy_guest_instance(
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
-    ptr::null()
+unsafe extern "C" fn stub_registry_revision(_this: *const HostApi) -> u64 {
+    0
 }

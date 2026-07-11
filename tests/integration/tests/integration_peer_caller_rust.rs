@@ -4,8 +4,7 @@
 //! `host->find_guest_contract → resolve_guest_contract → create_guest_instance`,
 //! then dispatches DIRECTLY through the cached peer interface (no host-mediated
 //! `call_guest_method` round-trip, no per-call registry resolve, no epoch pin),
-//! re-resolving only when the registry revision counter changes.
-//!
+//! re-resolving only when the registry revision value changes.
 //! This test replicates that EXACT pattern inline — without needing to compile
 //! a second cdylib — by calling the same sequence of `HostApi` function pointers
 //! through `Runtime::host_abi()` and then dispatching through the resolved
@@ -20,8 +19,7 @@
 //!      `peer_callers.rs` does), it:
 //!        - calls `find_guest_contract` to get a handle for `test.peer@1`
 //!        - calls `resolve_guest_contract` to get `*const GuestContractInterface`
-//!        - calls `create_guest_instance` on the host to build the peer instance
-//!        - caches the registry revision counter via `revision_counter`
+//!        - obtains the registry revision through `registry_revision`
 //!        - constructs a `CallArena` over a heap buffer (512 bytes)
 //!        - dispatches DIRECTLY through `interface.dispatch.vm.call` (the peer is
 //!          a Lua VM contract), passing the per-call arena
@@ -36,6 +34,7 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
+use core::ffi::c_void;
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
@@ -46,7 +45,7 @@ use polyplug_abi::GuestContractInstance;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostApi;
 use polyplug_abi::StringView;
-use polyplug_lua::LuaConfig;
+
 use polyplug_lua::LuaLoader;
 use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
@@ -143,10 +142,9 @@ fn write_lua_provider(tmp: &std::path::Path) -> PathBuf {
 /// Peer caller for `test.peer@1` implemented inline following the exact pattern
 /// that `polyplugc` generates in `peer_callers.rs`.
 ///
-/// Compare with `examples/guests/rust/transformer/generated/guest/peer_callers.rs`:
 ///   - `resolve()` calls `find_guest_contract` + `resolve_guest_contract` +
-///     `create_guest_instance`, then caches the registry revision counter
-///   - `echo()` revalidates against the revision counter, resets the arena, and
+///     `create_guest_instance`, then captures the registry revision value
+///   - `echo()` revalidates against the revision value, resets the arena, and
 ///     dispatches DIRECTLY through the cached interface (VM path for a Lua peer)
 ///   - `Drop` calls `arena.reset()` + `destroy_guest_instance` (host-mediated)
 struct TestPeerCaller {
@@ -155,8 +153,6 @@ struct TestPeerCaller {
     host: *const HostApi,
     /// Peer contract handle, retained so the cache can re-resolve after a reload.
     handle: GuestContractHandle,
-    /// Pointer to the runtime's registry revision counter, fetched once.
-    revision_ptr: *const u64,
     /// Revision value read when the peer was resolved.
     cached_revision: u64,
     /// Stable-address backing buffer for the per-call arena.
@@ -185,19 +181,8 @@ impl TestPeerCaller {
         unsafe {
             (iface_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
-        // Fetch the registry revision counter ONCE, then read its current value so
-        // every later dispatch can detect a reload/unload with a direct atomic load.
-        let revision_ptr: *const u64 = unsafe { (iface_api.revision_counter)(host) };
-        let cached_revision: u64 = if revision_ptr.is_null() {
-            0
-        } else {
-            // SAFETY: revision_ptr was returned by revision_counter and points to the
-            // runtime's revision counter (an AtomicU64), valid for the runtime lifetime.
-            unsafe {
-                (*(revision_ptr as *const core::sync::atomic::AtomicU64))
-                    .load(core::sync::atomic::Ordering::Acquire)
-            }
-        };
+        // The runtime callback acquires the published registry revision before returning.
+        let cached_revision: u64 = unsafe { (iface_api.registry_revision)(host) };
         let mut arena_buf: Box<[u8; 512]> = Box::new([0u8; 512]);
         let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);
         Some(TestPeerCaller {
@@ -205,24 +190,17 @@ impl TestPeerCaller {
             instance,
             host,
             handle,
-            revision_ptr,
             cached_revision,
             _arena_buf: arena_buf,
             arena,
         })
     }
 
-    /// Read the registry revision through the cached pointer — one atomic load.
+    /// Read the acquire-synchronized revision value through the HostApi callback.
     fn live_revision(&self) -> u64 {
-        if self.revision_ptr.is_null() {
-            return self.cached_revision;
-        }
-        // SAFETY: revision_ptr was returned by HostApi.revision_counter and points to
-        // the runtime's revision counter — an AtomicU64 valid for the runtime lifetime.
-        unsafe {
-            (*(self.revision_ptr as *const core::sync::atomic::AtomicU64))
-                .load(core::sync::atomic::Ordering::Acquire)
-        }
+        // SAFETY: self.host remains valid for the caller's lifetime.
+        let host_api: &HostApi = unsafe { &*self.host };
+        unsafe { (host_api.registry_revision)(self.host) }
     }
 
     /// Re-resolve the cached peer interface after the registry changed under us.
@@ -286,15 +264,23 @@ impl TestPeerCaller {
                     }
                     let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                     let dispatch_fn: unsafe extern "C" fn(
+                        *mut c_void,
                         GuestContractInstance,
                         *const (),
                         *mut (),
                         *mut AbiError,
                     ) = core::mem::transmute(fn_ptr);
-                    dispatch_fn(self.instance, args_ptr, out_ptr, &mut err);
+                    dispatch_fn(
+                        interface.adapter_context,
+                        self.instance,
+                        args_ptr,
+                        out_ptr,
+                        &mut err,
+                    );
                 }
                 DispatchType::VirtualMachine => {
                     (interface.dispatch.vm.call)(
+                        interface.adapter_context,
                         interface.dispatch.vm.loader_data,
                         self.instance,
                         0_u32,
@@ -345,7 +331,7 @@ fn rust_peer_caller_echo_roundtrip() {
     let provider_dir: PathBuf = write_lua_provider(tmp.path());
 
     let rt: Arc<Runtime> = Runtime::builder()
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(LuaLoader::new())
         .build()
         .expect("build runtime");
 

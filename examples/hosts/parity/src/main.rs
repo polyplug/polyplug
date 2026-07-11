@@ -4,8 +4,8 @@ use polyplug_abi::HostContractInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::runtime::RuntimeConfig;
 use polyplug_dotnet::{DotnetConfig, DotnetLoader, HostfxrLocation};
-use polyplug_js::{JsConfig, JsLoader};
-use polyplug_lua::{LuaConfig, LuaLoader};
+use polyplug_js::JsLoader;
+use polyplug_lua::LuaLoader;
 use polyplug_native::{NativeConfig, NativeLoader};
 use polyplug_python::{PythonConfig, PythonLoader};
 use std::collections::BTreeMap;
@@ -107,8 +107,8 @@ fn build_runtime() -> Result<Arc<Runtime>, String> {
     // after its callers, so the runtime outlives them.
     let runtime: Arc<Runtime> = Runtime::builder()
         .loader(NativeLoader::new(NativeConfig {}))
-        .loader(JsLoader::new(JsConfig {}))
-        .loader(LuaLoader::new(LuaConfig::default()))
+        .loader(JsLoader::new())
+        .loader(LuaLoader::new())
         .loader(PythonLoader::new(PythonConfig::default()))
         .loader(DotnetLoader::new(DotnetConfig {
             min_framework: String::from("net10.0"),

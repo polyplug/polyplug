@@ -32,6 +32,7 @@ use polyplug_abi::StringView;
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::in_process::reject_in_process_bundle;
 use polyplug_utils::BundleId;
 
 mod common;
@@ -433,6 +434,7 @@ fn test_panic_returns_abi_error_panic() {
     let host_interface: HostApi = HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: capture_register_callback,
+        register_in_process_bundle: reject_in_process_bundle,
         alloc: noop_alloc,
         free: noop_free,
         find_guest_contract: noop_find_guest_contract,
@@ -452,7 +454,7 @@ fn test_panic_returns_abi_error_panic() {
         log: stub_host_log,
         create_guest_instance: stub_create_guest_instance,
         destroy_guest_instance: stub_destroy_guest_instance,
-        revision_counter: stub_revision_counter,
+        registry_revision: stub_registry_revision,
         reserved: ptr::null(),
     };
 
@@ -496,6 +498,7 @@ fn test_panic_returns_abi_error_panic() {
     // generated factory thunk on the captured interface.
     unsafe {
         (interface.create_instance)(
+            interface.adapter_context,
             VmLoaderData::null(),
             &host_interface as *const HostApi,
             ptr::null(),
@@ -509,16 +512,29 @@ fn test_panic_returns_abi_error_panic() {
 
     // SAFETY: fn_ptr is function 0 in the interface (do_panic).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut (), *mut AbiError) =
-        // SAFETY: fn_ptr is the do_panic ABI wrapper -- the canonical 4-arg
-        // native dispatch signature (trailing out_err). The catch_unwind wrapper
-        // inside the plugin catches the panic before it crosses the FFI boundary.
-        unsafe { mem::transmute(fn_ptr) };
+    let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
+        GuestContractInstance,
+        *const (),
+        *mut (),
+        *mut AbiError,
+    ) = {
+        // SAFETY: the pointer comes from the generated dispatch table and is cast to that function's exact ABI.
+        unsafe { mem::transmute(fn_ptr) }
+    };
 
     let mut call_result: AbiError = AbiError::ok();
     // SAFETY: do_panic ignores args and out entirely (void function, no params);
     // instance was created by the generated create_instance above.
-    unsafe { dispatch_fn(instance, ptr::null(), ptr::null_mut(), &mut call_result) };
+    unsafe {
+        dispatch_fn(
+            interface.adapter_context,
+            instance,
+            ptr::null(),
+            ptr::null_mut(),
+            &mut call_result,
+        )
+    };
 
     // -- Step 11: Assert panic was caught and returned Panic --
     assert_eq!(
@@ -562,6 +578,6 @@ unsafe extern "C" fn stub_destroy_guest_instance(
 ) {
 }
 
-unsafe extern "C" fn stub_revision_counter(_this: *const HostApi) -> *const u64 {
-    ptr::null()
+unsafe extern "C" fn stub_registry_revision(_this: *const HostApi) -> u64 {
+    0
 }

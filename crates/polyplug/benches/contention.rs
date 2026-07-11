@@ -44,6 +44,7 @@
 // `cached` curve should scale up close to linearly across thread counts — a
 // flattening or collapse signals a lock regression on the dispatch path.
 
+use core::ffi::c_void;
 use core::hint::black_box;
 use core::time::Duration;
 use std::sync::Arc;
@@ -93,6 +94,7 @@ struct AddArgs {
 /// # Safety
 /// `args` must point to a valid `AddArgs`; `out` must point to a valid `u32`.
 unsafe extern "C" fn bench_add(
+    _adapter_context: *mut c_void,
     _instance: GuestContractInstance,
     args: *const (),
     out: *mut (),
@@ -110,6 +112,7 @@ unsafe extern "C" fn bench_add(
 }
 
 unsafe extern "C" fn noop_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -122,6 +125,7 @@ unsafe extern "C" fn noop_create_instance(
 }
 
 unsafe extern "C" fn noop_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
@@ -143,6 +147,7 @@ fn leak_native_interface(contract_id: u64) -> &'static GuestContractInterface {
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance: noop_create_instance,
         destroy_instance: noop_destroy_instance,
         dispatch: DispatchMechanisms {
@@ -212,11 +217,15 @@ unsafe fn cached_dispatch(interface: *const GuestContractInterface, contract_id:
     let fn_ptr: *const () = unsafe { *iface.dispatch.native.functions };
     // SAFETY: transmute to the native dispatch signature bench_add was built with.
     let dispatch_fn: unsafe extern "C" fn(
+        *mut c_void,
         GuestContractInstance,
         *const (),
         *mut (),
         *mut AbiError,
-    ) = unsafe { mem::transmute(fn_ptr) };
+    ) = {
+        // SAFETY: the pointer comes from the generated dispatch table and is cast to that function's exact ABI.
+        unsafe { mem::transmute(fn_ptr) }
+    };
 
     let instance: GuestContractInstance = GuestContractInstance {
         data: ptr::null_mut(),
@@ -231,6 +240,7 @@ unsafe fn cached_dispatch(interface: *const GuestContractInterface, contract_id:
     // SAFETY: instance carries the registered contract_id; args/out match bench_add.
     unsafe {
         dispatch_fn(
+            iface.adapter_context,
             instance,
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),

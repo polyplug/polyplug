@@ -12,8 +12,6 @@ keywords.workspace = true
 categories.workspace = true
 
 [lib]
-name = "polyplug_native"
-path = "src/lib.rs"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]

@@ -13,8 +13,8 @@
 -- polyplug_lua loader trampolines):
 --
 --   interface.create_instance(this, args, out_hci)      -- Lua callback
---   interface.dispatch.vm.call(loader_data, instance,   -- native trampoline ->
---       fn_id, args, out, arena, out_err)               --   bridge.callback (Lua)
+--   interface.dispatch.vm.call(user_data, loader_data, instance,
+--       fn_id, args, out, arena, out_err)               -- native trampoline ->
 --   interface.destroy_instance(this, instance)          -- native trampoline ->
 --                                                        --   bridge.destroy_callback (Lua)
 --
@@ -167,6 +167,7 @@ local function dispatch_inc(instance_data)
     local out = ffi.new("uint32_t[1]")
     local err = ffi.new("AbiError[1]")
     interface.dispatch.vm.call(
+        interface.user_data,
         interface.dispatch.vm.loader_data,
         gci,
         INC_FN_ID,

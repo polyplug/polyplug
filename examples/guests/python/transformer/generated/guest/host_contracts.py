@@ -15,6 +15,7 @@ _DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ct
 
 # Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
 class HostLoggerContract:
+    """Logging service supplied by the host."""
     def __init__(self, interface: int, instance: HostContractInstance) -> None:
         self._interface: int = interface
         self._instance: HostContractInstance = instance
@@ -36,6 +37,7 @@ class HostLoggerContract:
         return self._interface != 0
 
     def log(self, message: str) -> None:
+        """Writes an informational log message.\n\nArgs:\n    message: Message text to write.\n\nReturns:\n    Logging has no return value."""
         if self._interface == 0:
             return
         iface: Any = ctypes.cast(self._interface, ctypes.POINTER(HostContractInterface)).contents
@@ -52,7 +54,7 @@ class HostLoggerContract:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             dispatch_fn(self._instance.data, args_ptr, out_ptr, ctypes.byref(err))
         elif dispatch_type == DispatchType.VirtualMachine:
-            iface.dispatch.vm.call(iface.dispatch.vm.loader_data, GuestContractInstance(), 0, args_ptr, out_ptr, None, ctypes.byref(err))
+            iface.dispatch.vm.call(iface.user_data, iface.dispatch.vm.loader_data, GuestContractInstance(), 0, args_ptr, out_ptr, None, ctypes.byref(err))
         else:
             return
         if err.code != AbiErrorCode.Ok:
@@ -82,7 +84,7 @@ class HostLoggerContract:
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
             dispatch_fn(self._instance.data, args_ptr, out_ptr, ctypes.byref(err))
         elif dispatch_type == DispatchType.VirtualMachine:
-            iface.dispatch.vm.call(iface.dispatch.vm.loader_data, GuestContractInstance(), 1, args_ptr, out_ptr, None, ctypes.byref(err))
+            iface.dispatch.vm.call(iface.user_data, iface.dispatch.vm.loader_data, GuestContractInstance(), 1, args_ptr, out_ptr, None, ctypes.byref(err))
         else:
             return
         if err.code != AbiErrorCode.Ok:

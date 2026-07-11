@@ -348,21 +348,236 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str(
         "local NativeDispatchFnType = ffi.typeof(\"void (*)(GuestContractInstance, const void*, void*, AbiError*)\")\n",
     );
-    // Pre-parse the revision-counter pointer ctype ONCE at module scope. Every
-    // dispatch reads the registry revision through this cached ctype
-    // (`ffi.cast(ConstUint64Ptr, ptr)[0]`) — casting through a per-call string
-    // would churn the FFI ctype table. The runtime owns the counter (an
-    // AtomicU64); an aligned 64-bit load through this pointer is hardware-atomic
-    // on supported targets, so the staleness check needs no lock.
-    out.push_str("local ConstUint64Ptr = ffi.typeof(\"const uint64_t*\")\n\n");
+    out.push('\n');
 
     for contract in &ir.contracts {
         generate_host_contract_caller(&mut out, contract, &ir.enums);
         out.push('\n');
     }
+    if !ir.contracts.is_empty() {
+        generate_lua_in_process_adapters(&mut out, &ir.contracts, &ir.enums);
+        out.push('\n');
+    }
 
     out.push_str("return M\n");
     out
+}
+
+/// Emit Runtime-local LuaJIT adapters for in-process guest implementations.
+fn generate_lua_in_process_adapters(
+    out: &mut String,
+    contracts: &[ResolvedContract],
+    enums: &[EnumDef],
+) {
+    out.push_str("-- In-process Lua guest adapters.\n");
+    out.push_str(cdef_guarded_block());
+    out.push_str("cdef_guarded([[\n");
+    out.push_str("typedef uint32_t (*PolyplugLuaInProcessDispatchCallback)(void*, uint32_t, const void*, void*);\n");
+    out.push_str("typedef void (*PolyplugLuaInProcessDestroyCallback)(void*);\n");
+    out.push_str(
+        "typedef uint64_t (*PolyplugLuaInProcessCreateCallback)(const HostApi*, const void*);\n",
+    );
+    out.push_str("typedef struct PolyplugLuaInProcessBridge {\n");
+    out.push_str("    PolyplugLuaInProcessDispatchCallback callback;\n");
+    out.push_str("    PolyplugLuaInProcessDestroyCallback destroy_callback;\n");
+    out.push_str("    PolyplugLuaInProcessCreateCallback create_callback;\n");
+    out.push_str("    uint64_t contract_id;\n");
+    out.push_str("} PolyplugLuaInProcessBridge;\n");
+    out.push_str("void polyplug_lua_in_process_vm_dispatch(void*, VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);\n");
+    out.push_str("void polyplug_lua_in_process_create_instance(void*, VmLoaderData, const HostApi*, const void*, GuestContractInstance*);\n");
+    out.push_str("void polyplug_lua_in_process_destroy_instance(void*, VmLoaderData, const HostApi*, GuestContractInstance);\n");
+    out.push_str("]])\n\n");
+    out.push_str("local function in_process_factory(provider, contract_name)\n");
+    out.push_str("    if type(provider) == \"function\" then return provider end\n");
+    out.push_str(
+        "    if type(provider) == \"table\" then return function() return provider end end\n",
+    );
+    out.push_str(
+        "    error(\"in_process_bundle: \" .. contract_name .. \" needs a table or factory\", 3)\n",
+    );
+    out.push_str("end\n\n");
+    out.push_str("function M.in_process_bundle(spec, lua_bridge_lib)\n");
+    out.push_str("    if type(spec) ~= \"table\" or type(spec.name) ~= \"string\" or spec.name == \"\" then\n");
+    out.push_str("        error(\"in_process_bundle: spec.name must be a non-empty string\", 2)\n");
+    out.push_str("    end\n");
+    out.push_str("    local implementations = spec.implementations\n");
+    out.push_str("    if type(implementations) ~= \"table\" then error(\"in_process_bundle: spec.implementations must be a table\", 2) end\n");
+    out.push_str("    if lua_bridge_lib == nil then error(\"in_process_bundle: lua_bridge_lib is nil (pass require('polyplug.loaders.lua').bridge_lib())\", 2) end\n");
+    out.push_str("    local version = spec.version or { major = 1, minor = 0, patch = 0 }\n");
+    out.push_str("    local resident = { callbacks = {}, bridges = {}, interfaces = {}, instances = {}, factories = {}, strings = {}, output_strings = {}, next_id = 1 }\n");
+    out.push_str(&format!(
+        "    local records = ffi.new(\"InProcessContractRegistration[?]\", {})\n",
+        contracts.len()
+    ));
+    out.push_str("    resident.records = records\n");
+    for (index, contract) in contracts.iter().enumerate() {
+        generate_lua_in_process_contract_adapter(out, contract, enums, index);
+    }
+    out.push_str("    local dependencies = spec.dependencies or {}\n");
+    out.push_str("    local dependency_ids = nil\n");
+    out.push_str("    if #dependencies > 0 then\n");
+    out.push_str("        dependency_ids = ffi.new(\"uint64_t[?]\", #dependencies)\n");
+    out.push_str(
+        "        for i = 1, #dependencies do dependency_ids[i - 1] = dependencies[i] end\n",
+    );
+    out.push_str("        resident.dependency_ids = dependency_ids\n");
+    out.push_str("    end\n");
+    out.push_str("    resident.strings.bundle_name = spec.name\n");
+    out.push_str("    local registration = ffi.new(\"InProcessBundleRegistration\")\n");
+    out.push_str("    registration.metadata.name.ptr = ffi.cast(\"const uint8_t*\", resident.strings.bundle_name)\n");
+    out.push_str("    registration.metadata.name.len = #resident.strings.bundle_name\n");
+    out.push_str("    registration.metadata.version.major = version.major or 1\n");
+    out.push_str("    registration.metadata.version.minor = version.minor or 0\n");
+    out.push_str("    registration.metadata.version.patch = version.patch or 0\n");
+    out.push_str("    registration.metadata.runtime = ffi.C.SupportedLanguage_Lua\n");
+    out.push_str("    registration.dependency_ids = dependency_ids\n");
+    out.push_str("    registration.dependency_count = #dependencies\n");
+    out.push_str("    registration.contracts = records\n");
+    out.push_str(&format!(
+        "    registration.contract_count = {}\n",
+        contracts.len()
+    ));
+    out.push_str("    resident.registration = registration\n");
+    out.push_str("    return { registration = registration, resident = resident }\n");
+    out.push_str("end\n");
+}
+
+fn generate_lua_in_process_contract_adapter(
+    out: &mut String,
+    contract: &ResolvedContract,
+    enums: &[EnumDef],
+    index: usize,
+) {
+    let contract_key: &str = &contract.name;
+    let contract_struct: String = contract_name_to_struct(contract_key);
+    let plugin_default: String = format!("{}_plugin", contract_key.replace('.', "_"));
+    out.push_str(&format!("    do -- {contract_key}\n"));
+    out.push_str(&format!("        local provider = implementations[{contract_key:?}]\n        local factory = in_process_factory(provider, {contract_key:?})\n"));
+    out.push_str(&format!("        resident.factories[{contract_key:?}] = factory\n        resident.instances[{contract_key:?}] = {{}}\n"));
+    out.push_str(&format!("        resident.strings[{contract_key:?}] = {{ plugin_name = spec.plugin_names and spec.plugin_names[{contract_key:?}] or {plugin_default:?}, contract_name = {contract_key:?} }}\n"));
+    out.push_str("        local bridge = ffi.new(\"PolyplugLuaInProcessBridge\")\n");
+    out.push_str(&format!(
+        "        bridge.contract_id = 0x{:016X}ULL\n",
+        contract.contract_id
+    ));
+    out.push_str("        local function create(host, _args)\n");
+    out.push_str("            local ok, implementation = pcall(factory, host)\n            if not ok or type(implementation) ~= \"table\" then return 0ULL end\n");
+    out.push_str(
+        "            local id = resident.next_id\n            resident.next_id = id + 1\n",
+    );
+    out.push_str(&format!("            resident.instances[{contract_key:?}][id] = implementation\n            return id\n        end\n"));
+    out.push_str("        local function destroy(instance_data)\n            local id = tonumber(ffi.cast(\"uintptr_t\", instance_data))\n");
+    out.push_str(&format!("            if id ~= 0 then resident.instances[{contract_key:?}][id] = nil end\n        end\n"));
+    out.push_str("        local function dispatch(instance_data, fn_id, args, out_ptr)\n            local ok, code = pcall(function()\n");
+    out.push_str("                local id = tonumber(ffi.cast(\"uintptr_t\", instance_data))\n");
+    out.push_str(&format!(
+        "                local impl = resident.instances[{contract_key:?}][id]\n"
+    ));
+    for (function_index, function) in contract.functions.iter().enumerate() {
+        out.push_str(&format!(
+            "                if fn_id == {function_index} then\n"
+        ));
+        generate_lua_host_dispatch_args(out, &contract_struct, function, enums);
+        generate_lua_in_process_dispatch_call(out, function, enums);
+        out.push_str("                    return AbiErrorCode.Ok\n                end\n");
+    }
+    out.push_str("                return AbiErrorCode.Generic\n            end)\n            return ok and code or AbiErrorCode.Generic\n        end\n");
+    out.push_str("        local dispatch_cb = ffi.cast(\"PolyplugLuaInProcessDispatchCallback\", dispatch)\n");
+    out.push_str(
+        "        local create_cb = ffi.cast(\"PolyplugLuaInProcessCreateCallback\", create)\n",
+    );
+    out.push_str(
+        "        local destroy_cb = ffi.cast(\"PolyplugLuaInProcessDestroyCallback\", destroy)\n",
+    );
+    out.push_str("        bridge.callback = dispatch_cb\n        bridge.create_callback = create_cb\n        bridge.destroy_callback = destroy_cb\n");
+    out.push_str("        local interface = ffi.new(\"GuestContractInterface\")\n");
+    out.push_str(&format!(
+        "        interface.contract_id = 0x{:016X}ULL\n",
+        contract.contract_id
+    ));
+    out.push_str(&format!(
+        "        interface.contract_version.major = {}\n",
+        contract.version.major
+    ));
+    out.push_str(&format!(
+        "        interface.contract_version.minor = {}\n",
+        contract.version.minor
+    ));
+    out.push_str(&format!(
+        "        interface.contract_version.patch = {}\n",
+        contract.version.patch
+    ));
+    out.push_str("        interface.dispatch_type = ffi.C.DispatchType_VirtualMachine\n");
+    out.push_str("        interface.adapter_context = ffi.cast(\"void*\", bridge)\n");
+    out.push_str("        interface.create_instance = lua_bridge_lib.polyplug_lua_in_process_create_instance\n");
+    out.push_str("        interface.destroy_instance = lua_bridge_lib.polyplug_lua_in_process_destroy_instance\n");
+    out.push_str(
+        "        interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_in_process_vm_dispatch\n",
+    );
+    out.push_str("        interface.dispatch.vm.loader_data.data = nil\n");
+    out.push_str(&format!("        records[{index}].descriptor.name.ptr = ffi.cast(\"const uint8_t*\", resident.strings[{contract_key:?}].plugin_name)\n        records[{index}].descriptor.name.len = #resident.strings[{contract_key:?}].plugin_name\n"));
+    out.push_str(&format!("        records[{index}].descriptor.contract_name.ptr = ffi.cast(\"const uint8_t*\", resident.strings[{contract_key:?}].contract_name)\n        records[{index}].descriptor.contract_name.len = #resident.strings[{contract_key:?}].contract_name\n"));
+    out.push_str(&format!(
+        "        records[{index}].descriptor.version.major = {}\n",
+        contract.version.major
+    ));
+    out.push_str(&format!(
+        "        records[{index}].descriptor.version.minor = {}\n",
+        contract.version.minor
+    ));
+    out.push_str(&format!(
+        "        records[{index}].descriptor.version.patch = {}\n",
+        contract.version.patch
+    ));
+    out.push_str(&format!("        records[{index}].interface = interface\n        records[{index}].adapter_context = ffi.cast(\"void*\", bridge)\n"));
+    out.push_str(&format!("        resident.bridges[{contract_key:?}] = bridge\n        resident.interfaces[{contract_key:?}] = interface\n        resident.callbacks[{contract_key:?}] = {{ dispatch_cb, create_cb, destroy_cb }}\n"));
+    out.push_str("    end\n");
+}
+
+/// Marshal ergonomic Lua scalar and string results for an in-process adapter.
+fn generate_lua_in_process_dispatch_call(
+    out: &mut String,
+    func: &ResolvedFunction,
+    enums: &[EnumDef],
+) {
+    let call_args: String = func
+        .params
+        .iter()
+        .map(|param| param.name.clone())
+        .collect::<Vec<String>>()
+        .join(", ");
+    if !has_return_value(&func.returns) {
+        out.push_str(&format!(
+            "                impl:{}({call_args})\n",
+            func.name
+        ));
+        out.push_str("                local _ = out_ptr\n");
+        return;
+    }
+    out.push_str(&format!(
+        "                local result = impl:{}({call_args})\n",
+        func.name
+    ));
+    if matches!(
+        func.returns,
+        Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView))
+    ) {
+        out.push_str("                if type(result) ~= \"string\" then error(\"in-process implementation must return a Lua string\") end\n");
+        out.push_str(
+            "                resident.output_strings[#resident.output_strings + 1] = result\n",
+        );
+        out.push_str("                local output = ffi.cast(\"StringView*\", out_ptr)[0]\n");
+        out.push_str("                output.ptr = ffi.cast(\"const uint8_t*\", result)\n");
+        out.push_str("                output.len = #result\n");
+        return;
+    }
+    let ret_type: String = match func.returns.as_ref() {
+        Some(return_type) => lua_c_type_name(return_type, enums),
+        None => "void".to_owned(),
+    };
+    out.push_str(&format!(
+        "                ffi.cast(\"{ret_type}*\", out_ptr)[0] = result\n"
+    ));
 }
 
 fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
@@ -505,15 +720,9 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract, 
     out.push_str("        return self._interface ~= nil and not self._destroyed\n");
     out.push_str("    end,\n\n");
 
-    // live_revision - read the registry revision through the cached pointer (one
-    // aligned atomic load, no call into the runtime). Returns the cached value
-    // (i.e. "unchanged") when there is no counter (null runtime), so the staleness
-    // check is then a no-op.
+    // live_revision reads the synchronized value through HostApi.
     out.push_str("    live_revision = function(self)\n");
-    out.push_str("        if self._revision_ptr == nil then\n");
-    out.push_str("            return self._cached_revision\n");
-    out.push_str("        end\n");
-    out.push_str("        return ffi.cast(ConstUint64Ptr, self._revision_ptr)[0]\n");
+    out.push_str("        return self._host.registry_revision(self._host)\n");
     out.push_str("    end,\n\n");
 
     // revalidate - the registry changed under us (a reload/unload reclaimed the
@@ -631,19 +840,8 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract, 
     out.push_str("    -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.\n");
     out.push_str("    local instance = ffi.new(\"GuestContractInstance\")\n");
     out.push_str("    host.create_guest_instance(host, interface, nil, instance)\n");
-    // Fetch the registry revision counter ONCE, then read its current value, so
-    // every later call can detect a reload/unload with a direct atomic load (no
-    // call back into the runtime) and re-resolve before dispatching. A null host or
-    // null counter makes the staleness check a no-op (live_revision returns the
-    // cached value).
-    out.push_str("    local revision_ptr = nil\n");
-    out.push_str("    local cached_revision = 0\n");
-    out.push_str("    if host ~= nil then\n");
-    out.push_str("        revision_ptr = host.revision_counter(host)\n");
-    out.push_str("        if revision_ptr ~= nil then\n");
-    out.push_str("            cached_revision = ffi.cast(ConstUint64Ptr, revision_ptr)[0]\n");
-    out.push_str("        end\n");
-    out.push_str("    end\n");
+    // Capture the synchronized revision for the resolved interface.
+    out.push_str("    local cached_revision = host.registry_revision(host)\n");
     out.push_str("    local wrapper = {\n");
     out.push_str("        _interface = interface,\n");
     out.push_str("        _instance = instance,\n");
@@ -651,7 +849,6 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract, 
     // Retain the opaque handle so revalidate() can re-resolve after a hot-reload
     // (same slot, new interface) or report a gone contract (slot vacated).
     out.push_str("        _handle = handle,\n");
-    out.push_str("        _revision_ptr = revision_ptr,\n");
     out.push_str("        _cached_revision = cached_revision,\n");
     out.push_str("        _destroyed = false\n");
     out.push_str("    }\n");
@@ -757,7 +954,7 @@ fn generate_host_caller_method(
     // to per-value host->alloc — correct, just not zero-allocation. Native Rust/C++
     // hosts (rust.rs fn_needs_arena) carry real per-caller arenas.
     out.push_str(&format!(
-        "            self._interface.dispatch.vm.call(self._interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, nil, err)\n"
+        "            self._interface.dispatch.vm.call(self._interface.adapter_context, self._interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, nil, err)\n"
     ));
     out.push_str("        end\n");
     out.push_str("        if err.code ~= AbiErrorCode.Ok then\n");
@@ -1650,7 +1847,8 @@ fn file_header() -> &'static str {
 fn cdef_guarded_block() -> &'static str {
     "local function cdef_guarded(decl)\n\
     \tlocal ok, err = pcall(ffi.cdef, decl)\n\
-    \tif not ok and not string.find(err, \"already defined\", 1, true) then\n\
+    \tlocal in_process_redefinition = string.find(err or \"\", \"attempt to redefine 'PolyplugLuaInProcess\", 1, true)\n\
+    \tif not ok and not string.find(err, \"already defined\", 1, true) and not in_process_redefinition then\n\
     \t\terror(err, 2)\n\
     \tend\n\
      end\n\n"
@@ -2184,14 +2382,12 @@ fn generate_lua_guest_host_contract_method(
     out.push_str("        local fn = ffi.cast(DispatchFnType, fn_ptr)\n");
     out.push_str("        fn(impl_ptr, args_ptr, out_ptr, err)\n");
     out.push_str("    elseif dispatch_type == 1 then\n");
-    // The VM dispatch ABI signature is fn(loader_data, instance, fn_id, args, out,
-    // arena). Host contracts carry no guest instance, so a null GuestContractInstance
-    // is passed in the instance slot — matching the canonical rust host-contract
-    // caller (which passes GuestContractInstance::null()). The arena is null: this
-    // caller has no per-caller arena, so the bridge falls back to host->alloc.
+    // The VM dispatch ABI receives the registrant's user-data bridge as its
+    // adapter context, then loader data and a null guest instance. This is the
+    // host-contract analogue of a guest interface's adapter_context.
     out.push_str("        local _null_instance = ffi.new(\"GuestContractInstance\")\n");
     out.push_str(&format!(
-        "        interface.dispatch.vm.call(interface.dispatch.vm.loader_data, _null_instance, {fn_id}, args_ptr, out_ptr, nil, err)\n"
+        "        interface.dispatch.vm.call(interface.user_data, interface.dispatch.vm.loader_data, _null_instance, {fn_id}, args_ptr, out_ptr, nil, err)\n"
     ));
     out.push_str("    else\n");
     if has_return {
@@ -2482,13 +2678,7 @@ fn generate_lua_guest_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedCont
         out.push_str("]])\n\n");
     }
 
-    // Pre-parse the revision-counter pointer ctype ONCE at module scope. Each peer
-    // dispatch reads the registry revision through this cached ctype
-    // (`ffi.cast(ConstUint64Ptr, ptr)[0]`) — casting through a per-call string
-    // would churn the FFI ctype table. The runtime owns the counter (an
-    // AtomicU64); an aligned 64-bit load through this pointer is hardware-atomic on
-    // supported targets.
-    out.push_str("local ConstUint64Ptr = ffi.typeof(\"const uint64_t*\")\n\n");
+    out.push('\n');
 
     out.push_str("local M = {}\n\n");
 
@@ -2536,16 +2726,14 @@ fn generate_lua_guest_peer_caller(
     out.push_str(&format!("{} = {{}}\n", class_name));
     out.push_str(&format!("{}.__index = {}\n\n", class_name, class_name));
 
-    // :new(interface, instance, host, handle, revision_ptr, cached_revision) —
-    // low-level constructor used by resolve(). `handle`, `revision_ptr`, and
-    // `cached_revision` let each dispatch detect a peer reload/unload and re-resolve
-    // before using the cached interface/instance (which a reload reclaims).
+    // :new(interface, instance, host, handle, cached_revision) is the low-level
+    // constructor used by resolve().
     out.push_str(&format!(
-        "function {}:new(interface, instance, host, handle, revision_ptr, cached_revision)\n",
+        "function {}:new(interface, instance, host, handle, cached_revision)\n",
         class_name
     ));
     out.push_str(
-        "    local obj = { _interface = interface, _instance = instance, _host = host, _handle = handle, _revision_ptr = revision_ptr, _cached_revision = cached_revision }\n",
+        "    local obj = { _interface = interface, _instance = instance, _host = host, _handle = handle, _cached_revision = cached_revision }\n",
     );
     out.push_str("    setmetatable(obj, self)\n");
     out.push_str("    return obj\n");
@@ -2579,18 +2767,10 @@ fn generate_lua_guest_peer_caller(
     out.push_str("    -- create_guest_instance is an out-param ABI fn: (this, interface, args, out_instance) -> void.\n");
     out.push_str("    local instance = ffi.new(\"GuestContractInstance\")\n");
     out.push_str("    host.create_guest_instance(host, interface, nil, instance)\n");
-    // Fetch the registry revision counter ONCE, then read its current value, so
-    // every later dispatch can detect a peer reload/unload with a direct atomic
-    // load (no call back into the runtime) and re-resolve before dispatching. A
-    // null counter makes the staleness check a no-op (live_revision returns the
-    // cached value).
-    out.push_str("    local revision_ptr = host.revision_counter(host)\n");
-    out.push_str("    local cached_revision = 0\n");
-    out.push_str("    if revision_ptr ~= nil then\n");
-    out.push_str("        cached_revision = ffi.cast(ConstUint64Ptr, revision_ptr)[0]\n");
-    out.push_str("    end\n");
+    // Capture the synchronized revision for the resolved interface.
+    out.push_str("    local cached_revision = host.registry_revision(host)\n");
     out.push_str(&format!(
-        "    return {}:new(interface, instance, host, handle, revision_ptr, cached_revision)\n",
+        "    return {}:new(interface, instance, host, handle, cached_revision)\n",
         class_name
     ));
     out.push_str("end\n\n");
@@ -2599,14 +2779,9 @@ fn generate_lua_guest_peer_caller(
     out.push_str("    return self._interface ~= nil\n");
     out.push_str("end\n\n");
 
-    // live_revision - read the registry revision through the cached pointer (one
-    // aligned atomic load, no call into the runtime). Returns the cached value when
-    // there is no counter, making the staleness check a no-op.
+    // live_revision reads the synchronized value through HostApi.
     out.push_str(&format!("function {}:live_revision()\n", class_name));
-    out.push_str("    if self._revision_ptr == nil then\n");
-    out.push_str("        return self._cached_revision\n");
-    out.push_str("    end\n");
-    out.push_str("    return ffi.cast(ConstUint64Ptr, self._revision_ptr)[0]\n");
+    out.push_str("    return self._host.registry_revision(self._host)\n");
     out.push_str("end\n\n");
 
     // revalidate - the peer registry changed under us (a reload/unload reclaimed the
@@ -2729,12 +2904,10 @@ fn generate_lua_guest_peer_method(
     out.push_str("        local fn = ffi.cast(NativeDispatchFnType, fn_ptr)\n");
     out.push_str("        fn(self._instance, args_ptr, out_ptr, err)\n");
     out.push_str("    elseif dispatch_type == 1 then\n");
-    // VM dispatch path: call the loader vm.call trampoline directly through the
-    // cached interface. The arena is nil — a Lua peer caller has no per-caller
-    // CallArena, so the bridge falls back to host->alloc (same convention as the
-    // host->guest caller's nil arena).
+    // VM dispatch receives the immutable adapter context carried by the
+    // cached guest interface, followed by loader data and the caller instance.
     out.push_str(&format!(
-        "        interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, nil, err)\n"
+        "        interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, self._instance, {fn_id}, args_ptr, out_ptr, nil, err)\n"
     ));
     out.push_str("    else\n");
     if has_return {
@@ -2874,7 +3047,7 @@ fn generate_lua_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("        PolyplugLuaHostDestroyCallback destroy_callback;\n");
     out.push_str("    } PolyplugLuaHostDispatchBridge;\n");
     out.push_str(
-        "    void polyplug_lua_host_vm_dispatch(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);\n",
+        "    void polyplug_lua_host_vm_dispatch(void*, VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);\n",
     );
     out.push_str(
         "    void polyplug_lua_host_destroy_instance(const HostContractInterface*, HostContractInstance);\n",
@@ -3601,15 +3774,13 @@ mod tests {
             !out.contains(".header."),
             "must not read through a nonexistent .header field: {out}"
         );
-        // VM dispatch uses the canonical 6-arg call(loader_data, instance, fn_id, args,
-        // out, nil) — loader_data, not the old bridge_data field.
+        // Host contracts carry their generated bridge in user_data, which is
+        // forwarded as the VM callback's adapter context before loader data.
         assert!(
-            out.contains("interface.dispatch.vm.call(interface.dispatch.vm.loader_data,"),
-            "must call vm.call with loader_data: {out}"
-        );
-        assert!(
-            !out.contains("bridge_data"),
-            "must use loader_data, not bridge_data: {out}"
+            out.contains(
+                "interface.dispatch.vm.call(interface.user_data, interface.dispatch.vm.loader_data,"
+            ),
+            "must call vm.call with user_data adapter context before loader data: {out}"
         );
         // from_host resolves the interface via resolve_host_contract_interface and the
         // instance via get_host_contract, matching the canonical Rust caller.
@@ -3844,17 +4015,13 @@ mod tests {
             out.contains("fn(self._instance, args_ptr, out_ptr, err)"),
             "native arm must call the fn pointer with the instance directly: {out}"
         );
-        // VM arm: call the loader vm.call trampoline directly with a nil arena.
-        // Lua peer callers have no per-caller CallArena.
+        // VM arm: call the loader trampoline with the immutable interface context
+        // and a nil arena. Lua peer callers have no per-caller CallArena.
         assert!(
             out.contains(
-                "interface.dispatch.vm.call(interface.dispatch.vm.loader_data, self._instance,"
+                "interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, self._instance,"
             ),
-            "vm arm must call vm.call directly with loader_data and the instance: {out}"
-        );
-        assert!(
-            out.contains(", nil, err)"),
-            "vm dispatch must pass a nil arena and the trailing out_err: {out}"
+            "vm arm must pass adapter_context before loader data and the instance: {out}"
         );
         assert!(
             out.contains("return out_val"),
@@ -4033,6 +4200,90 @@ mod tests {
         );
     }
 
+    #[test]
+    fn in_process_adapter_keeps_typed_resident_and_context_local() {
+        let counter = ResolvedContract {
+            name: "state.counter".to_owned(),
+            contract_id: 0xA1,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "increment".to_owned(),
+                function_id: 0,
+                params: vec![],
+                returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+                docs: None,
+                return_docs: None,
+            }],
+            docs: None,
+        };
+        let value = ResolvedContract {
+            name: "state.value".to_owned(),
+            contract_id: 0xB2,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "value".to_owned(),
+                function_id: 0,
+                params: vec![],
+                returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+                docs: None,
+                return_docs: None,
+            }],
+            docs: None,
+        };
+        let ir = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![counter, value],
+            host_contracts: vec![],
+            bundle: None,
+        };
+
+        let out = generate_host_callers_file(&ir);
+        assert!(
+            out.contains("function M.in_process_bundle(spec, lua_bridge_lib)"),
+            "in-process bundles must take the Lua bridge library explicitly: {out}"
+        );
+        assert!(
+            out.contains("InProcessContractRegistration[?]\", 2"),
+            "all contract registrations must be allocated before a single registration call: {out}"
+        );
+        assert!(
+            out.contains("resident.instances[\"state.counter\"]")
+                && out.contains("resident.instances[\"state.value\"]"),
+            "each contract needs a resident-local instance table: {out}"
+        );
+        assert!(
+            out.contains("interface.adapter_context = ffi.cast(\"void*\", bridge)")
+                && out.contains("records[0].adapter_context = ffi.cast(\"void*\", bridge)")
+                && out.contains("records[1].adapter_context = ffi.cast(\"void*\", bridge)"),
+            "interface and registration records must carry the same adapter context: {out}"
+        );
+        assert!(
+            out.contains("lua_bridge_lib.polyplug_lua_in_process_vm_dispatch")
+                && out.contains("lua_bridge_lib.polyplug_lua_in_process_create_instance")
+                && out.contains("lua_bridge_lib.polyplug_lua_in_process_destroy_instance"),
+            "all ABI callbacks must use the explicit native bridge: {out}"
+        );
+        assert!(
+            out.contains("resident.callbacks[\"state.counter\"]")
+                && out.contains("resident.callbacks[\"state.value\"]")
+                && !out.contains("ffi.C.polyplug_lua_in_process"),
+            "callback lifetime must be resident-local without global symbol lookup: {out}"
+        );
+        assert!(
+            out.contains("attempt to redefine"),
+            "multiple generated modules in one LuaJIT VM must tolerate canonical duplicate cdefs: {out}"
+        );
+    }
+
     // ─── Host Interface Factory Tests ──────────────────────────────────────────
 
     fn host_logger_ir() -> ValidatedIr {
@@ -4156,9 +4407,9 @@ mod tests {
         // crates/polyplug_lua/src/ffi.rs (void return + trailing out-pointer).
         assert!(
             out.contains(
-                "void polyplug_lua_host_vm_dispatch(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);"
+                "void polyplug_lua_host_vm_dispatch(void*, VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);"
             ),
-            "vm_dispatch cdef must be the out-param form (void + AbiError*): {out}"
+            "vm_dispatch cdef must carry adapter_context and use the out-param ABI: {out}"
         );
         assert!(
             out.contains(

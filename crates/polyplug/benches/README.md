@@ -295,25 +295,23 @@ This is the measured cost behind borrowed-view returns (`&str` / `string_view` /
 `ReadOnlySpan` / `memoryview`) versus owned native `String` / `bytes`, and why
 the call arena exists for VM guests (`docs/PERFORMANCE.md`).
 
-### `revision_check` — the self-revalidating caller's per-dispatch overhead
+### `revision_check` — registry revision guard component
 
-The generated host and peer callers cache the resolved interface and, before each
-dispatch, poll the runtime revision counter through a cached pointer — one acquire
-load of a read-mostly word plus an integer compare — re-resolving only when it
-changed (a hot-reload or unload). This is a direct pointer poll, **not** a function
-call into the runtime per dispatch. This bench isolates that fast path by
-dispatching the same real native function with and without the check, so the delta
-is exactly the cost the auto-cache feature adds:
+Generated host and peer callers cache the resolved interface and call
+`HostApi.registry_revision` before each dispatch. The Rust callback performs the
+acquire load and returns a `u64` value; callers compare it with the revision
+captured at resolution and re-resolve if it changed after a load, reload, or unload.
 
-- `dispatch_only` — bare native dispatch (the floor): **~2.1 ns**.
-- `staleness_check_then_dispatch` — the acquire load + compare (branch not taken),
-  then the same dispatch: **~2.6 ns**.
+This benchmark isolates the acquire-load-plus-compare component by dispatching the
+same native function with and without that check:
 
-The delta is **~0.5 ns** — one atomic load of a Shared cache line. On the real
-cross-language dispatches (50 ns native host → 13 µs for a JS host, per the matrix)
-it is proportionally invisible, which is the point: the safety the feature buys
-(a cached interface pointer can never dangle after a reload/unload) costs one
-predicted branch, not a per-call round-trip into the runtime.
+- `dispatch_only` — bare native dispatch.
+- `staleness_check_then_dispatch` — acquire load + compare (branch not taken),
+  then the same dispatch.
+
+The generated-caller path also includes the one indirect `HostApi` callback that
+obtains the synchronized value. It never reads the runtime's atomic storage through
+a foreign pointer.
 
 ### `cold_start` — first dispatch (cache-cold) vs warm dispatch
 

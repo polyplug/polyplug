@@ -8,7 +8,7 @@ import ctypes
 import enum
 from typing import ClassVar
 
-from polyplug_abi import Buffer, StringView
+from polyplug_abi import StringView
 
 class LogLevel(enum.IntEnum):
     DEBUG = 0

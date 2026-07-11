@@ -18,6 +18,7 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
+use core::ffi::c_void;
 use core::ptr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,7 +29,7 @@ use polyplug::error::LoaderError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::BundleSource;
 use polyplug_abi::Array;
-use polyplug_abi::SupportedLanguage;
+
 use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::{
     DispatchMechanisms, DispatchType, GuestContractHandle, GuestContractInstance,
@@ -62,10 +63,6 @@ struct ProbeLoader {
 impl BundleLoader for ProbeLoader {
     fn loader_name(&self) -> &'static str {
         "probe-enforce"
-    }
-
-    fn loader_language(&self) -> SupportedLanguage {
-        SupportedLanguage::Rust
     }
 
     fn supports_hot_reload(&self) -> bool {
@@ -129,6 +126,7 @@ impl BundleLoader for ProbeLoader {
 
 /// No-op create_instance callback for the registered provider interface.
 unsafe extern "C" fn noop_create_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _args: *const (),
@@ -142,16 +140,16 @@ unsafe extern "C" fn noop_create_instance(
 
 /// No-op destroy_instance callback for the registered provider interface.
 unsafe extern "C" fn noop_destroy_instance(
+    _adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
     _instance: GuestContractInstance,
 ) {
 }
 
-/// Register a provider for `contract_id` from `bundle_id`, leaking a 'static
-/// interface (lives for the test process lifetime).
+/// Register a provider for `contract_id` from `bundle_id`.
 fn register_provider(runtime: &Runtime, contract_id: u64, bundle_id: u64) -> GuestContractHandle {
-    let interface: &'static GuestContractInterface = Box::leak(Box::new(GuestContractInterface {
+    let interface: GuestContractInterface = GuestContractInterface {
         contract_id: GuestContractId::from_u64(contract_id),
         contract_version: Version {
             major: 1,
@@ -159,6 +157,7 @@ fn register_provider(runtime: &Runtime, contract_id: u64, bundle_id: u64) -> Gue
             patch: 0,
         },
         dispatch_type: DispatchType::Native,
+        adapter_context: ptr::null_mut(),
         create_instance: noop_create_instance,
         destroy_instance: noop_destroy_instance,
         dispatch: DispatchMechanisms {
@@ -167,7 +166,7 @@ fn register_provider(runtime: &Runtime, contract_id: u64, bundle_id: u64) -> Gue
                 functions: ptr::null(),
             },
         },
-    }));
+    };
     let descriptor: PluginDescriptor = PluginDescriptor {
         name: StringView::from_static(b"provider"),
         contract_name: StringView::from_static(b"provider.contract"),
@@ -177,11 +176,11 @@ fn register_provider(runtime: &Runtime, contract_id: u64, bundle_id: u64) -> Gue
             patch: 0,
         },
     };
-    // SAFETY: interface is leaked and lives for the process lifetime.
+    // SAFETY: the registry copies the interface during this synchronous call.
     unsafe {
         runtime.registry().register_guest_contract(
             descriptor,
-            interface,
+            &interface,
             "provider.contract".to_owned(),
             BundleId::from_u64(bundle_id),
         )
