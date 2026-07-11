@@ -157,9 +157,9 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: just
-      - name: Build Lua loader + polyplugc (for Lua host SDK suites)
+      - name: Build Lua and JS loaders + polyplugc (for host SDK suites)
         if: runner.os == 'Linux'
-        run: cargo build -p polyplug_lua -p polyplugc
+        run: cargo build -p polyplug_lua -p polyplug_js -p polyplugc
       - name: Run Lua + JS host SDK suites
         if: runner.os == 'Linux'
         run: just test-host-lua test-host-js
@@ -167,6 +167,7 @@ jobs:
           POLYPLUG_LIB: ${{ github.workspace }}/target/debug/libpolyplug.so
           POLYPLUG_NATIVE_LIB: ${{ github.workspace }}/target/debug/libpolyplug_native.so
           POLYPLUG_LUA_LIB: ${{ github.workspace }}/target/debug/libpolyplug_lua.so
+          POLYPLUG_JS_LIB: ${{ github.workspace }}/target/debug/libpolyplug_js.so
           POLYPLUGC: ${{ github.workspace }}/target/debug/polyplugc
       # The same JS host SDK suite, now under Node.js via the koffi FFI backend
       # (mirrors the Deno run above). The justfile recipe runs `npm install` if
@@ -177,6 +178,7 @@ jobs:
         env:
           POLYPLUG_LIB: ${{ github.workspace }}/target/debug/libpolyplug.so
           POLYPLUG_NATIVE_LIB: ${{ github.workspace }}/target/debug/libpolyplug_native.so
+          POLYPLUG_JS_LIB: ${{ github.workspace }}/target/debug/libpolyplug_js.so
       # The same JS host SDK suite, now under Bun via the built-in bun:ffi FFI
       # backend (mirrors the Deno/Node runs above). The justfile recipe runs
       # `bun install` if node_modules is absent.
@@ -186,6 +188,7 @@ jobs:
         env:
           POLYPLUG_LIB: ${{ github.workspace }}/target/debug/libpolyplug.so
           POLYPLUG_NATIVE_LIB: ${{ github.workspace }}/target/debug/libpolyplug_native.so
+          POLYPLUG_JS_LIB: ${{ github.workspace }}/target/debug/libpolyplug_js.so
       # Cross-language conformance: ID-helper hash parity + to_str invalid-UTF-8 errors, all 6 langs.
       - name: Cross-language helper conformance
         if: runner.os == 'Linux'
