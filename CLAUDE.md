@@ -813,6 +813,67 @@ polyplug_common (shared schema TYPES + their pure behaviour)
 
 ---
 
+### 22. Universal Host/Guest Feature Parity
+
+**A generally applicable polyplug feature MUST ship for every maintained host
+and guest language in the same change. Rust-only delivery is forbidden.**
+
+The maintained language set is Rust, C++, C#, Python, Lua, and
+JavaScript/QuickJS.
+
+- Public runtime concepts, contracts, lifecycle semantics, validation, errors,
+  and capability claims are language-neutral.
+- Language-specific mechanics belong behind that language's generator, SDK, or
+  loader. They must not create a parallel public core model.
+- One canonical bundle, contract, registration, dependency, lifecycle, and
+  discovery path serves every source and language.
+- Equivalent feature semantics are mandatory; the physical mechanism may differ
+  by loader. For example, a VM loader may evaluate source while a native loader
+  delegates a materialized artifact to the operating-system loader.
+- A feature is not shipped while any maintained language silently ignores it,
+  stubs it, rejects it without an owner-approved platform limitation, or lacks
+  enforcement tests.
+- Every feature change must include a six-language host/guest parity review and
+  the applicable matrix tests. A limitation requires explicit owner approval and
+  current-state documentation.
+- Cross-compilation proves that target artifacts compile and link. It never
+  substitutes for native execution tests on the target operating system.
+
+### 23. Loader Ownership and Canonical Sources
+
+**Executable-source mechanics are loader responsibilities.**
+
+- `Path`, source text, artifact bytes, and linked native entrypoints must enter
+  one runtime load/registration transaction.
+- Loaders acquire, validate, own, and reclaim their language-specific resident
+  resource: native module, linked table, VM, interpreter module, or managed
+  assembly context.
+- Core runtime types describe canonical bundle semantics. Do not add
+  language-specific duplicate bundle/contract types.
+- A loader must stage every contract and resource before publication. Failure
+  publishes nothing and releases staged ownership exactly once.
+- Multi-contract registration is atomic for every language: readers observe
+  either the complete bundle or no bundle.
+- Linked native code may be logically unloaded but cannot be physically unmapped
+  from its host executable. Path/byte native artifacts remain owned by the
+  operating-system loader.
+
+### 24. Delegated Audits Are Leads, Not Truth
+
+**Never implement a reviewer or sub-agent finding without independent
+verification against current source and a reproducer or enforcing test.**
+
+- Preserve audit leads and their validation status in the active Plane work
+  item and its repository audit ledger until closure.
+- For each accepted finding, record exact source evidence, triggering behavior,
+  affected languages, the root fix, and the regression test.
+- Record rejected findings and why they are false, so another agent does not
+  repeat the same mistaken cleanup.
+- Dead-looking code requires the `use vs remove` judgment: determine whether it
+  is incomplete required wiring or genuine waste before deletion.
+
+---
+
 ## Project Structure
 
 ```
@@ -918,6 +979,11 @@ polyplug/
 | duplicate "helper" implementations outside the `checks/sdk_validator.yaml` target files | helpers live only in validated files; golden set in `checks/sdk_validator.yaml` |
 | documentation `.md` at repo root (except CLAUDE.md, README.md, CHANGELOG.md) | all docs live in `docs/` |
 | inline fully-qualified path (`std::path::PathBuf`, `crate::error::Foo`) at a use-site | `use` it at module top, write the short name (exceptions: `core::str::*`, module-qualified `ptr::`/`fs::`, macro `crate::`) |
+| generally applicable Rust-only feature | equivalent feature semantics for all six host and guest languages |
+| language-specific public bundle/contract model | one canonical core model with mechanics behind loaders/generators |
+| per-contract publication during bundle initialization | stage the complete bundle, then commit atomically |
+| cross-compilation used as runtime proof | cross-compile/link plus native target execution |
+| blindly accepting delegated findings | independently verify source, trigger, root fix, and regression test |
 
 ---
 
