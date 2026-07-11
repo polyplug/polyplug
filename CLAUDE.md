@@ -864,7 +864,8 @@ JavaScript/QuickJS.
 verification against current source and a reproducer or enforcing test.**
 
 - Preserve audit leads and their validation status in the active Plane work
-  item and its repository audit ledger until closure.
+  item and `.audit/` ledger until closure. Audit ledgers NEVER live in `docs/`;
+  `docs/` is the mdBook product documentation source.
 - For each accepted finding, record exact source evidence, triggering behavior,
   affected languages, the root fix, and the regression test.
 - Record rejected findings and why they are false, so another agent does not
@@ -881,6 +882,7 @@ polyplug/
 ├── CLAUDE.md                        this file (stays at root)
 ├── README.md                        stays at root (GitHub convention)
 ├── CHANGELOG.md                      stays at root (GitHub convention)
+├── .audit/                          temporary working audit ledgers; never mdBook content
 ├── docs/                            ALL other documentation (.md) lives here —
 │                                    incl. TRUST_MODEL.md, ABI_ARCHITECTURE.md
 ├── crates/
