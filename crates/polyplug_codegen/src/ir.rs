@@ -3,8 +3,8 @@
 //! The IR is produced by the parser, validated (type resolution, contract IDs),
 //! and then consumed by code generators.
 
-use polyplug_codegen::PolyplugcError;
-use polyplug_codegen::ResolvedBundleFile;
+use crate::PolyplugcError;
+use crate::ResolvedBundleFile;
 
 // ─── Version ─────────────────────────────────────────────────────────────
 
@@ -224,6 +224,8 @@ pub struct EnumVariant {
     pub name: String,
     /// Validated expression string, stored verbatim for codegen.
     pub value: String,
+    /// Optional human-readable documentation.
+    pub docs: Option<String>,
 }
 
 /// A fully validated enum definition.
@@ -233,6 +235,8 @@ pub struct EnumDef {
     pub repr: ReprType,
     pub bitflag: bool,
     pub variants: Vec<EnumVariant>,
+    /// Optional human-readable documentation.
+    pub docs: Option<String>,
 }
 
 // ─── IR Structs ────────────────────────────────────────────────────────────────
@@ -242,12 +246,16 @@ pub struct EnumDef {
 pub struct ResolvedType {
     pub name: String,
     pub fields: Vec<ResolvedField>,
+    /// Optional human-readable documentation.
+    pub docs: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ResolvedField {
     pub name: String,
     pub ty: ResolvedTypeRef,
+    /// Optional human-readable documentation.
+    pub docs: Option<String>,
 }
 
 /// A resolved function parameter.
@@ -255,6 +263,8 @@ pub struct ResolvedField {
 pub struct ResolvedParam {
     pub name: String,
     pub ty: ResolvedTypeRef,
+    /// Optional human-readable documentation.
+    pub docs: Option<String>,
 }
 
 #[derive(Debug)]
@@ -264,6 +274,10 @@ pub struct ResolvedFunction {
     pub function_id: u32,
     pub params: Vec<ResolvedParam>,
     pub returns: Option<ResolvedTypeRef>,
+    /// Optional human-readable documentation.
+    pub docs: Option<String>,
+    /// Optional documentation for the return value, including a `void` return.
+    pub return_docs: Option<String>,
 }
 
 #[derive(Debug)]
@@ -273,6 +287,8 @@ pub struct ResolvedContract {
     pub contract_id: u64,
     pub version: Version,
     pub functions: Vec<ResolvedFunction>,
+    /// Optional human-readable documentation.
+    pub docs: Option<String>,
 }
 
 /// A resolved host contract definition.
@@ -287,6 +303,8 @@ pub struct ResolvedHostContract {
     /// If true, `get_host_contract` returns the same instance for all callers.
     pub singleton: bool,
     pub functions: Vec<ResolvedFunction>,
+    /// Optional human-readable documentation.
+    pub docs: Option<String>,
 }
 
 #[derive(Debug)]

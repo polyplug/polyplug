@@ -1,22 +1,24 @@
 //! Generators — CodeGenerator trait and language dispatch.
 
-use std::path::PathBuf;
+pub mod cpp;
+pub mod csharp;
+pub(crate) mod docs;
+pub mod js_quickjs;
+pub mod lua;
+pub mod python;
+pub mod rust;
 
-pub(crate) mod cpp;
-pub(crate) mod csharp;
-pub(crate) mod js_quickjs;
-pub(crate) mod lua;
-pub(crate) mod python;
-pub(crate) mod rust;
-
+use crate::GenerateOutput;
+pub use crate::GeneratedFile;
+use crate::PolyplugcError;
+use crate::ResolvedBundleFile;
+pub type GeneratedFiles = GenerateOutput;
 use crate::ir::ResolvedContract;
 use crate::ir::ResolvedDependency;
 use crate::ir::ValidatedIr;
-use polyplug_codegen::PolyplugcError;
-use polyplug_codegen::ResolvedBundleFile;
 
 /// Arena buffer length (bytes) emitted by every language generator.
-pub(crate) const CALL_ARENA_BUF_LEN: usize = 512;
+pub const CALL_ARENA_BUF_LEN: usize = 512;
 
 /// Collect every contract in `ir.contracts` whose `contract_id` appears in the
 /// bundle's declared dependencies.  Returns an empty vec when there is no bundle
@@ -141,25 +143,8 @@ pub(crate) fn format_manifest_file_field(file: &ResolvedBundleFile) -> String {
     }
 }
 
-/// A single generated file (path + content).
-#[derive(Debug)]
-pub(crate) struct GeneratedFile {
-    /// Relative output path.
-    pub path: PathBuf,
-    /// Generated source code.
-    pub content: String,
-    /// If true, always write this file (skip cache check).
-    /// Used for manifest.toml which must always be regenerated.
-    pub force_regenerate: bool,
-}
-/// Collection of generated files.
-#[derive(Debug, Default)]
-pub(crate) struct GeneratedFiles {
-    pub files: Vec<GeneratedFile>,
-}
-
 /// Trait for language-specific code generators.
-pub(crate) trait CodeGenerator {
+pub trait CodeGenerator {
     /// Generate host-side caller code for an app developer.
     fn generate_host(
         &self,

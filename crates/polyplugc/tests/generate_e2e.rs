@@ -67,6 +67,12 @@ fn example_api_toml() -> PathBuf {
     repo_root().join("examples").join("api.toml")
 }
 
+/// Absolute path to the in-tree runtime crate. Generated Rust host callers
+/// retain `Arc<Runtime>`, so host-side compile fixtures depend on it directly.
+fn polyplug_path() -> PathBuf {
+    repo_root().join("crates").join("polyplug")
+}
+
 /// Absolute path to the in-tree ABI crate (a dependency the generated host
 /// glue needs).
 fn polyplug_abi_path() -> PathBuf {
@@ -410,8 +416,10 @@ fn host_thunk_empty_stringview_round_trips() {
          name = \"driver\"\n\
          path = \"src/main.rs\"\n\n\
          [dependencies]\n\
+         polyplug = {{ path = \"{}\" }}\n\
          polyplug_abi = {{ path = \"{}\" }}\n\
          polyplug_utils = {{ path = \"{}\" }}\n",
+        polyplug_path().display().to_string().replace('\\', "\\\\"),
         polyplug_abi_path()
             .display()
             .to_string()

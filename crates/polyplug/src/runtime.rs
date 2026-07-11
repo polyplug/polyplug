@@ -60,6 +60,8 @@ use crate::loader::manifest::{parsed_bundle_dependencies, resolved_dependencies_
 use crate::loader::parse_manifest;
 use crate::logger::{LoggerClosure, LoggerHandle, RecoverPoisoned, RecoveringGuard};
 pub use crate::runtime_builder::RuntimeBuilder;
+pub use crate::runtime_store::{EmbeddedBundle, EmbeddedContract};
+
 use crate::runtime_store::BundleDependency;
 use crate::runtime_store::BundleDescriptor;
 use crate::runtime_store::RuntimeStore;
@@ -211,6 +213,21 @@ impl Runtime {
     /// Create a RuntimeBuilder.
     pub fn builder() -> RuntimeBuilder {
         RuntimeBuilder::new()
+    }
+
+    /// Atomically register a statically linked guest bundle.
+    ///
+    /// The returned ID is derived with the same [`BundleId::new`] semantics as a
+    /// loader-backed bundle and can be passed to [`Runtime::unload_bundle`]. All
+    /// contracts, metadata, and dependency declarations are installed together or
+    /// the runtime remains unchanged. Interface references must remain valid until
+    /// the returned bundle ID is unloaded.
+    pub fn register_embedded_bundle(
+        &self,
+        bundle: &EmbeddedBundle,
+    ) -> Result<BundleId, RuntimeError> {
+        self.registry.register_embedded_bundle(bundle)?;
+        Ok(BundleId::new(bundle.name))
     }
 
     /// Find the first provider of a contract.
@@ -1661,9 +1678,19 @@ unsafe fn host_register_guest_contract_impl(
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
     let registry: &RuntimeStore = &runtime.registry;
-    // Get bundle_id from the runtime's per-thread init stack (pushed by the loader
-    // before calling polyplug_init).
+    // Raw guest registration is reserved for a loader-owned polyplug_init
+    // invocation. Hosts register static implementations through
+    // Runtime::register_embedded_bundle instead.
     let bundle_id: u64 = runtime.current_init_bundle_id();
+    if bundle_id == 0 {
+        const OUTSIDE_INIT: &[u8] =
+            b"register_guest_contract is only valid during loader initialization";
+        runtime.set_last_error(String::from_utf8_lossy(OUTSIDE_INIT).into_owned());
+        return AbiError {
+            code: AbiErrorCode::Generic as u32,
+            message: StringView::from_static(OUTSIDE_INIT),
+        };
+    }
 
     // SAFETY: descriptor is non-null (checked above) and provided by the plugin's
     // polyplug_init function.

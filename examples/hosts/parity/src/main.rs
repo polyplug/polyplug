@@ -140,7 +140,7 @@ fn sv_to_owned(sv: StringView) -> Result<String, String> {
 }
 
 /// Find a contract caller by ID in the runtime.
-fn find_contract<T>(runtime: &Runtime, contract_id: u64) -> Result<T, String>
+fn find_contract<T>(runtime: &Arc<Runtime>, contract_id: u64) -> Result<T, String>
 where
     T: ContractCaller,
 {
@@ -150,7 +150,8 @@ where
     if handle.is_null() {
         return Err("contract handle is null".to_string());
     }
-    T::from_handle(handle, runtime).ok_or_else(|| "failed to build contract caller".to_string())
+    T::from_handle(handle, Arc::clone(runtime))
+        .ok_or_else(|| "failed to build contract caller".to_string())
 }
 
 /// Invoke every contract for one language and return its (contract -> output)
@@ -331,35 +332,35 @@ fn print_matrix(grid: &[(String, Vec<bool>)]) {
 
 /// Trait for contract callers - allows generic find_contract helper.
 trait ContractCaller: Sized {
-    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self>;
+    fn from_handle(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self>;
 }
 
 impl ContractCaller for PipelineDecoderContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
-        Self::new(handle, runtime.as_context_ptr())
+    fn from_handle(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self> {
+        Self::new(handle, runtime)
     }
 }
 
 impl ContractCaller for DataTransformerContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
-        Self::new(handle, runtime.as_context_ptr())
+    fn from_handle(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self> {
+        Self::new(handle, runtime)
     }
 }
 
 impl ContractCaller for PipelineEncoderContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
-        Self::new(handle, runtime.as_context_ptr())
+    fn from_handle(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self> {
+        Self::new(handle, runtime)
     }
 }
 
 impl ContractCaller for DataReporterContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
-        Self::new(handle, runtime.as_context_ptr())
+    fn from_handle(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self> {
+        Self::new(handle, runtime)
     }
 }
 
 impl ContractCaller for PipelineValidatorContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
-        Self::new(handle, runtime.as_context_ptr())
+    fn from_handle(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self> {
+        Self::new(handle, runtime)
     }
 }

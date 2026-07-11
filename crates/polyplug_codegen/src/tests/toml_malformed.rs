@@ -10,9 +10,9 @@
 
 #![allow(clippy::expect_used)]
 
+use crate::error::PolyplugcError;
 use crate::ir::ValidatedIr;
 use crate::parser::{parse_api_str, parse_bundle_str};
-use polyplug_codegen::error::PolyplugcError;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

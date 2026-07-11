@@ -119,6 +119,53 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
   exports; the generated `init.rs` provides `polyplug_init`. Trait and factory
   names come from [Generated names](../generated-names.md).
 
+## Embedded Rust guest
+
+An embedded guest is linked directly into a Rust host executable rather than
+loaded from a disk bundle. Generate it through the public code-generation
+library; the CLI continues to generate the disk guest ABI:
+
+```rust
+use polyplug_codegen::{
+    GenerateConfig, Lang, RustGuestMode, Side, generate_rust_guest, write_output,
+};
+
+let output = generate_rust_guest(
+    GenerateConfig {
+        api_toml: "api.toml".into(),
+        lang: Lang::Rust,
+        side: Side::Guest,
+        out_dir: "generated".into(),
+    },
+    RustGuestMode::Embedded {
+        bundle_name: "my_plugin".to_owned(),
+    },
+)?;
+write_output(&output, std::path::Path::new("generated"))?;
+```
+
+The generated module exposes `interfaces::EmbeddedFactories` and
+`init::embedded_bundle`. Supply ordinary module-scoped Rust factory functions;
+the generated bundle descriptor borrows only static generated tables and can be
+registered through `Runtime::register_embedded_bundle`:
+
+```rust
+fn create_my_plugin(host: HostContext) -> Box<dyn PipelineDecoderGuestContract> {
+    Box::new(Plugin { host })
+}
+
+let bundle = generated::init::embedded_bundle(
+    generated::interfaces::EmbeddedFactories {
+        my_plugin: create_my_plugin,
+    },
+);
+runtime.register_embedded_bundle(&bundle)?;
+```
+
+Each generated module has independent factory storage and interfaces, so several
+embedded Rust guests can link into one executable. Use ordinary
+`unload_bundle` and re-registration operations for their lifecycle.
+
 To call a host contract (such as a logging service) from your plugin, use the
 typed caller in the generated `host_contract_callers.rs`. See
 `examples/guests/rust/reporter/src/lib.rs` for the full pattern.

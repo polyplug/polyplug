@@ -9,24 +9,21 @@ use clap::Subcommand;
 
 use ed25519_dalek::SigningKey;
 use ed25519_dalek::VerifyingKey;
-use polyplug_codegen::{GenerateConfig, GenerateOutput, PolyplugcError, Side};
+use polyplug_codegen::GenerateConfig;
+use polyplug_codegen::GenerateOutput;
+use polyplug_codegen::PolyplugcError;
+use polyplug_codegen::Side;
+use polyplug_codegen::WriteSummary;
+use polyplug_codegen::generate;
+use polyplug_codegen::parse_lang;
+use polyplug_codegen::parser;
+use polyplug_codegen::write_output;
 use polyplug_signing::{
     SigError, VerifiedBundle, generate_keypair, load_signing_key, save_signing_key,
     save_verifying_key, sign_bundle, verify_bundle,
 };
 
-mod codegen;
-mod generators;
-mod ir;
-mod parser;
 mod validate;
-
-// In-crate tests that exercise private surfaces the bin-only crate cannot expose
-// as a library (parser/IR internals, write_output/force_regenerate semantics).
-#[cfg(test)]
-mod tests;
-
-use crate::codegen::{WriteSummary, generate, parse_lang, write_output};
 
 /// polyplugc — code generator for the polyplug plugin runtime.
 #[derive(Debug, Parser)]

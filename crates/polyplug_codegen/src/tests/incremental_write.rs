@@ -1,12 +1,4 @@
-//! Incremental-write behaviour of `crate::codegen::write_output`.
-//!
-//! Every generator stamps `GeneratedFile::force_regenerate` — `true` for files like
-//! `manifest.toml` whose ids must always reflect the current contract, `false` for
-//! language bindings. This test proves the consumer honours that flag: a re-run that
-//! produces byte-identical output rewrites ONLY the force-regenerate files and leaves
-//! unchanged bindings untouched, while a binding whose on-disk content drifts is
-//! rewritten. Without the flag being wired (its prior state), every file was rewritten
-//! unconditionally and this contract had no enforcement.
+//! Incremental-write and path-safety behaviour of the public writer.
 
 #![allow(clippy::expect_used)]
 
@@ -14,10 +6,17 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process;
+use tempfile::tempdir;
 
-use polyplug_codegen::{GenerateConfig, GenerateOutput, Lang, Side};
-
-use crate::codegen::{WriteSummary, generate, write_output};
+use crate::GenerateConfig;
+use crate::GenerateOutput;
+use crate::GeneratedFile;
+use crate::Lang;
+use crate::PolyplugcError;
+use crate::Side;
+use crate::WriteSummary;
+use crate::generate;
+use crate::write_output;
 
 const API_TOML: &str = "\
 [[plugin_contract]]
@@ -150,4 +149,39 @@ fn rewrites_only_force_and_changed_files() {
     );
 
     let _ = fs::remove_dir_all(&tmp_dir);
+}
+
+#[test]
+fn unsafe_output_paths_are_rejected_before_writes() {
+    let temp = tempdir().expect("create temporary directory");
+    let out_dir = temp.path().join("generated");
+    let unsafe_paths = [
+        PathBuf::from("../outside.txt"),
+        PathBuf::from("/tmp/polyplug_codegen_outside.txt"),
+    ];
+
+    for path in unsafe_paths {
+        let output = GenerateOutput {
+            files: vec![
+                GeneratedFile {
+                    path: PathBuf::from("safe.txt"),
+                    content: "safe".to_owned(),
+                    force_regenerate: false,
+                },
+                GeneratedFile {
+                    path,
+                    content: "unsafe".to_owned(),
+                    force_regenerate: false,
+                },
+            ],
+        };
+        let error =
+            write_output(&output, &out_dir).expect_err("unsafe output path must be rejected");
+        assert!(matches!(error, PolyplugcError::UnsafeOutputPath { .. }));
+    }
+
+    assert!(
+        !out_dir.exists(),
+        "writer must reject paths before creating output"
+    );
 }

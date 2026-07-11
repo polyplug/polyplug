@@ -15,7 +15,15 @@ use super::types::*;
 
 /// Host trait for contract `host.logger` (id=0xF53EB5F2845853BB)
 /// Hosts implement this trait to provide functionality to plugins.
+/// Logging service supplied by the host.
 pub trait HostLogger: Send + Sync {
+    /// Writes an informational log message.
+    ///
+    /// # Arguments
+    /// * `message` — Message text to write.
+    ///
+    /// # Returns
+    /// Logging has no return value.
     fn log(&self, message: &str) -> ();
     fn log_with_level(&self, level: &LogLevel, message: &str) -> ();
 }

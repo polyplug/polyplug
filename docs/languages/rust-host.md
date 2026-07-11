@@ -191,7 +191,7 @@ let handle: GuestContractHandle = runtime
     .expect("contract not found");
 
 let mut caller: PipelineDecoderContract =
-    PipelineDecoderContract::new(handle, runtime.as_context_ptr())
+    PipelineDecoderContract::new(handle, Arc::clone(&runtime))
         .expect("caller init");
 
 let input = StringView { ptr: b"name,value,42".as_ptr(), len: 13 };
@@ -207,6 +207,10 @@ println!("{s}");   // DECODED:name|value|42
 The second argument to `find_guest_contract` is the minimum version to accept;
 pass `0` for any version. A hot-reloaded plugin
 is picked up automatically — see [Hot Reload](../HOT_RELOAD_DESIGN.md).
+
+Generated callers retain the supplied `Arc<Runtime>`. A caller therefore keeps
+its runtime alive after the application drops its original `Arc`, while normal
+unload and reload revision checks still invalidate stale contract handles.
 
 ## Full reference
 

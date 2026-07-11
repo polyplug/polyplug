@@ -62,6 +62,39 @@ unsafe extern "C" fn stateless_destroy_instance(
 ) {
 }
 
+/// Static guest contract implementation registered directly by a host process.
+///
+/// The interface and its dispatch tables must remain valid for the registration's
+/// lifetime. Requiring a `'static` reference preserves that requirement without
+/// widening a shorter-lived reference.
+pub struct EmbeddedContract {
+    /// Human-readable provider name.
+    pub plugin_name: &'static str,
+    /// Full contract name used for collision detection.
+    pub contract_name: &'static str,
+    /// Provider version.
+    pub version: Version,
+    /// Statically linked guest interface.
+    pub interface: &'static GuestContractInterface,
+}
+
+/// Atomic description of one statically linked, in-process bundle.
+///
+/// `dependencies` declares guest contracts this bundle needs, using the same
+/// dependency enforcement and unload rules as loader-backed bundles.
+pub struct EmbeddedBundle {
+    /// Stable bundle name used to derive [`BundleId`].
+    pub name: &'static str,
+    /// Bundle version shown by runtime introspection.
+    pub version: Version,
+    /// Language recorded in bundle metadata.
+    pub runtime: SupportedLanguage,
+    /// Guest contracts this bundle declares as dependencies.
+    pub dependencies: &'static [GuestContractId],
+    /// Guest contract implementations supplied by this bundle.
+    pub contracts: &'static [EmbeddedContract],
+}
+
 /// Bundle metadata stored in RuntimeStore.
 ///
 /// Provides complete bundle information for introspection and dependency resolution.
@@ -170,6 +203,13 @@ pub(crate) struct PluginSlot {
     /// slot is vacated so a handle minted against an earlier generation is recognised as
     /// stale even after the index is recycled by a later registration. Starts at 0.
     pub generation: u32,
+}
+
+struct PreparedGuestContract {
+    contract_id: GuestContractId,
+    descriptor: OwnedPluginDescriptor,
+    contract_name: String,
+    interface: Arc<GuestContractInterface>,
 }
 
 /// Internal data protected by a single RwLock.
@@ -464,16 +504,8 @@ impl RuntimeStore {
     ///
     /// # Safety
     ///
-    /// `interface_ptr` must be a valid pointer to a `'static` `GuestContractInterface` that remains valid
-    /// for the entire lifetime of the `Registry`. The caller must ensure the backing library
-    /// is not unloaded while this registry holds the pointer.
-    //
-    //  Returns Err if:
-    //  - contract_id is already registered to a DIFFERENT contract_name (hash collision)
-    //  - contract_id is already registered by the SAME bundle_id and the bundle is not
-    //    mid-reload (duplicate provider)
-    //
-    //  Different bundles MAY register the same contract_id (multi-impl).
+    /// `interface_ptr` must point to a valid `GuestContractInterface` for the
+    /// registration's lifetime.
     pub unsafe fn register_guest_contract(
         &self,
         descriptor: PluginDescriptor,
@@ -481,116 +513,145 @@ impl RuntimeStore {
         contract_name: String,
         bundle_id: BundleId,
     ) -> Result<GuestContractHandle, RegistryError> {
-        // SAFETY: interface_ptr is a valid 'static GuestContractInterface supplied by the caller.
-        // The ABI contract requires the pointer to remain valid for the library lifetime.
-        let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
-
-        // The plugin is untrusted: `dispatch_type` is a `#[repr(u32)]` enum but the
-        // plugin-provided struct can hold any 32-bit pattern. Materializing an
-        // out-of-range value as the enum would be UB, so read the field as a raw
-        // `u32` and validate it via the total `DispatchType::from_u32` before use.
-        let dispatch_type: DispatchType = {
-            // SAFETY: interface_ptr is a valid 'static GuestContractInterface (ABI
-            // contract). We read the 4-byte `dispatch_type` field as a raw `u32`
-            // (never as the typed enum) so an out-of-range value is observed soundly.
-            let raw: u32 =
-                unsafe { ptr::read(ptr::addr_of!((*interface_ptr).dispatch_type) as *const u32) };
-            match DispatchType::from_u32(raw) {
-                Some(dt) => dt,
-                None => return Err(RegistryError::InvalidDispatchType { value: raw }),
-            }
-        };
-
-        // Validate and copy the descriptor's borrowed `name` into an owned String
-        // BEFORE touching any registry state, so a rejected (invalid UTF-8) name
-        // leaves no slot behind. The StringView is valid for the whole call (the
-        // plugin owns the backing buffer during polyplug_init); we only read it.
-        // SAFETY: `descriptor.name` describes a valid byte range for this call.
-        let owned_name: String =
-            unsafe { string_view_to_owned_string(&descriptor.name, "PluginDescriptor.name")? };
-
+        // SAFETY: upheld by this function's caller.
+        let contract: PreparedGuestContract =
+            unsafe { Self::prepare_guest_contract(descriptor, interface_ptr, contract_name)? };
         let mut data: RecoveringGuard<RwLockWriteGuard<'_, RuntimeStoreData>> =
             self.data.write().recover_poisoned(self.logger, "store");
-
-        // During a reload window the bundle legitimately re-registers its own
-        // contracts into fresh (pending) slots; that is re-init, not a duplicate.
-        // Outside the window, a second registration of the SAME contract_id by the
-        // SAME bundle_id is the DuplicateProvider case the module contract promises
-        // to reject.
         let is_reloading: bool = data.reloading_bundles.contains(&bundle_id);
+        Self::validate_guest_contract_registration(&data, &contract, bundle_id, is_reloading)?;
+        Self::ensure_default_bundle_data(&mut data, bundle_id);
+        let handle: GuestContractHandle =
+            Self::insert_prepared_guest_contract(&mut data, contract, bundle_id, !is_reloading)?;
+        self.publish(&data);
+        Ok(handle)
+    }
 
-        if let Some(existing_indices) = data.guest_contract_index.get(&contract_id) {
-            for &existing_idx in existing_indices.iter() {
-                let existing_slot: &PluginSlot = &data.slots[existing_idx as usize];
-                if let Some(ref existing_entry) = existing_slot.entry {
-                    // Hash collision: same contract_id, different contract_name.
-                    if existing_entry.contract_name != contract_name {
-                        return Err(RegistryError::ContractIdCollision {
-                            id: contract_id.id(),
-                            name_a: existing_entry.contract_name.clone(),
-                            name_b: contract_name,
-                        });
-                    }
-                    // Same bundle, same contract, NOT mid-reload — duplicate provider.
-                    if existing_entry.bundle_id == bundle_id && !is_reloading {
-                        return Err(RegistryError::DuplicateProvider {
-                            contract: contract_name,
-                            existing: existing_entry.descriptor.name.clone(),
-                        });
-                    }
-                    // Different bundle, same contract — allowed (multi-impl support).
-                }
-            }
+    /// Register every contract in an in-process bundle as one registry mutation.
+    ///
+    /// All descriptor and collision checks complete before the store changes. The
+    /// single write lock then installs bundle metadata, dependency declarations, and
+    /// contract slots before publishing one snapshot.
+    pub(crate) fn register_embedded_bundle(
+        &self,
+        bundle: &EmbeddedBundle,
+    ) -> Result<(), RegistryError> {
+        if bundle.name.is_empty() {
+            return Err(RegistryError::EmptyEmbeddedBundleName);
+        }
+        if bundle.contracts.is_empty() {
+            return Err(RegistryError::EmptyEmbeddedBundle);
         }
 
-        let slot_idx: u32 = data
-            .slots
-            .iter()
-            .position(|s| s.entry.is_none())
-            .map(|i| i as u32)
-            .unwrap_or_else(|| {
-                let new_idx: u32 = data.slots.len() as u32;
-                data.slots.push(PluginSlot {
-                    entry: None,
-                    interface: None,
-                    generation: 0,
-                });
-                new_idx
+        let bundle_id: BundleId = BundleId::new(bundle.name);
+        if bundle_id.id() == 0 {
+            return Err(RegistryError::ReservedEmbeddedBundleId {
+                bundle: bundle.name.to_owned(),
             });
+        }
 
-        let owned_descriptor: OwnedPluginDescriptor = OwnedPluginDescriptor {
-            name: owned_name,
-            contract_name: contract_name.clone(),
-            version: descriptor.version,
+        let mut contracts: Vec<PreparedGuestContract> = Vec::with_capacity(bundle.contracts.len());
+        for (index, embedded) in bundle.contracts.iter().enumerate() {
+            if embedded.contract_name.is_empty() {
+                return Err(RegistryError::EmptyEmbeddedContract { index });
+            }
+            let descriptor: PluginDescriptor = PluginDescriptor {
+                name: StringView::from_static(embedded.plugin_name.as_bytes()),
+                contract_name: StringView::from_static(embedded.contract_name.as_bytes()),
+                version: embedded.version,
+            };
+            // SAFETY: EmbeddedContract exposes only a 'static interface reference.
+            let contract: PreparedGuestContract = unsafe {
+                Self::prepare_guest_contract(
+                    descriptor,
+                    embedded.interface as *const GuestContractInterface,
+                    embedded.contract_name.to_owned(),
+                )?
+            };
+
+            for existing in &contracts {
+                if existing.contract_id != contract.contract_id {
+                    continue;
+                }
+                if existing.contract_name != contract.contract_name {
+                    return Err(RegistryError::ContractIdCollision {
+                        id: contract.contract_id.id(),
+                        name_a: existing.contract_name.clone(),
+                        name_b: contract.contract_name,
+                    });
+                }
+                return Err(RegistryError::DuplicateProvider {
+                    contract: contract.contract_name,
+                    existing: existing.descriptor.name.clone(),
+                });
+            }
+            contracts.push(contract);
+        }
+
+        let descriptor: BundleDescriptor = BundleDescriptor {
+            id: bundle_id,
+            name: bundle.name.to_owned(),
+            version: bundle.version,
+            runtime: bundle.runtime,
+            file_path: PathBuf::new(),
+            dependencies: Vec::new(),
         };
+        let dependencies: HashSet<GuestContractId> = bundle.dependencies.iter().copied().collect();
+        let mut data: RecoveringGuard<RwLockWriteGuard<'_, RuntimeStoreData>> =
+            self.data.write().recover_poisoned(self.logger, "store");
+        for contract in &contracts {
+            Self::validate_guest_contract_registration(&data, contract, bundle_id, false)?;
+        }
+        if data.bundle_data.contains_key(&bundle_id) {
+            return Err(RegistryError::BundleAlreadyRegistered {
+                bundle: bundle.name.to_owned(),
+            });
+        }
 
-        let slot: &mut PluginSlot = &mut data.slots[slot_idx as usize];
-        let slot_generation: u32 = slot.generation;
-        slot.entry = Some(PluginEntry {
-            descriptor: owned_descriptor,
-            contract_name,
+        data.bundle_data.insert(
             bundle_id,
-        });
-        // Copy the interface into an Arc for shared ownership, substituting
-        // built-in stateless stubs for any null instance-lifecycle pointer.
-        //
-        // Guest generators that cannot emit a struct-returning callback (e.g.
-        // Python/ctypes, whose callbacks may not return the 16-byte
-        // GuestContractInstance by value) leave create_instance / destroy_instance
-        // as null. The ABI field type is a *non-nullable* `fn` pointer, so a null
-        // must never be materialized as a typed `fn` value (that would be UB).
-        // The lifecycle pointers are therefore read as raw `*const ()` directly
-        // from the source struct, checked for null, and only then transmuted back
-        // to typed fn pointers.
+            BundleData {
+                plugin_slots: Vec::with_capacity(contracts.len()),
+                descriptor,
+            },
+        );
+        data.bundle_name_index
+            .entry(bundle.name.to_owned())
+            .or_default()
+            .push(bundle_id);
+        data.bundle_declared_deps.insert(bundle_id, dependencies);
+        for contract in contracts {
+            let _handle: GuestContractHandle =
+                Self::insert_prepared_guest_contract(&mut data, contract, bundle_id, true)?;
+        }
+        self.publish(&data);
+        Ok(())
+    }
+
+    unsafe fn prepare_guest_contract(
+        descriptor: PluginDescriptor,
+        interface_ptr: *const GuestContractInterface,
+        contract_name: String,
+    ) -> Result<PreparedGuestContract, RegistryError> {
+        // SAFETY: upheld by the caller.
+        let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
+        let dispatch_type: DispatchType = {
+            // SAFETY: `interface_ptr` is valid; reading the raw discriminant avoids
+            // materializing an out-of-range enum value from untrusted ABI input.
+            let raw: u32 =
+                unsafe { ptr::read(ptr::addr_of!((*interface_ptr).dispatch_type) as *const u32) };
+            DispatchType::from_u32(raw).ok_or(RegistryError::InvalidDispatchType { value: raw })?
+        };
+        // SAFETY: descriptor.name is valid for this registration call.
+        let owned_name: String =
+            unsafe { string_view_to_owned_string(&descriptor.name, "PluginDescriptor.name")? };
         let interface: GuestContractInterface = unsafe {
-            // SAFETY: interface_ptr is a valid 'static GuestContractInterface.
-            // We read the two function-pointer fields as raw pointers (never as
-            // typed `fn`) so a null value is observed soundly.
+            // SAFETY: `interface_ptr` is valid. Read function-pointer bits before
+            // materializing them so null lifecycle entries can become stateless stubs.
             let create_raw: *const () =
                 ptr::read(ptr::addr_of!((*interface_ptr).create_instance) as *const *const ());
             let destroy_raw: *const () =
                 ptr::read(ptr::addr_of!((*interface_ptr).destroy_instance) as *const *const ());
-
             let create_instance: unsafe extern "C" fn(
                 VmLoaderData,
                 *const HostApi,
@@ -599,7 +660,6 @@ impl RuntimeStore {
             ) = if create_raw.is_null() {
                 stateless_create_instance
             } else {
-                // SAFETY: non-null pointer to a valid create_instance per ABI.
                 mem::transmute::<
                     *const (),
                     unsafe extern "C" fn(
@@ -617,15 +677,11 @@ impl RuntimeStore {
             ) = if destroy_raw.is_null() {
                 stateless_destroy_instance
             } else {
-                // SAFETY: non-null pointer to a valid destroy_instance per ABI.
                 mem::transmute::<
                     *const (),
                     unsafe extern "C" fn(VmLoaderData, *const HostApi, GuestContractInstance),
                 >(destroy_raw)
             };
-
-            // SAFETY: the remaining POD fields are read from the same valid
-            // struct; the (possibly substituted) lifecycle fns are sound.
             GuestContractInterface {
                 contract_id: (*interface_ptr).contract_id,
                 contract_version: (*interface_ptr).contract_version,
@@ -635,22 +691,48 @@ impl RuntimeStore {
                 dispatch: ptr::read(ptr::addr_of!((*interface_ptr).dispatch)),
             }
         };
-        slot.interface = Some(Arc::new(interface));
+        Ok(PreparedGuestContract {
+            contract_id,
+            descriptor: OwnedPluginDescriptor {
+                name: owned_name,
+                contract_name: contract_name.clone(),
+                version: descriptor.version,
+            },
+            contract_name,
+            interface: Arc::new(interface),
+        })
+    }
 
-        // Publish into guest_contract_index UNLESS this bundle is mid-reload. During a
-        // reload the freshly-registered slot is "pending": keeping it out of the find
-        // index prevents readers from transiently seeing two live slots per contract.
-        // apply_reload_swap later moves the interface into the already-published old
-        // slot and vacates this pending slot, so the index is never double-populated.
-        // `is_reloading` was computed above (the reload set is not mutated in between).
-        if !is_reloading {
-            data.guest_contract_index
-                .entry(contract_id)
-                .or_default()
-                .push(slot_idx);
+    fn validate_guest_contract_registration(
+        data: &RuntimeStoreData,
+        contract: &PreparedGuestContract,
+        bundle_id: BundleId,
+        is_reloading: bool,
+    ) -> Result<(), RegistryError> {
+        if let Some(existing_indices) = data.guest_contract_index.get(&contract.contract_id) {
+            for &existing_idx in existing_indices {
+                let existing_slot: &PluginSlot = &data.slots[existing_idx as usize];
+                if let Some(existing) = &existing_slot.entry {
+                    if existing.contract_name != contract.contract_name {
+                        return Err(RegistryError::ContractIdCollision {
+                            id: contract.contract_id.id(),
+                            name_a: existing.contract_name.clone(),
+                            name_b: contract.contract_name.clone(),
+                        });
+                    }
+                    if existing.bundle_id == bundle_id && !is_reloading {
+                        return Err(RegistryError::DuplicateProvider {
+                            contract: contract.contract_name.clone(),
+                            existing: existing.descriptor.name.clone(),
+                        });
+                    }
+                }
+            }
         }
+        Ok(())
+    }
 
-        // The descriptor is populated separately via register_bundle_metadata().
+    fn ensure_default_bundle_data(data: &mut RuntimeStoreData, bundle_id: BundleId) {
         data.bundle_data
             .entry(bundle_id)
             .or_insert_with(|| BundleData {
@@ -667,15 +749,54 @@ impl RuntimeStore {
                     file_path: PathBuf::new(),
                     dependencies: Vec::new(),
                 },
-            })
-            .plugin_slots
-            .push(slot_idx);
+            });
+    }
 
-        self.publish(&data);
-
+    fn insert_prepared_guest_contract(
+        data: &mut RuntimeStoreData,
+        contract: PreparedGuestContract,
+        bundle_id: BundleId,
+        publish_contract: bool,
+    ) -> Result<GuestContractHandle, RegistryError> {
+        let plugin_slots: &mut Vec<u32> = &mut data
+            .bundle_data
+            .get_mut(&bundle_id)
+            .ok_or(RegistryError::MissingBundleMetadata {
+                bundle_id: bundle_id.id(),
+            })?
+            .plugin_slots;
+        let slot_idx: u32 = data
+            .slots
+            .iter()
+            .position(|slot| slot.entry.is_none())
+            .map(|index| index as u32)
+            .unwrap_or_else(|| {
+                let index: u32 = data.slots.len() as u32;
+                data.slots.push(PluginSlot {
+                    entry: None,
+                    interface: None,
+                    generation: 0,
+                });
+                index
+            });
+        let slot: &mut PluginSlot = &mut data.slots[slot_idx as usize];
+        let generation: u32 = slot.generation;
+        slot.entry = Some(PluginEntry {
+            descriptor: contract.descriptor,
+            contract_name: contract.contract_name,
+            bundle_id,
+        });
+        slot.interface = Some(contract.interface);
+        if publish_contract {
+            data.guest_contract_index
+                .entry(contract.contract_id)
+                .or_default()
+                .push(slot_idx);
+        }
+        plugin_slots.push(slot_idx);
         Ok(GuestContractHandle {
             index: slot_idx,
-            generation: slot_generation,
+            generation,
         })
     }
 

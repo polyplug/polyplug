@@ -12,6 +12,9 @@ use super::GeneratedFile;
 use super::GeneratedFiles;
 use super::collect_peer_contracts;
 use super::peer_min_version;
+
+use super::docs::write_jsdoc;
+use crate::PolyplugcError;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -33,7 +36,7 @@ use langprint::backends::js_backend::{
 };
 use langprint::renderers::{EnumRenderer, FunctionRenderer};
 use langprint::{ImportEntry, ImportSet, TargetLanguage};
-use polyplug_codegen::PolyplugcError;
+use polyplug_utils::guest_contract_id;
 use std::io;
 
 /// A JS/TS named import `import {{ {name} }} from '{source}'`.
@@ -80,7 +83,7 @@ use std::string::FromUtf8Error;
 ///
 /// Produces TypeScript files using lo/hi u32 pairs for 64-bit values
 /// (QuickJS uses f64 internally, so bigint is not available).
-pub(crate) struct JsQuickjsGenerator;
+pub struct JsQuickjsGenerator;
 
 impl CodeGenerator for JsQuickjsGenerator {
     fn generate_host(
@@ -245,6 +248,22 @@ fn generate_js_quickjs_enum(out: &mut String, e: &EnumDef) -> Result<(), Polyplu
     } else {
         format!("Enum {}", e.name)
     };
+    let mut docs: Vec<String> = super::docs::lines(e.docs.as_deref())
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    for variant in &e.variants {
+        if let Some(variant_docs) = variant.docs.as_deref() {
+            docs.push(format!(
+                "{}: {}",
+                variant.name,
+                variant_docs.replace('\n', " ")
+            ));
+        }
+    }
+    if !docs.is_empty() {
+        write_jsdoc(out, "", Some(&docs.join("\n")), &[], None);
+    }
     let js_enum: JsEnum = JsEnum {
         name: e.name.clone(),
         members: e
@@ -302,6 +321,7 @@ fn generate_types_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
 }
 
 fn render_resolved_type(out: &mut String, type_def: &ResolvedType) {
+    write_jsdoc(out, "", type_def.docs.as_deref(), &[], None);
     out.push_str(&format!("export interface {} {{\n", type_def.name));
     for field in &type_def.fields {
         render_resolved_field(out, field);
@@ -311,10 +331,12 @@ fn render_resolved_type(out: &mut String, type_def: &ResolvedType) {
 
 fn render_resolved_field(out: &mut String, field: &ResolvedField) {
     let ts_t: String = ts_type_ref(&field.ty);
+    write_jsdoc(out, "    ", field.docs.as_deref(), &[], None);
     out.push_str(&format!("    readonly {}: {};\n", field.name, ts_t));
 }
 
 fn render_contract_types(out: &mut String, contract: &ResolvedContract) {
+    write_jsdoc(out, "", contract.docs.as_deref(), &[], None);
     for func in &contract.functions {
         let params: String = func
             .params
@@ -326,6 +348,18 @@ fn render_contract_types(out: &mut String, contract: &ResolvedContract) {
             None => "void".to_owned(),
             Some(ty) => ts_type_ref(ty),
         };
+        let documented_params: Vec<(&str, Option<&str>)> = func
+            .params
+            .iter()
+            .map(|param| (param.name.as_str(), param.docs.as_deref()))
+            .collect();
+        write_jsdoc(
+            out,
+            "",
+            func.docs.as_deref(),
+            &documented_params,
+            func.return_docs.as_deref(),
+        );
         out.push_str(&format!(
             "export type {}_{} = ({}) => {};\n",
             contract.name.replace('.', "_"),
@@ -415,8 +449,7 @@ fn render_plugin_interface_quickjs(
 ) -> Result<(), PolyplugcError> {
     let plugin_var: String = plugin_name.to_uppercase().replace(['.', '-'], "_");
     let contract_name_full: String = format!("{}@{}", contract.name, contract.version.major);
-    let contract_id: u64 =
-        polyplug_utils::guest_contract_id(&contract.name, contract.version.major);
+    let contract_id: u64 = guest_contract_id(&contract.name, contract.version.major);
     let contract_lo: u32 = (contract_id & 0xFFFFFFFF) as u32;
     let contract_hi: u32 = (contract_id >> 32) as u32;
     let function_count: usize = contract.functions.len();
@@ -427,6 +460,7 @@ fn render_plugin_interface_quickjs(
     out.push_str(&format!(
         "// Plugin: {plugin_name} ({contract_name_full})\n"
     ));
+    write_jsdoc(out, "", contract.docs.as_deref(), &[], None);
     for func in &contract.functions {
         let params: String = func
             .params
@@ -438,6 +472,18 @@ fn render_plugin_interface_quickjs(
             None => "void".to_owned(),
             Some(ty) => ts_type_ref(ty),
         };
+        let documented_params: Vec<(&str, Option<&str>)> = func
+            .params
+            .iter()
+            .map(|param| (param.name.as_str(), param.docs.as_deref()))
+            .collect();
+        write_jsdoc(
+            out,
+            "",
+            func.docs.as_deref(),
+            &documented_params,
+            func.return_docs.as_deref(),
+        );
         out.push_str(&format!(
             "//   {fn_name}({params}): {ret_type}\n",
             fn_name = func.name
@@ -776,7 +822,12 @@ fn render_js_method(
         typescript: true,
         verbatim_body: true,
     };
-    let before: String = format!("    {jsdoc}\n");
+    let before: String = jsdoc
+        .lines()
+        .map(|line| format!("    {line}"))
+        .collect::<Vec<String>>()
+        .join("\n")
+        + "\n";
     let mut indent_level: i32 = 1;
     let mut buf: Vec<u8> = Vec::new();
     backend
@@ -1192,10 +1243,18 @@ fn generate_host_caller_class_quickjs(
     let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
     let contract_id_const: String = format!("{}_CONTRACT_ID", contract_upper);
 
-    out.push_str(&format!(
-        "/** Host caller for contract `{}` over the Deno FFI SDK. */\n",
-        contract.name
-    ));
+    if let Some(docs) = contract.docs.as_deref() {
+        let caller_docs: String = format!(
+            "Host caller for contract `{}` over the Deno FFI SDK.\n\n{docs}",
+            contract.name
+        );
+        write_jsdoc(out, "", Some(&caller_docs), &[], None);
+    } else {
+        out.push_str(&format!(
+            "/** Host caller for contract `{}` over the Deno FFI SDK. */\n",
+            contract.name
+        ));
+    }
     out.push_str(&format!("export class {}Contract {{\n", class_name));
     out.push_str("    #rt: Runtime;\n");
     out.push_str("    #view: GuestContractInterfaceView;\n");
@@ -1333,7 +1392,25 @@ fn generate_host_caller_method_deno(
         None => "void".to_owned(),
     };
 
-    out.push_str(&format!("    /** Call `{}` */\n", func.name));
+    if func.docs.is_some()
+        || func.params.iter().any(|param| param.docs.is_some())
+        || func.return_docs.is_some()
+    {
+        let documented_params: Vec<(&str, Option<&str>)> = func
+            .params
+            .iter()
+            .map(|param| (param.name.as_str(), param.docs.as_deref()))
+            .collect();
+        write_jsdoc(
+            out,
+            "    ",
+            func.docs.as_deref(),
+            &documented_params,
+            func.return_docs.as_deref(),
+        );
+    } else {
+        out.push_str(&format!("    /** Call `{}` */\n", func.name));
+    }
     out.push_str(&format!(
         "    {}({}): {} {{\n",
         func.name,
@@ -1953,6 +2030,18 @@ fn generate_ts_host_interface_method(out: &mut String, func: &ResolvedFunction) 
             .join(", ")
     };
 
+    let documented_params: Vec<(&str, Option<&str>)> = func
+        .params
+        .iter()
+        .map(|param| (param.name.as_str(), param.docs.as_deref()))
+        .collect();
+    write_jsdoc(
+        out,
+        "    ",
+        func.docs.as_deref(),
+        &documented_params,
+        func.return_docs.as_deref(),
+    );
     out.push_str(&format!(
         "    {}({}): {};\n",
         method_name, params_str, return_type
@@ -1966,6 +2055,7 @@ fn generate_ts_host_contract_interface(out: &mut String, contract: &ResolvedHost
         "/**\n * Host interface for contract `{}` (id=0x{:016X})\n * Hosts implement this interface to provide functionality to plugins.\n */\n",
         contract.name, contract.contract_id
     ));
+    write_jsdoc(out, "", contract.docs.as_deref(), &[], None);
     out.push_str(&format!("export interface {} {{\n", iface_name));
 
     for func in &contract.functions {
@@ -2099,10 +2189,18 @@ fn generate_ts_guest_host_contract_caller(
     let contract_id_lo: u32 = (contract.contract_id & 0xFFFFFFFF) as u32;
     let contract_id_hi: u32 = (contract.contract_id >> 32) as u32;
 
-    out.push_str(&format!(
-        "/**\n * Guest caller for host contract `{}` (id=0x{:016X})\n */\n",
-        contract.name, contract.contract_id
-    ));
+    if let Some(docs) = contract.docs.as_deref() {
+        let caller_docs: String = format!(
+            "Guest caller for host contract `{}` (id=0x{:016X})\n\n{docs}",
+            contract.name, contract.contract_id
+        );
+        write_jsdoc(out, "", Some(&caller_docs), &[], None);
+    } else {
+        out.push_str(&format!(
+            "/**\n * Guest caller for host contract `{}` (id=0x{:016X})\n */\n",
+            contract.name, contract.contract_id
+        ));
+    }
     out.push_str(&format!("export class {} {{\n", class_name));
     out.push_str("    private _minVersion: number;\n");
     // The bridge and host pointer are threaded in explicitly (no global — Rule 12)
@@ -2199,7 +2297,26 @@ fn generate_ts_guest_host_contract_method(
             type_doc: Some(ts_guest_caller_param_type(&p.ty)),
         })
         .collect::<Vec<JsParameter>>();
-    let jsdoc: String = format!("/** Call `{}` */", func.name);
+    let mut jsdoc: String = String::new();
+    let documented_params: Vec<(&str, Option<&str>)> = func
+        .params
+        .iter()
+        .map(|param| (param.name.as_str(), param.docs.as_deref()))
+        .collect();
+    if func.docs.is_some()
+        || func.params.iter().any(|param| param.docs.is_some())
+        || func.return_docs.is_some()
+    {
+        write_jsdoc(
+            &mut jsdoc,
+            "",
+            func.docs.as_deref(),
+            &documented_params,
+            func.return_docs.as_deref(),
+        );
+    } else {
+        jsdoc.push_str(&format!("/** Call `{}` */", func.name));
+    }
 
     // The body is accumulated into `body` (aliased as `out` so the existing
     // push_str lines below are unchanged), then rendered as the verbatim slot.
@@ -4191,9 +4308,9 @@ fn generate_ts_peer_caller_method(
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
+    use crate::ResolvedBundleFile;
     use crate::ir::ResolvedDependency;
     use crate::ir::Version;
-    use polyplug_codegen::ResolvedBundleFile;
 
     #[test]
     fn generate_js_quickjs_enum_non_bitflag() {
@@ -4205,12 +4322,15 @@ mod tests {
                 EnumVariant {
                     name: "Unknown".to_owned(),
                     value: "0".to_owned(),
+                    docs: None,
                 },
                 EnumVariant {
                     name: "Rgba8".to_owned(),
                     value: "1".to_owned(),
+                    docs: None,
                 },
             ],
+            docs: None,
         };
         let mut out: String = String::new();
         generate_js_quickjs_enum(&mut out, &e).expect("render enum");
@@ -4235,12 +4355,15 @@ mod tests {
                 EnumVariant {
                     name: "None".to_owned(),
                     value: "0".to_owned(),
+                    docs: None,
                 },
                 EnumVariant {
                     name: "Compressed".to_owned(),
                     value: "1".to_owned(),
+                    docs: None,
                 },
             ],
+            docs: None,
         };
         let mut out: String = String::new();
         generate_js_quickjs_enum(&mut out, &e).expect("render enum");
@@ -4332,8 +4455,11 @@ mod tests {
                     params: vec![ResolvedParam {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                        docs: None,
                     }],
                     returns: None,
+                    docs: None,
+                    return_docs: None,
                 },
                 ResolvedFunction {
                     name: "logf".to_owned(),
@@ -4342,15 +4468,20 @@ mod tests {
                         ResolvedParam {
                             name: "level".to_owned(),
                             ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                            docs: None,
                         },
                         ResolvedParam {
                             name: "format".to_owned(),
                             ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                            docs: None,
                         },
                     ],
                     returns: None,
+                    docs: None,
+                    return_docs: None,
                 },
             ],
+            docs: None,
         };
         let mut out: String = String::new();
         generate_ts_host_contract_interface(&mut out, &contract);
@@ -4389,9 +4520,13 @@ mod tests {
                     params: vec![ResolvedParam {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                        docs: None,
                     }],
                     returns: None,
+                    docs: None,
+                    return_docs: None,
                 }],
+                docs: None,
             }],
             bundle: None,
         };
@@ -4432,7 +4567,10 @@ mod tests {
                     function_id: 0,
                     params: vec![],
                     returns: None,
+                    docs: None,
+                    return_docs: None,
                 }],
+                docs: None,
             }],
             bundle: None,
         };
@@ -4540,8 +4678,11 @@ mod tests {
                     params: vec![ResolvedParam {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                        docs: None,
                     }],
                     returns: None,
+                    docs: None,
+                    return_docs: None,
                 },
                 ResolvedFunction {
                     name: "logf".to_owned(),
@@ -4550,15 +4691,20 @@ mod tests {
                         ResolvedParam {
                             name: "level".to_owned(),
                             ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                            docs: None,
                         },
                         ResolvedParam {
                             name: "format".to_owned(),
                             ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                            docs: None,
                         },
                     ],
                     returns: None,
+                    docs: None,
+                    return_docs: None,
                 },
             ],
+            docs: None,
         };
         let mut out: String = String::new();
         generate_ts_guest_host_contract_caller(&mut out, &contract, &wrapper_ir(vec![], vec![]))
@@ -4629,9 +4775,13 @@ mod tests {
                 params: vec![ResolvedParam {
                     name: "path".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    docs: None,
                 }],
                 returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+                docs: None,
+                return_docs: None,
             }],
+            docs: None,
         };
         let mut out: String = String::new();
         generate_ts_guest_host_contract_caller(&mut out, &contract, &wrapper_ir(vec![], vec![]))
@@ -4669,9 +4819,13 @@ mod tests {
                     params: vec![ResolvedParam {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                        docs: None,
                     }],
                     returns: None,
+                    docs: None,
+                    return_docs: None,
                 }],
+                docs: None,
             }],
             bundle: None,
         };
@@ -4713,7 +4867,10 @@ mod tests {
                     function_id: 0,
                     params: vec![],
                     returns: None,
+                    docs: None,
+                    return_docs: None,
                 }],
+                docs: None,
             }],
             bundle: None,
         };
@@ -4744,7 +4901,9 @@ mod tests {
             variants: vec![EnumVariant {
                 name: "Debug".to_owned(),
                 value: "0".to_owned(),
+                docs: None,
             }],
+            docs: None,
         };
         let mut out: String = String::new();
         generate_js_quickjs_enum(&mut out, &e).expect("render enum");
@@ -4781,9 +4940,13 @@ mod tests {
                     params: vec![ResolvedParam {
                         name: "level".to_owned(),
                         ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
+                        docs: None,
                     }],
                     returns: None,
+                    docs: None,
+                    return_docs: None,
                 }],
+                docs: None,
             }],
             bundle: None,
         };
@@ -4817,9 +4980,13 @@ mod tests {
                     params: vec![ResolvedParam {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                        docs: None,
                     }],
                     returns: None,
+                    docs: None,
+                    return_docs: None,
                 }],
+                docs: None,
             }],
             bundle: None,
         };
@@ -4860,7 +5027,7 @@ mod tests {
     fn peer_caller_emitted_for_declared_dependency() {
         // Build an IR where the bundle declares a dependency on a contract that
         // IS present in ir.contracts — the generator must emit peer_callers.ts.
-        let validator_id: u64 = polyplug_utils::guest_contract_id("pipeline.Validator", 1);
+        let validator_id: u64 = guest_contract_id("pipeline.Validator", 1);
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
             enums: vec![],
@@ -4873,6 +5040,7 @@ mod tests {
                     patch: 0,
                 },
                 functions: vec![],
+                docs: None,
             }],
             host_contracts: vec![],
             bundle: Some(ResolvedBundle {
@@ -4959,9 +5127,13 @@ mod tests {
                 params: vec![ResolvedParam {
                     name: "key".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    docs: None,
                 }],
                 returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+                docs: None,
+                return_docs: None,
             }],
+            docs: None,
         };
         let mut out: String = String::new();
         generate_ts_guest_host_contract_caller(&mut out, &contract, &wrapper_ir(vec![], vec![]))
@@ -5002,7 +5174,10 @@ mod tests {
                 function_id: 2,
                 params: vec![],
                 returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+                docs: None,
+                return_docs: None,
             }],
+            docs: None,
         };
         let mut out: String = String::new();
         generate_ts_guest_host_contract_caller(&mut out, &contract, &wrapper_ir(vec![], vec![]))
@@ -5032,6 +5207,7 @@ mod tests {
                     patch: 0,
                 },
                 functions: vec![],
+                docs: None,
             }],
             host_contracts: vec![],
             bundle: None,
@@ -5070,13 +5246,14 @@ mod tests {
     fn wrapper_contract(functions: Vec<ResolvedFunction>) -> ResolvedContract {
         ResolvedContract {
             name: "test.shapes".to_owned(),
-            contract_id: polyplug_utils::guest_contract_id("test.shapes", 1),
+            contract_id: guest_contract_id("test.shapes", 1),
             version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
             },
             functions,
+            docs: None,
         }
     }
 
@@ -5096,13 +5273,17 @@ mod tests {
                 ResolvedParam {
                     name: "a".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    docs: None,
                 },
                 ResolvedParam {
                     name: "b".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    docs: None,
                 },
             ],
             returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            docs: None,
+            return_docs: None,
         }]);
         let ir: ValidatedIr = wrapper_ir(vec![], vec![]);
         let out: String = render_wrapper(&contract, &ir);
@@ -5135,13 +5316,17 @@ mod tests {
                 ResolvedParam {
                     name: "count".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    docs: None,
                 },
                 ResolvedParam {
                     name: "message".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    docs: None,
                 },
             ],
             returns: None,
+            docs: None,
+            return_docs: None,
         }]);
         let ir: ValidatedIr = wrapper_ir(vec![], vec![]);
         let out: String = render_wrapper(&contract, &ir);
@@ -5159,8 +5344,11 @@ mod tests {
             params: vec![ResolvedParam {
                 name: "input".to_owned(),
                 ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                docs: None,
             }],
             returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            docs: None,
+            return_docs: None,
         }]);
         let ir: ValidatedIr = wrapper_ir(vec![], vec![]);
         let out: String = render_wrapper(&contract, &ir);
@@ -5208,12 +5396,15 @@ mod tests {
                 ResolvedField {
                     name: "a".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    docs: None,
                 },
                 ResolvedField {
                     name: "b".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    docs: None,
                 },
             ],
+            docs: None,
         }];
         let contract: ResolvedContract = wrapper_contract(vec![ResolvedFunction {
             name: "add".to_owned(),
@@ -5221,8 +5412,11 @@ mod tests {
             params: vec![ResolvedParam {
                 name: "args".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("AddArgs".to_owned()),
+                docs: None,
             }],
             returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            docs: None,
+            return_docs: None,
         }]);
         let ir: ValidatedIr = wrapper_ir(types, vec![]);
         let out: String = render_wrapper(&contract, &ir);
@@ -5248,12 +5442,15 @@ mod tests {
                     ResolvedField {
                         name: "a".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                        docs: None,
                     },
                     ResolvedField {
                         name: "b".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                        docs: None,
                     },
                 ],
+                docs: None,
             },
             ResolvedType {
                 name: "Boxed".to_owned(),
@@ -5261,12 +5458,15 @@ mod tests {
                     ResolvedField {
                         name: "tag".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
+                        docs: None,
                     },
                     ResolvedField {
                         name: "inner".to_owned(),
                         ty: ResolvedTypeRef::UserDefined("Inner".to_owned()),
+                        docs: None,
                     },
                 ],
+                docs: None,
             },
         ];
         let contract: ResolvedContract = wrapper_contract(vec![ResolvedFunction {
@@ -5275,8 +5475,11 @@ mod tests {
             params: vec![ResolvedParam {
                 name: "o".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("Boxed".to_owned()),
+                docs: None,
             }],
             returns: Some(ResolvedTypeRef::UserDefined("Boxed".to_owned())),
+            docs: None,
+            return_docs: None,
         }]);
         let ir: ValidatedIr = wrapper_ir(types, vec![]);
         let out: String = render_wrapper(&contract, &ir);
@@ -5312,8 +5515,11 @@ mod tests {
             params: vec![ResolvedParam {
                 name: "factor".to_owned(),
                 ty: ResolvedTypeRef::Primitive(PrimitiveType::F64),
+                docs: None,
             }],
             returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::F64)),
+            docs: None,
+            return_docs: None,
         }]);
         let ir: ValidatedIr = wrapper_ir(vec![], vec![]);
         let out: String = render_wrapper(&contract, &ir);
@@ -5336,7 +5542,9 @@ mod tests {
             variants: vec![EnumVariant {
                 name: "Info".to_owned(),
                 value: "1".to_owned(),
+                docs: None,
             }],
+            docs: None,
         }];
         let contract: ResolvedContract = wrapper_contract(vec![ResolvedFunction {
             name: "set_level".to_owned(),
@@ -5344,8 +5552,11 @@ mod tests {
             params: vec![ResolvedParam {
                 name: "level".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
+                docs: None,
             }],
             returns: None,
+            docs: None,
+            return_docs: None,
         }]);
         let ir: ValidatedIr = wrapper_ir(vec![], enums);
         let out: String = render_wrapper(&contract, &ir);
@@ -5362,6 +5573,8 @@ mod tests {
             function_id: 0,
             params: vec![],
             returns: None,
+            docs: None,
+            return_docs: None,
         }]);
         let ir: ValidatedIr = wrapper_ir(vec![], vec![]);
         let out: String = render_wrapper(&contract, &ir);
@@ -5386,7 +5599,9 @@ mod tests {
             variants: vec![EnumVariant {
                 name: "Info".to_owned(),
                 value: "1".to_owned(),
+                docs: None,
             }],
+            docs: None,
         }];
         let func: ResolvedFunction = ResolvedFunction {
             name: "log_with_level".to_owned(),
@@ -5395,13 +5610,17 @@ mod tests {
                 ResolvedParam {
                     name: "level".to_owned(),
                     ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
+                    docs: None,
                 },
                 ResolvedParam {
                     name: "message".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    docs: None,
                 },
             ],
             returns: None,
+            docs: None,
+            return_docs: None,
         };
         let mut out: String = String::new();
         emit_ts_guest_host_contract_args_setup(&mut out, &func, &wrapper_ir(vec![], enums))
@@ -5426,7 +5645,9 @@ mod tests {
             variants: vec![EnumVariant {
                 name: "Rgba8".to_owned(),
                 value: "1".to_owned(),
+                docs: None,
             }],
+            docs: None,
         }]
     }
 
@@ -5438,8 +5659,11 @@ mod tests {
             params: vec![ResolvedParam {
                 name: "fmt".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("PixelFormat".to_owned()),
+                docs: None,
             }],
             returns: None,
+            docs: None,
+            return_docs: None,
         };
         let mut out: String = String::new();
         emit_ts_guest_host_contract_args_setup(
@@ -5488,7 +5712,9 @@ mod tests {
             variants: vec![EnumVariant {
                 name: "A".to_owned(),
                 value: "1".to_owned(),
+                docs: None,
             }],
+            docs: None,
         }];
         let func: ResolvedFunction = ResolvedFunction {
             name: "set_flags".to_owned(),
@@ -5496,8 +5722,11 @@ mod tests {
             params: vec![ResolvedParam {
                 name: "flags".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("BigFlags".to_owned()),
+                docs: None,
             }],
             returns: None,
+            docs: None,
+            return_docs: None,
         };
         let ir: ValidatedIr = wrapper_ir(vec![], enums);
         let mut out: String = String::new();
@@ -5533,12 +5762,15 @@ mod tests {
                 ResolvedField {
                     name: "a".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    docs: None,
                 },
                 ResolvedField {
                     name: "b".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    docs: None,
                 },
             ],
+            docs: None,
         }];
         let ir: ValidatedIr = wrapper_ir(types, vec![]);
         let func: ResolvedFunction = ResolvedFunction {
@@ -5547,8 +5779,11 @@ mod tests {
             params: vec![ResolvedParam {
                 name: "args".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("Pair".to_owned()),
+                docs: None,
             }],
             returns: Some(ResolvedTypeRef::UserDefined("Pair".to_owned())),
+            docs: None,
+            return_docs: None,
         };
 
         // PARAM: allocate the struct's C size and pack each field — no NaN.
@@ -5599,12 +5834,15 @@ mod tests {
                 ResolvedField {
                     name: "name".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    docs: None,
                 },
                 ResolvedField {
                     name: "code".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    docs: None,
                 },
             ],
+            docs: None,
         }];
         let ir: ValidatedIr = wrapper_ir(types, vec![]);
         let func: ResolvedFunction = ResolvedFunction {
@@ -5613,8 +5851,11 @@ mod tests {
             params: vec![ResolvedParam {
                 name: "args".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("Holder".to_owned()),
+                docs: None,
             }],
             returns: None,
+            docs: None,
+            return_docs: None,
         };
         let mut out: String = String::new();
         emit_ts_guest_host_contract_args_setup(&mut out, &func, &ir).expect("args setup");
@@ -5645,12 +5886,15 @@ mod tests {
                     ResolvedField {
                         name: "a".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                        docs: None,
                     },
                     ResolvedField {
                         name: "b".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::I64),
+                        docs: None,
                     },
                 ],
+                docs: None,
             }],
             enums: vec![EnumDef {
                 name: "Color".to_owned(),
@@ -5659,7 +5903,9 @@ mod tests {
                 variants: vec![EnumVariant {
                     name: "Red".to_owned(),
                     value: "1".to_owned(),
+                    docs: None,
                 }],
+                docs: None,
             }],
             contracts: vec![ResolvedContract {
                 name: "test.shapes".to_owned(),
@@ -5677,21 +5923,27 @@ mod tests {
                             ResolvedParam {
                                 name: "n".to_owned(),
                                 ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                                docs: None,
                             },
                             ResolvedParam {
                                 name: "big".to_owned(),
                                 ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
+                                docs: None,
                             },
                             ResolvedParam {
                                 name: "c".to_owned(),
                                 ty: ResolvedTypeRef::UserDefined("Color".to_owned()),
+                                docs: None,
                             },
                             ResolvedParam {
                                 name: "s".to_owned(),
                                 ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                                docs: None,
                             },
                         ],
                         returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+                        docs: None,
+                        return_docs: None,
                     },
                     ResolvedFunction {
                         name: "take_struct".to_owned(),
@@ -5699,22 +5951,30 @@ mod tests {
                         params: vec![ResolvedParam {
                             name: "p".to_owned(),
                             ty: ResolvedTypeRef::UserDefined("Pair".to_owned()),
+                            docs: None,
                         }],
                         returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+                        docs: None,
+                        return_docs: None,
                     },
                     ResolvedFunction {
                         name: "get_struct".to_owned(),
                         function_id: 2,
                         params: vec![],
                         returns: Some(ResolvedTypeRef::UserDefined("Pair".to_owned())),
+                        docs: None,
+                        return_docs: None,
                     },
                     ResolvedFunction {
                         name: "get_color".to_owned(),
                         function_id: 3,
                         params: vec![],
                         returns: Some(ResolvedTypeRef::UserDefined("Color".to_owned())),
+                        docs: None,
+                        return_docs: None,
                     },
                 ],
+                docs: None,
             }],
             host_contracts: vec![],
             bundle: None,
@@ -5828,12 +6088,15 @@ mod tests {
                         ResolvedField {
                             name: "a".to_owned(),
                             ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                            docs: None,
                         },
                         ResolvedField {
                             name: "b".to_owned(),
                             ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                            docs: None,
                         },
                     ],
+                    docs: None,
                 },
                 ResolvedType {
                     name: "Boxed".to_owned(),
@@ -5841,12 +6104,15 @@ mod tests {
                         ResolvedField {
                             name: "tag".to_owned(),
                             ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
+                            docs: None,
                         },
                         ResolvedField {
                             name: "inner".to_owned(),
                             ty: ResolvedTypeRef::UserDefined("Inner".to_owned()),
+                            docs: None,
                         },
                     ],
+                    docs: None,
                 },
             ],
             enums: vec![],
@@ -5865,16 +6131,22 @@ mod tests {
                         params: vec![ResolvedParam {
                             name: "o".to_owned(),
                             ty: ResolvedTypeRef::UserDefined("Boxed".to_owned()),
+                            docs: None,
                         }],
                         returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+                        docs: None,
+                        return_docs: None,
                     },
                     ResolvedFunction {
                         name: "get_box".to_owned(),
                         function_id: 1,
                         params: vec![],
                         returns: Some(ResolvedTypeRef::UserDefined("Boxed".to_owned())),
+                        docs: None,
+                        return_docs: None,
                     },
                 ],
+                docs: None,
             }],
             host_contracts: vec![],
             bundle: None,
@@ -5953,21 +6225,27 @@ mod tests {
                             ResolvedParam {
                                 name: "n".to_owned(),
                                 ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                                docs: None,
                             },
                             ResolvedParam {
                                 name: "big".to_owned(),
                                 ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
+                                docs: None,
                             },
                             ResolvedParam {
                                 name: "c".to_owned(),
                                 ty: ResolvedTypeRef::UserDefined("Color".to_owned()),
+                                docs: None,
                             },
                             ResolvedParam {
                                 name: "s".to_owned(),
                                 ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                                docs: None,
                             },
                         ],
                         returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+                        docs: None,
+                        return_docs: None,
                     },
                     ResolvedFunction {
                         name: "take_struct".to_owned(),
@@ -5975,8 +6253,11 @@ mod tests {
                         params: vec![ResolvedParam {
                             name: "p".to_owned(),
                             ty: ResolvedTypeRef::UserDefined("Pair".to_owned()),
+                            docs: None,
                         }],
                         returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+                        docs: None,
+                        return_docs: None,
                     },
                     ResolvedFunction {
                         name: "take_buffer".to_owned(),
@@ -5984,16 +6265,22 @@ mod tests {
                         params: vec![ResolvedParam {
                             name: "b".to_owned(),
                             ty: ResolvedTypeRef::AbiType(AbiBuiltin::Buffer),
+                            docs: None,
                         }],
                         returns: None,
+                        docs: None,
+                        return_docs: None,
                     },
                     ResolvedFunction {
                         name: "get_struct".to_owned(),
                         function_id: 3,
                         params: vec![],
                         returns: Some(ResolvedTypeRef::UserDefined("Pair".to_owned())),
+                        docs: None,
+                        return_docs: None,
                     },
                 ],
+                docs: None,
             }],
             bundle: None,
         }

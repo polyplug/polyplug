@@ -1,12 +1,9 @@
-//! Shared test helper: drive the `polyplugc` binary and reconstruct a
-//! `GenerateOutput` from the files it writes.
+//! Shared test helper that drives the compiled `polyplugc` binary and
+//! reconstructs a [`GenerateOutput`] from the files it writes.
 //!
-//! `polyplugc` is a bin-only CLI (CLAUDE.md Rule 21) — it exports no library, so
-//! tests exercise it exactly the way a real consumer does: by running the
-//! compiled binary. `cli_generate` runs `polyplugc generate …`, then reads the
-//! emitted files back into the same `GenerateOutput` shape the old in-process
-//! `generate()` returned, so a test body that iterates `output.files` is
-//! unchanged.
+//! `cli_generate` runs `polyplugc generate` exactly as an external consumer does,
+//! then returns every emitted file with a path relative to the requested output
+//! directory.
 
 #![allow(dead_code)]
 

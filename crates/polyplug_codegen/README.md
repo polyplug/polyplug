@@ -1,35 +1,38 @@
 # polyplug_codegen
 
-ABI-SDK code-generation library. It emits the per-language `sdks/*/abi` mirror
-files from the extracted Rust ABI types, and owns the shared data/error/config
-types that the `polyplugc` CLI consumes.
+Code-generation library for polyplug ABI SDK mirrors and contract bindings. It
+owns the API and bundle parser, validated IR, all six contract generators, and
+safe incremental output writing. `polyplugc` is the command-line interface over
+this library.
 
-This crate is **not** the contract-plugin generator. The per-contract host/guest
-binding generators live in `crates/polyplugc/src/generators/` and share no
-language emitters with this crate by design (see the project `CLAUDE.md`).
-
-## Two consumers
+## Consumers
 
 1. **`polyplug_abi`'s build script** (`crates/polyplug_abi/build/generate.rs`)
-   drives the `languages/` emitters at build time. It extracts the ABI items
+   drives the `languages/` emitters at build time. It extracts ABI items
    (`data::Item`: consts, structs, enums, unions, function signatures) from the
    `polyplug_abi` sources and emits the language mirrors under `sdks/*/abi`.
-   There is no Rust emitter — the Rust ABI is the source of truth itself.
-2. **`polyplugc`** depends on this crate only for shared types: `GenerateConfig`,
-   `GenerateOutput`, `Side`, `PolyplugcError` (with `error::SourceLocation`),
-   `ResolvedBundleFile`, `PlatformKey`, and `Lang`. It does **not** call the
-   `languages/` emitters.
+   There is no Rust ABI emitter because the Rust ABI is the source of truth.
+2. **Contract-binding consumers** call `generate`, `generate_ir`, and
+   `write_output` to parse a manifest or render validated IR, then write the
+   generated files. Rust in-process guests use `generate_rust_guest` with
+   `RustGuestMode::Embedded`; the existing `generate` API and `polyplugc` CLI
+   retain disk-bundle output. `write_output` accepts only relative file paths
+   without root, prefix, or parent-directory components. The `polyplugc` CLI
+   calls the same disk-generation API.
 
 ## Modules
 
 | Module | Purpose |
 |---|---|
 | `data` | Language-neutral ABI item model (`Item`, `ConstInfo`, `StructInfo`, `EnumInfo`, `UnionInfo`, `FunctionInfo`, field/layout info) |
-| `generator` | `CodeGenerator` trait — item-by-item generation (`generate_const`, `generate_struct`, `generate_enum`, `generate_union`, `generate_function`) |
-| `context` | `GenerationContext` + `Language` (Cpp, CSharp, Python, Lua, JavaScript): type mappings and formatting settings |
+| `context` | ABI-SDK `GenerationContext` and language settings |
 | `languages/` | The five ABI-SDK emitters: `cpp.rs`, `csharp.rs`, `python.rs`, `lua.rs`, `js.rs` |
-| `error` | `PolyplugcError` and `SourceLocation` — shared diagnostics used by `polyplugc` |
-| `reserved` | Reserved-word union table across all six target languages; contract identifiers that collide with any language keyword are rejected at parse time |
+| `parser` | TOML API and bundle parsing into validated contract IR |
+| `ir` | Validated contract, bundle, dependency, type, enum, and version model |
+| `generators/` | Contract-binding backends for Rust, C++, C#, Python, Lua, and QuickJS |
+| `generate` | Public manifest/IR generation, incremental writer, Rust formatting, and language parsing |
+| `error` | `PolyplugcError` and `SourceLocation` diagnostics |
+| `reserved` | Reserved-word union table across all six target languages |
 
 ## Generated output rules
 
@@ -50,8 +53,8 @@ cargo run -p sdk-validator -- --config checks/sdk_validator.yaml --fail-on-missi
 cargo test --package polyplug_codegen
 ```
 
-Includes `tests/layout_calculations.rs` (struct size/offset math) and
-`tests/typed_fn_ptr_generation.rs` (typed function-pointer emission).
+Includes ABI emitter coverage plus parser, validated-IR, six-backend, incremental
+writer, and unsafe-output-path coverage for contract binding generation.
 
 ## License
 

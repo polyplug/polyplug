@@ -1,13 +1,26 @@
 pub mod context;
 pub mod data;
 pub mod error;
+pub mod generate;
+pub mod generators;
+pub mod ir;
 pub mod languages;
+pub mod parser;
 pub mod reserved;
+#[cfg(test)]
+mod tests;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub use error::PolyplugcError;
+pub use generate::WriteSummary;
+pub use generate::generate;
+pub use generate::generate_ir;
+pub use generate::generate_ir_rust_guest;
+pub use generate::generate_rust_guest;
+pub use generate::parse_lang;
+pub use generate::write_output;
 
 /// Key for platform-specific file entries (os + arch).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -51,6 +64,21 @@ pub enum Side {
     Host,
     Guest,
 }
+/// Selects how Rust guest bindings are linked into a consumer.
+///
+/// [`Self::Disk`] preserves the `polyplugc` disk-bundle ABI, including the
+/// loader entry point and author factory symbols. [`Self::Embedded`] emits
+/// module-scoped factories and a `polyplug::EmbeddedBundle` constructor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RustGuestMode {
+    /// Generate the disk-loaded guest ABI used by `polyplugc`.
+    Disk,
+    /// Generate guest bindings linked directly into a Rust host executable.
+    Embedded {
+        /// Stable embedded bundle name used by the runtime to derive its ID.
+        bundle_name: String,
+    },
+}
 
 #[derive(Debug)]
 pub struct GenerateConfig {
@@ -72,7 +100,7 @@ pub struct GeneratedFile {
     pub force_regenerate: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Default)]
 pub struct GenerateOutput {
     pub files: Vec<GeneratedFile>,
 }

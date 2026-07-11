@@ -12,12 +12,12 @@
 
 #![allow(clippy::expect_used)]
 
-use crate::codegen::generate;
+use crate::generate;
 use crate::ir::{
     AbiBuiltin, PrimitiveType, ResolvedContract, ResolvedField, ResolvedFunction, ResolvedParam,
     ResolvedTypeRef, ValidatedIr, Version,
 };
-use polyplug_codegen::{GenerateConfig, GenerateOutput, GeneratedFile, Lang, Side};
+use crate::{GenerateConfig, GenerateOutput, GeneratedFile, Lang, Side};
 use polyplug_utils::guest_contract_id as fnv_contract_id;
 use std::env;
 use std::ffi::OsStr;
@@ -42,6 +42,7 @@ fn make_ir(contract_name: &str, major: u32, functions: Vec<ResolvedFunction>) ->
                 patch: 0,
             },
             functions,
+            docs: None,
         }],
         host_contracts: vec![],
         bundle: None,
@@ -61,6 +62,8 @@ fn make_fn(
         function_id,
         params,
         returns,
+        docs: None,
+        return_docs: None,
     }
 }
 
@@ -69,6 +72,7 @@ fn prim_param(name: &str, prim: PrimitiveType) -> ResolvedParam {
     ResolvedParam {
         name: name.to_owned(),
         ty: ResolvedTypeRef::Primitive(prim),
+        docs: None,
     }
 }
 
@@ -523,6 +527,7 @@ fn multiple_contracts_have_independent_fns_arrays() {
                     patch: 0,
                 },
                 functions: vec![make_fn("foo", 0, vec![], None)],
+                docs: None,
             },
             ResolvedContract {
                 name: "multi.b".to_owned(),
@@ -533,6 +538,7 @@ fn multiple_contracts_have_independent_fns_arrays() {
                     patch: 0,
                 },
                 functions: vec![make_fn("bar", 0, vec![], None)],
+                docs: None,
             },
         ],
         host_contracts: vec![],

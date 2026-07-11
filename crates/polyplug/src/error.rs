@@ -206,6 +206,24 @@ pub enum RegistryError {
     #[error("duplicate provider for contract `{contract}`: `{existing}` already registered")]
     DuplicateProvider { contract: String, existing: String },
 
+    #[error("embedded bundle name must not be empty")]
+    EmptyEmbeddedBundleName,
+
+    #[error("embedded bundle must provide at least one contract")]
+    EmptyEmbeddedBundle,
+
+    #[error("embedded contract at index {index} has an empty contract name")]
+    EmptyEmbeddedContract { index: usize },
+
+    #[error("embedded bundle `{bundle}` derived the reserved bundle ID 0")]
+    ReservedEmbeddedBundleId { bundle: String },
+
+    #[error("bundle `{bundle}` is already registered")]
+    BundleAlreadyRegistered { bundle: String },
+
+    #[error("bundle metadata missing for bundle_id=0x{bundle_id:016X}")]
+    MissingBundleMetadata { bundle_id: u64 },
+
     #[error("invalid plugin handle: index={index} is out of bounds")]
     InvalidHandle { index: u32 },
 

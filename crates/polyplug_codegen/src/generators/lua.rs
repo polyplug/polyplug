@@ -6,6 +6,9 @@ use super::GeneratedFile;
 use super::GeneratedFiles;
 use super::collect_peer_contracts;
 use super::peer_min_version;
+
+use super::docs::write_luals_docs;
+use crate::PolyplugcError;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -26,10 +29,9 @@ use langprint::backends::lua_backend::{
 };
 use langprint::renderers::{EnumRenderer, FunctionRenderer};
 use langprint::{ImportEntry, ImportSet, TargetLanguage};
-use polyplug_codegen::PolyplugcError;
 use std::io;
 
-pub(crate) struct LuaGenerator;
+pub struct LuaGenerator;
 
 /// Render grouped Lua `local m = require("m")` blocks through langprint's
 /// [`ImportSet`] so the `require` syntax lives in one place rather than in
@@ -259,10 +261,32 @@ fn generate_lua_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("]]) \n");
     // Emit enum tables (outside cdef — Lua tables, not C structs)
     for e in &ir.enums {
+        if e.docs.is_some() || e.variants.iter().any(|variant| variant.docs.is_some()) {
+            write_luals_docs(&mut out, "", e.docs.as_deref());
+            out.push_str(&format!("---@enum {}\n", e.name));
+            for variant in &e.variants {
+                write_luals_docs(&mut out, "", variant.docs.as_deref());
+                if variant.docs.is_some() {
+                    out.push_str(&format!("---@field {} integer\n", variant.name));
+                }
+            }
+        }
         generate_lua_enum(&mut out, e)?;
         out.push('\n');
     }
     for ty in &ir.types {
+        if ty.docs.is_some() || ty.fields.iter().any(|field| field.docs.is_some()) {
+            write_luals_docs(&mut out, "", ty.docs.as_deref());
+            out.push_str(&format!("---@class {}\n", ty.name));
+            for field in &ty.fields {
+                write_luals_docs(&mut out, "", field.docs.as_deref());
+                out.push_str(&format!(
+                    "---@field {} {}\n",
+                    field.name,
+                    lua_host_type_annotation(&field.ty)
+                ));
+            }
+        }
         out.push_str(&format!("ffi.metatype(\"{}\", {{}})\n", ty.name));
     }
     out.push_str("\nreturn {\n");
@@ -463,6 +487,7 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract, 
     let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
     let contract_id_const: String = format!("{}_CONTRACT_ID", contract_upper);
 
+    write_luals_docs(out, "", contract.docs.as_deref());
     // Methods table
     out.push_str(&format!(
         "-- Methods for {contract_struct} (instance wrapper)\n",
@@ -648,6 +673,36 @@ fn generate_host_caller_method(
 ) {
     let fn_id: u32 = func.function_id;
     let sig_params: String = build_lua_sig_params(func);
+    if func.docs.is_some()
+        || func.params.iter().any(|param| param.docs.is_some())
+        || func.return_docs.is_some()
+    {
+        write_luals_docs(out, "    ", func.docs.as_deref());
+        out.push_str("    ---@param self table\n");
+        for param in &func.params {
+            if let Some(docs) = param.docs.as_deref() {
+                write_luals_docs(out, "    ", Some(docs));
+                out.push_str(&format!(
+                    "    ---@param {} {} {}\n",
+                    param.name,
+                    lua_type_name(&param.ty),
+                    docs.replace('\n', " ")
+                ));
+            }
+        }
+        if let Some(docs) = func.return_docs.as_deref() {
+            write_luals_docs(out, "    ", Some(docs));
+            let return_type: String = match &func.returns {
+                Some(ty) => lua_type_name(ty),
+                None => "nil".to_owned(),
+            };
+            out.push_str(&format!(
+                "    ---@return {} {}\n",
+                return_type,
+                docs.replace('\n', " ")
+            ));
+        }
+    }
     out.push_str(&format!("    {} = function(self{sig_params})\n", func.name));
 
     // Validity keys off the resolved interface pointer, NOT instance.data:
@@ -809,6 +864,7 @@ fn generate_guest_plugin_interface(
     out.push_str(&format!(
         "-- Guest contract: {plugin_name} ({contract_name_full})\n"
     ));
+    write_luals_docs(out, "", contract.docs.as_deref());
     for func in &contract.functions {
         let params: Vec<String> = func
             .params
@@ -819,6 +875,26 @@ fn generate_guest_plugin_interface(
             Some(ty) => lua_type_name(ty),
             None => "()".to_owned(),
         };
+        write_luals_docs(out, "", func.docs.as_deref());
+        for param in &func.params {
+            if let Some(docs) = param.docs.as_deref() {
+                write_luals_docs(out, "", Some(docs));
+                out.push_str(&format!(
+                    "---@param {} {} {}\n",
+                    param.name,
+                    lua_type_name(&param.ty),
+                    docs.replace('\n', " ")
+                ));
+            }
+        }
+        if let Some(docs) = func.return_docs.as_deref() {
+            write_luals_docs(out, "", Some(docs));
+            out.push_str(&format!(
+                "---@return {} {}\n",
+                ret_ty,
+                docs.replace('\n', " ")
+            ));
+        }
         out.push_str(&format!(
             "--   {fn_name}({}) -> {ret_ty}\n",
             params.join(", "),
@@ -1858,6 +1934,7 @@ fn generate_lua_host_contract_metatable(out: &mut String, contract: &ResolvedHos
         "-- Host contract `{}` (id=0x{:016X})\n",
         contract.name, contract.contract_id
     ));
+    write_luals_docs(out, "", contract.docs.as_deref());
     out.push_str(&format!("{} = {{}}\n", class_name));
     out.push_str(&format!("{}.__index = {}\n\n", class_name, class_name));
 
@@ -1874,15 +1951,35 @@ fn generate_lua_host_contract_metatable(out: &mut String, contract: &ResolvedHos
             None => "nil".to_owned(),
         };
 
+        write_luals_docs(out, "", func.docs.as_deref());
         out.push_str("--- @param self table\n");
         for param in &func.params {
-            out.push_str(&format!(
-                "--- @param {} {}\n",
-                param.name,
-                lua_host_type_annotation(&param.ty)
-            ));
+            if let Some(docs) = param.docs.as_deref() {
+                write_luals_docs(out, "", Some(docs));
+                out.push_str(&format!(
+                    "---@param {} {} {}\n",
+                    param.name,
+                    lua_host_type_annotation(&param.ty),
+                    docs.replace('\n', " ")
+                ));
+            } else {
+                out.push_str(&format!(
+                    "---@param {} {}\n",
+                    param.name,
+                    lua_host_type_annotation(&param.ty)
+                ));
+            }
         }
-        out.push_str(&format!("--- @return {}\n", return_type));
+        if let Some(docs) = func.return_docs.as_deref() {
+            write_luals_docs(out, "", Some(docs));
+            out.push_str(&format!(
+                "---@return {} {}\n",
+                return_type,
+                docs.replace('\n', " ")
+            ));
+        } else {
+            out.push_str(&format!("--- @return {}\n", return_type));
+        }
         out.push_str(&format!(
             "function {}:{}({})\n",
             class_name,
@@ -1953,6 +2050,7 @@ fn generate_lua_guest_host_contract_caller(
         "-- Guest caller for host contract `{}` (id=0x{:016X})\n",
         contract.name, contract.contract_id
     ));
+    write_luals_docs(out, "", contract.docs.as_deref());
     out.push_str(&format!("{} = {{}}\n", class_name));
     out.push_str(&format!("{}.__index = {}\n\n", class_name, class_name));
 
@@ -2120,6 +2218,30 @@ fn generate_lua_guest_host_contract_method(
     }
     if body.ends_with('\n') {
         body.pop();
+    }
+    write_luals_docs(dst, "", func.docs.as_deref());
+    for param in &func.params {
+        if let Some(docs) = param.docs.as_deref() {
+            write_luals_docs(dst, "", Some(docs));
+            dst.push_str(&format!(
+                "---@param {} {} {}\n",
+                param.name,
+                lua_host_type_annotation(&param.ty),
+                docs.replace('\n', " ")
+            ));
+        }
+    }
+    if let Some(docs) = func.return_docs.as_deref() {
+        write_luals_docs(dst, "", Some(docs));
+        let return_type: String = match &func.returns {
+            Some(ty) => lua_host_type_annotation(ty),
+            None => "nil".to_owned(),
+        };
+        dst.push_str(&format!(
+            "---@return {} {}\n",
+            return_type,
+            docs.replace('\n', " ")
+        ));
     }
     dst.push_str(&render_lua_defn_fn(
         &format!("{class_name}:{}", func.name),
@@ -3072,10 +3194,10 @@ const _: fn() = || {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
+    use crate::ResolvedBundleFile;
     use crate::ir::ReprType;
     use crate::ir::ResolvedDependency;
     use crate::ir::Version;
-    use polyplug_codegen::ResolvedBundleFile;
 
     #[test]
     fn generate_lua_enum_non_bitflag() {
@@ -3087,12 +3209,15 @@ mod tests {
                 EnumVariant {
                     name: "Unknown".to_owned(),
                     value: "0".to_owned(),
+                    docs: None,
                 },
                 EnumVariant {
                     name: "Rgba8".to_owned(),
                     value: "1".to_owned(),
+                    docs: None,
                 },
             ],
+            docs: None,
         };
         let mut out: String = String::new();
         generate_lua_enum(&mut out, &e).expect("render enum");
@@ -3113,20 +3238,25 @@ mod tests {
                 EnumVariant {
                     name: "None".to_owned(),
                     value: "0".to_owned(),
+                    docs: None,
                 },
                 EnumVariant {
                     name: "Compressed".to_owned(),
                     value: "1".to_owned(),
+                    docs: None,
                 },
                 EnumVariant {
                     name: "Hdr".to_owned(),
                     value: "1 << 1".to_owned(),
+                    docs: None,
                 },
                 EnumVariant {
                     name: "CompressedHdr".to_owned(),
                     value: "Compressed | Hdr".to_owned(),
+                    docs: None,
                 },
             ],
+            docs: None,
         };
         let mut out: String = String::new();
         generate_lua_enum(&mut out, &e).expect("render enum");
@@ -3155,7 +3285,9 @@ mod tests {
                 variants: vec![EnumVariant {
                     name: "Rgba8".to_owned(),
                     value: "1".to_owned(),
+                    docs: None,
                 }],
+                docs: None,
             }],
             contracts: vec![],
             host_contracts: vec![],
@@ -3242,14 +3374,19 @@ mod tests {
                     ResolvedParam {
                         name: "level".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                        docs: None,
                     },
                     ResolvedParam {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                        docs: None,
                     },
                 ],
                 returns: None,
+                docs: None,
+                return_docs: None,
             }],
+            docs: None,
         };
         let mut out: String = String::new();
         generate_lua_host_contract_metatable(&mut out, &contract);
@@ -3292,9 +3429,13 @@ mod tests {
                 params: vec![ResolvedParam {
                     name: "path".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    docs: None,
                 }],
                 returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+                docs: None,
+                return_docs: None,
             }],
+            docs: None,
         };
         let mut out: String = String::new();
         generate_lua_host_contract_metatable(&mut out, &contract);
@@ -3343,7 +3484,10 @@ mod tests {
                 function_id: 0,
                 params: vec![],
                 returns: None,
+                docs: None,
+                return_docs: None,
             }],
+            docs: None,
         };
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -3402,14 +3546,19 @@ mod tests {
                     ResolvedParam {
                         name: "level".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                        docs: None,
                     },
                     ResolvedParam {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                        docs: None,
                     },
                 ],
                 returns: None,
+                docs: None,
+                return_docs: None,
             }],
+            docs: None,
         };
         let mut out: String = String::new();
         generate_lua_guest_host_contract_caller(&mut out, &contract, &[])
@@ -3498,9 +3647,13 @@ mod tests {
                 params: vec![ResolvedParam {
                     name: "path".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    docs: None,
                 }],
                 returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+                docs: None,
+                return_docs: None,
             }],
+            docs: None,
         };
         let mut out: String = String::new();
         generate_lua_guest_host_contract_caller(&mut out, &contract, &[])
@@ -3552,7 +3705,10 @@ mod tests {
                 function_id: 0,
                 params: vec![],
                 returns: None,
+                docs: None,
+                return_docs: None,
             }],
+            docs: None,
         };
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -3586,9 +3742,13 @@ mod tests {
                 params: vec![ResolvedParam {
                     name: "input".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    docs: None,
                 }],
                 returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+                docs: None,
+                return_docs: None,
             }],
+            docs: None,
         };
 
         let ir: ValidatedIr = ValidatedIr {
@@ -3713,6 +3873,7 @@ mod tests {
                 patch: 0,
             },
             functions: vec![],
+            docs: None,
         };
 
         // No bundle at all — no peer contracts.
@@ -3740,6 +3901,7 @@ mod tests {
                 patch: 0,
             },
             functions: vec![],
+            docs: None,
         };
         let ir_no_deps: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -3784,6 +3946,8 @@ mod tests {
             function_id: 0,
             params: vec![],
             returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            docs: None,
+            return_docs: None,
         };
         let contract: ResolvedContract = ResolvedContract {
             name: "data.Counter".to_owned(),
@@ -3794,6 +3958,7 @@ mod tests {
                 patch: 0,
             },
             functions: vec![func],
+            docs: None,
         };
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -3827,6 +3992,8 @@ mod tests {
             function_id: 0,
             params: vec![],
             returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            docs: None,
+            return_docs: None,
         };
         let contract: ResolvedContract = ResolvedContract {
             name: "data.Namer".to_owned(),
@@ -3837,6 +4004,7 @@ mod tests {
                 patch: 0,
             },
             functions: vec![func],
+            docs: None,
         };
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -3877,7 +4045,9 @@ mod tests {
                 variants: vec![EnumVariant {
                     name: "Info".to_owned(),
                     value: "1".to_owned(),
+                    docs: None,
                 }],
+                docs: None,
             }],
             contracts: vec![],
             host_contracts: vec![ResolvedHostContract {
@@ -3896,8 +4066,11 @@ mod tests {
                         params: vec![ResolvedParam {
                             name: "message".to_owned(),
                             ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                            docs: None,
                         }],
                         returns: None,
+                        docs: None,
+                        return_docs: None,
                     },
                     ResolvedFunction {
                         name: "log_with_level".to_owned(),
@@ -3906,15 +4079,20 @@ mod tests {
                             ResolvedParam {
                                 name: "level".to_owned(),
                                 ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
+                                docs: None,
                             },
                             ResolvedParam {
                                 name: "message".to_owned(),
                                 ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                                docs: None,
                             },
                         ],
                         returns: None,
+                        docs: None,
+                        return_docs: None,
                     },
                 ],
+                docs: None,
             }],
             bundle: None,
         }
@@ -4079,7 +4257,9 @@ mod tests {
             variants: vec![EnumVariant {
                 name: "Info".to_owned(),
                 value: "1".to_owned(),
+                docs: None,
             }],
+            docs: None,
         }];
         let func: ResolvedFunction = ResolvedFunction {
             name: "set_level".to_owned(),
@@ -4087,8 +4267,11 @@ mod tests {
             params: vec![ResolvedParam {
                 name: "level".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
+                docs: None,
             }],
             returns: None,
+            docs: None,
+            return_docs: None,
         };
         let mut out: String = String::new();
         generate_lua_host_dispatch_args(&mut out, "HostLogger", &func, &enums);
@@ -4146,12 +4329,15 @@ mod tests {
                 EnumVariant {
                     name: "Unknown".to_owned(),
                     value: "0".to_owned(),
+                    docs: None,
                 },
                 EnumVariant {
                     name: "Rgba8".to_owned(),
                     value: "1".to_owned(),
+                    docs: None,
                 },
             ],
+            docs: None,
         }]
     }
 
@@ -4171,16 +4357,22 @@ mod tests {
                     params: vec![ResolvedParam {
                         name: "fmt".to_owned(),
                         ty: ResolvedTypeRef::UserDefined("PixelFormat".to_owned()),
+                        docs: None,
                     }],
                     returns: None,
+                    docs: None,
+                    return_docs: None,
                 },
                 ResolvedFunction {
                     name: "get_format".to_owned(),
                     function_id: 1,
                     params: vec![],
                     returns: Some(ResolvedTypeRef::UserDefined("PixelFormat".to_owned())),
+                    docs: None,
+                    return_docs: None,
                 },
             ],
+            docs: None,
         }
     }
 
@@ -4246,16 +4438,22 @@ mod tests {
                     params: vec![ResolvedParam {
                         name: "fmt".to_owned(),
                         ty: ResolvedTypeRef::UserDefined("PixelFormat".to_owned()),
+                        docs: None,
                     }],
                     returns: None,
+                    docs: None,
+                    return_docs: None,
                 },
                 ResolvedFunction {
                     name: "get_mode".to_owned(),
                     function_id: 1,
                     params: vec![],
                     returns: Some(ResolvedTypeRef::UserDefined("PixelFormat".to_owned())),
+                    docs: None,
+                    return_docs: None,
                 },
             ],
+            docs: None,
         };
         let mut out: String = String::new();
         generate_lua_guest_host_contract_caller(&mut out, &contract, &pixel_format_enums())
@@ -4282,9 +4480,13 @@ mod tests {
                 params: vec![ResolvedParam {
                     name: "amount".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    docs: None,
                 }],
                 returns: None,
+                docs: None,
+                return_docs: None,
             }],
+            docs: None,
         };
         let mut out: String = String::new();
         generate_host_contract_caller(&mut out, &contract, &[]);
@@ -4310,6 +4512,7 @@ mod tests {
         ResolvedParam {
             name: name.to_owned(),
             ty: ResolvedTypeRef::Primitive(prim),
+            docs: None,
         }
     }
 
@@ -4320,6 +4523,8 @@ mod tests {
             function_id: 0,
             params: vec![scalar_param("amount", PrimitiveType::U32)],
             returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            docs: None,
+            return_docs: None,
         };
         let out: String = guest_handler(&func, &[]);
         assert!(
@@ -4346,8 +4551,11 @@ mod tests {
             params: vec![ResolvedParam {
                 name: "data".to_owned(),
                 ty: ResolvedTypeRef::AbiType(AbiBuiltin::Buffer),
+                docs: None,
             }],
             returns: None,
+            docs: None,
+            return_docs: None,
         };
         let out: String = guest_handler(&func, &[]);
         assert!(
@@ -4366,8 +4574,11 @@ mod tests {
             params: vec![ResolvedParam {
                 name: "pair".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("Pair".to_owned()),
+                docs: None,
             }],
             returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            docs: None,
+            return_docs: None,
         };
         let out: String = guest_handler(&func, &[]);
         assert!(
@@ -4387,7 +4598,9 @@ mod tests {
             variants: vec![EnumVariant {
                 name: "Info".to_owned(),
                 value: "1".to_owned(),
+                docs: None,
             }],
+            docs: None,
         }];
         let func: ResolvedFunction = ResolvedFunction {
             name: "set_level".to_owned(),
@@ -4395,8 +4608,11 @@ mod tests {
             params: vec![ResolvedParam {
                 name: "level".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("Level".to_owned()),
+                docs: None,
             }],
             returns: None,
+            docs: None,
+            return_docs: None,
         };
         let out: String = guest_handler(&func, &enums);
         assert!(
@@ -4417,6 +4633,8 @@ mod tests {
                 scalar_param("b", PrimitiveType::U32),
             ],
             returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            docs: None,
+            return_docs: None,
         };
         let out: String = guest_handler(&func, &[]);
         assert!(
@@ -4438,6 +4656,8 @@ mod tests {
             function_id: 0,
             params: vec![],
             returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            docs: None,
+            return_docs: None,
         };
         let out: String = guest_handler(&func, &[]);
         assert!(
@@ -4460,6 +4680,8 @@ mod tests {
             function_id: 0,
             params: vec![],
             returns: Some(ResolvedTypeRef::UserDefined("Pair".to_owned())),
+            docs: None,
+            return_docs: None,
         };
         let out: String = guest_handler(&func, &[]);
         assert!(

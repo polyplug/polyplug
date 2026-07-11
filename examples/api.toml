@@ -7,11 +7,13 @@
 [[plugin_contract]]
 name = "pipeline.Decoder"
 version = "1.0.0"
+docs = "Decodes CSV input into the pipeline representation."
 
 [[plugin_contract.functions]]
 name = "decode"
-params = [{ name = "input", type = "StringView" }]
-return = "StringView"
+docs = "Decodes one CSV record."
+params = [{ name = "input", type = "StringView", docs = "The CSV record to decode." }]
+return = { type = "StringView", docs = "The decoded pipeline record." }
 
 # data.Transformer: Transforms decoded data
 # Input: "DECODED:name|value|42"
@@ -86,11 +88,13 @@ value = "3"
 [[host_contract]]
 name = "host.logger"
 version = "1.0.0"
+docs = "Logging service supplied by the host."
 
 [[host_contract.functions]]
 name = "log"
-params = [{ name = "message", type = "StringView" }]
-return = "void"
+docs = "Writes an informational log message."
+params = [{ name = "message", type = "StringView", docs = "Message text to write." }]
+return = { type = "void", docs = "Logging has no return value." }
 
 [[host_contract.functions]]
 name = "log_with_level"

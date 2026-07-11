@@ -396,7 +396,7 @@ fn run_decode_baselines(so_path: &str, input: &str, iters: u64) {
 
 /// Helper: Find a plugin implementing a contract and create a caller instance.
 /// Uses generated contract ID constants - no manifest parsing needed.
-fn find_contract<T>(runtime: &Runtime, contract_id: u64) -> Option<T>
+fn find_contract<T>(runtime: &Arc<Runtime>, contract_id: u64) -> Option<T>
 where
     T: ContractCaller,
 {
@@ -404,40 +404,40 @@ where
     if handle.is_null() {
         return None;
     }
-    T::from_handle(handle, runtime)
+    T::from_handle(handle, Arc::clone(runtime))
 }
 
 /// Trait for contract callers - allows generic find_contract helper.
 trait ContractCaller: Sized {
-    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self>;
+    fn from_handle(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self>;
 }
 
 impl ContractCaller for PipelineDecoderContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
-        Self::new(handle, runtime.as_context_ptr())
+    fn from_handle(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self> {
+        Self::new(handle, runtime)
     }
 }
 
 impl ContractCaller for DataTransformerContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
-        Self::new(handle, runtime.as_context_ptr())
+    fn from_handle(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self> {
+        Self::new(handle, runtime)
     }
 }
 
 impl ContractCaller for PipelineEncoderContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
-        Self::new(handle, runtime.as_context_ptr())
+    fn from_handle(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self> {
+        Self::new(handle, runtime)
     }
 }
 
 impl ContractCaller for DataReporterContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
-        Self::new(handle, runtime.as_context_ptr())
+    fn from_handle(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self> {
+        Self::new(handle, runtime)
     }
 }
 
 impl ContractCaller for PipelineValidatorContract {
-    fn from_handle(handle: GuestContractHandle, runtime: &Runtime) -> Option<Self> {
-        Self::new(handle, runtime.as_context_ptr())
+    fn from_handle(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self> {
+        Self::new(handle, runtime)
     }
 }

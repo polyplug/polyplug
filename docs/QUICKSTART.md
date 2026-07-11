@@ -45,17 +45,27 @@ Create a directory for the project and write `api.toml`:
 [[plugin_contract]]
 name = "greeter.Hello"
 version = "1.0.0"
+docs = "Greets a caller by name."
 
 [[plugin_contract.functions]]
 name = "greet"
-params = [{ name = "name", type = "StringView" }]
-return = "StringView"
+docs = "Returns a greeting for the supplied name."
+params = [{ name = "name", type = "StringView", docs = "The name to greet." }]
+return = { type = "StringView", docs = "The generated greeting." }
 ```
 
 The `name` field uses a `namespace.Type` convention. Supported parameter and
 return types include `StringView`, `Buffer`, `bool`, `i32`, `u32`, `i64`,
 `u64`, `f32`, `f64`, and `void`. Enums defined in the same file can also be
 referenced as types.
+
+Every contract-binding declaration accepts an optional `docs` string: plugin and
+host contracts, functions, parameters, returns, structs, fields, enums, and enum
+variants. Documentation is emitted as native API documentation in every generated
+binding and does not affect contract IDs, ABI layout, compatibility, or manifests.
+Use either the string return form (`return = "StringView"`) or the documented
+return table shown above. Documentation line endings normalize to LF; tabs and
+ordinary line breaks are supported.
 
 ---
 

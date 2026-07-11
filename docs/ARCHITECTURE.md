@@ -97,6 +97,14 @@ sequenceDiagram
 `host->register_guest_contract(host, &descriptor, &interface)` — identical across
 every language generator (a hard rule; see `CLAUDE.md` §10).
 
+Static in-process implementations use
+`Runtime::register_embedded_bundle(&EmbeddedBundle)`. An `EmbeddedBundle` contains
+one or more `EmbeddedContract` values whose interfaces are `'static`; the runtime
+derives the normal nonzero `BundleId` from its name and atomically records metadata,
+declared dependencies, and contract slots. Embedded bundles use the same discovery,
+unload, stale-handle, dependency, and re-registration paths as loaded bundles.
+`HostApi::register_guest_contract` is reserved for loader-owned `polyplug_init`.
+
 ---
 
 ## Pipeline 2 — lock-free registry read

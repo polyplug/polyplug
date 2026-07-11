@@ -4,6 +4,7 @@
 //! Produces raw AST structs that are later lowered to `ValidatedIr`.
 
 use core::mem;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
@@ -12,6 +13,10 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+use crate::PlatformKey;
+use crate::PolyplugcError;
+use crate::ResolvedBundleFile;
+use crate::error::SourceLocation;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -31,11 +36,7 @@ use crate::ir::ValidatedIr;
 use crate::ir::Version;
 use crate::ir::array_element_name;
 use crate::ir::resolve_type_ref;
-use polyplug_codegen::PlatformKey;
-use polyplug_codegen::PolyplugcError;
-use polyplug_codegen::ResolvedBundleFile;
-use polyplug_codegen::error::SourceLocation;
-use polyplug_codegen::reserved;
+use crate::reserved;
 use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
 use polyplug_utils::host_contract_id;
@@ -57,6 +58,8 @@ pub(crate) struct RawType {
     pub name: String,
     #[serde(default)]
     pub fields: Vec<RawField>,
+    #[serde(default)]
+    pub docs: Option<toml::Spanned<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +67,8 @@ pub(crate) struct RawField {
     pub name: String,
     #[serde(rename = "type")]
     pub ty: toml::Spanned<String>,
+    #[serde(default)]
+    pub docs: Option<toml::Spanned<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,6 +77,8 @@ pub(crate) struct RawContract {
     pub version: toml::Spanned<String>,
     #[serde(default)]
     pub functions: Vec<RawFunction>,
+    #[serde(default)]
+    pub docs: Option<toml::Spanned<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,6 +89,8 @@ pub(crate) struct RawHostContract {
     pub singleton: bool,
     #[serde(default)]
     pub functions: Vec<RawFunction>,
+    #[serde(default)]
+    pub docs: Option<toml::Spanned<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,7 +99,40 @@ pub(crate) struct RawFunction {
     #[serde(default)]
     pub params: Vec<RawParam>,
     #[serde(rename = "return", default)]
-    pub returns: Option<toml::Spanned<String>>,
+    pub returns: Option<RawReturn>,
+    #[serde(default)]
+    pub docs: Option<toml::Spanned<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum RawReturn {
+    Type(String),
+    Table(RawReturnTable),
+}
+
+impl RawReturn {
+    fn ty(&self) -> &str {
+        match self {
+            RawReturn::Type(ty) => ty,
+            RawReturn::Table(table) => &table.ty,
+        }
+    }
+
+    fn docs(&self) -> Option<&str> {
+        match self {
+            RawReturn::Type(_) => None,
+            RawReturn::Table(table) => table.docs.as_deref(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawReturnTable {
+    #[serde(rename = "type")]
+    pub ty: String,
+    #[serde(default)]
+    pub docs: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,12 +140,16 @@ pub(crate) struct RawParam {
     pub name: String,
     #[serde(rename = "type")]
     pub ty: toml::Spanned<String>,
+    #[serde(default)]
+    pub docs: Option<toml::Spanned<String>>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawEnumVariant {
     pub name: String,
     pub value: String,
+    #[serde(default)]
+    pub docs: Option<toml::Spanned<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -114,6 +160,8 @@ pub(crate) struct RawEnum {
     pub bitflag: bool,
     #[serde(default)]
     pub variants: Vec<RawEnumVariant>,
+    #[serde(default)]
+    pub docs: Option<toml::Spanned<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,6 +239,55 @@ fn location_from_span(file: &str, source: &str, span_start: usize) -> SourceLoca
         line,
         col,
     }
+}
+
+/// Normalize documentation line endings and reject control characters that cannot
+/// be represented safely by every generated language.
+fn normalize_docs(
+    docs: Option<&toml::Spanned<String>>,
+    file: &str,
+    source: &str,
+) -> Result<Option<String>, PolyplugcError> {
+    let Some(docs) = docs else {
+        return Ok(None);
+    };
+
+    for (offset, character) in docs.get_ref().char_indices() {
+        let code: u32 = character as u32;
+        let allowed: bool = matches!(character, '\t' | '\n' | '\r')
+            || (code >= 0x20 && !(0x7F..=0x9F).contains(&code));
+        if !allowed {
+            return Err(PolyplugcError::InvalidDocumentation {
+                character,
+                location: Some(location_from_span(file, source, docs.span().start + offset)),
+            });
+        }
+    }
+
+    Ok(Some(
+        docs.get_ref().replace("\r\n", "\n").replace('\r', "\n"),
+    ))
+}
+
+/// Normalize documentation that originates from an untagged TOML value. Serde
+/// cannot preserve a value span while decoding an untagged enum, so this follows
+/// the same validation policy without a location.
+fn normalize_unspanned_docs(docs: Option<&str>) -> Result<Option<String>, PolyplugcError> {
+    let Some(docs) = docs else {
+        return Ok(None);
+    };
+    for character in docs.chars() {
+        let code: u32 = character as u32;
+        let allowed: bool = matches!(character, '\t' | '\n' | '\r')
+            || (code >= 0x20 && !(0x7F..=0x9F).contains(&code));
+        if !allowed {
+            return Err(PolyplugcError::InvalidDocumentation {
+                character,
+                location: None,
+            });
+        }
+    }
+    Ok(Some(docs.replace("\r\n", "\n").replace('\r', "\n")))
 }
 
 /// Parse a version from a spanned TOML field, enriching a `VersionOverflow`
@@ -319,6 +416,15 @@ fn resolve_type_ref_spanned(
     })
 }
 
+/// Normalize source line endings before TOML parsing so documentation and TOML
+/// syntax have one canonical newline representation.
+fn normalize_source_line_endings(source: &str) -> Cow<'_, str> {
+    if source.contains('\r') {
+        Cow::Owned(source.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        Cow::Borrowed(source)
+    }
+}
 // ─── Parse entry points ───────────────────────────────────────────────────────
 
 pub fn parse_api(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
@@ -335,19 +441,20 @@ pub fn parse_api_str(content: &str) -> Result<ValidatedIr, PolyplugcError> {
 }
 
 fn parse_api_str_with_file(content: &str, file: &str) -> Result<ValidatedIr, PolyplugcError> {
+    let content: Cow<'_, str> = normalize_source_line_endings(content);
     if content.contains("[[contract]]") && !content.contains("[[plugin_contract]]") {
         eprintln!("warning: [[contract]] is deprecated, use [[plugin_contract]] instead");
     }
-    let raw: RawApiSchema = toml::from_str(content).map_err(|e| {
+    let raw: RawApiSchema = toml::from_str(content.as_ref()).map_err(|e| {
         let location: Option<SourceLocation> = e
             .span()
-            .map(|span| location_from_span(file, content, span.start));
+            .map(|span| location_from_span(file, content.as_ref(), span.start));
         PolyplugcError::TomlParseError {
             message: e.message().to_owned(),
             location,
         }
     })?;
-    lower_api(raw, content, file)
+    lower_api(raw, content.as_ref(), file)
 }
 
 #[allow(dead_code)]
@@ -356,16 +463,17 @@ pub fn parse_bundle_str(content: &str) -> Result<ValidatedIr, PolyplugcError> {
 }
 
 fn parse_bundle_str_with_file(content: &str, file: &str) -> Result<ValidatedIr, PolyplugcError> {
-    let raw: RawBundleSchema = toml::from_str(content).map_err(|e| {
+    let content: Cow<'_, str> = normalize_source_line_endings(content);
+    let raw: RawBundleSchema = toml::from_str(content.as_ref()).map_err(|e| {
         let location: Option<SourceLocation> = e
             .span()
-            .map(|span| location_from_span(file, content, span.start));
+            .map(|span| location_from_span(file, content.as_ref(), span.start));
         PolyplugcError::TomlParseError {
             message: e.message().to_owned(),
             location,
         }
     })?;
-    lower_bundle(raw, content, file)
+    lower_bundle(raw, content.as_ref(), file)
 }
 
 pub fn parse_bundle_with_api(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
@@ -373,6 +481,7 @@ pub fn parse_bundle_with_api(path: &Path) -> Result<ValidatedIr, PolyplugcError>
         path: path.to_string_lossy().into_owned(),
         source: e,
     })?;
+    let content: String = normalize_source_line_endings(&content).into_owned();
     let file: String = path.to_string_lossy().into_owned();
     let raw: RawBundleSchema = toml::from_str(&content).map_err(|e| {
         let location: Option<SourceLocation> = e
@@ -706,12 +815,15 @@ fn collect_array_wrapper_types(
                 ResolvedField {
                     name: "items".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
+                    docs: None,
                 },
                 ResolvedField {
                     name: "len".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
+                    docs: None,
                 },
             ],
+            docs: None,
         })
         .collect()
 }
@@ -798,6 +910,7 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
     let mut resolved_types: Vec<ResolvedType> = Vec::new();
     for raw_type in &raw.types {
         validate_identifier(&raw_type.name, "type", &raw_type.name)?;
+        let docs: Option<String> = normalize_docs(raw_type.docs.as_ref(), file, source)?;
         let mut fields: Vec<ResolvedField> = Vec::new();
         for field in &raw_type.fields {
             validate_identifier(&field.name, "field", &raw_type.name)?;
@@ -811,17 +924,20 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
             fields.push(ResolvedField {
                 name: field.name.clone(),
                 ty,
+                docs: normalize_docs(field.docs.as_ref(), file, source)?,
             });
         }
         resolved_types.push(ResolvedType {
             name: raw_type.name.clone(),
             fields,
+            docs,
         });
     }
 
     let mut resolved_enums: Vec<EnumDef> = Vec::new();
     for raw_enum in &raw.r#enum {
         validate_identifier(&raw_enum.name, "enum", &raw_enum.name)?;
+        let docs: Option<String> = normalize_docs(raw_enum.docs.as_ref(), file, source)?;
         let repr: ReprType = match ReprType::parse(&raw_enum.repr) {
             Some(r) => r,
             None => {
@@ -847,6 +963,7 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
             variants.push(EnumVariant {
                 name: raw_variant.name.clone(),
                 value: raw_variant.value.clone(),
+                docs: normalize_docs(raw_variant.docs.as_ref(), file, source)?,
             });
         }
         check_enum_chained_refs(&raw_enum.name, &variants)?;
@@ -855,6 +972,7 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
             repr,
             bitflag: raw_enum.bitflag,
             variants,
+            docs,
         });
     }
 
@@ -875,6 +993,7 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
         validate_contract_members(&raw_contract.name, "contract", &raw_contract.functions)?;
         let version: Version = parse_version_spanned(&raw_contract.version, file, source)?;
         let contract_id: u64 = guest_contract_id(&raw_contract.name, version.major);
+        let docs: Option<String> = normalize_docs(raw_contract.docs.as_ref(), file, source)?;
 
         let mut functions: Vec<ResolvedFunction> = Vec::new();
         for (function_id, raw_fn) in raw_contract.functions.iter().enumerate() {
@@ -890,19 +1009,16 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
                 params.push(ResolvedParam {
                     name: p.name.clone(),
                     ty,
+                    docs: normalize_docs(p.docs.as_ref(), file, source)?,
                 });
             }
+            let return_docs: Option<String> =
+                normalize_unspanned_docs(raw_fn.returns.as_ref().and_then(RawReturn::docs))?;
             let returns: Option<ResolvedTypeRef> = raw_fn
                 .returns
                 .as_ref()
-                .map(|spanned| {
-                    resolve_type_ref_spanned(
-                        spanned,
-                        &raw_contract.name,
-                        &all_known_names,
-                        file,
-                        source,
-                    )
+                .map(|raw_return| {
+                    resolve_type_ref(raw_return.ty(), &raw_contract.name, &all_known_names)
                 })
                 .transpose()?
                 // An explicit `return = "void"` means "no return"; normalize it to
@@ -915,6 +1031,8 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
                 function_id: function_id as u32,
                 params,
                 returns,
+                docs: normalize_docs(raw_fn.docs.as_ref(), file, source)?,
+                return_docs,
             });
         }
 
@@ -923,6 +1041,7 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
             contract_id,
             version,
             functions,
+            docs,
         });
     }
 
@@ -935,6 +1054,7 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
         )?;
         let version: Version = parse_version_spanned(&raw_host_contract.version, file, source)?;
         let contract_id: u64 = host_contract_id(&raw_host_contract.name, version.major);
+        let docs: Option<String> = normalize_docs(raw_host_contract.docs.as_ref(), file, source)?;
 
         let mut functions: Vec<ResolvedFunction> = Vec::new();
         for (function_id, raw_fn) in raw_host_contract.functions.iter().enumerate() {
@@ -950,19 +1070,16 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
                 params.push(ResolvedParam {
                     name: p.name.clone(),
                     ty,
+                    docs: normalize_docs(p.docs.as_ref(), file, source)?,
                 });
             }
+            let return_docs: Option<String> =
+                normalize_unspanned_docs(raw_fn.returns.as_ref().and_then(RawReturn::docs))?;
             let returns: Option<ResolvedTypeRef> = raw_fn
                 .returns
                 .as_ref()
-                .map(|spanned| {
-                    resolve_type_ref_spanned(
-                        spanned,
-                        &raw_host_contract.name,
-                        &all_known_names,
-                        file,
-                        source,
-                    )
+                .map(|raw_return| {
+                    resolve_type_ref(raw_return.ty(), &raw_host_contract.name, &all_known_names)
                 })
                 .transpose()?
                 // An explicit `return = "void"` means "no return"; normalize it to
@@ -975,6 +1092,8 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
                 function_id: function_id as u32,
                 params,
                 returns,
+                docs: normalize_docs(raw_fn.docs.as_ref(), file, source)?,
+                return_docs,
             });
         }
 
@@ -984,6 +1103,7 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
             version,
             singleton: raw_host_contract.singleton,
             functions,
+            docs,
         });
     }
 
@@ -1270,6 +1390,7 @@ mod tests {
                 patch: 0,
             },
             functions: Vec::new(),
+            docs: None,
         }];
         let result: Result<(), PolyplugcError> = check_bundle_name_conflict("test.add", &contracts);
         assert!(
@@ -1289,6 +1410,7 @@ mod tests {
                 patch: 0,
             },
             functions: Vec::new(),
+            docs: None,
         }];
         let result: Result<(), PolyplugcError> =
             check_bundle_name_conflict("image_bundle", &contracts);
@@ -1323,14 +1445,17 @@ mod tests {
             EnumVariant {
                 name: "A".to_owned(),
                 value: "1".to_owned(),
+                docs: None,
             },
             EnumVariant {
                 name: "B".to_owned(),
                 value: "A | 1".to_owned(),
+                docs: None,
             },
             EnumVariant {
                 name: "C".to_owned(),
                 value: "B | 2".to_owned(),
+                docs: None,
             },
         ];
         let result: Result<(), PolyplugcError> = check_enum_chained_refs("MyEnum", &variants);

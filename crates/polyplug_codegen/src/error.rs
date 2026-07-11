@@ -47,6 +47,10 @@ pub enum PolyplugcError {
         source: io::Error,
     },
 
+    UnsafeOutputPath {
+        path: String,
+    },
+
     ReadFailed {
         path: String,
         source: io::Error,
@@ -54,6 +58,12 @@ pub enum PolyplugcError {
 
     ValidationFailed {
         message: String,
+    },
+
+    /// Documentation contains a control character that cannot be emitted safely.
+    InvalidDocumentation {
+        character: char,
+        location: Option<SourceLocation>,
     },
 
     /// TOML-level parse error with optional source location.
@@ -191,12 +201,33 @@ impl fmt::Display for PolyplugcError {
                 write!(f, "failed to write generated file `{path}`: {source}")
             }
 
+            PolyplugcError::UnsafeOutputPath { path } => {
+                write!(
+                    f,
+                    "generated output path `{path}` must be relative and must not traverse parent directories"
+                )
+            }
+
             PolyplugcError::ReadFailed { path, source } => {
                 write!(f, "failed to read file `{path}`: {source}")
             }
 
             PolyplugcError::ValidationFailed { message } => {
                 write!(f, "IR validation failed: {message}")
+            }
+
+            PolyplugcError::InvalidDocumentation {
+                character,
+                location,
+            } => {
+                if let Some(loc) = location {
+                    write!(f, "{loc} — ")?;
+                }
+                write!(
+                    f,
+                    "invalid documentation character U+{:04X}: documentation permits only tab, line breaks, and printable text",
+                    *character as u32
+                )
             }
 
             PolyplugcError::TomlParseError { message, location } => {

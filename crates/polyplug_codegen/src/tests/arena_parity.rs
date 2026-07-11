@@ -14,12 +14,12 @@
 
 #![allow(clippy::expect_used)]
 
-use crate::codegen::generate;
+use crate::generate;
 use crate::ir::{
     AbiBuiltin, PrimitiveType, ResolvedContract, ResolvedFunction, ResolvedParam, ResolvedTypeRef,
     ValidatedIr, Version,
 };
-use polyplug_codegen::{GenerateConfig, GenerateOutput, GeneratedFile, Lang, Side};
+use crate::{GenerateConfig, GenerateOutput, GeneratedFile, Lang, Side};
 use polyplug_utils::guest_contract_id as fnv_contract_id;
 use std::env;
 use std::ffi::OsStr;
@@ -42,6 +42,7 @@ fn make_ir(contract_name: &str, functions: Vec<ResolvedFunction>) -> ValidatedIr
                 patch: 0,
             },
             functions,
+            docs: None,
         }],
         host_contracts: vec![],
         bundle: None,
@@ -59,6 +60,8 @@ fn make_fn(
         function_id,
         params,
         returns,
+        docs: None,
+        return_docs: None,
     }
 }
 
@@ -66,6 +69,7 @@ fn sv_param(name: &str) -> ResolvedParam {
     ResolvedParam {
         name: name.to_owned(),
         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+        docs: None,
     }
 }
 
@@ -164,10 +168,12 @@ fn mixed_arena_ir(contract_name: &str) -> ValidatedIr {
                     ResolvedParam {
                         name: "a".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                        docs: None,
                     },
                     ResolvedParam {
                         name: "b".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                        docs: None,
                     },
                 ],
                 Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
@@ -187,10 +193,12 @@ fn scalar_only_ir(contract_name: &str) -> ValidatedIr {
                 ResolvedParam {
                     name: "a".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    docs: None,
                 },
                 ResolvedParam {
                     name: "b".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    docs: None,
                 },
             ],
             Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),

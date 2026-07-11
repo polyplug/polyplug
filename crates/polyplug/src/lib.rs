@@ -13,5 +13,5 @@ pub mod runtime_store;
 
 pub use reload::ReloadEvent;
 
-// Re-export Runtime for loader crates
-pub use runtime::Runtime;
+/// Rust host APIs for loader-backed and statically linked guest bundles.
+pub use runtime::{EmbeddedBundle, EmbeddedContract, Runtime};

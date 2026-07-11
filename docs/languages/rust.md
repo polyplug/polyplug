@@ -1,8 +1,9 @@
 # Rust — polyplug
 
-Rust works as both a host and a guest. As a host it links the runtime crate
-directly. As a guest it compiles to a native `cdylib`, and host and plugin share
-the same ABI types. For measured overhead, see [Performance](../PERFORMANCE.md).
+Rust works as both a host and a guest. A Rust guest either compiles to a native
+`cdylib` for disk loading or links directly into a Rust host as an embedded
+bundle; host and guest share the same ABI types. For measured overhead, see
+[Performance](../PERFORMANCE.md).
 
 ## Install
 
@@ -42,8 +43,8 @@ polyplug_utils = "0.1"   # bundle_id / contract_id hash utilities
 
 - **[Rust — Host (app)](rust-host.md)** — embed the runtime, load plugins of any
   language, call contracts.
-- **[Rust — Guest (plugin)](rust-guest.md)** — write a Rust plugin, generate
-  glue, build a `cdylib`, assemble and validate the bundle.
+- **[Rust — Guest (plugin)](rust-guest.md)** — write a Rust disk plugin or an
+  embedded Rust guest, then generate its glue and registration bundle.
 
 New to polyplug? Start with the [Quick Start](../QUICKSTART.md).
 

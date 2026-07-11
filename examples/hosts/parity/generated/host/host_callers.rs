@@ -8,6 +8,9 @@
 #![allow(clippy::pedantic)]
 #![allow(clippy::nursery)]
 
+use std::sync::Arc;
+
+use polyplug::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::Buffer;
@@ -53,6 +56,7 @@ impl ContractError {
 /// - `new()`: calls `create_instance` on the resolved interface
 /// - `drop()`: calls `destroy_instance` to clean up
 /// - dispatch: passes `instance` to all method calls
+/// Decodes CSV input into the pipeline representation.
 ///
 /// # Call-arena lifetime
 ///
@@ -61,18 +65,18 @@ impl ContractError {
 /// start of the call. Any view returned by such a method borrows arena memory
 /// and is valid only until the next arena-backed call on the same caller.
 pub struct PipelineDecoderContract {
+    /// Runtime owner retained for every caller dispatch and lifecycle operation.
+    runtime: Arc<Runtime>,
     /// Resolved interface pointer from the registry.
     interface: *const GuestContractInterface,
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
-    /// Host interface pointer (needed for create/destroy_instance).
-    host: *const HostApi,
     /// Contract handle, retained so the cache can re-resolve after a hot-reload
     /// (which swaps a new interface into the same slot) or report a gone contract.
     handle: GuestContractHandle,
     /// Pointer to the runtime's registry revision counter, fetched once via
     /// `HostApi.revision_counter`. Polled directly before each dispatch (one
-    /// atomic load, no call into the runtime); null when there is no runtime.
+    /// atomic load, no call into the runtime).
     revision_ptr: *const u64,
     /// Revision value read when the interface was resolved. Compared before each
     /// dispatch against the live counter to detect a reload/unload and re-resolve,
@@ -91,19 +95,19 @@ impl PipelineDecoderContract {
     ///
     /// # Arguments
     /// - `handle`: Contract handle from `find_guest_contract`
-    /// - `host`: Host interface pointer
+    /// - `runtime`: Runtime that owns the handle and remains alive for this caller
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
-        // Resolve the interface from the handle via HostApi method
-        // SAFETY: host is reborrowed via as_ref() (returns None if null); resolve_guest_contract
-        // is an ABI function pointer safe to call with a valid host and any handle.
-        let interface: *const GuestContractInterface = unsafe {
-            let iface: &HostApi = host.as_ref()?;
-            (iface.resolve_guest_contract)(host, handle)
-        };
+    pub fn new(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self> {
+        let host: *const HostApi = runtime.as_context_ptr();
+        // SAFETY: runtime retains the non-null HostApi allocation for this caller.
+        let host_api: &HostApi = unsafe { host.as_ref()? };
+        // SAFETY: resolve_guest_contract is an ABI function pointer safe to call with a
+        // live runtime host and any contract handle.
+        let interface: *const GuestContractInterface =
+            unsafe { (host_api.resolve_guest_contract)(host, handle) };
         if interface.is_null() {
             return None;
         }
@@ -111,28 +115,20 @@ impl PipelineDecoderContract {
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
         let mut instance: GuestContractInstance = GuestContractInstance::null();
-        // SAFETY: host is reborrowed via as_ref() (returns None if null); create_guest_instance
-        // is an ABI function pointer that writes the new instance through the out-param.
+        // SAFETY: the live runtime owns host; create_guest_instance writes the out-param.
         unsafe {
-            let host_api: &HostApi = host.as_ref()?;
             (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
         // Fetch the registry revision counter ONCE, then read its current value, so
         // every later call can detect a reload/unload with a direct atomic load (no
         // call back into the runtime) and re-resolve before dispatching.
-        // SAFETY: host is non-null here (resolve above reborrowed it via as_ref());
-        // as_ref() re-guards null, and revision_counter is an ABI fn ptr safe to call.
-        let revision_ptr: *const u64 = unsafe {
-            match host.as_ref() {
-                Some(host_api) => (host_api.revision_counter)(host),
-                None => core::ptr::null(),
-            }
-        };
+        // SAFETY: revision_counter is an ABI fn ptr safe to call with the live host.
+        let revision_ptr: *const u64 = unsafe { (host_api.revision_counter)(host) };
         let cached_revision: u64 = if revision_ptr.is_null() {
             0
         } else {
             // SAFETY: revision_ptr was returned by revision_counter and points to the
-            // runtime's revision counter (an AtomicU64), valid for the runtime's lifetime.
+            // runtime's revision counter (an AtomicU64), valid while runtime is retained.
             unsafe {
                 (*(revision_ptr as *const core::sync::atomic::AtomicU64))
                     .load(core::sync::atomic::Ordering::Acquire)
@@ -143,9 +139,9 @@ impl PipelineDecoderContract {
         let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
         let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);
         Some(PipelineDecoderContract {
+            runtime,
             interface,
             instance,
-            host,
             handle,
             revision_ptr,
             cached_revision,
@@ -154,10 +150,14 @@ impl PipelineDecoderContract {
         })
     }
 
+    #[inline]
+    fn host(&self) -> *const HostApi {
+        self.runtime.as_context_ptr()
+    }
+
     /// Read the registry revision through the cached pointer — one aligned atomic
-    /// load, no call into the runtime. Returns the cached value (i.e. "unchanged")
-    /// when there is no counter (null host/runtime), so the staleness check is then
-    /// a no-op.
+    /// load, no call into the runtime. Returns the cached value when the runtime
+    /// exposes no revision counter, so the staleness check is then a no-op.
     #[inline]
     fn live_revision(&self) -> u64 {
         if self.revision_ptr.is_null() {
@@ -180,14 +180,10 @@ impl PipelineDecoderContract {
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
     pub fn reset(&mut self) {
-        // Route create/destroy through the host so the runtime's live-instance
-        // accounting stays accurate. If the host pointer is null there is no
-        // runtime to mediate the lifecycle, so leave the instance untouched.
-        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
-        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
-            Some(api) => api,
-            None => return,
-        };
+        // Route create/destroy through the runtime retained by this caller.
+        let host: *const HostApi = self.host();
+        // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
+        let host_api: &HostApi = unsafe { &*host };
         // If the registry changed under us, the cached interface/instance are stale
         // (a reload/unload reclaimed their backing). revalidate() abandons the dead
         // instance and builds a fresh one on the current interface — exactly the
@@ -200,7 +196,7 @@ impl PipelineDecoderContract {
             // SAFETY: instance was created by create_guest_instance on this interface and is
             // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
             unsafe {
-                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
+                (host_api.destroy_guest_instance)(host, self.interface, self.instance);
             }
         }
         let mut new_instance: GuestContractInstance = GuestContractInstance::null();
@@ -208,7 +204,7 @@ impl PipelineDecoderContract {
         // instance through the out-param.
         unsafe {
             (host_api.create_guest_instance)(
-                self.host,
+                host,
                 self.interface,
                 core::ptr::null(),
                 &mut new_instance,
@@ -230,26 +226,19 @@ impl PipelineDecoderContract {
     /// be undefined behaviour. The runtime reclaims the old instance's backing as
     /// part of the reload, then a fresh instance is created on the new interface.
     fn revalidate(&mut self) -> bool {
-        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
-        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
-            Some(api) => api,
-            None => return false,
-        };
-        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a valid host and handle.
+        let host: *const HostApi = self.host();
+        // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
+        let host_api: &HostApi = unsafe { &*host };
+        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a live host and handle.
         let interface: *const GuestContractInterface =
-            unsafe { (host_api.resolve_guest_contract)(self.host, self.handle) };
+            unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
         if interface.is_null() {
             return false;
         }
         let mut instance: GuestContractInstance = GuestContractInstance::null();
         // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.
         unsafe {
-            (host_api.create_guest_instance)(
-                self.host,
-                interface,
-                core::ptr::null(),
-                &mut instance,
-            );
+            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         }
         self.interface = interface;
         self.instance = instance;
@@ -258,6 +247,11 @@ impl PipelineDecoderContract {
     }
 
     /// Call `decode` (function_id=0)
+    /// Decodes one CSV record.
+    /// # Arguments
+    /// * `input` — The CSV record to decode.
+    /// # Returns
+    /// The decoded pipeline record.
     #[allow(clippy::absurd_extreme_comparisons)]
     /// Returns a value borrowing this caller's arena; it stays valid until
     /// the next arena-backed call on this caller.
@@ -353,14 +347,10 @@ impl Drop for PipelineDecoderContract {
     fn drop(&mut self) {
         // Free any overflow blocks the arena still holds before dropping.
         self.arena.reset();
-        // Destroy instance via host-mediated lifecycle so the runtime drops it
-        // from its live-instance accounting. A null host pointer means there is
-        // no runtime to mediate the lifecycle, so skip the destroy.
-        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
-        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
-            Some(api) => api,
-            None => return,
-        };
+        // Destroy the instance through the runtime retained by this caller.
+        let host: *const HostApi = self.host();
+        // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
+        let host_api: &HostApi = unsafe { &*host };
         // If the registry changed since we resolved, the cached interface and instance
         // are stale — a reload/unload reclaimed their backing — so calling the dead
         // interface's destroy would be UB; the reload/unload already reclaimed the
@@ -372,7 +362,7 @@ impl Drop for PipelineDecoderContract {
             // SAFETY: instance was created by create_guest_instance and is valid.
             // The interface pointer is stored for the lifetime of this wrapper.
             unsafe {
-                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
+                (host_api.destroy_guest_instance)(host, self.interface, self.instance);
             }
         }
     }
@@ -392,18 +382,18 @@ impl Drop for PipelineDecoderContract {
 /// start of the call. Any view returned by such a method borrows arena memory
 /// and is valid only until the next arena-backed call on the same caller.
 pub struct DataTransformerContract {
+    /// Runtime owner retained for every caller dispatch and lifecycle operation.
+    runtime: Arc<Runtime>,
     /// Resolved interface pointer from the registry.
     interface: *const GuestContractInterface,
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
-    /// Host interface pointer (needed for create/destroy_instance).
-    host: *const HostApi,
     /// Contract handle, retained so the cache can re-resolve after a hot-reload
     /// (which swaps a new interface into the same slot) or report a gone contract.
     handle: GuestContractHandle,
     /// Pointer to the runtime's registry revision counter, fetched once via
     /// `HostApi.revision_counter`. Polled directly before each dispatch (one
-    /// atomic load, no call into the runtime); null when there is no runtime.
+    /// atomic load, no call into the runtime).
     revision_ptr: *const u64,
     /// Revision value read when the interface was resolved. Compared before each
     /// dispatch against the live counter to detect a reload/unload and re-resolve,
@@ -422,19 +412,19 @@ impl DataTransformerContract {
     ///
     /// # Arguments
     /// - `handle`: Contract handle from `find_guest_contract`
-    /// - `host`: Host interface pointer
+    /// - `runtime`: Runtime that owns the handle and remains alive for this caller
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
-        // Resolve the interface from the handle via HostApi method
-        // SAFETY: host is reborrowed via as_ref() (returns None if null); resolve_guest_contract
-        // is an ABI function pointer safe to call with a valid host and any handle.
-        let interface: *const GuestContractInterface = unsafe {
-            let iface: &HostApi = host.as_ref()?;
-            (iface.resolve_guest_contract)(host, handle)
-        };
+    pub fn new(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self> {
+        let host: *const HostApi = runtime.as_context_ptr();
+        // SAFETY: runtime retains the non-null HostApi allocation for this caller.
+        let host_api: &HostApi = unsafe { host.as_ref()? };
+        // SAFETY: resolve_guest_contract is an ABI function pointer safe to call with a
+        // live runtime host and any contract handle.
+        let interface: *const GuestContractInterface =
+            unsafe { (host_api.resolve_guest_contract)(host, handle) };
         if interface.is_null() {
             return None;
         }
@@ -442,28 +432,20 @@ impl DataTransformerContract {
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
         let mut instance: GuestContractInstance = GuestContractInstance::null();
-        // SAFETY: host is reborrowed via as_ref() (returns None if null); create_guest_instance
-        // is an ABI function pointer that writes the new instance through the out-param.
+        // SAFETY: the live runtime owns host; create_guest_instance writes the out-param.
         unsafe {
-            let host_api: &HostApi = host.as_ref()?;
             (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
         // Fetch the registry revision counter ONCE, then read its current value, so
         // every later call can detect a reload/unload with a direct atomic load (no
         // call back into the runtime) and re-resolve before dispatching.
-        // SAFETY: host is non-null here (resolve above reborrowed it via as_ref());
-        // as_ref() re-guards null, and revision_counter is an ABI fn ptr safe to call.
-        let revision_ptr: *const u64 = unsafe {
-            match host.as_ref() {
-                Some(host_api) => (host_api.revision_counter)(host),
-                None => core::ptr::null(),
-            }
-        };
+        // SAFETY: revision_counter is an ABI fn ptr safe to call with the live host.
+        let revision_ptr: *const u64 = unsafe { (host_api.revision_counter)(host) };
         let cached_revision: u64 = if revision_ptr.is_null() {
             0
         } else {
             // SAFETY: revision_ptr was returned by revision_counter and points to the
-            // runtime's revision counter (an AtomicU64), valid for the runtime's lifetime.
+            // runtime's revision counter (an AtomicU64), valid while runtime is retained.
             unsafe {
                 (*(revision_ptr as *const core::sync::atomic::AtomicU64))
                     .load(core::sync::atomic::Ordering::Acquire)
@@ -474,9 +456,9 @@ impl DataTransformerContract {
         let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
         let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);
         Some(DataTransformerContract {
+            runtime,
             interface,
             instance,
-            host,
             handle,
             revision_ptr,
             cached_revision,
@@ -485,10 +467,14 @@ impl DataTransformerContract {
         })
     }
 
+    #[inline]
+    fn host(&self) -> *const HostApi {
+        self.runtime.as_context_ptr()
+    }
+
     /// Read the registry revision through the cached pointer — one aligned atomic
-    /// load, no call into the runtime. Returns the cached value (i.e. "unchanged")
-    /// when there is no counter (null host/runtime), so the staleness check is then
-    /// a no-op.
+    /// load, no call into the runtime. Returns the cached value when the runtime
+    /// exposes no revision counter, so the staleness check is then a no-op.
     #[inline]
     fn live_revision(&self) -> u64 {
         if self.revision_ptr.is_null() {
@@ -511,14 +497,10 @@ impl DataTransformerContract {
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
     pub fn reset(&mut self) {
-        // Route create/destroy through the host so the runtime's live-instance
-        // accounting stays accurate. If the host pointer is null there is no
-        // runtime to mediate the lifecycle, so leave the instance untouched.
-        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
-        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
-            Some(api) => api,
-            None => return,
-        };
+        // Route create/destroy through the runtime retained by this caller.
+        let host: *const HostApi = self.host();
+        // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
+        let host_api: &HostApi = unsafe { &*host };
         // If the registry changed under us, the cached interface/instance are stale
         // (a reload/unload reclaimed their backing). revalidate() abandons the dead
         // instance and builds a fresh one on the current interface — exactly the
@@ -531,7 +513,7 @@ impl DataTransformerContract {
             // SAFETY: instance was created by create_guest_instance on this interface and is
             // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
             unsafe {
-                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
+                (host_api.destroy_guest_instance)(host, self.interface, self.instance);
             }
         }
         let mut new_instance: GuestContractInstance = GuestContractInstance::null();
@@ -539,7 +521,7 @@ impl DataTransformerContract {
         // instance through the out-param.
         unsafe {
             (host_api.create_guest_instance)(
-                self.host,
+                host,
                 self.interface,
                 core::ptr::null(),
                 &mut new_instance,
@@ -561,26 +543,19 @@ impl DataTransformerContract {
     /// be undefined behaviour. The runtime reclaims the old instance's backing as
     /// part of the reload, then a fresh instance is created on the new interface.
     fn revalidate(&mut self) -> bool {
-        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
-        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
-            Some(api) => api,
-            None => return false,
-        };
-        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a valid host and handle.
+        let host: *const HostApi = self.host();
+        // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
+        let host_api: &HostApi = unsafe { &*host };
+        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a live host and handle.
         let interface: *const GuestContractInterface =
-            unsafe { (host_api.resolve_guest_contract)(self.host, self.handle) };
+            unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
         if interface.is_null() {
             return false;
         }
         let mut instance: GuestContractInstance = GuestContractInstance::null();
         // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.
         unsafe {
-            (host_api.create_guest_instance)(
-                self.host,
-                interface,
-                core::ptr::null(),
-                &mut instance,
-            );
+            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         }
         self.interface = interface;
         self.instance = instance;
@@ -684,14 +659,10 @@ impl Drop for DataTransformerContract {
     fn drop(&mut self) {
         // Free any overflow blocks the arena still holds before dropping.
         self.arena.reset();
-        // Destroy instance via host-mediated lifecycle so the runtime drops it
-        // from its live-instance accounting. A null host pointer means there is
-        // no runtime to mediate the lifecycle, so skip the destroy.
-        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
-        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
-            Some(api) => api,
-            None => return,
-        };
+        // Destroy the instance through the runtime retained by this caller.
+        let host: *const HostApi = self.host();
+        // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
+        let host_api: &HostApi = unsafe { &*host };
         // If the registry changed since we resolved, the cached interface and instance
         // are stale — a reload/unload reclaimed their backing — so calling the dead
         // interface's destroy would be UB; the reload/unload already reclaimed the
@@ -703,7 +674,7 @@ impl Drop for DataTransformerContract {
             // SAFETY: instance was created by create_guest_instance and is valid.
             // The interface pointer is stored for the lifetime of this wrapper.
             unsafe {
-                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
+                (host_api.destroy_guest_instance)(host, self.interface, self.instance);
             }
         }
     }
@@ -723,18 +694,18 @@ impl Drop for DataTransformerContract {
 /// start of the call. Any view returned by such a method borrows arena memory
 /// and is valid only until the next arena-backed call on the same caller.
 pub struct PipelineEncoderContract {
+    /// Runtime owner retained for every caller dispatch and lifecycle operation.
+    runtime: Arc<Runtime>,
     /// Resolved interface pointer from the registry.
     interface: *const GuestContractInterface,
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
-    /// Host interface pointer (needed for create/destroy_instance).
-    host: *const HostApi,
     /// Contract handle, retained so the cache can re-resolve after a hot-reload
     /// (which swaps a new interface into the same slot) or report a gone contract.
     handle: GuestContractHandle,
     /// Pointer to the runtime's registry revision counter, fetched once via
     /// `HostApi.revision_counter`. Polled directly before each dispatch (one
-    /// atomic load, no call into the runtime); null when there is no runtime.
+    /// atomic load, no call into the runtime).
     revision_ptr: *const u64,
     /// Revision value read when the interface was resolved. Compared before each
     /// dispatch against the live counter to detect a reload/unload and re-resolve,
@@ -753,19 +724,19 @@ impl PipelineEncoderContract {
     ///
     /// # Arguments
     /// - `handle`: Contract handle from `find_guest_contract`
-    /// - `host`: Host interface pointer
+    /// - `runtime`: Runtime that owns the handle and remains alive for this caller
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
-        // Resolve the interface from the handle via HostApi method
-        // SAFETY: host is reborrowed via as_ref() (returns None if null); resolve_guest_contract
-        // is an ABI function pointer safe to call with a valid host and any handle.
-        let interface: *const GuestContractInterface = unsafe {
-            let iface: &HostApi = host.as_ref()?;
-            (iface.resolve_guest_contract)(host, handle)
-        };
+    pub fn new(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self> {
+        let host: *const HostApi = runtime.as_context_ptr();
+        // SAFETY: runtime retains the non-null HostApi allocation for this caller.
+        let host_api: &HostApi = unsafe { host.as_ref()? };
+        // SAFETY: resolve_guest_contract is an ABI function pointer safe to call with a
+        // live runtime host and any contract handle.
+        let interface: *const GuestContractInterface =
+            unsafe { (host_api.resolve_guest_contract)(host, handle) };
         if interface.is_null() {
             return None;
         }
@@ -773,28 +744,20 @@ impl PipelineEncoderContract {
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
         let mut instance: GuestContractInstance = GuestContractInstance::null();
-        // SAFETY: host is reborrowed via as_ref() (returns None if null); create_guest_instance
-        // is an ABI function pointer that writes the new instance through the out-param.
+        // SAFETY: the live runtime owns host; create_guest_instance writes the out-param.
         unsafe {
-            let host_api: &HostApi = host.as_ref()?;
             (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
         // Fetch the registry revision counter ONCE, then read its current value, so
         // every later call can detect a reload/unload with a direct atomic load (no
         // call back into the runtime) and re-resolve before dispatching.
-        // SAFETY: host is non-null here (resolve above reborrowed it via as_ref());
-        // as_ref() re-guards null, and revision_counter is an ABI fn ptr safe to call.
-        let revision_ptr: *const u64 = unsafe {
-            match host.as_ref() {
-                Some(host_api) => (host_api.revision_counter)(host),
-                None => core::ptr::null(),
-            }
-        };
+        // SAFETY: revision_counter is an ABI fn ptr safe to call with the live host.
+        let revision_ptr: *const u64 = unsafe { (host_api.revision_counter)(host) };
         let cached_revision: u64 = if revision_ptr.is_null() {
             0
         } else {
             // SAFETY: revision_ptr was returned by revision_counter and points to the
-            // runtime's revision counter (an AtomicU64), valid for the runtime's lifetime.
+            // runtime's revision counter (an AtomicU64), valid while runtime is retained.
             unsafe {
                 (*(revision_ptr as *const core::sync::atomic::AtomicU64))
                     .load(core::sync::atomic::Ordering::Acquire)
@@ -805,9 +768,9 @@ impl PipelineEncoderContract {
         let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
         let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);
         Some(PipelineEncoderContract {
+            runtime,
             interface,
             instance,
-            host,
             handle,
             revision_ptr,
             cached_revision,
@@ -816,10 +779,14 @@ impl PipelineEncoderContract {
         })
     }
 
+    #[inline]
+    fn host(&self) -> *const HostApi {
+        self.runtime.as_context_ptr()
+    }
+
     /// Read the registry revision through the cached pointer — one aligned atomic
-    /// load, no call into the runtime. Returns the cached value (i.e. "unchanged")
-    /// when there is no counter (null host/runtime), so the staleness check is then
-    /// a no-op.
+    /// load, no call into the runtime. Returns the cached value when the runtime
+    /// exposes no revision counter, so the staleness check is then a no-op.
     #[inline]
     fn live_revision(&self) -> u64 {
         if self.revision_ptr.is_null() {
@@ -842,14 +809,10 @@ impl PipelineEncoderContract {
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
     pub fn reset(&mut self) {
-        // Route create/destroy through the host so the runtime's live-instance
-        // accounting stays accurate. If the host pointer is null there is no
-        // runtime to mediate the lifecycle, so leave the instance untouched.
-        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
-        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
-            Some(api) => api,
-            None => return,
-        };
+        // Route create/destroy through the runtime retained by this caller.
+        let host: *const HostApi = self.host();
+        // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
+        let host_api: &HostApi = unsafe { &*host };
         // If the registry changed under us, the cached interface/instance are stale
         // (a reload/unload reclaimed their backing). revalidate() abandons the dead
         // instance and builds a fresh one on the current interface — exactly the
@@ -862,7 +825,7 @@ impl PipelineEncoderContract {
             // SAFETY: instance was created by create_guest_instance on this interface and is
             // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
             unsafe {
-                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
+                (host_api.destroy_guest_instance)(host, self.interface, self.instance);
             }
         }
         let mut new_instance: GuestContractInstance = GuestContractInstance::null();
@@ -870,7 +833,7 @@ impl PipelineEncoderContract {
         // instance through the out-param.
         unsafe {
             (host_api.create_guest_instance)(
-                self.host,
+                host,
                 self.interface,
                 core::ptr::null(),
                 &mut new_instance,
@@ -892,26 +855,19 @@ impl PipelineEncoderContract {
     /// be undefined behaviour. The runtime reclaims the old instance's backing as
     /// part of the reload, then a fresh instance is created on the new interface.
     fn revalidate(&mut self) -> bool {
-        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
-        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
-            Some(api) => api,
-            None => return false,
-        };
-        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a valid host and handle.
+        let host: *const HostApi = self.host();
+        // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
+        let host_api: &HostApi = unsafe { &*host };
+        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a live host and handle.
         let interface: *const GuestContractInterface =
-            unsafe { (host_api.resolve_guest_contract)(self.host, self.handle) };
+            unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
         if interface.is_null() {
             return false;
         }
         let mut instance: GuestContractInstance = GuestContractInstance::null();
         // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.
         unsafe {
-            (host_api.create_guest_instance)(
-                self.host,
-                interface,
-                core::ptr::null(),
-                &mut instance,
-            );
+            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         }
         self.interface = interface;
         self.instance = instance;
@@ -1015,14 +971,10 @@ impl Drop for PipelineEncoderContract {
     fn drop(&mut self) {
         // Free any overflow blocks the arena still holds before dropping.
         self.arena.reset();
-        // Destroy instance via host-mediated lifecycle so the runtime drops it
-        // from its live-instance accounting. A null host pointer means there is
-        // no runtime to mediate the lifecycle, so skip the destroy.
-        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
-        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
-            Some(api) => api,
-            None => return,
-        };
+        // Destroy the instance through the runtime retained by this caller.
+        let host: *const HostApi = self.host();
+        // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
+        let host_api: &HostApi = unsafe { &*host };
         // If the registry changed since we resolved, the cached interface and instance
         // are stale — a reload/unload reclaimed their backing — so calling the dead
         // interface's destroy would be UB; the reload/unload already reclaimed the
@@ -1034,7 +986,7 @@ impl Drop for PipelineEncoderContract {
             // SAFETY: instance was created by create_guest_instance and is valid.
             // The interface pointer is stored for the lifetime of this wrapper.
             unsafe {
-                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
+                (host_api.destroy_guest_instance)(host, self.interface, self.instance);
             }
         }
     }
@@ -1054,18 +1006,18 @@ impl Drop for PipelineEncoderContract {
 /// start of the call. Any view returned by such a method borrows arena memory
 /// and is valid only until the next arena-backed call on the same caller.
 pub struct DataReporterContract {
+    /// Runtime owner retained for every caller dispatch and lifecycle operation.
+    runtime: Arc<Runtime>,
     /// Resolved interface pointer from the registry.
     interface: *const GuestContractInterface,
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
-    /// Host interface pointer (needed for create/destroy_instance).
-    host: *const HostApi,
     /// Contract handle, retained so the cache can re-resolve after a hot-reload
     /// (which swaps a new interface into the same slot) or report a gone contract.
     handle: GuestContractHandle,
     /// Pointer to the runtime's registry revision counter, fetched once via
     /// `HostApi.revision_counter`. Polled directly before each dispatch (one
-    /// atomic load, no call into the runtime); null when there is no runtime.
+    /// atomic load, no call into the runtime).
     revision_ptr: *const u64,
     /// Revision value read when the interface was resolved. Compared before each
     /// dispatch against the live counter to detect a reload/unload and re-resolve,
@@ -1084,19 +1036,19 @@ impl DataReporterContract {
     ///
     /// # Arguments
     /// - `handle`: Contract handle from `find_guest_contract`
-    /// - `host`: Host interface pointer
+    /// - `runtime`: Runtime that owns the handle and remains alive for this caller
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
-        // Resolve the interface from the handle via HostApi method
-        // SAFETY: host is reborrowed via as_ref() (returns None if null); resolve_guest_contract
-        // is an ABI function pointer safe to call with a valid host and any handle.
-        let interface: *const GuestContractInterface = unsafe {
-            let iface: &HostApi = host.as_ref()?;
-            (iface.resolve_guest_contract)(host, handle)
-        };
+    pub fn new(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self> {
+        let host: *const HostApi = runtime.as_context_ptr();
+        // SAFETY: runtime retains the non-null HostApi allocation for this caller.
+        let host_api: &HostApi = unsafe { host.as_ref()? };
+        // SAFETY: resolve_guest_contract is an ABI function pointer safe to call with a
+        // live runtime host and any contract handle.
+        let interface: *const GuestContractInterface =
+            unsafe { (host_api.resolve_guest_contract)(host, handle) };
         if interface.is_null() {
             return None;
         }
@@ -1104,28 +1056,20 @@ impl DataReporterContract {
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
         let mut instance: GuestContractInstance = GuestContractInstance::null();
-        // SAFETY: host is reborrowed via as_ref() (returns None if null); create_guest_instance
-        // is an ABI function pointer that writes the new instance through the out-param.
+        // SAFETY: the live runtime owns host; create_guest_instance writes the out-param.
         unsafe {
-            let host_api: &HostApi = host.as_ref()?;
             (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
         // Fetch the registry revision counter ONCE, then read its current value, so
         // every later call can detect a reload/unload with a direct atomic load (no
         // call back into the runtime) and re-resolve before dispatching.
-        // SAFETY: host is non-null here (resolve above reborrowed it via as_ref());
-        // as_ref() re-guards null, and revision_counter is an ABI fn ptr safe to call.
-        let revision_ptr: *const u64 = unsafe {
-            match host.as_ref() {
-                Some(host_api) => (host_api.revision_counter)(host),
-                None => core::ptr::null(),
-            }
-        };
+        // SAFETY: revision_counter is an ABI fn ptr safe to call with the live host.
+        let revision_ptr: *const u64 = unsafe { (host_api.revision_counter)(host) };
         let cached_revision: u64 = if revision_ptr.is_null() {
             0
         } else {
             // SAFETY: revision_ptr was returned by revision_counter and points to the
-            // runtime's revision counter (an AtomicU64), valid for the runtime's lifetime.
+            // runtime's revision counter (an AtomicU64), valid while runtime is retained.
             unsafe {
                 (*(revision_ptr as *const core::sync::atomic::AtomicU64))
                     .load(core::sync::atomic::Ordering::Acquire)
@@ -1136,9 +1080,9 @@ impl DataReporterContract {
         let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
         let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);
         Some(DataReporterContract {
+            runtime,
             interface,
             instance,
-            host,
             handle,
             revision_ptr,
             cached_revision,
@@ -1147,10 +1091,14 @@ impl DataReporterContract {
         })
     }
 
+    #[inline]
+    fn host(&self) -> *const HostApi {
+        self.runtime.as_context_ptr()
+    }
+
     /// Read the registry revision through the cached pointer — one aligned atomic
-    /// load, no call into the runtime. Returns the cached value (i.e. "unchanged")
-    /// when there is no counter (null host/runtime), so the staleness check is then
-    /// a no-op.
+    /// load, no call into the runtime. Returns the cached value when the runtime
+    /// exposes no revision counter, so the staleness check is then a no-op.
     #[inline]
     fn live_revision(&self) -> u64 {
         if self.revision_ptr.is_null() {
@@ -1173,14 +1121,10 @@ impl DataReporterContract {
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
     pub fn reset(&mut self) {
-        // Route create/destroy through the host so the runtime's live-instance
-        // accounting stays accurate. If the host pointer is null there is no
-        // runtime to mediate the lifecycle, so leave the instance untouched.
-        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
-        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
-            Some(api) => api,
-            None => return,
-        };
+        // Route create/destroy through the runtime retained by this caller.
+        let host: *const HostApi = self.host();
+        // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
+        let host_api: &HostApi = unsafe { &*host };
         // If the registry changed under us, the cached interface/instance are stale
         // (a reload/unload reclaimed their backing). revalidate() abandons the dead
         // instance and builds a fresh one on the current interface — exactly the
@@ -1193,7 +1137,7 @@ impl DataReporterContract {
             // SAFETY: instance was created by create_guest_instance on this interface and is
             // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
             unsafe {
-                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
+                (host_api.destroy_guest_instance)(host, self.interface, self.instance);
             }
         }
         let mut new_instance: GuestContractInstance = GuestContractInstance::null();
@@ -1201,7 +1145,7 @@ impl DataReporterContract {
         // instance through the out-param.
         unsafe {
             (host_api.create_guest_instance)(
-                self.host,
+                host,
                 self.interface,
                 core::ptr::null(),
                 &mut new_instance,
@@ -1223,26 +1167,19 @@ impl DataReporterContract {
     /// be undefined behaviour. The runtime reclaims the old instance's backing as
     /// part of the reload, then a fresh instance is created on the new interface.
     fn revalidate(&mut self) -> bool {
-        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
-        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
-            Some(api) => api,
-            None => return false,
-        };
-        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a valid host and handle.
+        let host: *const HostApi = self.host();
+        // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
+        let host_api: &HostApi = unsafe { &*host };
+        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a live host and handle.
         let interface: *const GuestContractInterface =
-            unsafe { (host_api.resolve_guest_contract)(self.host, self.handle) };
+            unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
         if interface.is_null() {
             return false;
         }
         let mut instance: GuestContractInstance = GuestContractInstance::null();
         // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.
         unsafe {
-            (host_api.create_guest_instance)(
-                self.host,
-                interface,
-                core::ptr::null(),
-                &mut instance,
-            );
+            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         }
         self.interface = interface;
         self.instance = instance;
@@ -1346,14 +1283,10 @@ impl Drop for DataReporterContract {
     fn drop(&mut self) {
         // Free any overflow blocks the arena still holds before dropping.
         self.arena.reset();
-        // Destroy instance via host-mediated lifecycle so the runtime drops it
-        // from its live-instance accounting. A null host pointer means there is
-        // no runtime to mediate the lifecycle, so skip the destroy.
-        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
-        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
-            Some(api) => api,
-            None => return,
-        };
+        // Destroy the instance through the runtime retained by this caller.
+        let host: *const HostApi = self.host();
+        // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
+        let host_api: &HostApi = unsafe { &*host };
         // If the registry changed since we resolved, the cached interface and instance
         // are stale — a reload/unload reclaimed their backing — so calling the dead
         // interface's destroy would be UB; the reload/unload already reclaimed the
@@ -1365,7 +1298,7 @@ impl Drop for DataReporterContract {
             // SAFETY: instance was created by create_guest_instance and is valid.
             // The interface pointer is stored for the lifetime of this wrapper.
             unsafe {
-                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
+                (host_api.destroy_guest_instance)(host, self.interface, self.instance);
             }
         }
     }
@@ -1385,18 +1318,18 @@ impl Drop for DataReporterContract {
 /// start of the call. Any view returned by such a method borrows arena memory
 /// and is valid only until the next arena-backed call on the same caller.
 pub struct PipelineValidatorContract {
+    /// Runtime owner retained for every caller dispatch and lifecycle operation.
+    runtime: Arc<Runtime>,
     /// Resolved interface pointer from the registry.
     interface: *const GuestContractInterface,
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
-    /// Host interface pointer (needed for create/destroy_instance).
-    host: *const HostApi,
     /// Contract handle, retained so the cache can re-resolve after a hot-reload
     /// (which swaps a new interface into the same slot) or report a gone contract.
     handle: GuestContractHandle,
     /// Pointer to the runtime's registry revision counter, fetched once via
     /// `HostApi.revision_counter`. Polled directly before each dispatch (one
-    /// atomic load, no call into the runtime); null when there is no runtime.
+    /// atomic load, no call into the runtime).
     revision_ptr: *const u64,
     /// Revision value read when the interface was resolved. Compared before each
     /// dispatch against the live counter to detect a reload/unload and re-resolve,
@@ -1415,19 +1348,19 @@ impl PipelineValidatorContract {
     ///
     /// # Arguments
     /// - `handle`: Contract handle from `find_guest_contract`
-    /// - `host`: Host interface pointer
+    /// - `runtime`: Runtime that owns the handle and remains alive for this caller
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: GuestContractHandle, host: *const HostApi) -> Option<Self> {
-        // Resolve the interface from the handle via HostApi method
-        // SAFETY: host is reborrowed via as_ref() (returns None if null); resolve_guest_contract
-        // is an ABI function pointer safe to call with a valid host and any handle.
-        let interface: *const GuestContractInterface = unsafe {
-            let iface: &HostApi = host.as_ref()?;
-            (iface.resolve_guest_contract)(host, handle)
-        };
+    pub fn new(handle: GuestContractHandle, runtime: Arc<Runtime>) -> Option<Self> {
+        let host: *const HostApi = runtime.as_context_ptr();
+        // SAFETY: runtime retains the non-null HostApi allocation for this caller.
+        let host_api: &HostApi = unsafe { host.as_ref()? };
+        // SAFETY: resolve_guest_contract is an ABI function pointer safe to call with a
+        // live runtime host and any contract handle.
+        let interface: *const GuestContractInterface =
+            unsafe { (host_api.resolve_guest_contract)(host, handle) };
         if interface.is_null() {
             return None;
         }
@@ -1435,28 +1368,20 @@ impl PipelineValidatorContract {
         // A null `instance.data` is valid: stateless contracts return a null
         // handle from `create_instance` and use it as an opaque dispatch token.
         let mut instance: GuestContractInstance = GuestContractInstance::null();
-        // SAFETY: host is reborrowed via as_ref() (returns None if null); create_guest_instance
-        // is an ABI function pointer that writes the new instance through the out-param.
+        // SAFETY: the live runtime owns host; create_guest_instance writes the out-param.
         unsafe {
-            let host_api: &HostApi = host.as_ref()?;
             (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         };
         // Fetch the registry revision counter ONCE, then read its current value, so
         // every later call can detect a reload/unload with a direct atomic load (no
         // call back into the runtime) and re-resolve before dispatching.
-        // SAFETY: host is non-null here (resolve above reborrowed it via as_ref());
-        // as_ref() re-guards null, and revision_counter is an ABI fn ptr safe to call.
-        let revision_ptr: *const u64 = unsafe {
-            match host.as_ref() {
-                Some(host_api) => (host_api.revision_counter)(host),
-                None => core::ptr::null(),
-            }
-        };
+        // SAFETY: revision_counter is an ABI fn ptr safe to call with the live host.
+        let revision_ptr: *const u64 = unsafe { (host_api.revision_counter)(host) };
         let cached_revision: u64 = if revision_ptr.is_null() {
             0
         } else {
             // SAFETY: revision_ptr was returned by revision_counter and points to the
-            // runtime's revision counter (an AtomicU64), valid for the runtime's lifetime.
+            // runtime's revision counter (an AtomicU64), valid while runtime is retained.
             unsafe {
                 (*(revision_ptr as *const core::sync::atomic::AtomicU64))
                     .load(core::sync::atomic::Ordering::Acquire)
@@ -1467,9 +1392,9 @@ impl PipelineValidatorContract {
         let mut arena_buf: Box<[u8; CALL_ARENA_BUF_LEN]> = Box::new([0u8; CALL_ARENA_BUF_LEN]);
         let arena: CallArena = CallArena::new(arena_buf.as_mut_slice(), host);
         Some(PipelineValidatorContract {
+            runtime,
             interface,
             instance,
-            host,
             handle,
             revision_ptr,
             cached_revision,
@@ -1478,10 +1403,14 @@ impl PipelineValidatorContract {
         })
     }
 
+    #[inline]
+    fn host(&self) -> *const HostApi {
+        self.runtime.as_context_ptr()
+    }
+
     /// Read the registry revision through the cached pointer — one aligned atomic
-    /// load, no call into the runtime. Returns the cached value (i.e. "unchanged")
-    /// when there is no counter (null host/runtime), so the staleness check is then
-    /// a no-op.
+    /// load, no call into the runtime. Returns the cached value when the runtime
+    /// exposes no revision counter, so the staleness check is then a no-op.
     #[inline]
     fn live_revision(&self) -> u64 {
         if self.revision_ptr.is_null() {
@@ -1504,14 +1433,10 @@ impl PipelineValidatorContract {
     /// Destroy current instance and create a new one.
     /// Useful for recovering from plugin errors.
     pub fn reset(&mut self) {
-        // Route create/destroy through the host so the runtime's live-instance
-        // accounting stays accurate. If the host pointer is null there is no
-        // runtime to mediate the lifecycle, so leave the instance untouched.
-        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
-        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
-            Some(api) => api,
-            None => return,
-        };
+        // Route create/destroy through the runtime retained by this caller.
+        let host: *const HostApi = self.host();
+        // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
+        let host_api: &HostApi = unsafe { &*host };
         // If the registry changed under us, the cached interface/instance are stale
         // (a reload/unload reclaimed their backing). revalidate() abandons the dead
         // instance and builds a fresh one on the current interface — exactly the
@@ -1524,7 +1449,7 @@ impl PipelineValidatorContract {
             // SAFETY: instance was created by create_guest_instance on this interface and is
             // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
             unsafe {
-                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
+                (host_api.destroy_guest_instance)(host, self.interface, self.instance);
             }
         }
         let mut new_instance: GuestContractInstance = GuestContractInstance::null();
@@ -1532,7 +1457,7 @@ impl PipelineValidatorContract {
         // instance through the out-param.
         unsafe {
             (host_api.create_guest_instance)(
-                self.host,
+                host,
                 self.interface,
                 core::ptr::null(),
                 &mut new_instance,
@@ -1554,26 +1479,19 @@ impl PipelineValidatorContract {
     /// be undefined behaviour. The runtime reclaims the old instance's backing as
     /// part of the reload, then a fresh instance is created on the new interface.
     fn revalidate(&mut self) -> bool {
-        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
-        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
-            Some(api) => api,
-            None => return false,
-        };
-        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a valid host and handle.
+        let host: *const HostApi = self.host();
+        // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
+        let host_api: &HostApi = unsafe { &*host };
+        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a live host and handle.
         let interface: *const GuestContractInterface =
-            unsafe { (host_api.resolve_guest_contract)(self.host, self.handle) };
+            unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
         if interface.is_null() {
             return false;
         }
         let mut instance: GuestContractInstance = GuestContractInstance::null();
         // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.
         unsafe {
-            (host_api.create_guest_instance)(
-                self.host,
-                interface,
-                core::ptr::null(),
-                &mut instance,
-            );
+            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut instance);
         }
         self.interface = interface;
         self.instance = instance;
@@ -1677,14 +1595,10 @@ impl Drop for PipelineValidatorContract {
     fn drop(&mut self) {
         // Free any overflow blocks the arena still holds before dropping.
         self.arena.reset();
-        // Destroy instance via host-mediated lifecycle so the runtime drops it
-        // from its live-instance accounting. A null host pointer means there is
-        // no runtime to mediate the lifecycle, so skip the destroy.
-        // SAFETY: self.host is the stored host pointer; as_ref() returns None when it is null.
-        let host_api: &HostApi = match unsafe { self.host.as_ref() } {
-            Some(api) => api,
-            None => return,
-        };
+        // Destroy the instance through the runtime retained by this caller.
+        let host: *const HostApi = self.host();
+        // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
+        let host_api: &HostApi = unsafe { &*host };
         // If the registry changed since we resolved, the cached interface and instance
         // are stale — a reload/unload reclaimed their backing — so calling the dead
         // interface's destroy would be UB; the reload/unload already reclaimed the
@@ -1696,7 +1610,7 @@ impl Drop for PipelineValidatorContract {
             // SAFETY: instance was created by create_guest_instance and is valid.
             // The interface pointer is stored for the lifetime of this wrapper.
             unsafe {
-                (host_api.destroy_guest_instance)(self.host, self.interface, self.instance);
+                (host_api.destroy_guest_instance)(host, self.interface, self.instance);
             }
         }
     }
