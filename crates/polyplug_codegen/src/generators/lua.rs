@@ -341,12 +341,11 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push('\n');
 
     // Cached FFI types for hot path performance.
-    // Native guest dispatch functions take the instance by value and write the
-    // AbiError through a trailing out_err pointer (out-param ABI), matching
-    // GuestContractInterface native dispatch.
+    // Native guest dispatch functions receive the generated adapter context and
+    // instance by value, then write AbiError through the trailing out-param.
     out.push_str("-- Cached FFI types for hot path performance\n");
     out.push_str(
-        "local NativeDispatchFnType = ffi.typeof(\"void (*)(GuestContractInstance, const void*, void*, AbiError*)\")\n",
+        "local NativeDispatchFnType = ffi.typeof(\"void (*)(void*, GuestContractInstance, const void*, void*, AbiError*)\")\n",
     );
     out.push('\n');
 
@@ -945,7 +944,9 @@ fn generate_host_caller_method(
         "            local fn_ptr = self._interface.dispatch.native.functions[{fn_id}]\n"
     ));
     out.push_str("            local fn = ffi.cast(NativeDispatchFnType, fn_ptr)\n");
-    out.push_str("            fn(self._instance, args_ptr, out_ptr, err)\n");
+    out.push_str(
+        "            fn(self._interface.adapter_context, self._instance, args_ptr, out_ptr, err)\n",
+    );
     out.push_str("        else\n");
     // The arena is nil: a Lua host caller cannot soundly hold a per-caller
     // CallArena (the 40-byte arena owns a borrowed primary buffer plus a host
@@ -2895,14 +2896,13 @@ fn generate_lua_guest_peer_method(
         out.push_str("            return\n");
     }
     out.push_str("        end\n");
-    // Native dispatch path: call the guest function pointer directly through the
-    // cached interface (same ctype as the host->guest caller — pass the whole
-    // GuestContractInstance value as the first arg). No host-mediated round-trip.
+    // Native dispatch calls the guest function pointer directly through the
+    // cached interface, forwarding its immutable generated adapter context.
     out.push_str(&format!(
         "        local fn_ptr = interface.dispatch.native.functions[{fn_id}]\n"
     ));
     out.push_str("        local fn = ffi.cast(NativeDispatchFnType, fn_ptr)\n");
-    out.push_str("        fn(self._instance, args_ptr, out_ptr, err)\n");
+    out.push_str("        fn(interface.adapter_context, self._instance, args_ptr, out_ptr, err)\n");
     out.push_str("    elseif dispatch_type == 1 then\n");
     // VM dispatch receives the immutable adapter context carried by the
     // cached guest interface, followed by loader data and the caller instance.
@@ -4012,8 +4012,8 @@ mod tests {
             "native arm must cast through the shared NativeDispatchFnType ctype: {out}"
         );
         assert!(
-            out.contains("fn(self._instance, args_ptr, out_ptr, err)"),
-            "native arm must call the fn pointer with the instance directly: {out}"
+            out.contains("fn(interface.adapter_context, self._instance, args_ptr, out_ptr, err)"),
+            "native arm must forward adapter context before the instance: {out}"
         );
         // VM arm: call the loader trampoline with the immutable interface context
         // and a nil arena. Lua peer callers have no per-caller CallArena.

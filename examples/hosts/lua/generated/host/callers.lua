@@ -27,7 +27,7 @@ M.DATA_REPORTER_CONTRACT_ID = DATA_REPORTER_CONTRACT_ID
 M.PIPELINE_VALIDATOR_CONTRACT_ID = PIPELINE_VALIDATOR_CONTRACT_ID
 
 -- Cached FFI types for hot path performance
-local NativeDispatchFnType = ffi.typeof("void (*)(GuestContractInstance, const void*, void*, AbiError*)")
+local NativeDispatchFnType = ffi.typeof("void (*)(void*, GuestContractInstance, const void*, void*, AbiError*)")
 
 --- Decodes CSV input into the pipeline representation.
 -- Methods for PipelineDecoderContract (instance wrapper)
@@ -107,7 +107,7 @@ local PipelineDecoderContract_methods = {
             end
             local fn_ptr = self._interface.dispatch.native.functions[0]
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
-            fn(self._instance, args_ptr, out_ptr, err)
+            fn(self._interface.adapter_context, self._instance, args_ptr, out_ptr, err)
         else
             self._interface.dispatch.vm.call(self._interface.adapter_context, self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
         end
@@ -225,7 +225,7 @@ local DataTransformerContract_methods = {
             end
             local fn_ptr = self._interface.dispatch.native.functions[0]
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
-            fn(self._instance, args_ptr, out_ptr, err)
+            fn(self._interface.adapter_context, self._instance, args_ptr, out_ptr, err)
         else
             self._interface.dispatch.vm.call(self._interface.adapter_context, self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
         end
@@ -343,7 +343,7 @@ local PipelineEncoderContract_methods = {
             end
             local fn_ptr = self._interface.dispatch.native.functions[0]
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
-            fn(self._instance, args_ptr, out_ptr, err)
+            fn(self._interface.adapter_context, self._instance, args_ptr, out_ptr, err)
         else
             self._interface.dispatch.vm.call(self._interface.adapter_context, self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
         end
@@ -461,7 +461,7 @@ local DataReporterContract_methods = {
             end
             local fn_ptr = self._interface.dispatch.native.functions[0]
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
-            fn(self._instance, args_ptr, out_ptr, err)
+            fn(self._interface.adapter_context, self._instance, args_ptr, out_ptr, err)
         else
             self._interface.dispatch.vm.call(self._interface.adapter_context, self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
         end
@@ -579,7 +579,7 @@ local PipelineValidatorContract_methods = {
             end
             local fn_ptr = self._interface.dispatch.native.functions[0]
             local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
-            fn(self._instance, args_ptr, out_ptr, err)
+            fn(self._interface.adapter_context, self._instance, args_ptr, out_ptr, err)
         else
             self._interface.dispatch.vm.call(self._interface.adapter_context, self._interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
         end

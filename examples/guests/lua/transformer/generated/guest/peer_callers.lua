@@ -82,7 +82,7 @@ function PipelineValidatorPeer:validate(input)
         end
         local fn_ptr = interface.dispatch.native.functions[0]
         local fn = ffi.cast(NativeDispatchFnType, fn_ptr)
-        fn(self._instance, args_ptr, out_ptr, err)
+        fn(interface.adapter_context, self._instance, args_ptr, out_ptr, err)
     elseif dispatch_type == 1 then
         interface.dispatch.vm.call(interface.adapter_context, interface.dispatch.vm.loader_data, self._instance, 0, args_ptr, out_ptr, nil, err)
     else
