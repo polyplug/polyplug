@@ -1642,10 +1642,10 @@ fn emit_guest_wrapper_call(out: &mut String, func: &ResolvedFunction, contract_s
 fn generate_guest_init_file(
     out: &mut String,
     ir: &ValidatedIr,
-    embedded_bundle_name: Option<&str>,
+    in_process_bundle_name: Option<&str>,
 ) {
-    if let Some(bundle_name) = embedded_bundle_name {
-        generate_embedded_guest_init_file(out, ir, bundle_name);
+    if let Some(bundle_name) = in_process_bundle_name {
+        generate_in_process_guest_init_file(out, ir, bundle_name);
         return;
     }
     // Local `super::interfaces::*` imports; the contract-id const is shared across
@@ -1826,36 +1826,63 @@ fn generate_guest_init_file(
     out.push_str("}\n");
 }
 
-fn generate_embedded_guest_init_file(out: &mut String, ir: &ValidatedIr, bundle_name: &str) {
+fn generate_in_process_guest_init_file(out: &mut String, ir: &ValidatedIr, bundle_name: &str) {
     let providers: Vec<GuestProvider<'_>> = guest_providers(ir);
-    let dependencies: Vec<u64> = ir
-        .bundle
-        .as_ref()
-        .map(|bundle| bundle.dependencies.iter().map(dep_contract_id).collect())
-        .unwrap_or_default();
-    let (major, minor, patch): (u32, u32, u32) = ir
-        .bundle
-        .as_ref()
-        .map(|bundle| {
-            (
-                bundle.version.major,
-                bundle.version.minor,
-                bundle.version.patch,
-            )
-        })
-        .unwrap_or((1, 0, 0));
+    let manifest_toml: String = if ir.bundle.is_some() {
+        generate_bundle_manifest(ir)
+    } else {
+        let mut provides: Vec<String> = ir
+            .contracts
+            .iter()
+            .map(|contract: &ResolvedContract| {
+                format!("{}@{}", contract.name, contract.version.major)
+            })
+            .collect();
+        provides.sort();
+        provides.dedup();
+        let provides_toml: String = provides
+            .iter()
+            .map(|provider: &String| format!("{provider:?}"))
+            .collect::<Vec<String>>()
+            .join(", ");
+        let function_count_toml: String = ir
+            .contracts
+            .iter()
+            .map(|contract: &ResolvedContract| {
+                format!(
+                    "{:?} = {}",
+                    format!("{}@{}", contract.name, contract.version.major),
+                    contract.functions.len()
+                )
+            })
+            .collect::<Vec<String>>()
+            .join(", ");
+        format!(
+            "name = {bundle_name:?}\n\
+             id = {}\n\
+             version = \"1.0.0\"\n\
+             loader = \"in-process\"\n\
+             file = \"in-process\"\n\
+             provides = [{provides_toml}]\n\
+             function_count = {{ {function_count_toml} }}\n\
+             needs_reinit_on_dep_reload = false\n",
+            polyplug_utils::bundle_id(bundle_name)
+        )
+    };
 
     out.push_str(&rust_use_block(&[
         &["core::ffi::c_void"],
-        &["polyplug::InProcessBundle"],
         &[
-            "polyplug_abi::InProcessBundleMetadata",
-            "polyplug_abi::InProcessBundleRegistration",
-            "polyplug_abi::InProcessContractRegistration",
+            "polyplug::Runtime",
+            "polyplug::error::RuntimeError",
+            "polyplug_abi::AbiError",
+            "polyplug_abi::AbiErrorCode",
             "polyplug_abi::PluginDescriptor",
             "polyplug_abi::StringView",
             "polyplug_abi::SupportedLanguage",
             "polyplug_abi::Version",
+            "polyplug_common::ManifestData",
+            "polyplug_utils::BundleId",
         ],
         &["super::interfaces::InProcessFactories"],
     ]));
@@ -1864,63 +1891,52 @@ fn generate_embedded_guest_init_file(out: &mut String, ir: &ValidatedIr, bundle_
         "pub const IN_PROCESS_BUNDLE_NAME: &str = {bundle_name:?};\n\n"
     ));
     out.push_str(&format!(
-        "static IN_PROCESS_DEPENDENCIES: [u64; {}] = [\n",
-        dependencies.len()
+        "const IN_PROCESS_MANIFEST: &str = {manifest_toml:?};\n\n"
     ));
-    for dependency in dependencies {
-        out.push_str(&format!("    0x{dependency:016X},\n"));
-    }
-    out.push_str("];\n\n");
-    out.push_str("/// Construct this module's runtime-local in-process bundle.\n");
-    out.push_str("pub fn in_process_bundle(factories: InProcessFactories) -> InProcessBundle<InProcessFactories> {\n");
-    out.push_str("    let resident: Box<InProcessFactories> = Box::new(factories);\n");
-    out.push_str("    let adapter_context: *mut c_void = (&*resident as *const InProcessFactories).cast_mut().cast();\n");
-    out.push_str("    let contracts: Box<[InProcessContractRegistration]> = Box::new([\n");
+    out.push_str("/// Register this module through the canonical runtime bundle transaction.\n");
+    out.push_str(
+        "pub fn register_in_process_bundle(\n    runtime: &Runtime,\n    factories: InProcessFactories,\n) -> Result<BundleId, RuntimeError> {\n",
+    );
+    out.push_str(
+        "    let resident: Box<InProcessFactories> = Box::new(factories);\n\
+         \x20   let adapter_context: *mut c_void = (&*resident as *const InProcessFactories).cast_mut().cast();\n\
+         \x20   let mut manifest: ManifestData = ManifestData::parse_from_str(IN_PROCESS_MANIFEST)\n\
+         \x20       .expect(\"generated in-process manifest is valid\");\n\
+         \x20   manifest.file = \"in-process\".to_owned();\n\
+         \x20   runtime.register_in_process_bundle(manifest, SupportedLanguage::Rust, resident, |host| {\n",
+    );
     for provider in &providers {
         let plugin_name: String = guest_provider_name(provider);
         let interface_upper: String = guest_provider_upper(provider);
         let contract = provider.contract;
-        out.push_str("        InProcessContractRegistration {\n");
-        out.push_str("            descriptor: PluginDescriptor {\n");
         out.push_str(&format!(
-            "                name: StringView::from_static({plugin_name:?}.as_bytes()),\n"
+            "        let mut interface_{interface_upper} = super::interfaces::{interface_upper}_INTERFACE;\n\
+             \x20       interface_{interface_upper}.adapter_context = adapter_context;\n\
+             \x20       let descriptor_{interface_upper}: PluginDescriptor = PluginDescriptor {{\n\
+             \x20           name: StringView::from_static({plugin_name:?}.as_bytes()),\n\
+             \x20           contract_name: StringView::from_static({:?}.as_bytes()),\n\
+             \x20           version: Version {{ major: {}, minor: {}, patch: {} }},\n\
+             \x20       }};\n\
+             \x20       let mut error_{interface_upper}: AbiError = AbiError::ok();\n\
+             \x20       // SAFETY: core owns `host` for this registration transaction and copies the table synchronously.\n\
+             \x20       unsafe {{\n\
+             \x20           ((*host).register_guest_contract)(\n\
+             \x20               host,\n\
+             \x20               &descriptor_{interface_upper},\n\
+             \x20               &interface_{interface_upper},\n\
+             \x20               &mut error_{interface_upper},\n\
+             \x20           );\n\
+             \x20       }}\n\
+             \x20       if error_{interface_upper}.code != AbiErrorCode::Ok as u32 {{\n\
+             \x20           return error_{interface_upper};\n\
+             \x20       }}\n",
+            contract.name,
+            contract.version.major,
+            contract.version.minor,
+            contract.version.patch,
         ));
-        out.push_str(&format!(
-            "                contract_name: StringView::from_static({:?}.as_bytes()),\n",
-            contract.name
-        ));
-        out.push_str(&format!(
-            "                version: Version {{ major: {}, minor: {}, patch: {} }},\n",
-            contract.version.major, contract.version.minor, contract.version.patch
-        ));
-        out.push_str("            },\n");
-        out.push_str(&format!(
-            "            interface: &super::interfaces::{interface_upper}_INTERFACE,\n"
-        ));
-        out.push_str("            adapter_context,\n");
-        out.push_str("        },\n");
     }
-    out.push_str("    ]);\n");
-    out.push_str("    InProcessBundle::with_boxed_resident(\n");
-    out.push_str("        InProcessBundleRegistration {\n");
-    out.push_str("            metadata: InProcessBundleMetadata {\n");
-    out.push_str(
-        "                name: StringView::from_static(IN_PROCESS_BUNDLE_NAME.as_bytes()),\n",
-    );
-    out.push_str(&format!(
-        "                version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"
-    ));
-    out.push_str("                runtime: SupportedLanguage::Rust,\n");
-    out.push_str("            },\n");
-    out.push_str("            dependency_ids: IN_PROCESS_DEPENDENCIES.as_ptr(),\n");
-    out.push_str("            dependency_count: IN_PROCESS_DEPENDENCIES.len(),\n");
-    out.push_str("            contracts: core::ptr::null(),\n");
-    out.push_str("            contract_count: 0,\n");
-    out.push_str("        },\n");
-    out.push_str("        contracts,\n");
-    out.push_str("        resident,\n");
-    out.push_str("    )\n");
-    out.push_str("}\n");
+    out.push_str("        AbiError::ok()\n    })\n}\n");
 }
 
 // ─── Host code generation helpers ────────────────────────────────────────────

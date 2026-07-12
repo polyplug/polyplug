@@ -899,7 +899,10 @@ fn generate_index_ts(ir: &ValidatedIr) -> String {
     // Barrel re-exports: the bundle entry point (polyplug_init), each plugin's
     // interface + factory from ./contracts, and any peer caller classes.
     // ImportSet merges same-source entries onto one `export { … } from '…'` line.
-    let mut reexports: Vec<ImportEntry> = vec![js_reexport("polyplug_init", "./init")];
+    let mut reexports: Vec<ImportEntry> = vec![
+        js_reexport("POLYPLUG_MANIFEST", "./init"),
+        js_reexport("polyplug_init", "./init"),
+    ];
     if let Some(bundle) = bundle {
         for plugin in &bundle.plugins {
             let plugin_var: String = plugin.name.to_uppercase().replace(['.', '-'], "_");
@@ -963,6 +966,18 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
         })
         .collect();
     out.push_str(&js_import_block(&[&contract_imports]));
+
+    let manifest_bytes: String = generate_manifest_toml(ir)
+        .bytes()
+        .map(|byte: u8| byte.to_string())
+        .collect::<Vec<String>>()
+        .join(", ");
+    out.push_str(
+        "// Canonical manifest bytes for in-process staging; generated bundles retain this data.\n",
+    );
+    out.push_str(&format!(
+        "export const POLYPLUG_MANIFEST = new Uint8Array([{manifest_bytes}]);\n\n"
+    ));
     out.push('\n');
     out.push_str("// ABI error codes (match polyplug_abi.AbiErrorCode)\n");
     out.push_str("const AbiErrorCode = {\n");
@@ -6333,5 +6348,50 @@ mod tests {
             !out.contains("rt.free"),
             "provider must NOT free caller-owned arg payloads: {out}"
         );
+    }
+    #[test]
+    fn in_process_bundle_exports_canonical_manifest_bytes() {
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![],
+            bundle: Some(ResolvedBundle {
+                name: "js.in_process".to_owned(),
+                version: Version {
+                    major: 1,
+                    minor: 2,
+                    patch: 3,
+                },
+                loader: "js-quickjs".to_owned(),
+                file: ResolvedBundleFile::Single("plugin.js".to_owned()),
+                plugins: vec![],
+                bundle_id: 0x1234_5678_9ABC_DEF0,
+                dependencies: vec![],
+                needs_reinit_on_dep_reload: false,
+            }),
+        };
+        let manifest_bytes: String = generate_manifest_toml(&ir)
+            .bytes()
+            .map(|byte: u8| byte.to_string())
+            .collect::<Vec<String>>()
+            .join(", ");
+        let init: String = generate_init_ts(&ir);
+        let index: String = generate_index_ts(&ir);
+
+        assert!(
+            init.contains(&format!(
+                "export const POLYPLUG_MANIFEST = new Uint8Array([{manifest_bytes}]);"
+            )),
+            "init must own the canonical manifest bytes: {init}"
+        );
+        assert!(
+            index.contains("POLYPLUG_MANIFEST"),
+            "bundle index must re-export canonical manifest bytes: {index}"
+        );
+        let forbidden_bundle: String = ["InProcess", "BundleRegistration"].concat();
+        let forbidden_contract: String = ["InProcess", "ContractRegistration"].concat();
+        assert!(!init.contains(&forbidden_bundle));
+        assert!(!init.contains(&forbidden_contract));
     }
 }

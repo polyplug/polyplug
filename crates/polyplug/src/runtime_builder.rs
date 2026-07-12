@@ -23,10 +23,9 @@ use crate::{
         host_destroy_guest_instance, host_find_all_guest_contracts, host_find_guest_contract,
         host_free, host_get_dependencies, host_get_error_len, host_get_host_contract,
         host_get_last_error, host_list_bundles, host_load_bundle, host_log,
-        host_register_guest_contract, host_register_host_contract, host_register_in_process_bundle,
-        host_register_loader, host_registry_revision, host_reload_bundle,
-        host_resolve_guest_contract, host_resolve_host_contract_interface, host_unload_bundle,
-        validate_bundle_compatibility,
+        host_register_guest_contract, host_register_host_contract, host_register_loader,
+        host_registry_revision, host_reload_bundle, host_resolve_guest_contract,
+        host_resolve_host_contract_interface, host_unload_bundle, validate_bundle_compatibility,
     },
     runtime_store::RuntimeStore,
 };
@@ -268,7 +267,6 @@ impl RuntimeBuilder {
         let host_abi: Box<HostApi> = Box::new(HostApi {
             runtime: ptr::null_mut(),
             register_guest_contract: host_register_guest_contract,
-            register_in_process_bundle: host_register_in_process_bundle,
             alloc: host_alloc,
             free: host_free,
             find_guest_contract: host_find_guest_contract,

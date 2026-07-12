@@ -34,8 +34,8 @@ pub fn generate(config: GenerateConfig) -> Result<GenerateOutput, PolyplugcError
 /// Generate Rust guest bindings in an explicitly selected linking mode.
 ///
 /// The existing [`generate`] API always preserves disk-bundle output. Call this
-/// function with [`RustGuestMode::InProcess`] to generate a runtime-local
-/// `polyplug::InProcessBundle` constructor for a Rust guest.
+/// function with [`RustGuestMode::InProcess`] to generate a runtime-scoped
+/// canonical manifest registration helper for a Rust guest.
 pub fn generate_rust_guest(
     config: GenerateConfig,
     mode: RustGuestMode,

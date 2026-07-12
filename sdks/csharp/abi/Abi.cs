@@ -274,7 +274,7 @@ public struct GuestContractInterface
 ///  Each function receives the interface pointer as its first parameter,
 ///  allowing guests to call: `host->find_guest_contract(host, id, ver)`
 ///  SDKs hide this pattern: `host.find_guest_contract(id, ver)`
-[StructLayout(LayoutKind.Sequential, Size = 192)]
+[StructLayout(LayoutKind.Sequential, Size = 184)]
 public struct HostApi
 {
     ///  Opaque pointer to Runtime.
@@ -297,15 +297,6 @@ public struct HostApi
     ///  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
     ///    success, an error otherwise). Never null.
     public IntPtr RegisterGuestContract;
-    ///  Register every contract and metadata record in one in-process bundle transaction.
-    ///
-    ///  The host retains language-specific implementation objects in its own
-    ///  runtime-local resident. Core synchronously copies and validates `registration`;
-    ///  it never receives an implementation-object pointer.
-    ///
-    ///  On success, `out_bundle_id` receives the derived nonzero bundle ID. `out_err`
-    ///  is always written when non-null.
-    public IntPtr RegisterInProcessBundle;
     ///  Allocate memory using the host allocator.
     ///
     ///  Memory allocated here must be freed via `free`.
@@ -581,7 +572,7 @@ public struct HostApi
     public IntPtr Reserved;
 }
 
-/// Expected size: 192 bytes
+/// Expected size: 184 bytes
 
 ///  Opaque handle to a host contract instance.
 ///
@@ -702,59 +693,6 @@ public struct HostContractInterface
 }
 
 /// Expected size: 80 bytes
-
-///  Metadata shared by every contract in one in-process bundle registration.
-[StructLayout(LayoutKind.Sequential, Size = 32)]
-public struct InProcessBundleMetadata
-{
-    ///  Stable UTF-8 bundle name. Core derives the nonzero bundle ID from this value.
-    public StringView Name;
-    ///  Bundle semantic version.
-    public Version Version;
-    ///  Language owning the resident and interface implementation.
-    public SupportedLanguage Runtime;
-}
-
-/// Expected size: 32 bytes
-
-///  One contract supplied by an in-process bundle.
-[StructLayout(LayoutKind.Sequential, Size = 64)]
-public struct InProcessContractRegistration
-{
-    ///  Provider and contract metadata copied by core during registration.
-    public PluginDescriptor Descriptor;
-    ///  Canonical guest interface table copied and validated by core during registration.
-    public IntPtr Interface;
-    ///  Opaque generated-adapter context copied into the registered interface.
-    ///
-    ///  Core never dereferences, writes, or frees this pointer. Generated lifecycle
-    ///  and dispatch thunks receive it as their first callback argument.
-    public IntPtr AdapterContext;
-}
-
-/// Expected size: 64 bytes
-
-///  Complete, one-shot in-process bundle registration input.
-///
-///  All pointers are borrowed only for the synchronous registration call. If a count is
-///  nonzero, its corresponding pointer is required to be non-null and valid for that many
-///  elements. `dependency_ids` contains canonical `GuestContractId` numeric values.
-[StructLayout(LayoutKind.Sequential, Size = 64)]
-public struct InProcessBundleRegistration
-{
-    ///  Bundle-level metadata.
-    public InProcessBundleMetadata Metadata;
-    ///  Declared guest-contract dependency IDs.
-    public IntPtr DependencyIds;
-    ///  Number of dependency IDs.
-    public nuint DependencyCount;
-    ///  Contract descriptors and interface-table pointers.
-    public IntPtr Contracts;
-    ///  Number of supplied contracts.
-    public nuint ContractCount;
-}
-
-/// Expected size: 64 bytes
 
 ///  Opaque handle to a registered guest contract.
 ///

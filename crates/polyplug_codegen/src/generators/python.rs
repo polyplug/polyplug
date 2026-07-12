@@ -422,12 +422,13 @@ fn generate_python_in_process_file(ir: &ValidatedIr) -> Result<String, Polyplugc
 
 import ctypes
 import inspect
+import json
 import struct
 import threading
 from typing import Any, Callable, Self
 
-from polyplug_abi import AbiError, AbiErrorCode, DispatchType, NativeDispatch, PluginDescriptor, StringView, SupportedLanguage, Version, to_str
-from polyplug_abi.abi import InProcessBundleMetadata, InProcessBundleRegistration, InProcessContractRegistration, GuestContractInstance, GuestContractInterface, VmLoaderData
+from polyplug_abi import AbiError, AbiErrorCode, DispatchType, NativeDispatch, PluginDescriptor, StringView, Version, to_str
+from polyplug_abi.abi import GuestContractInstance, GuestContractInterface, VmLoaderData
 
 _CREATE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, VmLoaderData, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
 _DESTROY = ctypes.CFUNCTYPE(None, ctypes.c_void_p, VmLoaderData, ctypes.c_void_p, GuestContractInstance)
@@ -456,7 +457,7 @@ def _factory(value: Any) -> Callable[[int], Any]:
     return make
 
 class _Adapter:
-    def __init__(self, contract_id: int, version: Version, name: str, value: Any, dispatchers: list[Callable[..., None]]) -> None:
+    def __init__(self, contract_id: int, version: Version, plugin_name: str, contract_name: str, value: Any, dispatchers: list[Callable[..., None]]) -> None:
         self.contract_id = contract_id
         self._factory = _factory(value)
         self._instances: dict[int, Any] = {}
@@ -465,8 +466,10 @@ class _Adapter:
         self._buffers: list[Any] = []
         self._context = ctypes.c_uint64(contract_id)
         self.context = ctypes.addressof(self._context)
-        name_bytes = name.encode("utf-8")
-        self._name = ctypes.create_string_buffer(name_bytes)
+        plugin_name_bytes = plugin_name.encode("utf-8")
+        contract_name_bytes = contract_name.encode("utf-8")
+        self._plugin_name = ctypes.create_string_buffer(plugin_name_bytes)
+        self._contract_name = ctypes.create_string_buffer(contract_name_bytes)
 
         @_CREATE
         def create(context: int, _loader: VmLoaderData, host: int, _args: int, out_instance: int) -> None:
@@ -518,9 +521,12 @@ class _Adapter:
         self.interface.create_instance = create
         self.interface.destroy_instance = destroy
         self.interface.dispatch.native = NativeDispatch(len(callbacks), ctypes.cast(self._functions, ctypes.c_void_p))
-        view = StringView(ctypes.cast(self._name, ctypes.c_void_p), len(name_bytes))
-        self.descriptor = PluginDescriptor(view, view, version)
-        self._keepalive = (create, destroy, callbacks, self._functions, self._context, self._name)
+        plugin_view = StringView(ctypes.cast(self._plugin_name, ctypes.c_void_p), len(plugin_name_bytes))
+        contract_view = StringView(ctypes.cast(self._contract_name, ctypes.c_void_p), len(contract_name_bytes))
+        self.descriptor = PluginDescriptor(plugin_view, contract_view, version)
+        self.contract_name = contract_name
+        self.function_count = len(callbacks)
+        self._keepalive = (create, destroy, callbacks, self._functions, self._context, self._plugin_name, self._contract_name)
 
     def _allocate(self, size: int, align: int) -> int:
         buffer = ctypes.create_string_buffer(size + max(align, 1) - 1)
@@ -553,7 +559,30 @@ def alloc_string_arena(allocate: Callable[[int, int], int], _arena: int, value: 
             ir,
         )?;
     }
-    out.push_str("class InProcessBundle:\n    def __init__(self, name: str, version: tuple[int, int, int] = (1, 0, 0), dependencies: tuple[int, ...] = ()) -> None:\n        self._name_bytes = name.encode(\"utf-8\")\n        self._name = ctypes.create_string_buffer(self._name_bytes)\n        self._version = Version(*version)\n        self._dependencies = (ctypes.c_uint64 * len(dependencies))(*dependencies)\n        self._adapters: list[_Adapter] = []\n        self._transfer_lock = threading.Lock()\n        self._transferred = False\n\n    def _reserve_transfer(self) -> None:\n        with self._transfer_lock:\n            if self._transferred:\n                raise RuntimeError(\"in-process bundle has already been registered\")\n            self._transferred = True\n\n    def _cancel_transfer(self) -> None:\n        with self._transfer_lock:\n            self._transferred = False\n\n");
+    out.push_str(r#"class InProcessBundle:
+    def __init__(self, name: str, version: tuple[int, int, int] = (1, 0, 0), dependencies: tuple[str, ...] = ()) -> None:
+        if not name:
+            raise ValueError("in-process bundle name must not be empty")
+        if any(not isinstance(dependency, str) or not dependency for dependency in dependencies):
+            raise ValueError("in-process dependencies must be non-empty bundle dependency specifications")
+        self._name = name
+        self._version = Version(*version)
+        self._dependencies = dependencies
+        self._adapters: list[_Adapter] = []
+        self._transfer_lock = threading.Lock()
+        self._transferred = False
+
+    def _reserve_transfer(self) -> None:
+        with self._transfer_lock:
+            if self._transferred:
+                raise RuntimeError("in-process bundle has already been registered")
+            self._transferred = True
+
+    def _cancel_transfer(self) -> None:
+        with self._transfer_lock:
+            self._transferred = False
+
+"#);
     for contract in &ir.contracts {
         let lower = contract.name.replace(['.', '-'], "_").to_lowercase();
         let dispatchers = contract
@@ -563,11 +592,38 @@ def alloc_string_arena(allocate: Callable[[int, int], int], _arena: int, value: 
             .collect::<Vec<_>>()
             .join(", ");
         out.push_str(&format!(
-            "    def add_{lower}(self, implementation: Any) -> Self:\n        if any(adapter.contract_id == 0x{:016X} for adapter in self._adapters):\n            raise ValueError(\"duplicate in-process contract\")\n        self._adapters.append(_Adapter(0x{:016X}, Version({}, {}, {}), {:?}, implementation, [{}]))\n        return self\n\n",
+            "    def add_{lower}(self, implementation: Any) -> Self:\n        if any(adapter.contract_id == 0x{:016X} for adapter in self._adapters):\n            raise ValueError(\"duplicate in-process contract\")\n        self._adapters.append(_Adapter(0x{:016X}, Version({}, {}, {}), self._name, {:?}, implementation, [{}]))\n        return self\n\n",
             contract.contract_id, contract.contract_id, contract.version.major, contract.version.minor, contract.version.patch, contract.name, dispatchers
         ));
     }
-    out.push_str("    def _in_process_registration(self) -> InProcessBundleRegistration:\n        if not self._adapters:\n            raise ValueError(\"in-process bundle requires at least one contract\")\n        self._contracts = (InProcessContractRegistration * len(self._adapters))(*(InProcessContractRegistration(adapter.descriptor, ctypes.addressof(adapter.interface), adapter.context) for adapter in self._adapters))\n        return InProcessBundleRegistration(InProcessBundleMetadata(StringView(ctypes.cast(self._name, ctypes.c_void_p), len(self._name_bytes)), self._version, SupportedLanguage.Python), ctypes.cast(self._dependencies, ctypes.c_void_p) if self._dependencies else None, len(self._dependencies), ctypes.cast(self._contracts, ctypes.c_void_p), len(self._contracts))\n");
+    out.push_str(r#"    def _in_process_manifest(self) -> bytes:
+        if not self._adapters:
+            raise ValueError("in-process bundle requires at least one contract")
+        provides = [f"{adapter.contract_name}@{adapter.interface.contract_version.major}" for adapter in self._adapters]
+        function_count = ", ".join(
+            f"{json.dumps(adapter.contract_name + '@' + str(adapter.interface.contract_version.major))} = {adapter.function_count}"
+            for adapter in self._adapters
+        )
+        identifier = 0xCBF29CE484222325
+        for byte in self._name.encode("utf-8"):
+            identifier = ((identifier ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+        lines = [
+            f"name = {json.dumps(self._name)}",
+            f"id = {identifier}",
+            f"version = {json.dumps(f'{self._version.major}.{self._version.minor}.{self._version.patch}')}",
+            'loader = "in-process"',
+            'file = "in-process"',
+            f"provides = [{', '.join(json.dumps(provide) for provide in provides)}]",
+            f"function_count = {{ {function_count} }}",
+            "needs_reinit_on_dep_reload = false",
+        ]
+        if self._dependencies:
+            lines.append(f"bundle_dependencies = [{', '.join(json.dumps(dependency) for dependency in self._dependencies)}]")
+        return ("\n".join(lines) + "\n").encode("utf-8")
+
+    def _in_process_contracts(self) -> tuple[tuple[PluginDescriptor, GuestContractInterface], ...]:
+        return tuple((adapter.descriptor, adapter.interface) for adapter in self._adapters)
+"#);
     Ok(out)
 }
 
@@ -601,7 +657,7 @@ fn generate_python_in_process_stub(ir: &ValidatedIr) -> String {
         }
         out.push('\n');
     }
-    out.push_str("class InProcessBundle:\n    def __init__(self, name: str, version: tuple[int, int, int] = ..., dependencies: tuple[int, ...] = ...) -> None: ...\n");
+    out.push_str("class InProcessBundle:\n    def __init__(self, name: str, version: tuple[int, int, int] = ..., dependencies: tuple[str, ...] = ...) -> None: ...\n");
     for contract in &ir.contracts {
         let lower = contract.name.replace(['.', '-'], "_").to_lowercase();
         let struct_name = contract_name_to_struct(&contract.name);
@@ -5929,5 +5985,29 @@ mod tests {
             !out.contains("(\"fmt\", PixelFormat)"),
             "IntEnum class must never appear in _fields_: {out}"
         );
+    }
+    #[test]
+    fn python_in_process_bundle_uses_manifest_staging_without_registration_records() {
+        let ir = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![],
+            bundle: None,
+        };
+
+        let output = generate_python_in_process_file(&ir).expect("generate in-process bundle");
+
+        assert!(output.contains("def _in_process_manifest(self) -> bytes:"));
+        assert!(output.contains("def _in_process_contracts(self)"));
+        assert!(output.contains("PluginDescriptor"));
+        assert!(output.contains("GuestContractInterface"));
+        for record in [
+            "BundleMetadata",
+            "ContractRegistration",
+            "BundleRegistration",
+        ] {
+            assert!(!output.contains(&format!("InProcess{record}")));
+        }
     }
 }

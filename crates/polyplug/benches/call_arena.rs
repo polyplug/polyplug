@@ -56,7 +56,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
-use polyplug_abi::in_process::reject_in_process_bundle;
+
 use polyplug_utils::BundleId;
 
 use core::ffi::c_void;
@@ -206,7 +206,6 @@ fn arena_host_api() -> HostApi {
     HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: stub_register_guest,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: arena_alloc,
         free: arena_free,
         find_guest_contract: stub_find,

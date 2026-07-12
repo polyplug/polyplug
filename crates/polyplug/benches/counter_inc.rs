@@ -89,7 +89,7 @@ use polyplug_abi::HostContractInstance;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
-use polyplug_abi::in_process::reject_in_process_bundle;
+
 use polyplug_utils::BundleId;
 
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
@@ -330,7 +330,6 @@ fn capture_host() -> HostApi {
     HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: capture_register_callback,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find,

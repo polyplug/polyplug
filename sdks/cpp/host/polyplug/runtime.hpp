@@ -39,6 +39,18 @@ extern "C" {
     /// Destroy a runtime instance.
     /// Takes HostApi* returned by polyplug_runtime_create.
     void polyplug_runtime_destroy(const HostApi* host);
+    void polyplug_begin_in_process_bundle(
+        const HostApi* host,
+        const uint8_t* manifest_bytes,
+        size_t manifest_len,
+        uint32_t language,
+        uint64_t* out_bundle_id,
+        AbiError* out_error);
+    void polyplug_commit_in_process_bundle(
+        const HostApi* host,
+        uint64_t bundle_id,
+        AbiError* out_error);
+    void polyplug_abort_in_process_bundle(const HostApi* host, uint64_t bundle_id);
 }
 
 namespace polyplug {
@@ -307,31 +319,41 @@ public:
         }
     }
 
-    /// Register a generated, runtime-local in-process bundle.
+    /// Register a generated, runtime-local in-process bundle through canonical manifest staging.
     ///
-    /// `Bundle` is the generated `InProcessBundle` type. It retains all C++ state
-    /// until this call succeeds, then transfers exactly one resident to this Runtime.
-    /// The registration table is borrowed only for this synchronous ABI call.
+    /// The generated bundle supplies canonical manifest TOML plus existing descriptor/interface
+    /// pairs. Its resident transfers only after the staged transaction commits successfully.
     template <typename Bundle>
     uint64_t register_in_process_bundle(Bundle& bundle) {
         ensure_host();
         if (bundle.in_process_resident() == nullptr) {
             throw std::runtime_error("register_in_process_bundle: bundle has no resident");
         }
-        const InProcessBundleRegistration& registration = bundle.in_process_registration();
-
+        const std::string_view manifest = bundle.in_process_manifest();
         std::lock_guard<std::mutex> lock(in_process_mutex_);
-        // Allocate before publishing to core. After core succeeds, moving an owned
-        // resident into the reserved vector is noexcept, preserving atomic ownership.
         in_process_residents_.reserve(in_process_residents_.size() + 1U);
 
         AbiError result{};
         uint64_t bundle_id = 0;
-        host_->register_in_process_bundle(host_, &registration, &bundle_id, &result);
+        polyplug_begin_in_process_bundle(
+            host_,
+            reinterpret_cast<const uint8_t*>(manifest.data()),
+            manifest.size(),
+            static_cast<uint32_t>(bundle.in_process_language()),
+            &bundle_id,
+            &result);
         if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             throw std::runtime_error("register_in_process_bundle failed: " + get_last_error());
         }
-
+        result = bundle.register_guest_contracts(host_);
+        if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
+            polyplug_abort_in_process_bundle(host_, bundle_id);
+            throw std::runtime_error("register_in_process_bundle failed: " + get_last_error());
+        }
+        polyplug_commit_in_process_bundle(host_, bundle_id, &result);
+        if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
+            throw std::runtime_error("register_in_process_bundle failed: " + get_last_error());
+        }
         std::unique_ptr<detail::InProcessResident> resident = bundle.take_in_process_resident();
         if (resident == nullptr) {
             throw std::logic_error("in-process bundle resident disappeared during registration");

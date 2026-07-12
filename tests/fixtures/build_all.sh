@@ -177,10 +177,10 @@ if command -v rolldown >/dev/null 2>&1; then
         --lang js-quickjs --out "${JS_GEN_DIR}/generated"
     rolldown "${JS_GEN_DIR}/adder.js" --format iife --platform neutral \
         --file "${JS_GEN_DIR}/plugin.js"
-    # The IIFE wraps everything in an exports object, but the loader expects
-    # polyplug_init in the global scope (mirrors examples/build_all.sh).
+    # The IIFE wraps exports, while the QuickJS loader consumes polyplug_init
+    # and generated in-process callers consume the canonical manifest bytes.
     sed -i 's/^(function(exports)/var polyplug_module = (function(exports)/' "${JS_GEN_DIR}/plugin.js"
-    sed -i 's/^})({});$/})({});\nglobalThis.polyplug_init = polyplug_module.polyplug_init;/' "${JS_GEN_DIR}/plugin.js"
+    sed -i 's/^})({});$/})({});\nglobalThis.polyplug_init = polyplug_module.polyplug_init;\nglobalThis.POLYPLUG_MANIFEST = polyplug_module.POLYPLUG_MANIFEST;/' "${JS_GEN_DIR}/plugin.js"
     cp "${JS_GEN_DIR}/generated/manifest.toml" "${JS_GEN_DIR}/manifest.toml"
     echo "  -> tests/fixtures/test_plugin_js_generated/plugin.js"
 else

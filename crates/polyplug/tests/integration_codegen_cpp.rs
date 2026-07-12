@@ -38,7 +38,7 @@ use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
-use polyplug_abi::in_process::reject_in_process_bundle;
+
 use polyplug_abi::types::StringView;
 use polyplug_abi::types::abi_error_ok;
 use polyplug_utils::BundleId;
@@ -291,7 +291,6 @@ fn make_host_interface() -> HostApi {
     HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: registry_register_callback,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: noop_alloc,
         free: noop_free,
         find_guest_contract: noop_find_guest_contract,
@@ -874,12 +873,22 @@ implements = ["test.beta@1.0"]
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 #include "in_process.hpp"
 
 namespace {
 int alpha_destroyed = 0;
 int beta_destroyed = 0;
+std::vector<std::pair<PluginDescriptor, const GuestContractInterface*>> captured_contracts;
+
+void capture_contract(const HostApi*, const PluginDescriptor* descriptor,
+                      const GuestContractInterface* interface, AbiError* error) {
+    if (descriptor == nullptr || interface == nullptr || error == nullptr) return;
+    captured_contracts.emplace_back(*descriptor, interface);
+    *error = AbiError{};
+}
 
 class Alpha final : public polyplug_plugin::TestAlphaGuestContract {
 public:
@@ -897,23 +906,23 @@ private:
     uint32_t value_ = 40;
 };
 
-bool invoke_twice(const InProcessContractRegistration& registration, const HostApi& host,
+bool invoke_twice(const GuestContractInterface* interface, const HostApi& host,
                   uint32_t first, uint32_t second) {
     GuestContractInstance instance{nullptr, 0U};
-    registration.interface->create_instance(
-        registration.adapter_context, VmLoaderData{nullptr}, &host, nullptr, &instance);
+    interface->create_instance(
+        interface->adapter_context, VmLoaderData{nullptr}, &host, nullptr, &instance);
     if (instance.data == nullptr) return false;
 
     auto dispatch = reinterpret_cast<void (*)(void*, GuestContractInstance, const void*, void*, AbiError*)>(
-        registration.interface->dispatch.native.functions[0]);
+        interface->dispatch.native.functions[0]);
     uint32_t result = 0;
     AbiError error{};
-    dispatch(registration.adapter_context, instance, nullptr, &result, &error);
+    dispatch(interface->adapter_context, instance, nullptr, &result, &error);
     if (error.code != static_cast<uint32_t>(AbiErrorCode::Ok) || result != first) return false;
-    dispatch(registration.adapter_context, instance, nullptr, &result, &error);
+    dispatch(interface->adapter_context, instance, nullptr, &result, &error);
     if (error.code != static_cast<uint32_t>(AbiErrorCode::Ok) || result != second) return false;
-    registration.interface->destroy_instance(
-        registration.adapter_context, VmLoaderData{nullptr}, &host, instance);
+    interface->destroy_instance(
+        interface->adapter_context, VmLoaderData{nullptr}, &host, instance);
     return true;
 }
 }  // namespace
@@ -925,25 +934,30 @@ TestBetaGuestContract* polyplug_create_beta(const HostApi*) { return nullptr; }
 
 int main() {
     HostApi host{};
-    auto bundle = polyplug_plugin::create_in_process_bundle(
+    host.register_guest_contract = &capture_contract;
+    auto bundle = polyplug_plugin::make_in_process_bundle(
         [](const HostApi*) { return std::make_unique<Alpha>(); },
         [](const HostApi*) { return std::make_unique<Beta>(); });
 
-    const InProcessBundleRegistration& registration = bundle.in_process_registration();
-    if (registration.contract_count != 2U || registration.contracts == nullptr) return 1;
-    if (registration.contracts[0].adapter_context == registration.contracts[1].adapter_context) return 2;
-    if (!invoke_twice(registration.contracts[0], host, 1U, 2U)) return 3;
-    if (!invoke_twice(registration.contracts[1], host, 41U, 42U)) return 4;
-    if (alpha_destroyed != 1 || beta_destroyed != 1) return 5;
+    AbiError registration_error = bundle.register_guest_contracts(&host);
+    if (registration_error.code != static_cast<uint32_t>(AbiErrorCode::Ok)) return 1;
+    if (captured_contracts.size() != 2U) return 2;
+    if (captured_contracts[0].second->adapter_context == captured_contracts[1].second->adapter_context) return 3;
+    if (!invoke_twice(captured_contracts[0].second, host, 1U, 2U)) return 4;
+    if (!invoke_twice(captured_contracts[1].second, host, 41U, 42U)) return 5;
+    if (alpha_destroyed != 1 || beta_destroyed != 1) return 6;
 
-    auto throwing_bundle = polyplug_plugin::create_in_process_bundle(
+    captured_contracts.clear();
+    auto throwing_bundle = polyplug_plugin::make_in_process_bundle(
         [](const HostApi*) -> std::unique_ptr<Alpha> { throw std::runtime_error("factory failure"); },
         [](const HostApi*) { return std::make_unique<Beta>(); });
-    const InProcessContractRegistration& throwing = throwing_bundle.in_process_registration().contracts[0];
+    registration_error = throwing_bundle.register_guest_contracts(&host);
+    if (registration_error.code != static_cast<uint32_t>(AbiErrorCode::Ok)) return 7;
+    const GuestContractInterface* throwing = captured_contracts[0].second;
     GuestContractInstance failed{reinterpret_cast<void*>(1), 99U};
-    throwing.interface->create_instance(
-        throwing.adapter_context, VmLoaderData{nullptr}, &host, nullptr, &failed);
-    if (failed.data != nullptr || failed.contract_id != 0U) return 6;
+    throwing->create_instance(
+        throwing->adapter_context, VmLoaderData{nullptr}, &host, nullptr, &failed);
+    if (failed.data != nullptr || failed.contract_id != 0U) return 8;
     return 0;
 }
 "#,

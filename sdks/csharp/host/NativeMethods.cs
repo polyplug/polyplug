@@ -11,7 +11,7 @@ internal static partial class NativeMethods
 {
     private const string NativeLib = "polyplug";
 
-    // ─── FFI Entry Points (18-02: Only 2 exports) ─────────────────────────────────
+    // ─── FFI Entry Points ────────────────────────────────────────────────────
 
     /// <summary>
     /// Creates a new runtime instance.
@@ -32,4 +32,25 @@ internal static partial class NativeMethods
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_destroy")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void PolyplugRuntimeDestroy(nint host);
+
+    [LibraryImport(NativeLib, EntryPoint = "polyplug_begin_in_process_bundle")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe partial void PolyplugBeginInProcessBundle(
+        nint host,
+        byte* manifestBytes,
+        nuint manifestLen,
+        uint language,
+        ulong* outBundleId,
+        AbiError* outError);
+
+    [LibraryImport(NativeLib, EntryPoint = "polyplug_commit_in_process_bundle")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe partial void PolyplugCommitInProcessBundle(
+        nint host,
+        ulong bundleId,
+        AbiError* outError);
+
+    [LibraryImport(NativeLib, EntryPoint = "polyplug_abort_in_process_bundle")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void PolyplugAbortInProcessBundle(nint host, ulong bundleId);
 }

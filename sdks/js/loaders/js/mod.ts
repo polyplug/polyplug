@@ -16,10 +16,6 @@ const JS_SYMBOLS = {
         parameters: ["pointer"] as const,
         result: "pointer" as const,
     },
-    polyplug_js_in_process_bridge_context: {
-        parameters: ["pointer"] as const,
-        result: "pointer" as const,
-    },
     polyplug_js_in_process_bridge_free: {
         parameters: ["pointer"] as const,
         result: "void" as const,

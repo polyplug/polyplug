@@ -65,11 +65,13 @@ bundle = InProcessBundle("example.python.decoder").add_pipeline_decoder(Decoder)
 bundle_id = runtime.register_in_process_bundle(bundle)
 ```
 
-Registration submits every added contract as one canonical bundle transaction.
-The `Runtime` becomes the sole owner of the registered bundle resident,
-including factories, callbacks, implementation instances, and backing ABI
-tables. Successful registration transfers the bundle exactly once; a rejected
-registration releases the reservation so the object can be retried.
+Registration stages the generated bundle's canonical manifest, registers each
+`PluginDescriptor` and `GuestContractInterface`, then commits the complete
+transaction atomically. The `Runtime` retains the bundle resident only after a
+successful commit. A registration failure aborts staging and releases the
+reservation so the object can be retried.
+When supplied, `dependencies` are existing manifest `bundle_dependencies`
+specifications such as `"upstream.bundle@1.0.0"`.
 `unload_bundle` logically drains the bundle before releasing that resident; a
 failed unload leaves it registered and retained.
 

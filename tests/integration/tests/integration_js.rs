@@ -22,7 +22,6 @@ use polyplug_abi::HostApi;
 use polyplug_abi::HostContractInstance;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::in_process::reject_in_process_bundle;
 
 use polyplug_js::JsLoader;
 use polyplug_utils::BundleId;
@@ -262,7 +261,6 @@ fn counting_host() -> HostApi {
     HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: arena_stub_register_guest,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: counting_alloc,
         free: counting_free,
         find_guest_contract: arena_stub_find,

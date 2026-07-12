@@ -93,11 +93,15 @@ fn in_process_mode_uses_runtime_local_factories_and_canonical_descriptors() {
     assert!(!interfaces.contains(concat!("EMBEDDED_", "FACTORIES")));
     assert!(!interfaces.contains(concat!("install_", "embedded_factories")));
     assert!(!init.contains(concat!("register_", "embedded_bundle")));
-    assert!(init.contains("pub fn in_process_bundle"));
-    assert!(init.contains("InProcessBundle::with_boxed_resident"));
+    assert!(init.contains("pub fn register_in_process_bundle"));
+    assert!(init.contains("ManifestData::parse_from_str(IN_PROCESS_MANIFEST)"));
+    assert!(init.contains(
+        "runtime.register_in_process_bundle(manifest, SupportedLanguage::Rust, resident, |host|"
+    ));
     assert!(init.contains("let adapter_context: *mut c_void"));
-    assert!(init.contains("let contracts: Box<[InProcessContractRegistration]>"));
-    assert!(init.contains("static IN_PROCESS_DEPENDENCIES"));
+    assert!(init.contains("register_guest_contract"));
+    assert!(!init.contains("InProcessBundle"));
+    assert!(!init.contains("InProcessContractRegistration"));
     assert!(!init.contains("polyplug_init"));
     assert!(!init.contains("no_mangle"));
     assert!(callers.contains("runtime: Arc<Runtime>"));

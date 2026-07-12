@@ -31,7 +31,6 @@ use polyplug_utils::BundleId;
 use crate::{
     guest::{GuestContractInstance, GuestContractInterface},
     host::{HostContractInstance, HostContractInterface},
-    in_process::InProcessBundleRegistration,
     plugin::{GuestContractHandle, PluginDescriptor},
     types::{AbiError, Array, DependencyInfo, StringView},
 };
@@ -99,20 +98,6 @@ pub struct HostApi {
         this: *const HostApi,
         descriptor: *const PluginDescriptor,
         interface: *const GuestContractInterface,
-        out_err: *mut AbiError,
-    ),
-    /// Register every contract and metadata record in one in-process bundle transaction.
-    ///
-    /// The host retains language-specific implementation objects in its own
-    /// runtime-local resident. Core synchronously copies and validates `registration`;
-    /// it never receives an implementation-object pointer.
-    ///
-    /// On success, `out_bundle_id` receives the derived nonzero bundle ID. `out_err`
-    /// is always written when non-null.
-    pub register_in_process_bundle: unsafe extern "C" fn(
-        this: *const HostApi,
-        registration: *const InProcessBundleRegistration,
-        out_bundle_id: *mut u64,
         out_err: *mut AbiError,
     ),
     /// Allocate memory using the host allocator.
@@ -460,34 +445,33 @@ mod tests {
 
     #[test]
     fn layout_host_api() {
-        // HostApi: runtime pointer (8 bytes) + 22 extern "C" fn pointers (176 bytes) + 1 reserved data pointer (8 bytes).
-        // Total: 192 bytes (24 pointer-sized fields).
-        assert_eq!(size_of::<HostApi>(), 192);
+        // HostApi: runtime pointer (8 bytes) + 21 extern "C" fn pointers (168 bytes) + 1 reserved data pointer (8 bytes).
+        // Total: 184 bytes (23 pointer-sized fields).
+        assert_eq!(size_of::<HostApi>(), 184);
         assert_eq!(align_of::<HostApi>(), 8);
         assert_eq!(offset_of!(HostApi, runtime), 0);
         assert_eq!(offset_of!(HostApi, register_guest_contract), 8);
-        assert_eq!(offset_of!(HostApi, register_in_process_bundle), 16);
-        assert_eq!(offset_of!(HostApi, alloc), 24);
-        assert_eq!(offset_of!(HostApi, free), 32);
-        assert_eq!(offset_of!(HostApi, find_guest_contract), 40);
-        assert_eq!(offset_of!(HostApi, find_all_guest_contracts), 48);
-        assert_eq!(offset_of!(HostApi, resolve_guest_contract), 56);
-        assert_eq!(offset_of!(HostApi, get_host_contract), 64);
-        assert_eq!(offset_of!(HostApi, resolve_host_contract_interface), 72);
-        assert_eq!(offset_of!(HostApi, list_bundles), 80);
-        assert_eq!(offset_of!(HostApi, get_dependencies), 88);
-        assert_eq!(offset_of!(HostApi, load_bundle), 96);
-        assert_eq!(offset_of!(HostApi, reload_bundle), 104);
-        assert_eq!(offset_of!(HostApi, register_host_contract), 112);
-        assert_eq!(offset_of!(HostApi, register_loader), 120);
-        assert_eq!(offset_of!(HostApi, get_last_error), 128);
-        assert_eq!(offset_of!(HostApi, get_error_len), 136);
-        assert_eq!(offset_of!(HostApi, unload_bundle), 144);
-        assert_eq!(offset_of!(HostApi, log), 152);
-        assert_eq!(offset_of!(HostApi, create_guest_instance), 160);
-        assert_eq!(offset_of!(HostApi, destroy_guest_instance), 168);
-        assert_eq!(offset_of!(HostApi, registry_revision), 176);
-        assert_eq!(offset_of!(HostApi, reserved), 184);
+        assert_eq!(offset_of!(HostApi, alloc), 16);
+        assert_eq!(offset_of!(HostApi, free), 24);
+        assert_eq!(offset_of!(HostApi, find_guest_contract), 32);
+        assert_eq!(offset_of!(HostApi, find_all_guest_contracts), 40);
+        assert_eq!(offset_of!(HostApi, resolve_guest_contract), 48);
+        assert_eq!(offset_of!(HostApi, get_host_contract), 56);
+        assert_eq!(offset_of!(HostApi, resolve_host_contract_interface), 64);
+        assert_eq!(offset_of!(HostApi, list_bundles), 72);
+        assert_eq!(offset_of!(HostApi, get_dependencies), 80);
+        assert_eq!(offset_of!(HostApi, load_bundle), 88);
+        assert_eq!(offset_of!(HostApi, reload_bundle), 96);
+        assert_eq!(offset_of!(HostApi, register_host_contract), 104);
+        assert_eq!(offset_of!(HostApi, register_loader), 112);
+        assert_eq!(offset_of!(HostApi, get_last_error), 120);
+        assert_eq!(offset_of!(HostApi, get_error_len), 128);
+        assert_eq!(offset_of!(HostApi, unload_bundle), 136);
+        assert_eq!(offset_of!(HostApi, log), 144);
+        assert_eq!(offset_of!(HostApi, create_guest_instance), 152);
+        assert_eq!(offset_of!(HostApi, destroy_guest_instance), 160);
+        assert_eq!(offset_of!(HostApi, registry_revision), 168);
+        assert_eq!(offset_of!(HostApi, reserved), 176);
     }
 
     /// Verify HostApi has runtime: *mut c_void field at offset 0.
@@ -500,12 +484,12 @@ mod tests {
     /// Verify list_bundles field exists.
     #[test]
     fn list_bundles_field_exists() {
-        assert_eq!(offset_of!(HostApi, list_bundles), 80);
+        assert_eq!(offset_of!(HostApi, list_bundles), 72);
     }
 
     /// Verify get_dependencies field exists.
     #[test]
     fn get_dependencies_field_exists() {
-        assert_eq!(offset_of!(HostApi, get_dependencies), 88);
+        assert_eq!(offset_of!(HostApi, get_dependencies), 80);
     }
 }

@@ -396,48 +396,19 @@ fn generate_lua_in_process_adapters(
     );
     out.push_str("end\n\n");
     out.push_str("function M.in_process_bundle(spec, lua_bridge_lib)\n");
-    out.push_str("    if type(spec) ~= \"table\" or type(spec.name) ~= \"string\" or spec.name == \"\" then\n");
-    out.push_str("        error(\"in_process_bundle: spec.name must be a non-empty string\", 2)\n");
-    out.push_str("    end\n");
+    out.push_str("    if type(spec) ~= \"table\" then error(\"in_process_bundle: spec must be a table\", 2) end\n");
+    out.push_str("    if type(spec.manifest) ~= \"string\" or spec.manifest == \"\" then error(\"in_process_bundle: spec.manifest must be canonical manifest TOML\", 2) end\n");
     out.push_str("    local implementations = spec.implementations\n");
     out.push_str("    if type(implementations) ~= \"table\" then error(\"in_process_bundle: spec.implementations must be a table\", 2) end\n");
     out.push_str("    if lua_bridge_lib == nil then error(\"in_process_bundle: lua_bridge_lib is nil (pass require('polyplug.loaders.lua').bridge_lib())\", 2) end\n");
-    out.push_str("    local version = spec.version or { major = 1, minor = 0, patch = 0 }\n");
-    out.push_str("    local resident = { callbacks = {}, bridges = {}, interfaces = {}, instances = {}, factories = {}, strings = {}, output_strings = {}, next_id = 1 }\n");
-    out.push_str(&format!(
-        "    local records = ffi.new(\"InProcessContractRegistration[?]\", {})\n",
-        contracts.len()
-    ));
-    out.push_str("    resident.records = records\n");
+    out.push_str("    local resident = { callbacks = {}, bridges = {}, descriptors = {}, interfaces = {}, instances = {}, factories = {}, strings = {}, output_strings = {}, manifest = spec.manifest, next_id = 1 }\n");
+    out.push_str("    local contracts = {}\n");
     for (index, contract) in contracts.iter().enumerate() {
         generate_lua_in_process_contract_adapter(out, contract, enums, index);
     }
-    out.push_str("    local dependencies = spec.dependencies or {}\n");
-    out.push_str("    local dependency_ids = nil\n");
-    out.push_str("    if #dependencies > 0 then\n");
-    out.push_str("        dependency_ids = ffi.new(\"uint64_t[?]\", #dependencies)\n");
     out.push_str(
-        "        for i = 1, #dependencies do dependency_ids[i - 1] = dependencies[i] end\n",
+        "    return { manifest = resident.manifest, contracts = contracts, resident = resident }\n",
     );
-    out.push_str("        resident.dependency_ids = dependency_ids\n");
-    out.push_str("    end\n");
-    out.push_str("    resident.strings.bundle_name = spec.name\n");
-    out.push_str("    local registration = ffi.new(\"InProcessBundleRegistration\")\n");
-    out.push_str("    registration.metadata.name.ptr = ffi.cast(\"const uint8_t*\", resident.strings.bundle_name)\n");
-    out.push_str("    registration.metadata.name.len = #resident.strings.bundle_name\n");
-    out.push_str("    registration.metadata.version.major = version.major or 1\n");
-    out.push_str("    registration.metadata.version.minor = version.minor or 0\n");
-    out.push_str("    registration.metadata.version.patch = version.patch or 0\n");
-    out.push_str("    registration.metadata.runtime = ffi.C.SupportedLanguage_Lua\n");
-    out.push_str("    registration.dependency_ids = dependency_ids\n");
-    out.push_str("    registration.dependency_count = #dependencies\n");
-    out.push_str("    registration.contracts = records\n");
-    out.push_str(&format!(
-        "    registration.contract_count = {}\n",
-        contracts.len()
-    ));
-    out.push_str("    resident.registration = registration\n");
-    out.push_str("    return { registration = registration, resident = resident }\n");
     out.push_str("end\n");
 }
 
@@ -514,22 +485,22 @@ fn generate_lua_in_process_contract_adapter(
         "        interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_in_process_vm_dispatch\n",
     );
     out.push_str("        interface.dispatch.vm.loader_data.data = nil\n");
-    out.push_str(&format!("        records[{index}].descriptor.name.ptr = ffi.cast(\"const uint8_t*\", resident.strings[{contract_key:?}].plugin_name)\n        records[{index}].descriptor.name.len = #resident.strings[{contract_key:?}].plugin_name\n"));
-    out.push_str(&format!("        records[{index}].descriptor.contract_name.ptr = ffi.cast(\"const uint8_t*\", resident.strings[{contract_key:?}].contract_name)\n        records[{index}].descriptor.contract_name.len = #resident.strings[{contract_key:?}].contract_name\n"));
+    out.push_str("        local descriptor = ffi.new(\"PluginDescriptor\")\n");
+    out.push_str(&format!("        descriptor.name.ptr = ffi.cast(\"const uint8_t*\", resident.strings[{contract_key:?}].plugin_name)\n        descriptor.name.len = #resident.strings[{contract_key:?}].plugin_name\n"));
+    out.push_str(&format!("        descriptor.contract_name.ptr = ffi.cast(\"const uint8_t*\", resident.strings[{contract_key:?}].contract_name)\n        descriptor.contract_name.len = #resident.strings[{contract_key:?}].contract_name\n"));
     out.push_str(&format!(
-        "        records[{index}].descriptor.version.major = {}\n",
+        "        descriptor.version.major = {}\n",
         contract.version.major
     ));
     out.push_str(&format!(
-        "        records[{index}].descriptor.version.minor = {}\n",
+        "        descriptor.version.minor = {}\n",
         contract.version.minor
     ));
     out.push_str(&format!(
-        "        records[{index}].descriptor.version.patch = {}\n",
+        "        descriptor.version.patch = {}\n",
         contract.version.patch
     ));
-    out.push_str(&format!("        records[{index}].interface = interface\n        records[{index}].adapter_context = ffi.cast(\"void*\", bridge)\n"));
-    out.push_str(&format!("        resident.bridges[{contract_key:?}] = bridge\n        resident.interfaces[{contract_key:?}] = interface\n        resident.callbacks[{contract_key:?}] = {{ dispatch_cb, create_cb, destroy_cb }}\n"));
+    out.push_str(&format!("        resident.bridges[{contract_key:?}] = bridge\n        resident.descriptors[{contract_key:?}] = descriptor\n        resident.interfaces[{contract_key:?}] = interface\n        resident.callbacks[{contract_key:?}] = {{ dispatch_cb, create_cb, destroy_cb }}\n        contracts[{}] = {{ descriptor = descriptor, interface = interface }}\n", index + 1));
     out.push_str("    end\n");
 }
 
@@ -4252,8 +4223,10 @@ mod tests {
             "in-process bundles must take the Lua bridge library explicitly: {out}"
         );
         assert!(
-            out.contains("InProcessContractRegistration[?]\", 2"),
-            "all contract registrations must be allocated before a single registration call: {out}"
+            out.contains("spec.manifest must be canonical manifest TOML")
+                && out.contains("local contracts = {}")
+                && out.contains("return { manifest = resident.manifest, contracts = contracts, resident = resident }"),
+            "generated bundles must own canonical manifest bytes and descriptor/interface pairs: {out}"
         );
         assert!(
             out.contains("resident.instances[\"state.counter\"]")
@@ -4262,9 +4235,13 @@ mod tests {
         );
         assert!(
             out.contains("interface.adapter_context = ffi.cast(\"void*\", bridge)")
-                && out.contains("records[0].adapter_context = ffi.cast(\"void*\", bridge)")
-                && out.contains("records[1].adapter_context = ffi.cast(\"void*\", bridge)"),
-            "interface and registration records must carry the same adapter context: {out}"
+                && out.contains("resident.descriptors[\"state.counter\"]")
+                && out.contains("resident.descriptors[\"state.value\"]")
+                && out
+                    .contains("contracts[1] = { descriptor = descriptor, interface = interface }")
+                && out
+                    .contains("contracts[2] = { descriptor = descriptor, interface = interface }"),
+            "adapter context must stay inside canonical interfaces with staged descriptor/interface pairs: {out}"
         );
         assert!(
             out.contains("lua_bridge_lib.polyplug_lua_in_process_vm_dispatch")

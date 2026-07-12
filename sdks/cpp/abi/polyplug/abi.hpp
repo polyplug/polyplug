@@ -19,9 +19,6 @@ struct GuestContractInterface;
 struct HostApi;
 struct HostContractInstance;
 struct HostContractInterface;
-struct InProcessBundleMetadata;
-struct InProcessContractRegistration;
-struct InProcessBundleRegistration;
 struct GuestContractHandle;
 struct BundleInitContext;
 struct PluginDescriptor;
@@ -156,7 +153,6 @@ static_assert(sizeof(GuestContractInstance) == 16, "GuestContractInstance size m
 ///  allowing guests to call: `host->find_guest_contract(host, id, ver)`
 ///  SDKs hide this pattern: `host.find_guest_contract(id, ver)`
 using HostApi_register_guest_contract_fn = void(*)(const HostApi*, const PluginDescriptor*, const GuestContractInterface*, AbiError*);
-using HostApi_register_in_process_bundle_fn = void(*)(const HostApi*, const InProcessBundleRegistration*, uint64_t*, AbiError*);
 using HostApi_alloc_fn = uint8_t*(*)(const HostApi*, size_t, size_t);
 using HostApi_free_fn = void(*)(const HostApi*, uint8_t*, size_t, size_t);
 using HostApi_find_guest_contract_fn = GuestContractHandle(*)(const HostApi*, uint64_t, uint32_t);
@@ -198,15 +194,6 @@ struct HostApi {
     ///  - `out_err`: out-param; the result is written here (`AbiError::ok()` on
     ///    success, an error otherwise). Never null.
     HostApi_register_guest_contract_fn register_guest_contract;
-    ///  Register every contract and metadata record in one in-process bundle transaction.
-    ///
-    ///  The host retains language-specific implementation objects in its own
-    ///  runtime-local resident. Core synchronously copies and validates `registration`;
-    ///  it never receives an implementation-object pointer.
-    ///
-    ///  On success, `out_bundle_id` receives the derived nonzero bundle ID. `out_err`
-    ///  is always written when non-null.
-    HostApi_register_in_process_bundle_fn register_in_process_bundle;
     ///  Allocate memory using the host allocator.
     ///
     ///  Memory allocated here must be freed via `free`.
@@ -481,7 +468,7 @@ struct HostApi {
     ///  Reserved. Producers must set this to null; consumers must not read it.
     const void* reserved;
 };
-static_assert(sizeof(HostApi) == 192, "HostApi size mismatch");
+static_assert(sizeof(HostApi) == 184, "HostApi size mismatch");
 
 ///  Opaque handle to a host contract instance.
 ///
@@ -965,36 +952,6 @@ struct VmDispatch {
 };
 static_assert(sizeof(VmDispatch) == 16, "VmDispatch size mismatch");
 
-///  Metadata shared by every contract in one in-process bundle registration.
-struct InProcessBundleMetadata {
-    ///  Stable UTF-8 bundle name. Core derives the nonzero bundle ID from this value.
-    StringView name;
-    ///  Bundle semantic version.
-    Version version;
-    ///  Language owning the resident and interface implementation.
-    SupportedLanguage runtime;
-};
-static_assert(sizeof(InProcessBundleMetadata) == 32, "InProcessBundleMetadata size mismatch");
-
-///  Complete, one-shot in-process bundle registration input.
-///
-///  All pointers are borrowed only for the synchronous registration call. If a count is
-///  nonzero, its corresponding pointer is required to be non-null and valid for that many
-///  elements. `dependency_ids` contains canonical `GuestContractId` numeric values.
-struct InProcessBundleRegistration {
-    ///  Bundle-level metadata.
-    InProcessBundleMetadata metadata;
-    ///  Declared guest-contract dependency IDs.
-    const uint64_t* dependency_ids;
-    ///  Number of dependency IDs.
-    size_t dependency_count;
-    ///  Contract descriptors and interface-table pointers.
-    const InProcessContractRegistration* contracts;
-    ///  Number of supplied contracts.
-    size_t contract_count;
-};
-static_assert(sizeof(InProcessBundleRegistration) == 64, "InProcessBundleRegistration size mismatch");
-
 ///  Context passed to every guest `polyplug_init()` function.
 ///
 ///  # OWNERSHIP
@@ -1302,20 +1259,6 @@ struct HostContractInterface {
     DispatchMechanisms dispatch;
 };
 static_assert(sizeof(HostContractInterface) == 80, "HostContractInterface size mismatch");
-
-///  One contract supplied by an in-process bundle.
-struct InProcessContractRegistration {
-    ///  Provider and contract metadata copied by core during registration.
-    PluginDescriptor descriptor;
-    ///  Canonical guest interface table copied and validated by core during registration.
-    const GuestContractInterface* interface;
-    ///  Opaque generated-adapter context copied into the registered interface.
-    ///
-    ///  Core never dereferences, writes, or frees this pointer. Generated lifecycle
-    ///  and dispatch thunks receive it as their first callback argument.
-    void* adapter_context;
-};
-static_assert(sizeof(InProcessContractRegistration) == 64, "InProcessContractRegistration size mismatch");
 
 
 // ─── Helper Methods (embedded by the build script) ───

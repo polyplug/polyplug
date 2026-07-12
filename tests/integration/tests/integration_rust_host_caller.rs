@@ -21,7 +21,7 @@ use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::VmLoaderData;
-use polyplug_abi::in_process::reject_in_process_bundle;
+
 use polyplug_native::NativeLoader;
 use polyplug_utils::BundleId;
 
@@ -357,7 +357,6 @@ fn counting_host() -> HostApi {
     HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: caller_stub_register_guest,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: caller_counting_alloc,
         free: caller_counting_free,
         find_guest_contract: caller_stub_find,

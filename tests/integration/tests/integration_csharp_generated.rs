@@ -191,8 +191,19 @@ fn generated_csharp_bundle_transform_dispatches() {
         AbiErrorCode::Ok as u32,
         "transform must return Ok"
     );
+    // SAFETY: out_view points to out_view.len UTF-8 bytes allocated by HostApi::alloc.
+    let out_bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_view.ptr, out_view.len) };
+    let out_str: String = core::str::from_utf8(out_bytes)
+        .expect("transform output is UTF-8")
+        .to_owned();
+    assert_eq!(
+        out_str, "TRANSFORMED:WIDGET|payload (transformed)|3",
+        "transform must apply the documented transformation"
+    );
+    // SAFETY: the result came from HostApi::alloc with byte alignment and must be
+    // released with the same size and alignment before destroying the guest instance.
+    unsafe { ((*host_abi).free)(host_abi, out_view.ptr.cast_mut(), out_view.len, 1) };
     // SAFETY: instance was created by create_instance; destroy exactly once.
-    // out_view points to guest/host-owned bytes that outlive the instance.
     unsafe {
         (vtable.destroy_instance)(
             vtable.adapter_context,
@@ -201,12 +212,4 @@ fn generated_csharp_bundle_transform_dispatches() {
             instance,
         )
     };
-
-    // SAFETY: out_view points to out_view.len UTF-8 bytes owned by the guest.
-    let out_bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_view.ptr, out_view.len) };
-    let out_str: &str = core::str::from_utf8(out_bytes).expect("transform output is UTF-8");
-    assert_eq!(
-        out_str, "TRANSFORMED:WIDGET|payload (transformed)|3",
-        "transform must apply the documented transformation"
-    );
 }

@@ -12,5 +12,5 @@ pub mod runtime_store;
 
 pub use reload::ReloadEvent;
 
-/// Rust host APIs for loader-backed and in-process guest bundles.
-pub use runtime::{InProcessBundle, Runtime};
+/// Rust host API for loader-backed and in-process guest bundles.
+pub use runtime::Runtime;

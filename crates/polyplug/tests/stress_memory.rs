@@ -31,7 +31,7 @@ use polyplug_abi::HostContractInstance;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
-use polyplug_abi::in_process::reject_in_process_bundle;
+
 use polyplug_abi::tracking::TrackingAllocator;
 use polyplug_abi::{
     AbiError, AbiErrorCode, Array, Buffer, BundleInitContext, GuestContractHandle,
@@ -343,7 +343,6 @@ fn init_memory_plugin_interface(library: &Library) -> *const GuestContractInterf
     let host_interface: HostApi = HostApi {
         runtime: null_mut(),
         register_guest_contract: registry_register_callback,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -783,7 +782,6 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     let host_interface: HostApi = HostApi {
         runtime: null_mut(),
         register_guest_contract: registry_register_callback,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: tracking_alloc_wrapper,
         free: tracking_free_wrapper,
         find_guest_contract: stub_find_guest_contract,

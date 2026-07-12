@@ -4,4 +4,4 @@
 
 // Main entry point for bundling
 export { VALIDATOR_INTERFACE, setValidatorFactory } from './contracts';
-export { polyplug_init } from './init';
+export { POLYPLUG_MANIFEST, polyplug_init } from './init';

@@ -3,7 +3,6 @@
 
 using System;
 using System.Runtime.InteropServices;
-using System.Text;
 
 using Polyplug.Abi;
 using Polyplug.Host;
@@ -17,16 +16,17 @@ public static class InProcessBundleFactory {
         var resident = new Resident(
             encoder_pipeline_encoderFactory
         );
-        return new InProcessBundle(resident.Registration, resident);
+        return new InProcessBundle(resident.Manifest, resident, resident.RegisterContracts);
     }
 
     private sealed class Resident : IDisposable {
         private readonly GuestContractInterface[] _interfaces;
-        private readonly InProcessContractRegistration[] _contracts;
+        private readonly PluginDescriptor[] _descriptors;
         private readonly byte[][] _strings;
         private readonly GCHandle[] _pins;
+        private readonly byte[] _manifest = [0x23, 0x20, 0x54, 0x48, 0x49, 0x53, 0x20, 0x46, 0x49, 0x4C, 0x45, 0x20, 0x49, 0x53, 0x20, 0x41, 0x55, 0x54, 0x4F, 0x2D, 0x47, 0x45, 0x4E, 0x45, 0x52, 0x41, 0x54, 0x45, 0x44, 0x20, 0x42, 0x59, 0x20, 0x70, 0x6F, 0x6C, 0x79, 0x70, 0x6C, 0x75, 0x67, 0x63, 0x2E, 0x20, 0x44, 0x4F, 0x20, 0x4E, 0x4F, 0x54, 0x20, 0x45, 0x44, 0x49, 0x54, 0x2E, 0x0A, 0x6E, 0x61, 0x6D, 0x65, 0x20, 0x3D, 0x20, 0x22, 0x63, 0x73, 0x68, 0x61, 0x72, 0x70, 0x5F, 0x65, 0x6E, 0x63, 0x6F, 0x64, 0x65, 0x72, 0x22, 0x0A, 0x69, 0x64, 0x20, 0x3D, 0x20, 0x37, 0x39, 0x39, 0x30, 0x33, 0x35, 0x34, 0x38, 0x36, 0x33, 0x33, 0x39, 0x32, 0x35, 0x39, 0x37, 0x36, 0x31, 0x33, 0x0A, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6F, 0x6E, 0x20, 0x3D, 0x20, 0x22, 0x31, 0x2E, 0x30, 0x2E, 0x30, 0x22, 0x0A, 0x6C, 0x6F, 0x61, 0x64, 0x65, 0x72, 0x20, 0x3D, 0x20, 0x22, 0x64, 0x6F, 0x74, 0x6E, 0x65, 0x74, 0x22, 0x0A, 0x70, 0x72, 0x6F, 0x76, 0x69, 0x64, 0x65, 0x73, 0x20, 0x3D, 0x20, 0x5B, 0x22, 0x70, 0x69, 0x70, 0x65, 0x6C, 0x69, 0x6E, 0x65, 0x2E, 0x45, 0x6E, 0x63, 0x6F, 0x64, 0x65, 0x72, 0x40, 0x31, 0x22, 0x5D, 0x0A, 0x66, 0x75, 0x6E, 0x63, 0x74, 0x69, 0x6F, 0x6E, 0x5F, 0x63, 0x6F, 0x75, 0x6E, 0x74, 0x20, 0x3D, 0x20, 0x7B, 0x20, 0x22, 0x70, 0x69, 0x70, 0x65, 0x6C, 0x69, 0x6E, 0x65, 0x2E, 0x45, 0x6E, 0x63, 0x6F, 0x64, 0x65, 0x72, 0x40, 0x31, 0x22, 0x20, 0x3D, 0x20, 0x31, 0x20, 0x7D, 0x0A, 0x6E, 0x65, 0x65, 0x64, 0x73, 0x5F, 0x72, 0x65, 0x69, 0x6E, 0x69, 0x74, 0x5F, 0x6F, 0x6E, 0x5F, 0x64, 0x65, 0x70, 0x5F, 0x72, 0x65, 0x6C, 0x6F, 0x61, 0x64, 0x20, 0x3D, 0x20, 0x66, 0x61, 0x6C, 0x73, 0x65, 0x0A, 0x66, 0x69, 0x6C, 0x65, 0x20, 0x3D, 0x20, 0x22, 0x65, 0x6E, 0x63, 0x6F, 0x64, 0x65, 0x72, 0x2E, 0x64, 0x6C, 0x6C, 0x22, 0x0A];
         private bool _disposed;
-        internal InProcessBundleRegistration Registration { get; }
+        internal byte[] Manifest => _manifest;
 
         internal Resident(
             Func<IntPtr, IPipelineEncoderGuestContract> encoder_pipeline_encoderFactory
@@ -35,19 +35,28 @@ public static class InProcessBundleFactory {
                 EncoderInterfaces.CreateInProcessInterface(encoder_pipeline_encoderFactory),
             ];
             _strings = [
-                Encoding.UTF8.GetBytes("csharp_encoder"),
-                Encoding.UTF8.GetBytes("encoder"),
-                Encoding.UTF8.GetBytes("pipeline.Encoder@1"),
+                System.Text.Encoding.UTF8.GetBytes("encoder"),
+                System.Text.Encoding.UTF8.GetBytes("pipeline.Encoder@1"),
             ];
-            _pins = new GCHandle[_strings.Length + 3];
+            _pins = new GCHandle[_strings.Length + 1];
             for (var index = 0; index < _strings.Length; index++) _pins[index] = GCHandle.Alloc(_strings[index], GCHandleType.Pinned);
-            _pins[^3] = GCHandle.Alloc(_interfaces, GCHandleType.Pinned);
-            _contracts = new InProcessContractRegistration[_interfaces.Length];
-            _pins[^2] = GCHandle.Alloc(_contracts, GCHandleType.Pinned);
-            _contracts[0] = new InProcessContractRegistration { Descriptor = new PluginDescriptor { Name = new StringView { Ptr = _pins[1].AddrOfPinnedObject(), Len = (nuint)_strings[1].Length }, ContractName = new StringView { Ptr = _pins[2].AddrOfPinnedObject(), Len = (nuint)_strings[2].Length }, Version = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u } }, Interface = _pins[^3].AddrOfPinnedObject() + 0 * Marshal.SizeOf<GuestContractInterface>(), AdapterContext = _interfaces[0].AdapterContext };
-            ulong[] dependencies = [];
-            _pins[^1] = GCHandle.Alloc(dependencies, GCHandleType.Pinned);
-            Registration = new InProcessBundleRegistration { Metadata = new InProcessBundleMetadata { Name = new StringView { Ptr = _pins[0].AddrOfPinnedObject(), Len = (nuint)_strings[0].Length }, Version = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u }, Runtime = SupportedLanguage.Dotnet }, DependencyIds = _pins[^1].AddrOfPinnedObject(), DependencyCount = (nuint)dependencies.Length, Contracts = _pins[^2].AddrOfPinnedObject(), ContractCount = (nuint)_contracts.Length };
+            _pins[^1] = GCHandle.Alloc(_interfaces, GCHandleType.Pinned);
+            _descriptors = new PluginDescriptor[_interfaces.Length];
+            _descriptors[0] = new PluginDescriptor { Name = new StringView { Ptr = _pins[0].AddrOfPinnedObject(), Len = (nuint)_strings[0].Length }, ContractName = new StringView { Ptr = _pins[1].AddrOfPinnedObject(), Len = (nuint)_strings[1].Length }, Version = new Polyplug.Abi.Version { Major = 1u, Minor = 0u, Patch = 0u } };
+        }
+
+        internal unsafe AbiError RegisterContracts(IntPtr hostPtr) {
+            var host = (HostApi*)hostPtr;
+            var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError*, void>)host->RegisterGuestContract;
+            fixed (PluginDescriptor* descriptors = _descriptors)
+            fixed (GuestContractInterface* interfaces = _interfaces) {
+                for (var index = 0; index < _interfaces.Length; index++) {
+                    AbiError error = default;
+                    registerFn(hostPtr, &descriptors[index], &interfaces[index], &error);
+                    if (error.Code != (uint)AbiErrorCode.Ok) return error;
+                }
+            }
+            return new AbiError { Code = (uint)AbiErrorCode.Ok };
         }
 
         public void Dispose() {

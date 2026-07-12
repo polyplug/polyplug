@@ -42,7 +42,7 @@ use polyplug_abi::StringView;
 use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
-use polyplug_abi::in_process::reject_in_process_bundle;
+
 use polyplug_abi::types::Version;
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
@@ -313,7 +313,6 @@ fn build_host_interface() -> HostApi {
     HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: bench_register_callback,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: bench_alloc,
         free: bench_free,
         find_guest_contract: bench_find_guest_contract,

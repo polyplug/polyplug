@@ -29,7 +29,7 @@ use polyplug_abi::HostContractInstance;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
-use polyplug_abi::in_process::reject_in_process_bundle;
+
 use polyplug_abi::{AbiError, AbiErrorCode};
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
@@ -383,7 +383,6 @@ fn test_rust_host_rust_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -488,7 +487,6 @@ fn test_cpp_host_rust_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -593,7 +591,6 @@ fn test_csharp_host_rust_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -698,7 +695,6 @@ fn test_python_host_rust_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -803,7 +799,6 @@ fn test_lua_host_rust_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -908,7 +903,6 @@ fn test_js_host_rust_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -1019,7 +1013,6 @@ fn test_rust_host_cpp_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -1124,7 +1117,6 @@ fn test_cpp_host_cpp_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -1229,7 +1221,6 @@ fn test_csharp_host_cpp_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -1334,7 +1325,6 @@ fn test_python_host_cpp_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -1439,7 +1429,6 @@ fn test_lua_host_cpp_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,
@@ -1544,7 +1533,6 @@ fn test_js_host_cpp_guest() {
     let host_interface: HostApi = HostApi {
         runtime: core::ptr::null_mut(),
         register_guest_contract: capture_interface_cb,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,

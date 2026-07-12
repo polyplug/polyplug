@@ -78,10 +78,15 @@ fn write_consumer_manifest(root: &Path) {
         .display()
         .to_string()
         .replace('\\', "/");
+    let common = workspace
+        .join("crates/polyplug_common")
+        .display()
+        .to_string()
+        .replace('\\', "/");
     fs::write(
         root.join("Cargo.toml"),
         format!(
-            "[package]\nname = \"generated_in_process_rust_consumer\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\npolyplug = {{ path = \"{polyplug}\" }}\npolyplug_abi = {{ path = \"{abi}\" }}\npolyplug_guest = {{ path = \"{guest}\" }}\npolyplug_utils = {{ path = \"{utils}\" }}\n\n[workspace]\n"
+            "[package]\nname = \"generated_in_process_rust_consumer\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\npolyplug = {{ path = \"{polyplug}\" }}\npolyplug_abi = {{ path = \"{abi}\" }}\npolyplug_common = {{ path = \"{common}\" }}\npolyplug_guest = {{ path = \"{guest}\" }}\npolyplug_utils = {{ path = \"{utils}\" }}\n\n[workspace]\n"
         ),
     )
     .expect("write consumer Cargo.toml");
@@ -138,20 +143,21 @@ fn second_beta(_host: HostContext) -> Box<dyn second_guest::contracts::EmbeddedB
 
 fn main() {
     let runtime: Arc<Runtime> = Runtime::builder().build().expect("build runtime");
-    let first_bundle = first_guest::init::in_process_bundle(first_guest::interfaces::InProcessFactories {
-        embedded_alpha: first_alpha,
-        embedded_shared: first_shared,
-    });
-    let second_bundle = second_guest::init::in_process_bundle(second_guest::interfaces::InProcessFactories {
-        embedded_beta: second_beta,
-    });
-
-    let first_id = runtime
-        .register_in_process_bundle(first_bundle)
-        .expect("register first generated in-process bundle atomically");
-    runtime
-        .register_in_process_bundle(second_bundle)
-        .expect("register second generated in-process bundle");
+    let first_id = first_guest::init::register_in_process_bundle(
+        &runtime,
+        first_guest::interfaces::InProcessFactories {
+            embedded_alpha: first_alpha,
+            embedded_shared: first_shared,
+        },
+    )
+    .expect("register first generated in-process bundle atomically");
+    second_guest::init::register_in_process_bundle(
+        &runtime,
+        second_guest::interfaces::InProcessFactories {
+            embedded_beta: second_beta,
+        },
+    )
+    .expect("register second generated in-process bundle");
 
     assert!(runtime
         .find_guest_contract(first_host::host::types::EMBEDDED_SHARED_CONTRACT_ID, 0)
@@ -197,13 +203,14 @@ fn main() {
         Err(RegistryError::StaleHandle { .. })
     ));
 
-    let replacement_bundle = first_guest::init::in_process_bundle(first_guest::interfaces::InProcessFactories {
-        embedded_alpha: first_alpha,
-        embedded_shared: first_shared,
-    });
-    runtime
-        .register_in_process_bundle(replacement_bundle)
-        .expect("re-register first generated bundle");
+    first_guest::init::register_in_process_bundle(
+        &runtime,
+        first_guest::interfaces::InProcessFactories {
+            embedded_alpha: first_alpha,
+            embedded_shared: first_shared,
+        },
+    )
+    .expect("re-register first generated bundle");
     let replacement_handle = runtime
         .find_guest_contract(first_host::host::types::EMBEDDED_ALPHA_CONTRACT_ID, 0)
         .expect("find re-registered alpha");

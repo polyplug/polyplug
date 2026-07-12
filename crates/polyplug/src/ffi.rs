@@ -25,17 +25,18 @@
 //! - `alloc`, `free` — memory management
 
 use core::panic::AssertUnwindSafe;
+use core::{ptr, slice, str};
 use std::panic::catch_unwind;
 use std::sync::Arc;
 
-use core::ptr;
-
-use polyplug_abi::HostApi;
 use polyplug_abi::runtime::{ReloadPhase, RuntimeConfig};
+use polyplug_abi::{AbiError, AbiErrorCode, HostApi, StringView, SupportedLanguage};
+use polyplug_common::ManifestData;
+use polyplug_utils::BundleId;
 
 use crate::runtime::Runtime;
 
-// ─── FFI Entry Points (18-02: Only 2 exports) ─────────────────────────────────
+// ─── FFI Entry Points ─────────────────────────────────────────────────────────
 
 /// Creates a new runtime instance.
 ///
@@ -138,6 +139,156 @@ pub unsafe extern "C" fn polyplug_runtime_destroy(host: *const HostApi) {
         }
     }))
     .unwrap_or(())
+}
+
+/// Begin an in-process registration transaction using canonical manifest TOML.
+///
+/// Call `HostApi::register_guest_contract` for every provider before committing. The
+/// manifest bytes are copied while parsing; no registration envelope crosses the ABI.
+///
+/// # Safety
+///
+/// `host` must be a live runtime `HostApi`. Non-null output pointers must be
+/// writable, and `manifest_bytes` must reference `manifest_len` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_begin_in_process_bundle(
+    host: *const HostApi,
+    manifest_bytes: *const u8,
+    manifest_len: usize,
+    language: u32,
+    out_bundle_id: *mut u64,
+    out_error: *mut AbiError,
+) {
+    if !out_bundle_id.is_null() {
+        // SAFETY: caller provided writable result storage.
+        unsafe { out_bundle_id.write(0) };
+    }
+    let result: Result<u64, String> = catch_unwind(AssertUnwindSafe(|| {
+        if host.is_null()
+            || out_bundle_id.is_null()
+            || (manifest_bytes.is_null() && manifest_len != 0)
+        {
+            return Err("invalid in-process registration pointer".to_owned());
+        }
+        let language: SupportedLanguage = match language {
+            0 => SupportedLanguage::Rust,
+            1 => SupportedLanguage::Cpp,
+            2 => SupportedLanguage::Dotnet,
+            3 => SupportedLanguage::Python,
+            4 => SupportedLanguage::Lua,
+            5 => SupportedLanguage::JavaScript,
+            _ => return Err("invalid in-process language".to_owned()),
+        };
+        let manifest_bytes: &[u8] = if manifest_len == 0 {
+            &[]
+        } else {
+            // SAFETY: non-nullness and byte length are validated above.
+            unsafe { slice::from_raw_parts(manifest_bytes, manifest_len) }
+        };
+        let manifest_text: &str =
+            str::from_utf8(manifest_bytes).map_err(|_| "manifest TOML is not UTF-8".to_owned())?;
+        let manifest: ManifestData =
+            ManifestData::parse_from_str(manifest_text).map_err(|error| error.to_string())?;
+        // SAFETY: host is a live HostApi for the whole registration transaction.
+        let runtime_ptr: *const Runtime = unsafe { (*host).runtime.cast() };
+        if runtime_ptr.is_null() {
+            return Err("runtime pointer is null".to_owned());
+        }
+        // SAFETY: HostApi.runtime is owned by this live runtime.
+        let runtime: &Runtime = unsafe { &*runtime_ptr };
+        runtime
+            .begin_in_process_bundle(manifest, language)
+            .map(|bundle_id| bundle_id.id())
+            .map_err(|error| error.to_string())
+    }))
+    .unwrap_or_else(|_| Err("in-process registration panicked".to_owned()));
+    match result {
+        Ok(bundle_id) => {
+            // SAFETY: out_bundle_id is non-null on the success path.
+            unsafe { out_bundle_id.write(bundle_id) };
+            if !out_error.is_null() {
+                // SAFETY: caller provided writable result storage.
+                unsafe { out_error.write(AbiError::ok()) };
+            }
+        }
+        Err(error) => write_in_process_error(host, out_error, error),
+    }
+}
+
+/// Commit an in-process registration transaction after all guest contracts staged.
+///
+/// # Safety
+///
+/// `host` must be the live runtime that began `bundle_id`, and a non-null
+/// `out_error` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_commit_in_process_bundle(
+    host: *const HostApi,
+    bundle_id: u64,
+    out_error: *mut AbiError,
+) {
+    let result: Result<(), String> = catch_unwind(AssertUnwindSafe(|| {
+        if host.is_null() {
+            return Err("HostApi pointer is null".to_owned());
+        }
+        // SAFETY: host is non-null and belongs to a live runtime.
+        let runtime_ptr: *const Runtime = unsafe { (*host).runtime.cast() };
+        if runtime_ptr.is_null() {
+            return Err("runtime pointer is null".to_owned());
+        }
+        // SAFETY: HostApi.runtime is owned by this live runtime.
+        unsafe { &*runtime_ptr }
+            .commit_in_process_bundle(BundleId::from_u64(bundle_id))
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }))
+    .unwrap_or_else(|_| Err("in-process registration panicked".to_owned()));
+    match result {
+        Ok(()) if !out_error.is_null() => {
+            // SAFETY: caller provided writable result storage.
+            unsafe { out_error.write(AbiError::ok()) };
+        }
+        Ok(()) => {}
+        Err(error) => write_in_process_error(host, out_error, error),
+    }
+}
+
+/// Abort an uncommitted in-process registration transaction and release staged data.
+///
+/// # Safety
+///
+/// `host` must be the live runtime that began `bundle_id`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_abort_in_process_bundle(host: *const HostApi, bundle_id: u64) {
+    if host.is_null() {
+        return;
+    }
+    // SAFETY: a non-null host belongs to a live runtime for this call.
+    let runtime_ptr: *const Runtime = unsafe { (*host).runtime.cast() };
+    if !runtime_ptr.is_null() {
+        // SAFETY: HostApi.runtime is owned by this live runtime.
+        unsafe { &*runtime_ptr }.abort_in_process_bundle(BundleId::from_u64(bundle_id));
+    }
+}
+
+fn write_in_process_error(host: *const HostApi, out_error: *mut AbiError, error: String) {
+    if !host.is_null() {
+        // SAFETY: non-null HostApi belongs to a live runtime for this callback.
+        let runtime_ptr: *const Runtime = unsafe { (*host).runtime.cast() };
+        if !runtime_ptr.is_null() {
+            // SAFETY: HostApi.runtime is owned by this live runtime.
+            unsafe { &*runtime_ptr }.set_last_error(error);
+        }
+    }
+    if !out_error.is_null() {
+        // SAFETY: caller provided writable result storage.
+        unsafe {
+            out_error.write(AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: StringView::null(),
+            });
+        }
+    }
 }
 
 #[cfg(test)]

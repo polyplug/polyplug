@@ -335,17 +335,6 @@ export interface HostApi {
      */
     register_guest_contract: number;
     /**
-     *  Register every contract and metadata record in one in-process bundle transaction.
-     *
-     *  The host retains language-specific implementation objects in its own
-     *  runtime-local resident. Core synchronously copies and validates `registration`;
-     *  it never receives an implementation-object pointer.
-     *
-     *  On success, `out_bundle_id` receives the derived nonzero bundle ID. `out_err`
-     *  is always written when non-null.
-     */
-    register_in_process_bundle: number;
-    /**
      *  Allocate memory using the host allocator.
      *
      *  Memory allocated here must be freed via `free`.
@@ -662,29 +651,28 @@ export interface HostApi {
 
 export const HOST_API_RUNTIME_OFFSET: number = 0;
 export const HOST_API_REGISTER_GUEST_CONTRACT_OFFSET: number = 8;
-export const HOST_API_REGISTER_IN_PROCESS_BUNDLE_OFFSET: number = 16;
-export const HOST_API_ALLOC_OFFSET: number = 24;
-export const HOST_API_FREE_OFFSET: number = 32;
-export const HOST_API_FIND_GUEST_CONTRACT_OFFSET: number = 40;
-export const HOST_API_FIND_ALL_GUEST_CONTRACTS_OFFSET: number = 48;
-export const HOST_API_RESOLVE_GUEST_CONTRACT_OFFSET: number = 56;
-export const HOST_API_GET_HOST_CONTRACT_OFFSET: number = 64;
-export const HOST_API_RESOLVE_HOST_CONTRACT_INTERFACE_OFFSET: number = 72;
-export const HOST_API_LIST_BUNDLES_OFFSET: number = 80;
-export const HOST_API_GET_DEPENDENCIES_OFFSET: number = 88;
-export const HOST_API_LOAD_BUNDLE_OFFSET: number = 96;
-export const HOST_API_RELOAD_BUNDLE_OFFSET: number = 104;
-export const HOST_API_REGISTER_HOST_CONTRACT_OFFSET: number = 112;
-export const HOST_API_REGISTER_LOADER_OFFSET: number = 120;
-export const HOST_API_GET_LAST_ERROR_OFFSET: number = 128;
-export const HOST_API_GET_ERROR_LEN_OFFSET: number = 136;
-export const HOST_API_UNLOAD_BUNDLE_OFFSET: number = 144;
-export const HOST_API_LOG_OFFSET: number = 152;
-export const HOST_API_CREATE_GUEST_INSTANCE_OFFSET: number = 160;
-export const HOST_API_DESTROY_GUEST_INSTANCE_OFFSET: number = 168;
-export const HOST_API_REGISTRY_REVISION_OFFSET: number = 176;
-export const HOST_API_RESERVED_OFFSET: number = 184;
-export const HOST_API_SIZE: number = 192;
+export const HOST_API_ALLOC_OFFSET: number = 16;
+export const HOST_API_FREE_OFFSET: number = 24;
+export const HOST_API_FIND_GUEST_CONTRACT_OFFSET: number = 32;
+export const HOST_API_FIND_ALL_GUEST_CONTRACTS_OFFSET: number = 40;
+export const HOST_API_RESOLVE_GUEST_CONTRACT_OFFSET: number = 48;
+export const HOST_API_GET_HOST_CONTRACT_OFFSET: number = 56;
+export const HOST_API_RESOLVE_HOST_CONTRACT_INTERFACE_OFFSET: number = 64;
+export const HOST_API_LIST_BUNDLES_OFFSET: number = 72;
+export const HOST_API_GET_DEPENDENCIES_OFFSET: number = 80;
+export const HOST_API_LOAD_BUNDLE_OFFSET: number = 88;
+export const HOST_API_RELOAD_BUNDLE_OFFSET: number = 96;
+export const HOST_API_REGISTER_HOST_CONTRACT_OFFSET: number = 104;
+export const HOST_API_REGISTER_LOADER_OFFSET: number = 112;
+export const HOST_API_GET_LAST_ERROR_OFFSET: number = 120;
+export const HOST_API_GET_ERROR_LEN_OFFSET: number = 128;
+export const HOST_API_UNLOAD_BUNDLE_OFFSET: number = 136;
+export const HOST_API_LOG_OFFSET: number = 144;
+export const HOST_API_CREATE_GUEST_INSTANCE_OFFSET: number = 152;
+export const HOST_API_DESTROY_GUEST_INSTANCE_OFFSET: number = 160;
+export const HOST_API_REGISTRY_REVISION_OFFSET: number = 168;
+export const HOST_API_RESERVED_OFFSET: number = 176;
+export const HOST_API_SIZE: number = 184;
 
 /**
  *  Opaque handle to a host contract instance.
@@ -835,68 +823,6 @@ export const HOST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET: number = 48;
 export const HOST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET: number = 56;
 export const HOST_CONTRACT_INTERFACE_DISPATCH_OFFSET: number = 64;
 export const HOST_CONTRACT_INTERFACE_SIZE: number = 80;
-
-/**  Metadata shared by every contract in one in-process bundle registration. */
-export interface InProcessBundleMetadata {
-    /**  Stable UTF-8 bundle name. Core derives the nonzero bundle ID from this value. */
-    name: StringView;
-    /**  Bundle semantic version. */
-    version: Version;
-    /**  Language owning the resident and interface implementation. */
-    runtime: SupportedLanguage;
-}
-
-export const IN_PROCESS_BUNDLE_METADATA_NAME_OFFSET: number = 0;
-export const IN_PROCESS_BUNDLE_METADATA_VERSION_OFFSET: number = 16;
-export const IN_PROCESS_BUNDLE_METADATA_RUNTIME_OFFSET: number = 28;
-export const IN_PROCESS_BUNDLE_METADATA_SIZE: number = 32;
-
-/**  One contract supplied by an in-process bundle. */
-export interface InProcessContractRegistration {
-    /**  Provider and contract metadata copied by core during registration. */
-    descriptor: PluginDescriptor;
-    /**  Canonical guest interface table copied and validated by core during registration. */
-    interface: bigint;
-    /**
-     *  Opaque generated-adapter context copied into the registered interface.
-     *
-     *  Core never dereferences, writes, or frees this pointer. Generated lifecycle
-     *  and dispatch thunks receive it as their first callback argument.
-     */
-    adapter_context: bigint;
-}
-
-export const IN_PROCESS_CONTRACT_REGISTRATION_DESCRIPTOR_OFFSET: number = 0;
-export const IN_PROCESS_CONTRACT_REGISTRATION_INTERFACE_OFFSET: number = 48;
-export const IN_PROCESS_CONTRACT_REGISTRATION_ADAPTER_CONTEXT_OFFSET: number = 56;
-export const IN_PROCESS_CONTRACT_REGISTRATION_SIZE: number = 64;
-
-/**
- *  Complete, one-shot in-process bundle registration input.
- *
- *  All pointers are borrowed only for the synchronous registration call. If a count is
- *  nonzero, its corresponding pointer is required to be non-null and valid for that many
- *  elements. `dependency_ids` contains canonical `GuestContractId` numeric values.
- */
-export interface InProcessBundleRegistration {
-    /**  Bundle-level metadata. */
-    metadata: InProcessBundleMetadata;
-    /**  Declared guest-contract dependency IDs. */
-    dependency_ids: bigint;
-    /**  Number of dependency IDs. */
-    dependency_count: number;
-    /**  Contract descriptors and interface-table pointers. */
-    contracts: bigint;
-    /**  Number of supplied contracts. */
-    contract_count: number;
-}
-
-export const IN_PROCESS_BUNDLE_REGISTRATION_METADATA_OFFSET: number = 0;
-export const IN_PROCESS_BUNDLE_REGISTRATION_DEPENDENCY_IDS_OFFSET: number = 32;
-export const IN_PROCESS_BUNDLE_REGISTRATION_DEPENDENCY_COUNT_OFFSET: number = 40;
-export const IN_PROCESS_BUNDLE_REGISTRATION_CONTRACTS_OFFSET: number = 48;
-export const IN_PROCESS_BUNDLE_REGISTRATION_CONTRACT_COUNT_OFFSET: number = 56;
-export const IN_PROCESS_BUNDLE_REGISTRATION_SIZE: number = 64;
 
 /**
  *  Opaque handle to a registered guest contract.

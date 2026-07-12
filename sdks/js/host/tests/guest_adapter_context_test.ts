@@ -1,8 +1,8 @@
 import { buildInProcessGuestContract } from "../polyplug/mod.js";
+import { GUEST_CONTRACT_INTERFACE_ADAPTER_CONTEXT_OFFSET } from "../../abi/abi.ts";
 import { getBackend } from "@polyplug/abi";
 import { assertEquals, test } from "../../testing/harness.ts";
 import { bridgeLibrary } from "../../loaders/js/mod.ts";
-
 
 test("generated bridge owns the opaque context used by canonical lifecycle callbacks", () => {
     const adapter = buildInProcessGuestContract({
@@ -13,7 +13,12 @@ test("generated bridge owns the opaque context used by canonical lifecycle callb
     }, bridgeLibrary());
 
     try {
-        assertEquals(getBackend().pointerValue(adapter.adapterContext) !== 0n, true);
+        assertEquals(
+            getBackend().pointerView(adapter.interfacePtr).getBigUint64(
+                GUEST_CONTRACT_INTERFACE_ADAPTER_CONTEXT_OFFSET,
+            ) !== 0n,
+            true,
+        );
     } finally {
         adapter.resident.release();
     }

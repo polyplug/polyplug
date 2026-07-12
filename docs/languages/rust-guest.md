@@ -145,20 +145,22 @@ write_output(&output, std::path::Path::new("generated"))?;
 ```
 
 The generated module exposes `interfaces::InProcessFactories` and
-`init::in_process_bundle`. Supply ordinary factory functions and register the
-returned value by ownership:
+`init::register_in_process_bundle`. Supply ordinary factory functions; the
+generated adapter builds the canonical manifest transaction, registers every
+contract through the existing `register_guest_contract` callback, and transfers
+the resident only after the transaction commits:
 
 ```rust
 fn create_my_plugin(host: HostContext) -> Box<dyn PipelineDecoderGuestContract> {
     Box::new(Plugin { host })
 }
 
-let bundle = generated::init::in_process_bundle(
+generated::init::register_in_process_bundle(
+    &runtime,
     generated::interfaces::InProcessFactories {
         my_plugin: create_my_plugin,
     },
-);
-runtime.register_in_process_bundle(bundle)?;
+)?;
 ```
 
 `Runtime` owns the factory resident until logical unload. Each runtime has a

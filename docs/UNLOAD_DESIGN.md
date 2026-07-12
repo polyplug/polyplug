@@ -245,7 +245,7 @@ invalidates handles and reclaims the backing resources.
 | Type | Size | Layout |
 |---|---|---|
 | `GuestContractHandle` | 8 bytes, align 4 | `{ index: u32, generation: u32 }` |
-| `HostApi` | 192 bytes, align 8 | 1 runtime ptr + 22 fn-ptr fields + 1 trailing `reserved` data ptr |
+| `HostApi` | 184 bytes, align 8 | 1 runtime ptr + 21 fn-ptr fields + 1 trailing `reserved` data ptr |
 | `RuntimeConfig` | 72 bytes, align 8 | no unload-mode field |
 
 `ReloadPhaseType::Unloading = 3` with the `ReloadPhase::unloading()` constructor models

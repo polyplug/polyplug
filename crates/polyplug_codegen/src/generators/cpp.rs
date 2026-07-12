@@ -23,7 +23,6 @@ use crate::ir::EnumVariant;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
-use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -1283,10 +1282,16 @@ fn generate_cpp_in_process_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcErro
     out.push_str("#pragma once\n");
     out.push_str(&cpp_include_block(&[
         &[("interfaces.hpp", false), ("polyplug/runtime.hpp", false)],
-        &[("memory", true), ("utility", true), ("vector", true)],
+        &[
+            ("memory", true),
+            ("string_view", true),
+            ("utility", true),
+            ("vector", true),
+        ],
     ]));
+    let manifest_toml: String = generate_bundle_manifest_cpp(ir);
     out.push_str("\nnamespace polyplug_plugin {\nnamespace in_process {\n\n");
-    out.push_str("class Provider {\npublic:\n    virtual ~Provider() = default;\n    virtual InProcessContractRegistration registration() noexcept = 0;\n};\n\n");
+    out.push_str("class Provider {\npublic:\n    virtual ~Provider() = default;\n    virtual AbiError register_contract(const HostApi* host) noexcept = 0;\n};\n\n");
 
     for plugin in &bundle.plugins {
         let contract_impl =
@@ -1336,16 +1341,15 @@ fn generate_cpp_in_process_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcErro
              \x20           DispatchMechanisms{{ .native = NativeDispatch{{{}U, {upper}_FNS}} }}\n\
              \x20       }} {{}}\n\
              \n\
-             \x20   InProcessContractRegistration registration() noexcept override {{\n\
-             \x20       return InProcessContractRegistration{{\n\
-             \x20           PluginDescriptor{{\n\
-             \x20               StringView{{reinterpret_cast<const uint8_t*>(\"{}\"), {}U}},\n\
-             \x20               StringView{{reinterpret_cast<const uint8_t*>(\"{contract_full}\"), {}U}},\n\
-             \x20               Version{{{}U, {}U, {}U}}\n\
-             \x20           }},\n\
-             \x20           &interface_,\n\
-             \x20           this\n\
+             \x20   AbiError register_contract(const HostApi* host) noexcept override {{\n\
+             \x20       PluginDescriptor descriptor{{\n\
+             \x20           StringView{{reinterpret_cast<const uint8_t*>(\"{}\"), {}U}},\n\
+             \x20           StringView{{reinterpret_cast<const uint8_t*>(\"{contract_full}\"), {}U}},\n\
+             \x20           Version{{{}U, {}U, {}U}}\n\
              \x20       }};\n\
+             \x20       AbiError error{{}};\n\
+             \x20       host->register_guest_contract(host, &descriptor, &interface_, &error);\n\
+             \x20       return error;\n\
              \x20   }}\n\
              \n\
              private:\n\
@@ -1359,20 +1363,16 @@ fn generate_cpp_in_process_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcErro
              \x20           if (!implementation) return;\n\
              \x20           auto* state = new {state_name}{{host, implementation.release()}};\n\
              \x20           *out_instance = GuestContractInstance{{state, {contract_upper}_CONTRACT_ID}};\n\
-             \x20       }} catch (...) {{\n\
-             \x20           *out_instance = GuestContractInstance{{nullptr, 0U}};\n\
-             \x20       }}\n\
+             \x20       }} catch (...) {{ *out_instance = GuestContractInstance{{nullptr, 0U}}; }}\n\
              \x20   }}\n\
              \n\
-             \x20   static void destroy_instance(void* adapter_context, VmLoaderData, const HostApi*, GuestContractInstance instance) noexcept {{\n\
-             \x20       (void)adapter_context;\n\
+             \x20   static void destroy_instance(void*, VmLoaderData, const HostApi*, GuestContractInstance instance) noexcept {{\n\
              \x20       if (instance.data == nullptr) return;\n\
              \x20       try {{\n\
              \x20           auto* state = static_cast<{state_name}*>(instance.data);\n\
              \x20           delete state->impl;\n\
              \x20           delete state;\n\
-             \x20       }} catch (...) {{\n\
-             \x20       }}\n\
+             \x20       }} catch (...) {{}}\n\
              \x20   }}\n\
              \n\
              \x20   Factory factory_;\n\
@@ -1391,35 +1391,25 @@ fn generate_cpp_in_process_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcErro
         ));
     }
 
-    let dependency_ids: Vec<u64> = bundle
-        .dependencies
-        .iter()
-        .map(|dependency| match dependency {
-            ResolvedDependency::ByContract { contract_id, .. }
-            | ResolvedDependency::ByBundle { contract_id, .. } => *contract_id,
-        })
-        .collect();
     out.push_str("class Resident final : public polyplug::detail::InProcessResident {\npublic:\n");
-    out.push_str(&format!(
-        "    Resident() : registration_{{InProcessBundleMetadata{{StringView{{reinterpret_cast<const uint8_t*>(\"{}\"), {}U}}, Version{{{}U, {}U, {}U}}, SupportedLanguage::Cpp}}, nullptr, 0U, nullptr, 0U}} {{\n",
-        bundle.name, bundle.name.len(), bundle.version.major, bundle.version.minor, bundle.version.patch
-    ));
-    for dependency in dependency_ids {
-        out.push_str(&format!(
-            "        dependencies_.push_back(0x{dependency:016X}ULL);\n"
-        ));
-    }
-    out.push_str("        rebuild_registration();\n    }\n\n");
-    out.push_str("    template <typename ProviderType, typename Factory>\n    void add(Factory factory) {\n        providers_.push_back(std::make_unique<ProviderType>(std::move(factory)));\n        rebuild_registration();\n    }\n\n");
-    out.push_str("    const InProcessBundleRegistration& registration() const noexcept { return registration_; }\n\n");
-    out.push_str("private:\n    void rebuild_registration() {\n        contracts_.clear();\n        contracts_.reserve(providers_.size());\n        for (const std::unique_ptr<Provider>& provider : providers_) contracts_.push_back(provider->registration());\n        registration_.dependency_ids = dependencies_.empty() ? nullptr : dependencies_.data();\n        registration_.dependency_count = dependencies_.size();\n        registration_.contracts = contracts_.empty() ? nullptr : contracts_.data();\n        registration_.contract_count = contracts_.size();\n    }\n\n    std::vector<std::unique_ptr<Provider>> providers_{};\n    std::vector<uint64_t> dependencies_{};\n    std::vector<InProcessContractRegistration> contracts_{};\n    InProcessBundleRegistration registration_{};\n};\n\n");
+    out.push_str("    template <typename ProviderType, typename Factory>\n    void add(Factory factory) { providers_.push_back(std::make_unique<ProviderType>(std::move(factory))); }\n\n");
+    out.push_str("    AbiError register_contracts(const HostApi* host) noexcept {\n        for (const std::unique_ptr<Provider>& provider : providers_) {\n            AbiError error = provider->register_contract(host);\n            if (error.code != static_cast<uint32_t>(AbiErrorCode::Ok)) return error;\n        }\n        return AbiError{};\n    }\n\nprivate:\n    std::vector<std::unique_ptr<Provider>> providers_{};\n};\n\n");
     out.push_str("}  // namespace in_process\n\nclass InProcessBundle {\npublic:\n    InProcessBundle() : resident_(std::make_unique<in_process::Resident>()) {}\n    InProcessBundle(InProcessBundle&&) noexcept = default;\n    InProcessBundle& operator=(InProcessBundle&&) noexcept = default;\n    InProcessBundle(const InProcessBundle&) = delete;\n    InProcessBundle& operator=(const InProcessBundle&) = delete;\n\n");
     for plugin in &bundle.plugins {
         let upper = plugin.name.to_uppercase().replace('.', "_");
         let lower = plugin.name.to_lowercase().replace('.', "_");
         out.push_str(&format!("    template <typename Factory>\n    InProcessBundle& add_{lower}(Factory factory) {{\n        resident_->template add<in_process::{upper}Provider<Factory>>(std::move(factory));\n        return *this;\n    }}\n\n"));
     }
-    out.push_str("    const InProcessBundleRegistration& in_process_registration() const noexcept { return resident_->registration(); }\n    polyplug::detail::InProcessResident* in_process_resident() const noexcept { return resident_.get(); }\n    std::unique_ptr<polyplug::detail::InProcessResident> take_in_process_resident() noexcept { return std::move(resident_); }\n\nprivate:\n    std::unique_ptr<in_process::Resident> resident_;\n};\n\n");
+    out.push_str(&format!(
+        "    std::string_view in_process_manifest() const noexcept {{ return {manifest_toml:?}; }}\n\
+         \x20   SupportedLanguage in_process_language() const noexcept {{ return SupportedLanguage::Cpp; }}\n\
+         \x20   AbiError register_guest_contracts(const HostApi* host) noexcept {{ return resident_->register_contracts(host); }}\n\
+         \x20   polyplug::detail::InProcessResident* in_process_resident() const noexcept {{ return resident_.get(); }}\n\
+         \x20   std::unique_ptr<polyplug::detail::InProcessResident> take_in_process_resident() noexcept {{ return std::move(resident_); }}\n\n\
+         private:\n\
+         \x20   std::unique_ptr<in_process::Resident> resident_;\n\
+         }};\n\n"
+    ));
     if !bundle.plugins.is_empty() {
         let template_params: String = bundle
             .plugins
@@ -1437,16 +1427,14 @@ fn generate_cpp_in_process_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcErro
             .iter()
             .map(|plugin| {
                 let lower = plugin.name.to_lowercase().replace('.', "_");
-                format!("{}Factory {lower}_factory", snake_to_pascal(&lower))
+                format!("{}Factory {lower}", snake_to_pascal(&lower))
             })
             .collect::<Vec<String>>()
             .join(", ");
-        out.push_str(&format!("template <{template_params}>\nInProcessBundle create_in_process_bundle({parameters}) {{\n    InProcessBundle bundle;\n"));
+        out.push_str(&format!("template <{template_params}>\nInProcessBundle make_in_process_bundle({parameters}) {{\n    InProcessBundle bundle{{}};\n"));
         for plugin in &bundle.plugins {
             let lower = plugin.name.to_lowercase().replace('.', "_");
-            out.push_str(&format!(
-                "    bundle.add_{lower}(std::move({lower}_factory));\n"
-            ));
+            out.push_str(&format!("    bundle.add_{lower}(std::move({lower}));\n"));
         }
         out.push_str("    return bundle;\n}\n\n");
     }
@@ -5536,10 +5524,11 @@ mod tests {
         let in_process = file_content(&files, "guest/in_process.hpp");
         assert!(
             in_process.contains("class InProcessBundle")
-                && in_process.contains("create_in_process_bundle")
+                && in_process.contains("make_in_process_bundle")
                 && in_process.contains("adapter_context")
-                && in_process.contains("InProcessContractRegistration"),
-            "in-process adapters must retain typed factories and carry canonical context:\n{in_process}"
+                && in_process.contains("register_contracts")
+                && in_process.contains("in_process_manifest"),
+            "in-process adapters must retain typed factories and stage canonical descriptor/interface pairs:\n{in_process}"
         );
 
         for file in &files.files {

@@ -41,12 +41,10 @@ that needs the path after init copies it into loader-owned state.
 
 ## Host ABI (libpolyplug Exports)
 
-The runtime exports exactly **two** `#[no_mangle]` C symbols, both runtime
-lifecycle entry points. Every other operation — including cross-boundary
-allocation (load/reload, discovery, resolution, registration, error handling,
-and `alloc` / `free`) — is reached through the function-pointer fields of the
-`HostApi` returned by `polyplug_runtime_create`, not through additional
-C exports.
+The runtime exports lifecycle functions plus three scoped in-process staging
+functions. Normal runtime operations — allocation, load/reload, discovery,
+resolution, contract registration, and error handling — remain function-pointer
+fields on the `HostApi` returned by `polyplug_runtime_create`.
 
 ### Runtime Lifecycle
 ```c
@@ -60,6 +58,32 @@ const HostApi* polyplug_runtime_create(const void* config);
 // as C free(); the HostApi pointer is dangling afterwards and must not be used.
 void polyplug_runtime_destroy(const HostApi* host);
 ```
+
+### In-Process Registration Staging
+
+```c
+void polyplug_begin_in_process_bundle(
+    const HostApi* host,
+    const uint8_t* manifest_bytes,
+    size_t manifest_len,
+    uint32_t language,
+    uint64_t* out_bundle_id,
+    AbiError* out_error);
+void polyplug_commit_in_process_bundle(
+    const HostApi* host,
+    uint64_t bundle_id,
+    AbiError* out_error);
+void polyplug_abort_in_process_bundle(const HostApi* host, uint64_t bundle_id);
+```
+
+`begin` parses and validates the canonical bundle manifest and opens an internal
+transaction on the calling thread. Generated adapters register every provider
+through the existing `HostApi.register_guest_contract` field using only
+`PluginDescriptor` and `GuestContractInterface`; language state stays in
+`GuestContractInterface.adapter_context`. `commit` consumes the transaction,
+validates the complete provider/function/dependency set, and publishes one
+registry snapshot. Registration failures before commit call `abort`; a commit
+result already owns cleanup and must not be aborted again.
 
 `config` points at a `RuntimeConfig` (`#[repr(C)]`, **72 bytes, align 8**):
 `compatibility: Compatibility` (u32, offset 0), `hot_reload_enabled: bool`
@@ -99,13 +123,12 @@ void host->free(const HostApi* host, uint8_t* ptr, size_t size, size_t align);
 
 ### All Other Operations (via HostApi fields)
 
-`polyplug_runtime_create` returns a pointer to `HostApi`, a `192`-byte
-`#[repr(C)]` struct: one opaque runtime pointer plus 22 function-pointer fields.
-`register_in_process_bundle` is at offset 16; `unload_bundle` is at offset 144,
-`log` at offset 152, `create_guest_instance` at offset 160,
-`destroy_guest_instance` at offset 168, and `registry_revision` at offset 176.
-A trailing `reserved: *const c_void` data pointer is at offset 184 (producers set
-null; consumers must not read it). Host applications
+`polyplug_runtime_create` returns a pointer to `HostApi`, a `184`-byte
+`#[repr(C)]` struct: one opaque runtime pointer, 21 function-pointer fields, and
+a trailing reserved pointer. `unload_bundle` is at offset 136, `log` at offset
+144, `create_guest_instance` at offset 152, `destroy_guest_instance` at offset
+160, `registry_revision` at offset 168, and `reserved` at offset 176 (producers
+set it to null; consumers must not read it). Host applications
 and plugins call these fields using the self-passing pattern, e.g.
 `host->load_bundle(host, path, path_len)`.
 

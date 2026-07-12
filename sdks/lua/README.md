@@ -47,10 +47,12 @@ end
 ## In-process guest implementations
 
 Generated `host/callers.lua` exposes `in_process_bundle(spec, lua_bridge_lib)` for
-implementations that run in the host LuaJIT VM. Supply one table or factory per
-generated contract, then register the complete bundle synchronously. Factories
-receive the `HostApi*` and return a fresh implementation table for each caller
-instance. Obtain `lua_bridge_lib` from the Lua loader module so its scalar native
+implementations that run in the host LuaJIT VM. `spec.manifest` is the canonical
+`manifest.toml` text for the complete bundle; it declares identity, providers,
+function counts, and dependencies. Supply one table or factory per generated
+contract, then register the complete bundle synchronously. Factories receive the
+`HostApi*` and return a fresh implementation table for each caller instance.
+Obtain `lua_bridge_lib` from the Lua loader module so its scalar native
 trampolines can expand the canonical adapter-context ABI.
 
 ```lua
@@ -58,8 +60,17 @@ local callers = require("generated.host.callers")
 local lua_loader = require("polyplug.loaders.lua")
 
 local bundle = callers.in_process_bundle({
-    name = "my-lua-services",
-    version = { major = 1, minor = 0, patch = 0 },
+    manifest = [[
+loader = "lua"
+name = "my-lua-services"
+id = 0xC4E6F639A4127E2F
+version = "1.0.0"
+file = "in-process"
+provides = ["pipeline.decoder@1.0.0"]
+
+[function_count]
+"pipeline.decoder@1" = 1
+]],
     implementations = {
         ["pipeline.decoder"] = function(host)
             return {
@@ -76,18 +87,22 @@ local bundle_id = runtime:register_in_process_bundle(bundle)
 runtime:unload_bundle(bundle_id)
 ```
 
-The Runtime becomes the sole owner of the generated resident—typed factories,
-Lua callback cdata, interfaces, backing registration tables, and live
-implementations—only after the complete registration succeeds. Successful
-registration consumes the bundle resident exactly once; a rejected registration
-leaves it available for retry. The Runtime releases the resident only after
-successful logical unload; a failed unload leaves it intact for callers to drain
-and retry. Lua errors are contained at callback boundaries and returned as ABI
-errors.
+The Runtime starts a manifest-backed staging transaction, invokes
+`HostApi.register_guest_contract` once for every generated descriptor/interface
+pair, and atomically commits only after the full provider set validates. A
+registration failure aborts the open stage; a rejected commit has already
+discarded it. The Runtime becomes the sole owner of the generated
+resident—canonical manifest bytes, typed factories,
+Lua callback cdata, interfaces, descriptors, and live implementations—only after
+the complete registration succeeds. Successful registration consumes the bundle
+resident exactly once; a rejected registration leaves it available for retry. The
+Runtime releases the resident only after successful logical unload; a failed
+unload leaves it intact for callers to drain and retry. Lua errors are contained
+at callback boundaries and returned as ABI errors.
 
-The generated adapter integration test covers atomic registration, per-instance
-state, two-Runtime isolation, resident lifetime, failed unload retention, and
-unload/re-registration:
+The generated adapter integration test covers pre-commit and commit-validation
+rollback, per-instance state, two-Runtime isolation, resident lifetime, failed
+unload retention, and unload/re-registration:
 
 ```sh
 cargo build -p polyplug -p polyplug_lua -p polyplugc

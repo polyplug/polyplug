@@ -54,10 +54,10 @@ flowchart TB
     Host -. "poll before each call" .-> Rev
 ```
 
-The host-side library exposes exactly **two** `#[no_mangle]` C symbols —
-`polyplug_runtime_create` and `polyplug_runtime_destroy`. Everything else is a
-field on the `HostApi` struct (a frozen 192-byte function table). See
-[`ABI_ARCHITECTURE.md`](ABI_ARCHITECTURE.md) for the full surface.
+The host-side library exports runtime lifecycle plus scoped in-process staging
+functions. Normal operations remain fields on the frozen 184-byte `HostApi`
+function table. See [`ABI_ARCHITECTURE.md`](ABI_ARCHITECTURE.md) for the full
+surface.
 
 ---
 
@@ -100,55 +100,41 @@ every language generator (a hard rule; see `CLAUDE.md` §10).
 
 ## In-process registration contract
 
-Every maintained host SDK uses the same one-shot `HostApi` callback:
+Every maintained host SDK uses the existing bundle lifecycle and
+`register_guest_contract` callback. Core begins a scoped canonical
+`ManifestData` transaction, the host adapter registers each `PluginDescriptor` and
+`GuestContractInterface` through that callback, then core validates and commits the
+whole bundle once. A callback failure aborts the staged transaction without exposing
+metadata, dependencies, or a provider.
 
-```c
-host->register_in_process_bundle(
-    host,
-    &InProcessBundleRegistration,
-    &out_bundle_id,
-    &out_error
-);
-```
-
-`InProcessBundleRegistration` contains named `InProcessBundleMetadata`, a counted
-`u64` dependency-ID array, and a counted `InProcessContractRegistration` array.
-Each contract record contains a `PluginDescriptor`, a `GuestContractInterface*`,
-and an opaque generated-adapter context pointer. The callback borrows every input
-pointer only for this synchronous call; core copies and validates metadata,
-interface tables, and the opaque context, then publishes the complete bundle
-through `register_prepared_bundle` in the same transaction as loader-backed bundles.
-
-Rust, C++, C#, Python, Lua, and JavaScript hosts MUST create implementation
-objects in their own language and retain them in a resident owned by one specific
-`Runtime`, keyed by the returned bundle ID. Core neither accepts arbitrary
-implementation-object pointers nor understands a language object's layout.
-`register_guest_contract` remains reserved for loader-owned `polyplug_init`.
+Rust, C++, C#, Python, Lua, and JavaScript hosts create implementation objects in
+their own language and retain them in a resident owned by one specific `Runtime`,
+keyed by the committed bundle ID. Core neither accepts implementation-object
+pointers nor understands a language object's layout.
 
 ### SDK implementer handoff
 
-- Use the generated ABI mirror's named `InProcessBundleMetadata`,
-  `InProcessContractRegistration`, and `InProcessBundleRegistration` records, then
-  call `HostApi.register_in_process_bundle` once for the complete bundle. Keep all
-  input storage valid only through that synchronous call; core copies the records it
-  retains.
+- Construct the existing canonical manifest, including its provider and dependency
+  specifications, and use the scoped registration transaction. Register every
+  interface through `register_guest_contract`; do not introduce a parallel bundle
+  envelope or callback.
 - Keep typed factories, implementation objects, callback roots, and interface-table
   backing storage in a resident owned by the individual C++, C#, Python, Lua, or
-  JavaScript runtime wrapper. Insert it only after a successful registration, remove
-  it only after a successful unload, and never use a process-global factory map.
-- Route interface callbacks through that runtime-local resident. The opaque
-  `adapter_context` is copied into the registered `GuestContractInterface` and
-  forwarded as the first argument to create, destroy, native dispatch, and VM
-  dispatch callbacks. Core never dereferences or interprets it.
+  JavaScript runtime wrapper. Transfer that resident only after the transaction
+  commits, never through a process-global factory map.
+- Route interface callbacks through the runtime-local resident. The opaque
+  `GuestContractInterface.adapter_context` is copied unchanged and forwarded as the
+  first argument to create, destroy, native-dispatch, and VM-dispatch callbacks.
+  Core never dereferences or interprets it.
 - On unload, first prevent new wrapper calls and drain active calls, guest instances,
-  and language-specific leases. Call `HostApi.unload_bundle`; only when it succeeds
-  may the wrapper invalidate callers and release its resident. On failure, retain
-  every resident and caller.
+  and language-specific leases. Release a resident only after the canonical unload
+  succeeds; on failure retain the resident and caller state.
 
 Rust's generated adapter follows this contract through `InProcessFactories` and
-`InProcessBundle`. Its runtime refuses logical unload while it owns live stateful
-instances, then invalidates the bundle and releases the resident. Logical unload
-does not promise to unload a host language runtime or resident machine code.
+the runtime-scoped registration helper. Its runtime refuses logical unload while it
+owns live stateful instances, then invalidates the bundle and releases the resident.
+Logical unload does not promise to unload a host language runtime or resident machine
+code.
 
 ---
 

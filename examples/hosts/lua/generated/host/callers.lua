@@ -657,16 +657,13 @@ local function in_process_factory(provider, contract_name)
 end
 
 function M.in_process_bundle(spec, lua_bridge_lib)
-    if type(spec) ~= "table" or type(spec.name) ~= "string" or spec.name == "" then
-        error("in_process_bundle: spec.name must be a non-empty string", 2)
-    end
+    if type(spec) ~= "table" then error("in_process_bundle: spec must be a table", 2) end
+    if type(spec.manifest) ~= "string" or spec.manifest == "" then error("in_process_bundle: spec.manifest must be canonical manifest TOML", 2) end
     local implementations = spec.implementations
     if type(implementations) ~= "table" then error("in_process_bundle: spec.implementations must be a table", 2) end
     if lua_bridge_lib == nil then error("in_process_bundle: lua_bridge_lib is nil (pass require('polyplug.loaders.lua').bridge_lib())", 2) end
-    local version = spec.version or { major = 1, minor = 0, patch = 0 }
-    local resident = { callbacks = {}, bridges = {}, interfaces = {}, instances = {}, factories = {}, strings = {}, output_strings = {}, next_id = 1 }
-    local records = ffi.new("InProcessContractRegistration[?]", 5)
-    resident.records = records
+    local resident = { callbacks = {}, bridges = {}, descriptors = {}, interfaces = {}, instances = {}, factories = {}, strings = {}, output_strings = {}, manifest = spec.manifest, next_id = 1 }
+    local contracts = {}
     do -- pipeline.Decoder
         local provider = implementations["pipeline.Decoder"]
         local factory = in_process_factory(provider, "pipeline.Decoder")
@@ -723,18 +720,19 @@ function M.in_process_bundle(spec, lua_bridge_lib)
         interface.destroy_instance = lua_bridge_lib.polyplug_lua_in_process_destroy_instance
         interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_in_process_vm_dispatch
         interface.dispatch.vm.loader_data.data = nil
-        records[0].descriptor.name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Decoder"].plugin_name)
-        records[0].descriptor.name.len = #resident.strings["pipeline.Decoder"].plugin_name
-        records[0].descriptor.contract_name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Decoder"].contract_name)
-        records[0].descriptor.contract_name.len = #resident.strings["pipeline.Decoder"].contract_name
-        records[0].descriptor.version.major = 1
-        records[0].descriptor.version.minor = 0
-        records[0].descriptor.version.patch = 0
-        records[0].interface = interface
-        records[0].adapter_context = ffi.cast("void*", bridge)
+        local descriptor = ffi.new("PluginDescriptor")
+        descriptor.name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Decoder"].plugin_name)
+        descriptor.name.len = #resident.strings["pipeline.Decoder"].plugin_name
+        descriptor.contract_name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Decoder"].contract_name)
+        descriptor.contract_name.len = #resident.strings["pipeline.Decoder"].contract_name
+        descriptor.version.major = 1
+        descriptor.version.minor = 0
+        descriptor.version.patch = 0
         resident.bridges["pipeline.Decoder"] = bridge
+        resident.descriptors["pipeline.Decoder"] = descriptor
         resident.interfaces["pipeline.Decoder"] = interface
         resident.callbacks["pipeline.Decoder"] = { dispatch_cb, create_cb, destroy_cb }
+        contracts[1] = { descriptor = descriptor, interface = interface }
     end
     do -- data.Transformer
         local provider = implementations["data.Transformer"]
@@ -792,18 +790,19 @@ function M.in_process_bundle(spec, lua_bridge_lib)
         interface.destroy_instance = lua_bridge_lib.polyplug_lua_in_process_destroy_instance
         interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_in_process_vm_dispatch
         interface.dispatch.vm.loader_data.data = nil
-        records[1].descriptor.name.ptr = ffi.cast("const uint8_t*", resident.strings["data.Transformer"].plugin_name)
-        records[1].descriptor.name.len = #resident.strings["data.Transformer"].plugin_name
-        records[1].descriptor.contract_name.ptr = ffi.cast("const uint8_t*", resident.strings["data.Transformer"].contract_name)
-        records[1].descriptor.contract_name.len = #resident.strings["data.Transformer"].contract_name
-        records[1].descriptor.version.major = 1
-        records[1].descriptor.version.minor = 0
-        records[1].descriptor.version.patch = 0
-        records[1].interface = interface
-        records[1].adapter_context = ffi.cast("void*", bridge)
+        local descriptor = ffi.new("PluginDescriptor")
+        descriptor.name.ptr = ffi.cast("const uint8_t*", resident.strings["data.Transformer"].plugin_name)
+        descriptor.name.len = #resident.strings["data.Transformer"].plugin_name
+        descriptor.contract_name.ptr = ffi.cast("const uint8_t*", resident.strings["data.Transformer"].contract_name)
+        descriptor.contract_name.len = #resident.strings["data.Transformer"].contract_name
+        descriptor.version.major = 1
+        descriptor.version.minor = 0
+        descriptor.version.patch = 0
         resident.bridges["data.Transformer"] = bridge
+        resident.descriptors["data.Transformer"] = descriptor
         resident.interfaces["data.Transformer"] = interface
         resident.callbacks["data.Transformer"] = { dispatch_cb, create_cb, destroy_cb }
+        contracts[2] = { descriptor = descriptor, interface = interface }
     end
     do -- pipeline.Encoder
         local provider = implementations["pipeline.Encoder"]
@@ -861,18 +860,19 @@ function M.in_process_bundle(spec, lua_bridge_lib)
         interface.destroy_instance = lua_bridge_lib.polyplug_lua_in_process_destroy_instance
         interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_in_process_vm_dispatch
         interface.dispatch.vm.loader_data.data = nil
-        records[2].descriptor.name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Encoder"].plugin_name)
-        records[2].descriptor.name.len = #resident.strings["pipeline.Encoder"].plugin_name
-        records[2].descriptor.contract_name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Encoder"].contract_name)
-        records[2].descriptor.contract_name.len = #resident.strings["pipeline.Encoder"].contract_name
-        records[2].descriptor.version.major = 1
-        records[2].descriptor.version.minor = 0
-        records[2].descriptor.version.patch = 0
-        records[2].interface = interface
-        records[2].adapter_context = ffi.cast("void*", bridge)
+        local descriptor = ffi.new("PluginDescriptor")
+        descriptor.name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Encoder"].plugin_name)
+        descriptor.name.len = #resident.strings["pipeline.Encoder"].plugin_name
+        descriptor.contract_name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Encoder"].contract_name)
+        descriptor.contract_name.len = #resident.strings["pipeline.Encoder"].contract_name
+        descriptor.version.major = 1
+        descriptor.version.minor = 0
+        descriptor.version.patch = 0
         resident.bridges["pipeline.Encoder"] = bridge
+        resident.descriptors["pipeline.Encoder"] = descriptor
         resident.interfaces["pipeline.Encoder"] = interface
         resident.callbacks["pipeline.Encoder"] = { dispatch_cb, create_cb, destroy_cb }
+        contracts[3] = { descriptor = descriptor, interface = interface }
     end
     do -- data.Reporter
         local provider = implementations["data.Reporter"]
@@ -930,18 +930,19 @@ function M.in_process_bundle(spec, lua_bridge_lib)
         interface.destroy_instance = lua_bridge_lib.polyplug_lua_in_process_destroy_instance
         interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_in_process_vm_dispatch
         interface.dispatch.vm.loader_data.data = nil
-        records[3].descriptor.name.ptr = ffi.cast("const uint8_t*", resident.strings["data.Reporter"].plugin_name)
-        records[3].descriptor.name.len = #resident.strings["data.Reporter"].plugin_name
-        records[3].descriptor.contract_name.ptr = ffi.cast("const uint8_t*", resident.strings["data.Reporter"].contract_name)
-        records[3].descriptor.contract_name.len = #resident.strings["data.Reporter"].contract_name
-        records[3].descriptor.version.major = 1
-        records[3].descriptor.version.minor = 0
-        records[3].descriptor.version.patch = 0
-        records[3].interface = interface
-        records[3].adapter_context = ffi.cast("void*", bridge)
+        local descriptor = ffi.new("PluginDescriptor")
+        descriptor.name.ptr = ffi.cast("const uint8_t*", resident.strings["data.Reporter"].plugin_name)
+        descriptor.name.len = #resident.strings["data.Reporter"].plugin_name
+        descriptor.contract_name.ptr = ffi.cast("const uint8_t*", resident.strings["data.Reporter"].contract_name)
+        descriptor.contract_name.len = #resident.strings["data.Reporter"].contract_name
+        descriptor.version.major = 1
+        descriptor.version.minor = 0
+        descriptor.version.patch = 0
         resident.bridges["data.Reporter"] = bridge
+        resident.descriptors["data.Reporter"] = descriptor
         resident.interfaces["data.Reporter"] = interface
         resident.callbacks["data.Reporter"] = { dispatch_cb, create_cb, destroy_cb }
+        contracts[4] = { descriptor = descriptor, interface = interface }
     end
     do -- pipeline.Validator
         local provider = implementations["pipeline.Validator"]
@@ -999,40 +1000,21 @@ function M.in_process_bundle(spec, lua_bridge_lib)
         interface.destroy_instance = lua_bridge_lib.polyplug_lua_in_process_destroy_instance
         interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_in_process_vm_dispatch
         interface.dispatch.vm.loader_data.data = nil
-        records[4].descriptor.name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Validator"].plugin_name)
-        records[4].descriptor.name.len = #resident.strings["pipeline.Validator"].plugin_name
-        records[4].descriptor.contract_name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Validator"].contract_name)
-        records[4].descriptor.contract_name.len = #resident.strings["pipeline.Validator"].contract_name
-        records[4].descriptor.version.major = 1
-        records[4].descriptor.version.minor = 0
-        records[4].descriptor.version.patch = 0
-        records[4].interface = interface
-        records[4].adapter_context = ffi.cast("void*", bridge)
+        local descriptor = ffi.new("PluginDescriptor")
+        descriptor.name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Validator"].plugin_name)
+        descriptor.name.len = #resident.strings["pipeline.Validator"].plugin_name
+        descriptor.contract_name.ptr = ffi.cast("const uint8_t*", resident.strings["pipeline.Validator"].contract_name)
+        descriptor.contract_name.len = #resident.strings["pipeline.Validator"].contract_name
+        descriptor.version.major = 1
+        descriptor.version.minor = 0
+        descriptor.version.patch = 0
         resident.bridges["pipeline.Validator"] = bridge
+        resident.descriptors["pipeline.Validator"] = descriptor
         resident.interfaces["pipeline.Validator"] = interface
         resident.callbacks["pipeline.Validator"] = { dispatch_cb, create_cb, destroy_cb }
+        contracts[5] = { descriptor = descriptor, interface = interface }
     end
-    local dependencies = spec.dependencies or {}
-    local dependency_ids = nil
-    if #dependencies > 0 then
-        dependency_ids = ffi.new("uint64_t[?]", #dependencies)
-        for i = 1, #dependencies do dependency_ids[i - 1] = dependencies[i] end
-        resident.dependency_ids = dependency_ids
-    end
-    resident.strings.bundle_name = spec.name
-    local registration = ffi.new("InProcessBundleRegistration")
-    registration.metadata.name.ptr = ffi.cast("const uint8_t*", resident.strings.bundle_name)
-    registration.metadata.name.len = #resident.strings.bundle_name
-    registration.metadata.version.major = version.major or 1
-    registration.metadata.version.minor = version.minor or 0
-    registration.metadata.version.patch = version.patch or 0
-    registration.metadata.runtime = ffi.C.SupportedLanguage_Lua
-    registration.dependency_ids = dependency_ids
-    registration.dependency_count = #dependencies
-    registration.contracts = records
-    registration.contract_count = 5
-    resident.registration = registration
-    return { registration = registration, resident = resident }
+    return { manifest = resident.manifest, contracts = contracts, resident = resident }
 end
 
 return M

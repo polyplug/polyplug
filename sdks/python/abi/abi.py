@@ -385,7 +385,6 @@ assert ctypes.sizeof(VmDispatch) == 16, f"VmDispatch expected 16 bytes, got {cty
 
 
 _host_api_register_guest_contract_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
-_host_api_register_in_process_bundle_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
 _host_api_alloc_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
 _host_api_free_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
 _host_api_find_guest_contract_t = ctypes.CFUNCTYPE(GuestContractHandle, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
@@ -449,7 +448,6 @@ class HostApi(ctypes.Structure):
     _fields_ = [
         ("runtime", ctypes.c_void_p),
         ("register_guest_contract", _host_api_register_guest_contract_t),
-        ("register_in_process_bundle", _host_api_register_in_process_bundle_t),
         ("alloc", _host_api_alloc_t),
         ("free", _host_api_free_t),
         ("find_guest_contract", _host_api_find_guest_contract_t),
@@ -473,39 +471,8 @@ class HostApi(ctypes.Structure):
         ("reserved", ctypes.c_void_p),
     ]
 
-# Expected size: 192 bytes
-assert ctypes.sizeof(HostApi) == 192, f"HostApi expected 192 bytes, got {ctypes.sizeof(HostApi)}"
-
-
-class InProcessBundleMetadata(ctypes.Structure):
-    """ Metadata shared by every contract in one in-process bundle registration."""
-    _fields_ = [
-        ("name", StringView),
-        ("version", Version),
-        ("runtime", ctypes.c_uint32),
-    ]
-
-# Expected size: 32 bytes
-assert ctypes.sizeof(InProcessBundleMetadata) == 32, f"InProcessBundleMetadata expected 32 bytes, got {ctypes.sizeof(InProcessBundleMetadata)}"
-
-
-class InProcessBundleRegistration(ctypes.Structure):
-    """ Complete, one-shot in-process bundle registration input.
-
-     All pointers are borrowed only for the synchronous registration call. If a count is
-     nonzero, its corresponding pointer is required to be non-null and valid for that many
-     elements. `dependency_ids` contains canonical `GuestContractId` numeric values.
-    """
-    _fields_ = [
-        ("metadata", InProcessBundleMetadata),
-        ("dependency_ids", ctypes.c_void_p),
-        ("dependency_count", ctypes.c_size_t),
-        ("contracts", ctypes.c_void_p),
-        ("contract_count", ctypes.c_size_t),
-    ]
-
-# Expected size: 64 bytes
-assert ctypes.sizeof(InProcessBundleRegistration) == 64, f"InProcessBundleRegistration expected 64 bytes, got {ctypes.sizeof(InProcessBundleRegistration)}"
+# Expected size: 184 bytes
+assert ctypes.sizeof(HostApi) == 184, f"HostApi expected 184 bytes, got {ctypes.sizeof(HostApi)}"
 
 
 class BundleInitContext(ctypes.Structure):
@@ -716,18 +683,6 @@ class HostContractInterface(ctypes.Structure):
 
 # Expected size: 80 bytes
 assert ctypes.sizeof(HostContractInterface) == 80, f"HostContractInterface expected 80 bytes, got {ctypes.sizeof(HostContractInterface)}"
-
-
-class InProcessContractRegistration(ctypes.Structure):
-    """ One contract supplied by an in-process bundle."""
-    _fields_ = [
-        ("descriptor", PluginDescriptor),
-        ("interface", ctypes.c_void_p),
-        ("adapter_context", ctypes.c_void_p),
-    ]
-
-# Expected size: 64 bytes
-assert ctypes.sizeof(InProcessContractRegistration) == 64, f"InProcessContractRegistration expected 64 bytes, got {ctypes.sizeof(InProcessContractRegistration)}"
 
 
 # ─── Helper Methods (embedded by the build script) ───

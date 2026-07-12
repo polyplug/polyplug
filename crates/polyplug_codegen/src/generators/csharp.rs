@@ -18,7 +18,6 @@ use crate::ir::EnumDef;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
-use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
@@ -1290,10 +1289,16 @@ fn generate_cs_in_process_file(ir: &ValidatedIr) -> Option<String> {
             }
         }
     }
+    let manifest: String = generate_bundle_manifest_csharp(ir);
+    let manifest_bytes: String = manifest
+        .bytes()
+        .map(|byte: u8| format!("0x{byte:02X}"))
+        .collect::<Vec<String>>()
+        .join(", ");
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
     out.push_str(&csharp_using_block(&[
-        &["System", "System.Runtime.InteropServices", "System.Text"],
+        &["System", "System.Runtime.InteropServices"],
         &["Polyplug.Abi", "Polyplug.Host"],
     ]));
     out.push('\n');
@@ -1327,15 +1332,18 @@ fn generate_cs_in_process_file(ir: &ValidatedIr) -> Option<String> {
         out.push_str(&format!("            {parameter}{separator}\n"));
     }
     out.push_str("        );\n");
-    out.push_str("        return new InProcessBundle(resident.Registration, resident);\n");
+    out.push_str("        return new InProcessBundle(resident.Manifest, resident, resident.RegisterContracts);\n");
     out.push_str("    }\n\n");
     out.push_str("    private sealed class Resident : IDisposable {\n");
     out.push_str("        private readonly GuestContractInterface[] _interfaces;\n");
-    out.push_str("        private readonly InProcessContractRegistration[] _contracts;\n");
+    out.push_str("        private readonly PluginDescriptor[] _descriptors;\n");
     out.push_str("        private readonly byte[][] _strings;\n");
     out.push_str("        private readonly GCHandle[] _pins;\n");
+    out.push_str(&format!(
+        "        private readonly byte[] _manifest = [{manifest_bytes}];\n"
+    ));
     out.push_str("        private bool _disposed;\n");
-    out.push_str("        internal InProcessBundleRegistration Registration { get; }\n\n");
+    out.push_str("        internal byte[] Manifest => _manifest;\n\n");
     out.push_str("        internal Resident(\n");
     for (index, (plugin, contract)) in entries.iter().enumerate() {
         let parameter: String = format!(
@@ -1353,7 +1361,6 @@ fn generate_cs_in_process_file(ir: &ValidatedIr) -> Option<String> {
     out.push_str("            _interfaces = [\n");
     for (plugin, contract) in &entries {
         let plugin_pascal: String = pascal_case(plugin);
-        let plugin_upper: String = plugin.to_uppercase().replace(['.', '-'], "_");
         let parameter: String = format!(
             "{}_{}Factory",
             plugin.to_lowercase().replace(['.', '-'], "_"),
@@ -1362,61 +1369,43 @@ fn generate_cs_in_process_file(ir: &ValidatedIr) -> Option<String> {
         out.push_str(&format!(
             "                {plugin_pascal}Interfaces.CreateInProcessInterface({parameter}),\n"
         ));
-        let _ = plugin_upper;
     }
     out.push_str("            ];\n");
     out.push_str("            _strings = [\n");
-    out.push_str(&format!(
-        "                Encoding.UTF8.GetBytes({:?}),\n",
-        bundle.name
-    ));
     for (plugin, contract) in &entries {
         out.push_str(&format!(
-            "                Encoding.UTF8.GetBytes({plugin:?}),\n"
+            "                System.Text.Encoding.UTF8.GetBytes({plugin:?}),\n"
         ));
         out.push_str(&format!(
-            "                Encoding.UTF8.GetBytes({:?}),\n",
+            "                System.Text.Encoding.UTF8.GetBytes({:?}),\n",
             format!("{}@{}", contract.name, contract.version.major)
         ));
     }
     out.push_str("            ];\n");
-    out.push_str("            _pins = new GCHandle[_strings.Length + 3];\n");
+    out.push_str("            _pins = new GCHandle[_strings.Length + 1];\n");
     out.push_str("            for (var index = 0; index < _strings.Length; index++) _pins[index] = GCHandle.Alloc(_strings[index], GCHandleType.Pinned);\n");
-    out.push_str("            _pins[^3] = GCHandle.Alloc(_interfaces, GCHandleType.Pinned);\n");
-    out.push_str(
-        "            _contracts = new InProcessContractRegistration[_interfaces.Length];\n",
-    );
-    out.push_str("            _pins[^2] = GCHandle.Alloc(_contracts, GCHandleType.Pinned);\n");
+    out.push_str("            _pins[^1] = GCHandle.Alloc(_interfaces, GCHandleType.Pinned);\n");
+    out.push_str("            _descriptors = new PluginDescriptor[_interfaces.Length];\n");
     for (index, (_, contract)) in entries.iter().enumerate() {
-        let string_index: usize = 1 + index * 2;
+        let string_index: usize = index * 2;
         out.push_str(&format!(
-            "            _contracts[{index}] = new InProcessContractRegistration {{ Descriptor = new PluginDescriptor {{ Name = new StringView {{ Ptr = _pins[{string_index}].AddrOfPinnedObject(), Len = (nuint)_strings[{string_index}].Length }}, ContractName = new StringView {{ Ptr = _pins[{}].AddrOfPinnedObject(), Len = (nuint)_strings[{}].Length }}, Version = new Polyplug.Abi.Version {{ Major = {}u, Minor = {}u, Patch = {}u }} }}, Interface = _pins[^3].AddrOfPinnedObject() + {index} * Marshal.SizeOf<GuestContractInterface>(), AdapterContext = _interfaces[{index}].AdapterContext }};\n",
+            "            _descriptors[{index}] = new PluginDescriptor {{ Name = new StringView {{ Ptr = _pins[{string_index}].AddrOfPinnedObject(), Len = (nuint)_strings[{string_index}].Length }}, ContractName = new StringView {{ Ptr = _pins[{}].AddrOfPinnedObject(), Len = (nuint)_strings[{}].Length }}, Version = new Polyplug.Abi.Version {{ Major = {}u, Minor = {}u, Patch = {}u }} }};\n",
             string_index + 1, string_index + 1, contract.version.major, contract.version.minor, contract.version.patch
         ));
     }
-    let dependencies: Vec<u64> = bundle
-        .dependencies
-        .iter()
-        .map(|dependency| match dependency {
-            ResolvedDependency::ByContract { contract_id, .. }
-            | ResolvedDependency::ByBundle { contract_id, .. } => *contract_id,
-        })
-        .collect();
-    out.push_str(&format!(
-        "            ulong[] dependencies = [{}];\n",
-        dependencies
-            .iter()
-            .map(u64::to_string)
-            .collect::<Vec<String>>()
-            .join(", ")
-    ));
-    out.push_str("            _pins[^1] = GCHandle.Alloc(dependencies, GCHandleType.Pinned);\n");
-    out.push_str("            Registration = new InProcessBundleRegistration { Metadata = new InProcessBundleMetadata { Name = new StringView { Ptr = _pins[0].AddrOfPinnedObject(), Len = (nuint)_strings[0].Length }, Version = new Polyplug.Abi.Version {");
-    out.push_str(&format!(
-        " Major = {}u, Minor = {}u, Patch = {}u ",
-        bundle.version.major, bundle.version.minor, bundle.version.patch
-    ));
-    out.push_str("}, Runtime = SupportedLanguage.Dotnet }, DependencyIds = _pins[^1].AddrOfPinnedObject(), DependencyCount = (nuint)dependencies.Length, Contracts = _pins[^2].AddrOfPinnedObject(), ContractCount = (nuint)_contracts.Length };\n");
+    out.push_str("        }\n\n");
+    out.push_str("        internal unsafe AbiError RegisterContracts(IntPtr hostPtr) {\n");
+    out.push_str("            var host = (HostApi*)hostPtr;\n");
+    out.push_str("            var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError*, void>)host->RegisterGuestContract;\n");
+    out.push_str("            fixed (PluginDescriptor* descriptors = _descriptors)\n");
+    out.push_str("            fixed (GuestContractInterface* interfaces = _interfaces) {\n");
+    out.push_str("                for (var index = 0; index < _interfaces.Length; index++) {\n");
+    out.push_str("                    AbiError error = default;\n");
+    out.push_str("                    registerFn(hostPtr, &descriptors[index], &interfaces[index], &error);\n");
+    out.push_str("                    if (error.Code != (uint)AbiErrorCode.Ok) return error;\n");
+    out.push_str("                }\n");
+    out.push_str("            }\n");
+    out.push_str("            return new AbiError { Code = (uint)AbiErrorCode.Ok };\n");
     out.push_str("        }\n\n");
     out.push_str("        public void Dispose() {\n");
     out.push_str("            if (_disposed) return;\n");

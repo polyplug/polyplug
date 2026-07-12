@@ -30,8 +30,8 @@ use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::dispatch::dispatch_type::DispatchType;
 use polyplug_abi::types::{StringView, Version};
 use polyplug_abi::{
-    GuestContractHandle, GuestContractInstance, GuestContractInterface, HostApi,
-    InProcessBundleRegistration, PluginDescriptor, SupportedLanguage,
+    GuestContractHandle, GuestContractInstance, GuestContractInterface, HostApi, PluginDescriptor,
+    SupportedLanguage,
 };
 use polyplug_common::ManifestData;
 use polyplug_utils::{BundleId, GuestContractId};
@@ -678,111 +678,6 @@ impl RuntimeStore {
         }
         self.publish(&data);
         Ok(())
-    }
-
-    /// Copy and validate a complete in-process registration before publishing it.
-    ///
-    /// # Safety
-    ///
-    /// Every non-null pointer in `registration` must be valid for its documented
-    /// element count for the duration of this call. The store copies all data it
-    /// retains before returning.
-    pub(crate) unsafe fn register_in_process_bundle(
-        &self,
-        registration: &InProcessBundleRegistration,
-    ) -> Result<BundleId, RegistryError> {
-        // SAFETY: the registration contract guarantees its metadata name is a
-        // valid StringView for this synchronous copy.
-        let bundle_name: String = unsafe {
-            string_view_to_owned_string(
-                &registration.metadata.name,
-                "InProcessBundleMetadata.name",
-            )?
-        };
-        if bundle_name.is_empty() {
-            return Err(RegistryError::EmptyInProcessBundleName);
-        }
-        if registration.contract_count == 0 {
-            return Err(RegistryError::EmptyInProcessBundle);
-        }
-        if registration.contracts.is_null() {
-            return Err(RegistryError::InvalidPointer {
-                context: "InProcessBundleRegistration.contracts".to_owned(),
-            });
-        }
-        if registration.dependency_count > 0 && registration.dependency_ids.is_null() {
-            return Err(RegistryError::InvalidPointer {
-                context: "InProcessBundleRegistration.dependency_ids".to_owned(),
-            });
-        }
-
-        let bundle_id: BundleId = BundleId::new(&bundle_name);
-        if bundle_id.id() == 0 {
-            return Err(RegistryError::ReservedInProcessBundleId {
-                bundle: bundle_name,
-            });
-        }
-
-        // SAFETY: non-nullness and the documented element count were validated
-        // above; the caller keeps the array alive for this synchronous copy.
-        let registrations: &[polyplug_abi::InProcessContractRegistration] =
-            unsafe { slice::from_raw_parts(registration.contracts, registration.contract_count) };
-        let dependency_ids: &[u64] = if registration.dependency_count == 0 {
-            &[]
-        } else {
-            // SAFETY: non-nullness was validated when the count is nonzero, and
-            // the caller keeps the array alive for this synchronous copy.
-            unsafe {
-                slice::from_raw_parts(registration.dependency_ids, registration.dependency_count)
-            }
-        };
-        let mut contracts: Vec<PreparedGuestContract> = Vec::with_capacity(registrations.len());
-        for (index, contract) in registrations.iter().enumerate() {
-            if contract.interface.is_null() {
-                return Err(RegistryError::InvalidPointer {
-                    context: format!("InProcessContractRegistration.interface[{index}]"),
-                });
-            }
-            // SAFETY: each descriptor belongs to the validated registration array
-            // and remains alive for this synchronous copy.
-            let contract_name: String = unsafe {
-                string_view_to_owned_string(
-                    &contract.descriptor.contract_name,
-                    "PluginDescriptor.contract_name",
-                )?
-            };
-            if contract_name.is_empty() {
-                return Err(RegistryError::EmptyInProcessContract { index });
-            }
-            // SAFETY: the interface pointer was checked non-null and the caller
-            // keeps the registration storage alive for this synchronous copy.
-            contracts.push(unsafe {
-                Self::prepare_guest_contract(
-                    contract.descriptor,
-                    contract.interface,
-                    contract_name,
-                    contract.adapter_context,
-                )?
-            });
-        }
-
-        self.register_prepared_bundle(
-            BundleDescriptor {
-                id: bundle_id,
-                name: bundle_name,
-                version: registration.metadata.version,
-                runtime: registration.metadata.runtime,
-                file_path: PathBuf::new(),
-                dependencies: Vec::new(),
-            },
-            dependency_ids
-                .iter()
-                .copied()
-                .map(GuestContractId::from_u64)
-                .collect(),
-            contracts,
-        )?;
-        Ok(bundle_id)
     }
 
     fn validate_prepared_bundle_contracts(
@@ -1980,7 +1875,6 @@ mod tests {
     use super::*;
     use polyplug_abi::{
         DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface, HostApi,
-        InProcessBundleMetadata, InProcessBundleRegistration, InProcessContractRegistration,
         NativeDispatch, PluginDescriptor, StringView, SupportedLanguage, Version,
     };
 
@@ -2041,46 +1935,66 @@ mod tests {
     }
 
     #[test]
-    fn in_process_registration_is_atomic_when_a_contract_is_invalid() {
+    fn prepared_registration_is_atomic_when_a_contract_is_invalid() {
         let registry: RuntimeStore = RuntimeStore::new();
         let contract_id: u64 = 0xA173_3A09_4E01_0001;
-        let interface: GuestContractInterface = mock_interface(contract_id);
+        let mut interface: GuestContractInterface = mock_interface(contract_id);
         let mut adapter_context_token: u8 = 0;
-        let registrations: [InProcessContractRegistration; 2] = [
-            InProcessContractRegistration {
-                descriptor: make_descriptor("atomic-provider", "atomic.contract"),
-                interface: &interface,
-                adapter_context: (&mut adapter_context_token as *mut u8).cast(),
+        interface.adapter_context = (&mut adapter_context_token as *mut u8).cast();
+        // SAFETY: `interface` and its static descriptor views remain valid throughout preparation.
+        let first: PreparedGuestContract = unsafe {
+            RuntimeStore::prepare_guest_contract(
+                make_descriptor("atomic-provider", "atomic.contract"),
+                &interface,
+                "atomic.contract".to_owned(),
+                interface.adapter_context,
+            )
+        }
+        .expect("valid interface prepares");
+        // SAFETY: `interface` and its static descriptor views remain valid throughout preparation.
+        let duplicate: PreparedGuestContract = unsafe {
+            RuntimeStore::prepare_guest_contract(
+                make_descriptor("invalid-provider", "atomic.contract"),
+                &interface,
+                "atomic.contract".to_owned(),
+                interface.adapter_context,
+            )
+        }
+        .expect("duplicate interface still prepares");
+        let bundle_id: BundleId = BundleId::new("atomic-in-process-bundle");
+        let descriptor: BundleDescriptor = BundleDescriptor {
+            id: bundle_id,
+            name: "atomic-in-process-bundle".to_owned(),
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
             },
-            InProcessContractRegistration {
-                descriptor: make_descriptor("invalid-provider", "invalid.contract"),
-                interface: ptr::null(),
-                adapter_context: ptr::null_mut(),
-            },
-        ];
-        let invalid: InProcessBundleRegistration = InProcessBundleRegistration {
-            metadata: InProcessBundleMetadata {
-                name: StringView::from_static(b"atomic-in-process-bundle"),
-                version: Version {
-                    major: 1,
-                    minor: 0,
-                    patch: 0,
-                },
-                runtime: SupportedLanguage::Rust,
-            },
-            dependency_ids: ptr::null(),
-            dependency_count: 0,
-            contracts: registrations.as_ptr(),
-            contract_count: registrations.len(),
+            runtime: SupportedLanguage::Rust,
+            file_path: PathBuf::new(),
+            dependencies: Vec::new(),
         };
         let revision_before: u64 = registry.current_revision();
-
-        // SAFETY: all non-null pointers in `invalid` remain live through this call.
-        let rejected: Result<BundleId, RegistryError> =
-            unsafe { registry.register_in_process_bundle(&invalid) };
+        let rejected_descriptor: BundleDescriptor = BundleDescriptor {
+            id: bundle_id,
+            name: "atomic-in-process-bundle".to_owned(),
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            runtime: SupportedLanguage::Rust,
+            file_path: PathBuf::new(),
+            dependencies: Vec::new(),
+        };
+        let rejected: Result<(), RegistryError> = registry.register_prepared_bundle(
+            rejected_descriptor,
+            HashSet::new(),
+            vec![first, duplicate],
+        );
         assert!(matches!(
             rejected,
-            Err(RegistryError::InvalidPointer { .. })
+            Err(RegistryError::DuplicateProvider { .. })
         ));
         assert_eq!(registry.current_revision(), revision_before);
         assert!(
@@ -2088,15 +2002,20 @@ mod tests {
                 .find(GuestContractId::from_u64(contract_id), 0)
                 .is_err()
         );
+        // SAFETY: `interface` and its static descriptor views remain valid throughout preparation.
+        let valid: PreparedGuestContract = unsafe {
+            RuntimeStore::prepare_guest_contract(
+                make_descriptor("atomic-provider", "atomic.contract"),
+                &interface,
+                "atomic.contract".to_owned(),
+                interface.adapter_context,
+            )
+        }
+        .expect("valid interface prepares again");
 
-        let valid: InProcessBundleRegistration = InProcessBundleRegistration {
-            contract_count: 1,
-            ..invalid
-        };
-        // SAFETY: the sole non-null contract record and its interface remain live through this call.
-        let bundle_id: BundleId = unsafe { registry.register_in_process_bundle(&valid) }
-            .expect("valid complete registration publishes once");
-        assert_eq!(bundle_id, BundleId::new("atomic-in-process-bundle"));
+        registry
+            .register_prepared_bundle(descriptor, HashSet::new(), vec![valid])
+            .expect("valid prepared bundle publishes once");
         assert_eq!(registry.current_revision(), revision_before + 1);
         let handle: GuestContractHandle = registry
             .find(GuestContractId::from_u64(contract_id), 0)
@@ -2104,17 +2023,9 @@ mod tests {
         let copied: *const GuestContractInterface = registry
             .resolve_guest_contract(handle)
             .expect("registered interface must resolve");
-        // SAFETY: `copied` is the registry-owned interface valid while `registry` lives.
-        let copied_context: *mut c_void = unsafe { (*copied).adapter_context };
-        assert_eq!(
-            copied_context,
-            (&mut adapter_context_token as *mut u8).cast()
-        );
-        assert!(
-            registry
-                .find(GuestContractId::from_u64(contract_id), 0)
-                .is_ok()
-        );
+        // SAFETY: `copied` is registry-owned and valid while `registry` lives.
+        let copied_adapter_context: *mut c_void = unsafe { (*copied).adapter_context };
+        assert_eq!(copied_adapter_context, interface.adapter_context);
     }
 
     #[test]

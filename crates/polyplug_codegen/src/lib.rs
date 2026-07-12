@@ -68,7 +68,7 @@ pub enum Side {
 ///
 /// [`Self::Disk`] preserves the `polyplugc` disk-bundle ABI, including the
 /// loader entry point and author factory symbols. [`Self::InProcess`] emits
-/// runtime-local factories and an `InProcessBundle` constructor.
+/// runtime-local factories and a canonical manifest registration helper.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RustGuestMode {
     /// Generate the disk-loaded guest ABI used by `polyplugc`.

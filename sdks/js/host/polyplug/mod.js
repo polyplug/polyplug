@@ -27,7 +27,6 @@ import { getBackend } from "@polyplug/abi";
 import {
   HOST_API_RUNTIME_OFFSET,
   HOST_API_REGISTER_GUEST_CONTRACT_OFFSET,
-  HOST_API_REGISTER_IN_PROCESS_BUNDLE_OFFSET,
   HOST_API_ALLOC_OFFSET,
   HOST_API_FREE_OFFSET,
   HOST_API_FIND_GUEST_CONTRACT_OFFSET,
@@ -81,33 +80,21 @@ import {
   HOST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET,
   HOST_CONTRACT_INTERFACE_DISPATCH_OFFSET,
   HOST_CONTRACT_INTERFACE_SIZE,
-} from "@polyplug/abi";
-
-import {
-  GUEST_CONTRACT_INTERFACE_CONTRACT_ID_OFFSET,
-  GUEST_CONTRACT_INTERFACE_CONTRACT_VERSION_OFFSET,
-  GUEST_CONTRACT_INTERFACE_SIZE,
-  IN_PROCESS_BUNDLE_METADATA_NAME_OFFSET,
-  IN_PROCESS_BUNDLE_METADATA_RUNTIME_OFFSET,
-  IN_PROCESS_BUNDLE_METADATA_VERSION_OFFSET,
-  IN_PROCESS_BUNDLE_REGISTRATION_CONTRACT_COUNT_OFFSET,
-  IN_PROCESS_BUNDLE_REGISTRATION_CONTRACTS_OFFSET,
-  IN_PROCESS_BUNDLE_REGISTRATION_DEPENDENCY_COUNT_OFFSET,
-  IN_PROCESS_BUNDLE_REGISTRATION_DEPENDENCY_IDS_OFFSET,
-  IN_PROCESS_BUNDLE_REGISTRATION_METADATA_OFFSET,
-  IN_PROCESS_BUNDLE_REGISTRATION_SIZE,
-  IN_PROCESS_CONTRACT_REGISTRATION_ADAPTER_CONTEXT_OFFSET,
-  IN_PROCESS_CONTRACT_REGISTRATION_DESCRIPTOR_OFFSET,
-  IN_PROCESS_CONTRACT_REGISTRATION_INTERFACE_OFFSET,
-  IN_PROCESS_CONTRACT_REGISTRATION_SIZE,
   PLUGIN_DESCRIPTOR_CONTRACT_NAME_OFFSET,
   PLUGIN_DESCRIPTOR_NAME_OFFSET,
+  PLUGIN_DESCRIPTOR_SIZE,
   PLUGIN_DESCRIPTOR_VERSION_OFFSET,
   STRING_VIEW_LEN_OFFSET,
   STRING_VIEW_PTR_OFFSET,
   VERSION_MAJOR_OFFSET,
   VERSION_MINOR_OFFSET,
   VERSION_PATCH_OFFSET,
+} from "@polyplug/abi";
+
+import {
+  GUEST_CONTRACT_INTERFACE_CONTRACT_ID_OFFSET,
+  GUEST_CONTRACT_INTERFACE_CONTRACT_VERSION_OFFSET,
+  GUEST_CONTRACT_INTERFACE_SIZE,
 } from "@polyplug/abi";
 
 // Import the GuestContractHandle layout constants so the by-value struct passing
@@ -208,13 +195,24 @@ export const SignaturePolicy = Object.freeze({
 const SYMBOLS = {
   polyplug_runtime_create: { parameters: ["pointer"], result: "pointer" },
   polyplug_runtime_destroy: { parameters: ["pointer"], result: "void" },
+  polyplug_begin_in_process_bundle: {
+    parameters: ["pointer", "pointer", "usize", "u32", "pointer", "pointer"],
+    result: "void",
+  },
+  polyplug_commit_in_process_bundle: {
+    parameters: ["pointer", "u64", "pointer"],
+    result: "void",
+  },
+  polyplug_abort_in_process_bundle: {
+    parameters: ["pointer", "u64"],
+    result: "void",
+  },
 };
 
-// HostApi struct offsets imported from auto-generated abi.ts (168 bytes, 19 function pointer fields + trailing reserved pointer)
+// HostApi struct offsets imported from auto-generated abi.ts.
 const HOST_API_OFFSETS = {
   runtime: HOST_API_RUNTIME_OFFSET,
   register_guest_contract: HOST_API_REGISTER_GUEST_CONTRACT_OFFSET,
-  register_in_process_bundle: HOST_API_REGISTER_IN_PROCESS_BUNDLE_OFFSET,
   alloc: HOST_API_ALLOC_OFFSET,
   free: HOST_API_FREE_OFFSET,
   find_guest_contract: HOST_API_FIND_GUEST_CONTRACT_OFFSET,
@@ -477,47 +475,77 @@ export function buildHostContractInterface(spec) {
 }
 
 /**
- * A complete generated in-process registration and its rooted JavaScript state.
- *
- * The registration bytes are borrowed only by the synchronous HostApi call.
- * The resident owns every callback, implementation, factory, and backing table
- * that native code can subsequently reach. It transfers exactly once into the
- * Runtime that accepted the registration.
+ * Canonical manifest bytes, staged contract registrar, and rooted JavaScript
+ * state for one in-process bundle. The resident remains with its creator until
+ * every descriptor/interface pair has staged and core commits the transaction.
  */
 export class InProcessBundle {
-  #registration;
+  #manifest;
   #resident;
+  #registerContracts;
+  #transferReserved;
 
   /**
-   * @param {Uint8Array} registration Complete InProcessBundleRegistration storage.
+   * @param {string | Uint8Array} manifest Canonical bundle manifest TOML.
    * @param {{ release: () => void }} resident Rooted generated state.
+   * @param {(host: PolyPtr) => void} registerContracts Stages descriptor/interface pairs.
    */
-  constructor(registration, resident) {
-    if (!(registration instanceof Uint8Array)) {
-      throw new TypeError("InProcessBundle registration must be a Uint8Array");
+  constructor(manifest, resident, registerContracts) {
+    if (typeof manifest !== "string" && !(manifest instanceof Uint8Array)) {
+      throw new TypeError("InProcessBundle manifest must be TOML text or UTF-8 bytes");
+    }
+    const manifestBytes = typeof manifest === "string" ? _encoder.encode(manifest) : manifest.slice();
+    if (manifestBytes.byteLength === 0) {
+      throw new TypeError("InProcessBundle manifest must not be empty");
     }
     if (resident === null || typeof resident !== "object" || typeof resident.release !== "function") {
       throw new TypeError("InProcessBundle resident must release rooted state");
     }
-    this.#registration = registration;
+    if (typeof registerContracts !== "function") {
+      throw new TypeError("InProcessBundle must register descriptor/interface pairs");
+    }
+    this.#manifest = manifestBytes;
     this.#resident = resident;
+    this.#registerContracts = registerContracts;
+    this.#transferReserved = false;
   }
 
-  /** @returns {Uint8Array} The canonical table for the synchronous ABI call. */
-  _inProcessRegistration() {
+  _reserveInProcessTransfer() {
+    if (this.#resident === null || this.#transferReserved) {
+      throw new Error("InProcessBundle is already being registered or has been registered");
+    }
+    this.#transferReserved = true;
+  }
+
+  _cancelInProcessTransfer() {
+    if (this.#resident !== null) {
+      this.#transferReserved = false;
+    }
+  }
+
+  /** @returns {Uint8Array} Canonical manifest bytes held by this generated bundle. */
+  _inProcessManifest() {
     if (this.#resident === null) {
       throw new Error("InProcessBundle has already been registered");
     }
-    return this.#registration;
+    return this.#manifest;
+  }
+
+  _registerGuestContracts(host) {
+    if (!this.#transferReserved || this.#resident === null) {
+      throw new Error("InProcessBundle registration is not active");
+    }
+    this.#registerContracts(host);
   }
 
   /** @returns {{ release: () => void }} The resident transferred to the Runtime. */
   _takeInProcessResident() {
-    if (this.#resident === null) {
-      throw new Error("InProcessBundle resident has already been transferred");
+    if (!this.#transferReserved || this.#resident === null) {
+      throw new Error("InProcessBundle resident is not available for transfer");
     }
     const resident = this.#resident;
     this.#resident = null;
+    this.#transferReserved = false;
     return resident;
   }
 }
@@ -560,7 +588,6 @@ export function buildInProcessGuestContract(spec, bridgeLibrary) {
   for (const name of [
     "polyplug_js_in_process_bridge_create",
     "polyplug_js_in_process_bridge_interface",
-    "polyplug_js_in_process_bridge_context",
     "polyplug_js_in_process_bridge_free",
   ]) {
     if (typeof symbols[name] !== "function") {
@@ -633,8 +660,7 @@ export function buildInProcessGuestContract(spec, bridgeLibrary) {
     throw new Error("polyplug_js bridge could not create an in-process adapter");
   }
   const interfacePtr = symbols.polyplug_js_in_process_bridge_interface(bridgeResident);
-  const adapterContext = symbols.polyplug_js_in_process_bridge_context(bridgeResident);
-  if (interfacePtr === null || adapterContext === null) {
+  if (interfacePtr === null) {
     symbols.polyplug_js_in_process_bridge_free(bridgeResident);
     destroy.close();
     create.close();
@@ -658,7 +684,6 @@ export function buildInProcessGuestContract(spec, bridgeLibrary) {
   };
   return {
     interfacePtr,
-    adapterContext,
     resident,
     _createForTest: createImplementation,
     _destroyForTest: destroyImplementation,
@@ -668,12 +693,12 @@ export function buildInProcessGuestContract(spec, bridgeLibrary) {
 }
 
 /**
- * Combines generated contract adapters into one atomically registered bundle.
+ * Combines generated contract adapters with their canonical manifest bytes.
+ * Existing PluginDescriptor and GuestContractInterface values are registered
+ * directly during the runtime's staging transaction.
  *
  * @param {{
- *   name: string,
- *   version: { major: number, minor: number, patch: number },
- *   dependencies?: bigint[],
+ *   manifest: string | Uint8Array,
  *   contracts: Array<{
  *     provider: string,
  *     contractName: string,
@@ -686,75 +711,35 @@ export function buildInProcessGuestContract(spec, bridgeLibrary) {
 export function buildInProcessBundle(spec) {
   if (spec === null || typeof spec !== "object" || !Array.isArray(spec.contracts)
     || spec.contracts.length === 0) {
-    throw new TypeError("buildInProcessBundle requires at least one contract adapter");
+    throw new TypeError("buildInProcessBundle requires a canonical manifest and at least one contract adapter");
   }
-  const roots = [];
-  const dependencies = spec.dependencies ?? [];
-  const dependencyTable = new Uint8Array(dependencies.length * 8);
-  const dependencyView = new DataView(dependencyTable.buffer);
-  for (let index = 0; index < dependencies.length; index += 1) {
-    dependencyView.setBigUint64(index * 8, dependencies[index], true);
-  }
-  roots.push(dependencyTable);
 
-  const contractsTable = new Uint8Array(IN_PROCESS_CONTRACT_REGISTRATION_SIZE * spec.contracts.length);
-  const contractsView = new DataView(contractsTable.buffer);
-  for (let index = 0; index < spec.contracts.length; index += 1) {
-    const contract = spec.contracts[index];
-    const offset = index * IN_PROCESS_CONTRACT_REGISTRATION_SIZE;
-    const descriptor = offset + IN_PROCESS_CONTRACT_REGISTRATION_DESCRIPTOR_OFFSET;
-    writeStringView(contractsView, descriptor + PLUGIN_DESCRIPTOR_NAME_OFFSET, contract.provider, roots);
+  const roots = [];
+  const registrations = [];
+  for (const contract of spec.contracts) {
+    if (contract === null || typeof contract !== "object"
+      || typeof contract.provider !== "string" || typeof contract.contractName !== "string"
+      || contract.adapter === null || typeof contract.adapter !== "object"
+      || contract.adapter.interfacePtr === null || contract.adapter.interfacePtr === undefined) {
+      throw new TypeError("buildInProcessBundle contract must provide a descriptor and guest interface");
+    }
+
+    const descriptor = new Uint8Array(PLUGIN_DESCRIPTOR_SIZE);
+    const descriptorView = new DataView(descriptor.buffer);
+    writeStringView(descriptorView, PLUGIN_DESCRIPTOR_NAME_OFFSET, contract.provider, roots);
     writeStringView(
-      contractsView,
-      descriptor + PLUGIN_DESCRIPTOR_CONTRACT_NAME_OFFSET,
+      descriptorView,
+      PLUGIN_DESCRIPTOR_CONTRACT_NAME_OFFSET,
       contract.contractName,
       roots,
     );
-    writeVersion(contractsView, descriptor + PLUGIN_DESCRIPTOR_VERSION_OFFSET, contract.version);
-    contractsView.setBigUint64(
-      offset + IN_PROCESS_CONTRACT_REGISTRATION_INTERFACE_OFFSET,
-      _ffi.pointerValue(contract.adapter.interfacePtr),
-      true,
-    );
-    contractsView.setBigUint64(
-      offset + IN_PROCESS_CONTRACT_REGISTRATION_ADAPTER_CONTEXT_OFFSET,
-      _ffi.pointerValue(contract.adapter.adapterContext),
-      true,
-    );
-    roots.push(contract.adapter);
+    writeVersion(descriptorView, PLUGIN_DESCRIPTOR_VERSION_OFFSET, contract.version);
+    roots.push(descriptor, contract.adapter);
+    registrations.push({ descriptor, adapter: contract.adapter, contractName: contract.contractName });
   }
-  roots.push(contractsTable);
-
-  const registration = new Uint8Array(IN_PROCESS_BUNDLE_REGISTRATION_SIZE);
-  const registrationView = new DataView(registration.buffer);
-  const metadata = IN_PROCESS_BUNDLE_REGISTRATION_METADATA_OFFSET;
-  writeStringView(registrationView, metadata + IN_PROCESS_BUNDLE_METADATA_NAME_OFFSET, spec.name, roots);
-  writeVersion(registrationView, metadata + IN_PROCESS_BUNDLE_METADATA_VERSION_OFFSET, spec.version);
-  registrationView.setUint32(metadata + IN_PROCESS_BUNDLE_METADATA_RUNTIME_OFFSET, 5, true);
-  registrationView.setBigUint64(
-    IN_PROCESS_BUNDLE_REGISTRATION_DEPENDENCY_IDS_OFFSET,
-    dependencies.length === 0 ? 0n : _ffi.pointerValue(_ffi.pointerOf(dependencyTable)),
-    true,
-  );
-  registrationView.setBigUint64(
-    IN_PROCESS_BUNDLE_REGISTRATION_DEPENDENCY_COUNT_OFFSET,
-    BigInt(dependencies.length),
-    true,
-  );
-  registrationView.setBigUint64(
-    IN_PROCESS_BUNDLE_REGISTRATION_CONTRACTS_OFFSET,
-    _ffi.pointerValue(_ffi.pointerOf(contractsTable)),
-    true,
-  );
-  registrationView.setBigUint64(
-    IN_PROCESS_BUNDLE_REGISTRATION_CONTRACT_COUNT_OFFSET,
-    BigInt(spec.contracts.length),
-    true,
-  );
-  roots.push(registration);
 
   let released = false;
-  return new InProcessBundle(registration, {
+  const resident = {
     release() {
       if (released) {
         return;
@@ -765,6 +750,21 @@ export function buildInProcessBundle(spec) {
       }
       roots.length = 0;
     },
+  };
+  return new InProcessBundle(spec.manifest, resident, (host) => {
+    for (const registration of registrations) {
+      const error = new Uint8Array(ABI_ERROR_SIZE);
+      callHostMethod(
+        host,
+        HOST_API_OFFSETS.register_guest_contract,
+        ["pointer", "pointer", "pointer", "pointer"],
+        "void",
+        [host, _ffi.pointerOf(registration.descriptor), registration.adapter.interfacePtr, _ffi.pointerOf(error)],
+      );
+      if (new DataView(error.buffer).getUint32(0, true) !== AbiErrorCode.Ok) {
+        throw new Error(`register_guest_contract failed for ${registration.contractName}`);
+      }
+    }
   });
 }
 
@@ -791,9 +791,10 @@ function readHostField(hostPtr, offset) {
  * @returns {*} Result from FFI call
  */
 function callHostMethod(hostPtr, fieldOffset, paramTypes, resultType, args) {
-  const funcPtr = readHostField(hostPtr, fieldOffset);
+  const rawFunctionPointer = _ffi.pointerView(hostPtr).getBigUint64(fieldOffset);
+  const funcPtr = _ffi.pointerCreate(rawFunctionPointer);
   if (funcPtr === null) {
-    throw new Error(`HostApi field at offset ${fieldOffset} is null`);
+    throw new Error(`HostApi field at offset ${fieldOffset} is null (raw ${rawFunctionPointer})`);
   }
 
   // Create function definition for this call
@@ -1204,14 +1205,20 @@ export class Runtime {
   }
 
   /**
-   * Synchronously register one generated, complete in-process bundle.
+   * Synchronously stage and commit one generated in-process bundle.
    *
-   * The bundle prepares its canonical ABI table before this call. Its resident
-   * retains all JavaScript factories, implementations, callbacks, and backing
-   * buffers until this Runtime takes sole ownership after core accepts the
-   * registration. Logical unload releases that resident only after core drains
-   * its calls, instances, and leases.
-   * @param {{ _inProcessRegistration: () => Uint8Array, _takeInProcessResident: () => { release: () => void } }} bundle
+   * The generated bundle owns canonical manifest bytes and rooted callbacks,
+   * implementations, descriptors, and interfaces. Core receives each existing
+   * PluginDescriptor/GuestContractInterface pair through HostApi while staging.
+   * The resident transfers only after commit succeeds; logical unload releases it
+   * only after core drains calls, instances, and leases.
+   * @param {{
+   *   _reserveInProcessTransfer: () => void,
+   *   _cancelInProcessTransfer: () => void,
+   *   _inProcessManifest: () => Uint8Array,
+   *   _registerGuestContracts: (host: PolyPtr) => void,
+   *   _takeInProcessResident: () => { release: () => void },
+   * }} bundle
    * @returns {bigint} Stable bundle identifier.
    */
   registerInProcessBundle(bundle) {
@@ -1219,41 +1226,68 @@ export class Runtime {
       throw new Error("registerInProcessBundle: runtime is destroyed");
     }
     if (bundle === null || typeof bundle !== "object"
-      || typeof bundle._inProcessRegistration !== "function"
+      || typeof bundle._reserveInProcessTransfer !== "function"
+      || typeof bundle._cancelInProcessTransfer !== "function"
+      || typeof bundle._inProcessManifest !== "function"
+      || typeof bundle._registerGuestContracts !== "function"
       || typeof bundle._takeInProcessResident !== "function") {
       throw new TypeError("registerInProcessBundle expects a generated in-process bundle");
     }
 
-    const registration = bundle._inProcessRegistration();
-    if (!(registration instanceof Uint8Array)) {
-      throw new TypeError("generated in-process bundle returned an invalid registration table");
-    }
+    bundle._reserveInProcessTransfer();
+    let staged = false;
+    let bundleId = 0n;
+    try {
+      const manifest = bundle._inProcessManifest();
+      if (!(manifest instanceof Uint8Array) || manifest.byteLength === 0) {
+        throw new TypeError("generated in-process bundle returned invalid manifest bytes");
+      }
 
-    const bundleIdBuf = new Uint8Array(8);
-    const errBuf = new Uint8Array(ABI_ERROR_SIZE);
-    callHostMethod(
-      this.#host,
-      HOST_API_OFFSETS.register_in_process_bundle,
-      ["pointer", "pointer", "pointer", "pointer"],
-      "void",
-      [this.#host, _ffi.pointerOf(registration), _ffi.pointerOf(bundleIdBuf), _ffi.pointerOf(errBuf)],
-    );
-    const code = new DataView(errBuf.buffer).getUint32(0, true);
-    if (code !== AbiErrorCode.Ok) {
-      throw new Error(`registerInProcessBundle failed: ${this.lastError()}`);
-    }
+      const bundleIdBuf = new Uint8Array(8);
+      const beginError = new Uint8Array(ABI_ERROR_SIZE);
+      this.#lib.symbols.polyplug_begin_in_process_bundle(
+        this.#host,
+        _ffi.pointerOf(manifest),
+        BigInt(manifest.byteLength),
+        5,
+        _ffi.pointerOf(bundleIdBuf),
+        _ffi.pointerOf(beginError),
+      );
+      if (new DataView(beginError.buffer).getUint32(0, true) !== AbiErrorCode.Ok) {
+        throw new Error(`registerInProcessBundle failed to begin: ${this.lastError()}`);
+      }
 
-    const bundleId = new DataView(bundleIdBuf.buffer).getBigUint64(0, true);
-    if (this.#inProcessResidents.has(bundleId)) {
-      throw new Error("registerInProcessBundle: runtime returned a duplicate live bundle id");
-    }
-    const resident = bundle._takeInProcessResident();
-    if (resident === null || typeof resident !== "object" || typeof resident.release !== "function") {
-      throw new Error("generated in-process bundle lost its resident during registration");
-    }
-    this.#inProcessResidents.set(bundleId, resident);
-    return bundleId;
+      bundleId = new DataView(bundleIdBuf.buffer).getBigUint64(0, true);
+      staged = true;
+      bundle._registerGuestContracts(this.#host);
 
+      const commitError = new Uint8Array(ABI_ERROR_SIZE);
+      this.#lib.symbols.polyplug_commit_in_process_bundle(
+        this.#host,
+        bundleId,
+        _ffi.pointerOf(commitError),
+      );
+      staged = false;
+      if (new DataView(commitError.buffer).getUint32(0, true) !== AbiErrorCode.Ok) {
+        throw new Error(`registerInProcessBundle failed to commit: ${this.lastError()}`);
+      }
+
+      if (this.#inProcessResidents.has(bundleId)) {
+        throw new Error("registerInProcessBundle: runtime returned a duplicate live bundle id");
+      }
+      const resident = bundle._takeInProcessResident();
+      if (resident === null || typeof resident !== "object" || typeof resident.release !== "function") {
+        throw new Error("generated in-process bundle lost its resident during registration");
+      }
+      this.#inProcessResidents.set(bundleId, resident);
+      return bundleId;
+    } catch (error) {
+      if (staged) {
+        this.#lib.symbols.polyplug_abort_in_process_bundle(this.#host, bundleId);
+      }
+      bundle._cancelInProcessTransfer();
+      throw error;
+    }
   }
   /**
    * Find guest contract by contract ID.

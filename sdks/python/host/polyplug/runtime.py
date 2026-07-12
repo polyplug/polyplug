@@ -35,13 +35,14 @@ from polyplug_abi import (
     ReloadPhaseType,
     RuntimeConfig,
     SignaturePolicy,
+    SupportedLanguage,
 )
 
 # The ABI-level ReloadPhase ctypes Structure (the on_reload callback receives a
 # const pointer to this 48-byte struct). The `polyplug_abi` package re-exports a
 # higher-level Python `ReloadPhase` wrapper class under the same name, so the
 # raw ctypes Structure is imported from its defining module to disambiguate.
-from polyplug_abi.abi import InProcessBundleRegistration, ReloadPhase as AbiReloadPhase
+from polyplug_abi.abi import ReloadPhase as AbiReloadPhase
 
 
 _LIB_NAME: str = "polyplug"
@@ -75,15 +76,16 @@ except ImportError:
 
 @runtime_checkable
 class Backend(Protocol):
-    """Protocol for HostApi-based FFI backend.
-
-    Only two FFI bindings needed: create and destroy.
-    All operations go through HostApi struct fields.
-    """
+    """Protocol for runtime creation and in-process staging exports."""
 
     def create_host_interface(self, config_ptr: int = 0) -> int: ...
     def destroy_host_interface(self, host: int) -> None: ...
     def load_host_interface(self, host: int) -> HostApi: ...
+    def begin_in_process_bundle(
+        self, host: int, manifest: bytes, language: int, bundle_id: ctypes.c_uint64, error: AbiError
+    ) -> None: ...
+    def commit_in_process_bundle(self, host: int, bundle_id: int, error: AbiError) -> None: ...
+    def abort_in_process_bundle(self, host: int, bundle_id: int) -> None: ...
 
 
 class CTypesBackend:
@@ -95,13 +97,21 @@ class CTypesBackend:
         self._setup_bindings()
 
     def _setup_bindings(self) -> None:
-        # Only two FFI exports: create (takes optional *const RuntimeConfig,
-        # null for defaults) and destroy.
         self.lib.polyplug_runtime_create.argtypes = [self.ctypes.c_void_p]
         self.lib.polyplug_runtime_create.restype = self.ctypes.c_void_p
-
         self.lib.polyplug_runtime_destroy.argtypes = [self.ctypes.c_void_p]
         self.lib.polyplug_runtime_destroy.restype = None
+        self.lib.polyplug_begin_in_process_bundle.argtypes = [
+            self.ctypes.c_void_p, self.ctypes.c_void_p, self.ctypes.c_size_t, self.ctypes.c_uint32,
+            self.ctypes.POINTER(self.ctypes.c_uint64), self.ctypes.POINTER(AbiError),
+        ]
+        self.lib.polyplug_begin_in_process_bundle.restype = None
+        self.lib.polyplug_commit_in_process_bundle.argtypes = [
+            self.ctypes.c_void_p, self.ctypes.c_uint64, self.ctypes.POINTER(AbiError),
+        ]
+        self.lib.polyplug_commit_in_process_bundle.restype = None
+        self.lib.polyplug_abort_in_process_bundle.argtypes = [self.ctypes.c_void_p, self.ctypes.c_uint64]
+        self.lib.polyplug_abort_in_process_bundle.restype = None
 
     def create_host_interface(self, config_ptr: int = 0) -> int:
         """Create runtime and return HostApi pointer.
@@ -119,6 +129,20 @@ class CTypesBackend:
         """Load HostApi struct from pointer."""
         return HostApi.from_address(host)
 
+    def begin_in_process_bundle(
+        self, host: int, manifest: bytes, language: int, bundle_id: ctypes.c_uint64, error: AbiError
+    ) -> None:
+        manifest_buffer = self.ctypes.create_string_buffer(manifest)
+        self.lib.polyplug_begin_in_process_bundle(
+            host, manifest_buffer, len(manifest), language, self.ctypes.byref(bundle_id), self.ctypes.byref(error)
+        )
+
+    def commit_in_process_bundle(self, host: int, bundle_id: int, error: AbiError) -> None:
+        self.lib.polyplug_commit_in_process_bundle(host, bundle_id, self.ctypes.byref(error))
+
+    def abort_in_process_bundle(self, host: int, bundle_id: int) -> None:
+        self.lib.polyplug_abort_in_process_bundle(host, bundle_id)
+
 
 class CFFIBackend:
     """cffi ABI mode backend for HostApi operations."""
@@ -126,6 +150,9 @@ class CFFIBackend:
     CDEF = """
         void* polyplug_runtime_create(const void* config);
         void polyplug_runtime_destroy(void* host);
+        void polyplug_begin_in_process_bundle(const void* host, const void* manifest, size_t manifest_len, uint32_t language, void* bundle_id, void* error);
+        void polyplug_commit_in_process_bundle(const void* host, uint64_t bundle_id, void* error);
+        void polyplug_abort_in_process_bundle(const void* host, uint64_t bundle_id);
     """
 
     def __init__(self, lib_path: str) -> None:
@@ -154,6 +181,27 @@ class CFFIBackend:
     def load_host_interface(self, host: int) -> HostApi:
         """Load HostApi struct from pointer (via ctypes)."""
         return HostApi.from_address(host)
+
+    def begin_in_process_bundle(
+        self, host: int, manifest: bytes, language: int, bundle_id: ctypes.c_uint64, error: AbiError
+    ) -> None:
+        manifest_buffer = bytearray(manifest)
+        self.lib.polyplug_begin_in_process_bundle(
+            self.ffi.cast("void*", host),
+            self.ffi.from_buffer(manifest_buffer),
+            len(manifest_buffer),
+            language,
+            self.ffi.cast("void*", ctypes.addressof(bundle_id)),
+            self.ffi.cast("void*", ctypes.addressof(error)),
+        )
+
+    def commit_in_process_bundle(self, host: int, bundle_id: int, error: AbiError) -> None:
+        self.lib.polyplug_commit_in_process_bundle(
+            self.ffi.cast("void*", host), bundle_id, self.ffi.cast("void*", ctypes.addressof(error))
+        )
+
+    def abort_in_process_bundle(self, host: int, bundle_id: int) -> None:
+        self.lib.polyplug_abort_in_process_bundle(self.ffi.cast("void*", host), bundle_id)
 
 
 def get_backend() -> str:
@@ -266,7 +314,7 @@ class Runtime:
         self._load_bundle_fn = self._host_struct.load_bundle
         self._reload_bundle_fn = self._host_struct.reload_bundle
         self._unload_bundle_fn = self._host_struct.unload_bundle
-        self._register_in_process_bundle_fn = self._host_struct.register_in_process_bundle
+        self._register_guest_contract_fn = self._host_struct.register_guest_contract
         self._find_guest_contract_fn = self._host_struct.find_guest_contract
         self._find_all_fn = self._host_struct.find_all_guest_contracts
         self._resolve_fn = self._host_struct.resolve_guest_contract
@@ -484,42 +532,43 @@ class Runtime:
         self._in_process_residents.pop(bundle_id, None)
 
     def register_in_process_bundle(self, bundle: object) -> int:
-        """Synchronously register a generated in-process bundle with this runtime.
-
-        Generated ``host.in_process.InProcessBundle`` objects expose
-        ``_in_process_registration()``. It returns a complete canonical
-        ``InProcessBundleRegistration`` while keeping all Python callback roots
-        and table storage on the bundle object. The resident is retained only
-        after the core has atomically accepted the registration.
-        """
+        """Stage, register, and atomically publish a generated Python bundle."""
         host: int = self._ensure_host()
         reserve = getattr(bundle, "_reserve_transfer", None)
         cancel = getattr(bundle, "_cancel_transfer", None)
-        prepare = getattr(bundle, "_in_process_registration", None)
-        if not callable(reserve) or not callable(cancel) or not callable(prepare):
-            raise TypeError(
-                "bundle must be a generated host.in_process.InProcessBundle"
-            )
-        reserve()
-        try:
-            registration = prepare()
-            if not isinstance(registration, InProcessBundleRegistration):
-                raise TypeError(
-                    "_in_process_registration() must return InProcessBundleRegistration"
-                )
+        manifest_for = getattr(bundle, "_in_process_manifest", None)
+        contracts_for = getattr(bundle, "_in_process_contracts", None)
+        if not all(callable(method) for method in (reserve, cancel, manifest_for, contracts_for)):
+            raise TypeError("bundle must be a generated host.in_process.InProcessBundle")
 
+        reserve()
+        staged_bundle_id: int | None = None
+        try:
+            manifest = manifest_for()
+            if not isinstance(manifest, bytes):
+                raise TypeError("_in_process_manifest() must return canonical UTF-8 bytes")
             bundle_id = ctypes.c_uint64()
-            err = AbiError()
-            self._register_in_process_bundle_fn(
-                host,
-                ctypes.byref(registration),
-                ctypes.byref(bundle_id),
-                ctypes.byref(err),
-            )
-            self._check_error(err.code, "register_in_process_bundle")
+            error = AbiError()
+            self._backend.begin_in_process_bundle(host, manifest, int(SupportedLanguage.Python), bundle_id, error)
+            self._check_error(error.code, "begin_in_process_bundle")
+            staged_bundle_id = bundle_id.value
+
+            for descriptor, interface in contracts_for():
+                error = AbiError()
+                self._register_guest_contract_fn(
+                    host, ctypes.byref(descriptor), ctypes.byref(interface), ctypes.byref(error)
+                )
+                self._check_error(error.code, "register_guest_contract")
+
+            error = AbiError()
+            self._backend.commit_in_process_bundle(host, bundle_id.value, error)
+            staged_bundle_id = None
+            self._check_error(error.code, "commit_in_process_bundle")
             self._in_process_residents[bundle_id.value] = bundle
             return bundle_id.value
         except BaseException:
+            if staged_bundle_id is not None:
+                self._backend.abort_in_process_bundle(host, staged_bundle_id)
             cancel()
             raise
 

@@ -82,10 +82,36 @@ local function marker_factory(value)
     end
 end
 
-local function bundle(name, seed, dependencies)
+local function canonical_manifest(name, providers, function_counts, dependency)
+    local entries = {
+        "loader = \"lua\"",
+        "name = \"" .. name .. "\"",
+        "id = " .. tostring(polyplug.bundle_id(name)):gsub("ULL$", ""),
+        "version = \"1.0.0\"",
+        "file = \"in-process\"",
+        "provides = [" .. providers .. "]",
+        "",
+        "[function_count]",
+        function_counts,
+    }
+    if dependency then
+        entries[#entries + 1] = ""
+        entries[#entries + 1] = "[[dependency]]"
+        entries[#entries + 1] = "kind = \"contract\""
+        entries[#entries + 1] = "contract = \"" .. dependency.name .. "\""
+        entries[#entries + 1] = "contract_id = " .. tostring(dependency.id):gsub("ULL$", "")
+        entries[#entries + 1] = "min_version = \"1.0\""
+    end
+    return table.concat(entries, "\n") .. "\n"
+end
+
+local function bundle(name, seed, providers)
     return callers.in_process_bundle({
-        name = name,
-        dependencies = dependencies,
+        manifest = canonical_manifest(
+            name,
+            providers or "\"state.counter@1.0.0\", \"state.marker@1.0.0\", \"state.dependent@1.0.0\"",
+            "\"state.counter@1\" = 2\n\"state.marker@1\" = 1\n\"state.dependent@1\" = 1"
+        ),
         implementations = {
             ["state.counter"] = counter_factory(seed),
             ["state.marker"] = marker_factory(seed * 10),
@@ -98,11 +124,23 @@ local first = polyplug.Runtime.new()
 local second = polyplug.Runtime.new()
 
 local rejected = bundle("lua-in-process-rejected", 1)
-rejected.registration.contracts = nil
+rejected.contracts[2].interface = nil
 check(not pcall(function() first:register_in_process_bundle(rejected) end),
     "invalid complete registration must reject atomically")
 check(first:resolve_guest_contract(first:find_guest_contract(callers.STATE_COUNTER_CONTRACT_ID, 0)) == nil,
-    "rejected multi-contract bundle must publish no contracts")
+    "pre-commit rejection must publish no contracts")
+
+local commit_rejected = bundle(
+    "lua-in-process-commit-rejected",
+    1,
+    "\"state.counter@1.0.0\""
+)
+check(not pcall(function() first:register_in_process_bundle(commit_rejected) end),
+    "commit validation failure must reject atomically")
+check(first:resolve_guest_contract(first:find_guest_contract(callers.STATE_COUNTER_CONTRACT_ID, 0)) == nil,
+    "commit rejection must publish no contracts")
+local recovered_id = first:register_in_process_bundle(bundle("lua-in-process-commit-rejected", 2))
+first:unload_bundle(recovered_id)
 
 local first_bundle = bundle("lua-in-process-first", 0)
 local first_id = first:register_in_process_bundle(first_bundle)
@@ -124,8 +162,12 @@ first_counter:destroy()
 first_peer:destroy()
 
 local dependent_bundle = dependent_callers.in_process_bundle({
-    name = "lua-in-process-dependent",
-    dependencies = { callers.STATE_COUNTER_CONTRACT_ID },
+    manifest = canonical_manifest(
+        "lua-in-process-dependent",
+        "\"state.dependent@1.0.0\"",
+        "\"state.dependent@1\" = 1",
+        { name = "state.counter", id = callers.STATE_COUNTER_CONTRACT_ID }
+    ),
     implementations = {
         ["state.dependent"] = marker_factory(500),
     },
@@ -152,4 +194,4 @@ second:unload_bundle(second_id)
 first:destroy()
 second:destroy()
 os.execute("rm -rf " .. quote(generated_root))
-print("PASS: Lua generated in-process atomicity, state, isolation, resident lifetime, unload, and re-registration")
+print("PASS: Lua generated in-process staging rollback, state, isolation, resident lifetime, unload, and re-registration")

@@ -12,9 +12,6 @@ from abi import (
     HostApi,
     HostContractInstance,
     HostContractInterface,
-    InProcessBundleMetadata,
-    InProcessContractRegistration,
-    InProcessBundleRegistration,
     GuestContractHandle,
     BundleInitContext,
     PluginDescriptor,
@@ -52,7 +49,7 @@ def test_guest_contract_interface_size():
 
 
 def test_host_api_size():
-    assert ctypes.sizeof(HostApi) == 192, f"HostApi expected 192 bytes, got {ctypes.sizeof(HostApi)}"
+    assert ctypes.sizeof(HostApi) == 184, f"HostApi expected 184 bytes, got {ctypes.sizeof(HostApi)}"
 
 
 def test_host_contract_instance_size():
@@ -61,18 +58,6 @@ def test_host_contract_instance_size():
 
 def test_host_contract_interface_size():
     assert ctypes.sizeof(HostContractInterface) == 80, f"HostContractInterface expected 80 bytes, got {ctypes.sizeof(HostContractInterface)}"
-
-
-def test_in_process_bundle_metadata_size():
-    assert ctypes.sizeof(InProcessBundleMetadata) == 32, f"InProcessBundleMetadata expected 32 bytes, got {ctypes.sizeof(InProcessBundleMetadata)}"
-
-
-def test_in_process_contract_registration_size():
-    assert ctypes.sizeof(InProcessContractRegistration) == 64, f"InProcessContractRegistration expected 64 bytes, got {ctypes.sizeof(InProcessContractRegistration)}"
-
-
-def test_in_process_bundle_registration_size():
-    assert ctypes.sizeof(InProcessBundleRegistration) == 64, f"InProcessBundleRegistration expected 64 bytes, got {ctypes.sizeof(InProcessBundleRegistration)}"
 
 
 def test_guest_contract_handle_size():

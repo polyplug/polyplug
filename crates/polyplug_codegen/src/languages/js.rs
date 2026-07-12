@@ -121,7 +121,6 @@ impl JsGenerator {
             "AbiError" => Some((24, 8)),         // { code(4), _pad(4), message(16) }
             "Array" => Some((24, 8)),            // { items(8), len(8), align(8) }
             "PluginDescriptor" => Some((48, 8)), // { name(16), contract_name(16), version(12), _pad(4) }
-            "InProcessBundleMetadata" => Some((32, 8)), // { name(16), version(12), runtime(4) }
             // Enums are resolved from `GenerationContext::enum_reprs` in
             // `type_size` / `type_align`, keyed by their actual Rust `repr`.
             _ => None,
@@ -700,91 +699,5 @@ mod tests {
             output.contains("export const POLICY_HOLDER_SIZE: number = 8;"),
             "u32 + repr(u32) enum struct must be 8 bytes, got: {output}"
         );
-    }
-    #[test]
-    fn js_in_process_carriers_use_nested_abi_layouts() {
-        let generator: JsGenerator = JsGenerator::new();
-        let mut enum_reprs: HashMap<String, String> = HashMap::new();
-        enum_reprs.insert(String::from("SupportedLanguage"), String::from("u32"));
-        let ctx: GenerationContext = GenerationContext::new().with_enum_reprs(enum_reprs);
-
-        let contract = StructInfo {
-            name: String::from("InProcessContractRegistration"),
-            fields: vec![
-                FieldInfo {
-                    name: String::from("descriptor"),
-                    rust_type: String::from("PluginDescriptor"),
-                    doc: None,
-                },
-                FieldInfo {
-                    name: String::from("interface"),
-                    rust_type: String::from("*constGuestContractInterface"),
-                    doc: None,
-                },
-                FieldInfo {
-                    name: String::from("adapter_context"),
-                    rust_type: String::from("*mutc_void"),
-                    doc: None,
-                },
-            ],
-            doc: None,
-            attributes: vec![],
-            size_hint: Some(64),
-        };
-        let contract_output: String = generator
-            .generate_struct(&contract, &ctx)
-            .expect("generate");
-        assert!(
-            contract_output
-                .contains("IN_PROCESS_CONTRACT_REGISTRATION_INTERFACE_OFFSET: number = 48;")
-        );
-        assert!(
-            contract_output
-                .contains("IN_PROCESS_CONTRACT_REGISTRATION_ADAPTER_CONTEXT_OFFSET: number = 56;")
-        );
-        assert!(contract_output.contains("IN_PROCESS_CONTRACT_REGISTRATION_SIZE: number = 64;"));
-
-        let bundle = StructInfo {
-            name: String::from("InProcessBundleRegistration"),
-            fields: vec![
-                FieldInfo {
-                    name: String::from("metadata"),
-                    rust_type: String::from("InProcessBundleMetadata"),
-                    doc: None,
-                },
-                FieldInfo {
-                    name: String::from("dependency_ids"),
-                    rust_type: String::from("*constu64"),
-                    doc: None,
-                },
-                FieldInfo {
-                    name: String::from("dependency_count"),
-                    rust_type: String::from("usize"),
-                    doc: None,
-                },
-                FieldInfo {
-                    name: String::from("contracts"),
-                    rust_type: String::from("*constInProcessContractRegistration"),
-                    doc: None,
-                },
-                FieldInfo {
-                    name: String::from("contract_count"),
-                    rust_type: String::from("usize"),
-                    doc: None,
-                },
-            ],
-            doc: None,
-            attributes: vec![],
-            size_hint: Some(64),
-        };
-        let bundle_output: String = generator.generate_struct(&bundle, &ctx).expect("generate");
-        assert!(
-            bundle_output
-                .contains("IN_PROCESS_BUNDLE_REGISTRATION_DEPENDENCY_IDS_OFFSET: number = 32;")
-        );
-        assert!(
-            bundle_output.contains("IN_PROCESS_BUNDLE_REGISTRATION_CONTRACTS_OFFSET: number = 48;")
-        );
-        assert!(bundle_output.contains("IN_PROCESS_BUNDLE_REGISTRATION_SIZE: number = 64;"));
     }
 }

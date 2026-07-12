@@ -6,12 +6,13 @@ from __future__ import annotations
 
 import ctypes
 import inspect
+import json
 import struct
 import threading
 from typing import Any, Callable, Self
 
-from polyplug_abi import AbiError, AbiErrorCode, DispatchType, NativeDispatch, PluginDescriptor, StringView, SupportedLanguage, Version, to_str
-from polyplug_abi.abi import InProcessBundleMetadata, InProcessBundleRegistration, InProcessContractRegistration, GuestContractInstance, GuestContractInterface, VmLoaderData
+from polyplug_abi import AbiError, AbiErrorCode, DispatchType, NativeDispatch, PluginDescriptor, StringView, Version, to_str
+from polyplug_abi.abi import GuestContractInstance, GuestContractInterface, VmLoaderData
 
 _CREATE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, VmLoaderData, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
 _DESTROY = ctypes.CFUNCTYPE(None, ctypes.c_void_p, VmLoaderData, ctypes.c_void_p, GuestContractInstance)
@@ -40,7 +41,7 @@ def _factory(value: Any) -> Callable[[int], Any]:
     return make
 
 class _Adapter:
-    def __init__(self, contract_id: int, version: Version, name: str, value: Any, dispatchers: list[Callable[..., None]]) -> None:
+    def __init__(self, contract_id: int, version: Version, plugin_name: str, contract_name: str, value: Any, dispatchers: list[Callable[..., None]]) -> None:
         self.contract_id = contract_id
         self._factory = _factory(value)
         self._instances: dict[int, Any] = {}
@@ -49,8 +50,10 @@ class _Adapter:
         self._buffers: list[Any] = []
         self._context = ctypes.c_uint64(contract_id)
         self.context = ctypes.addressof(self._context)
-        name_bytes = name.encode("utf-8")
-        self._name = ctypes.create_string_buffer(name_bytes)
+        plugin_name_bytes = plugin_name.encode("utf-8")
+        contract_name_bytes = contract_name.encode("utf-8")
+        self._plugin_name = ctypes.create_string_buffer(plugin_name_bytes)
+        self._contract_name = ctypes.create_string_buffer(contract_name_bytes)
 
         @_CREATE
         def create(context: int, _loader: VmLoaderData, host: int, _args: int, out_instance: int) -> None:
@@ -102,9 +105,12 @@ class _Adapter:
         self.interface.create_instance = create
         self.interface.destroy_instance = destroy
         self.interface.dispatch.native = NativeDispatch(len(callbacks), ctypes.cast(self._functions, ctypes.c_void_p))
-        view = StringView(ctypes.cast(self._name, ctypes.c_void_p), len(name_bytes))
-        self.descriptor = PluginDescriptor(view, view, version)
-        self._keepalive = (create, destroy, callbacks, self._functions, self._context, self._name)
+        plugin_view = StringView(ctypes.cast(self._plugin_name, ctypes.c_void_p), len(plugin_name_bytes))
+        contract_view = StringView(ctypes.cast(self._contract_name, ctypes.c_void_p), len(contract_name_bytes))
+        self.descriptor = PluginDescriptor(plugin_view, contract_view, version)
+        self.contract_name = contract_name
+        self.function_count = len(callbacks)
+        self._keepalive = (create, destroy, callbacks, self._functions, self._context, self._plugin_name, self._contract_name)
 
     def _allocate(self, size: int, align: int) -> int:
         buffer = ctypes.create_string_buffer(size + max(align, 1) - 1)
@@ -170,11 +176,14 @@ def _in_process_pipeline_validator_validate_abi(impl: Any, args_ptr: int, out_pt
     ctypes.memmove(out_ptr, ctypes.addressof(out_view), ctypes.sizeof(out_view))
 
 class InProcessBundle:
-    def __init__(self, name: str, version: tuple[int, int, int] = (1, 0, 0), dependencies: tuple[int, ...] = ()) -> None:
-        self._name_bytes = name.encode("utf-8")
-        self._name = ctypes.create_string_buffer(self._name_bytes)
+    def __init__(self, name: str, version: tuple[int, int, int] = (1, 0, 0), dependencies: tuple[str, ...] = ()) -> None:
+        if not name:
+            raise ValueError("in-process bundle name must not be empty")
+        if any(not isinstance(dependency, str) or not dependency for dependency in dependencies):
+            raise ValueError("in-process dependencies must be non-empty bundle dependency specifications")
+        self._name = name
         self._version = Version(*version)
-        self._dependencies = (ctypes.c_uint64 * len(dependencies))(*dependencies)
+        self._dependencies = dependencies
         self._adapters: list[_Adapter] = []
         self._transfer_lock = threading.Lock()
         self._transferred = False
@@ -192,35 +201,57 @@ class InProcessBundle:
     def add_pipeline_decoder(self, implementation: Any) -> Self:
         if any(adapter.contract_id == 0xE1D7DE773BE6E7F7 for adapter in self._adapters):
             raise ValueError("duplicate in-process contract")
-        self._adapters.append(_Adapter(0xE1D7DE773BE6E7F7, Version(1, 0, 0), "pipeline.Decoder", implementation, [_in_process_pipeline_decoder_decode_abi]))
+        self._adapters.append(_Adapter(0xE1D7DE773BE6E7F7, Version(1, 0, 0), self._name, "pipeline.Decoder", implementation, [_in_process_pipeline_decoder_decode_abi]))
         return self
 
     def add_data_transformer(self, implementation: Any) -> Self:
         if any(adapter.contract_id == 0x4775991362CD68EE for adapter in self._adapters):
             raise ValueError("duplicate in-process contract")
-        self._adapters.append(_Adapter(0x4775991362CD68EE, Version(1, 0, 0), "data.Transformer", implementation, [_in_process_data_transformer_transform_abi]))
+        self._adapters.append(_Adapter(0x4775991362CD68EE, Version(1, 0, 0), self._name, "data.Transformer", implementation, [_in_process_data_transformer_transform_abi]))
         return self
 
     def add_pipeline_encoder(self, implementation: Any) -> Self:
         if any(adapter.contract_id == 0xFC50F9D1D3DB629F for adapter in self._adapters):
             raise ValueError("duplicate in-process contract")
-        self._adapters.append(_Adapter(0xFC50F9D1D3DB629F, Version(1, 0, 0), "pipeline.Encoder", implementation, [_in_process_pipeline_encoder_encode_abi]))
+        self._adapters.append(_Adapter(0xFC50F9D1D3DB629F, Version(1, 0, 0), self._name, "pipeline.Encoder", implementation, [_in_process_pipeline_encoder_encode_abi]))
         return self
 
     def add_data_reporter(self, implementation: Any) -> Self:
         if any(adapter.contract_id == 0x76BB4643A9F5AD68 for adapter in self._adapters):
             raise ValueError("duplicate in-process contract")
-        self._adapters.append(_Adapter(0x76BB4643A9F5AD68, Version(1, 0, 0), "data.Reporter", implementation, [_in_process_data_reporter_report_abi]))
+        self._adapters.append(_Adapter(0x76BB4643A9F5AD68, Version(1, 0, 0), self._name, "data.Reporter", implementation, [_in_process_data_reporter_report_abi]))
         return self
 
     def add_pipeline_validator(self, implementation: Any) -> Self:
         if any(adapter.contract_id == 0x45173A959EEC57C5 for adapter in self._adapters):
             raise ValueError("duplicate in-process contract")
-        self._adapters.append(_Adapter(0x45173A959EEC57C5, Version(1, 0, 0), "pipeline.Validator", implementation, [_in_process_pipeline_validator_validate_abi]))
+        self._adapters.append(_Adapter(0x45173A959EEC57C5, Version(1, 0, 0), self._name, "pipeline.Validator", implementation, [_in_process_pipeline_validator_validate_abi]))
         return self
 
-    def _in_process_registration(self) -> InProcessBundleRegistration:
+    def _in_process_manifest(self) -> bytes:
         if not self._adapters:
             raise ValueError("in-process bundle requires at least one contract")
-        self._contracts = (InProcessContractRegistration * len(self._adapters))(*(InProcessContractRegistration(adapter.descriptor, ctypes.addressof(adapter.interface), adapter.context) for adapter in self._adapters))
-        return InProcessBundleRegistration(InProcessBundleMetadata(StringView(ctypes.cast(self._name, ctypes.c_void_p), len(self._name_bytes)), self._version, SupportedLanguage.Python), ctypes.cast(self._dependencies, ctypes.c_void_p) if self._dependencies else None, len(self._dependencies), ctypes.cast(self._contracts, ctypes.c_void_p), len(self._contracts))
+        provides = [f"{adapter.contract_name}@{adapter.interface.contract_version.major}" for adapter in self._adapters]
+        function_count = ", ".join(
+            f"{json.dumps(adapter.contract_name + '@' + str(adapter.interface.contract_version.major))} = {adapter.function_count}"
+            for adapter in self._adapters
+        )
+        identifier = 0xCBF29CE484222325
+        for byte in self._name.encode("utf-8"):
+            identifier = ((identifier ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+        lines = [
+            f"name = {json.dumps(self._name)}",
+            f"id = {identifier}",
+            f"version = {json.dumps(f'{self._version.major}.{self._version.minor}.{self._version.patch}')}",
+            'loader = "in-process"',
+            'file = "in-process"',
+            f"provides = [{', '.join(json.dumps(provide) for provide in provides)}]",
+            f"function_count = {{ {function_count} }}",
+            "needs_reinit_on_dep_reload = false",
+        ]
+        if self._dependencies:
+            lines.append(f"bundle_dependencies = [{', '.join(json.dumps(dependency) for dependency in self._dependencies)}]")
+        return ("\n".join(lines) + "\n").encode("utf-8")
+
+    def _in_process_contracts(self) -> tuple[tuple[PluginDescriptor, GuestContractInterface], ...]:
+        return tuple((adapter.descriptor, adapter.interface) for adapter in self._adapters)

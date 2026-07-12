@@ -32,7 +32,7 @@ use polyplug_abi::StringView;
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
-use polyplug_abi::in_process::reject_in_process_bundle;
+
 use polyplug_utils::BundleId;
 
 mod common;
@@ -434,7 +434,6 @@ fn test_panic_returns_abi_error_panic() {
     let host_interface: HostApi = HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: capture_register_callback,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: noop_alloc,
         free: noop_free,
         find_guest_contract: noop_find_guest_contract,

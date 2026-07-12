@@ -14,7 +14,7 @@ use libloading::{Library, Symbol};
 use polyplug::runtime_store::RuntimeStore;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
-use polyplug_abi::in_process::reject_in_process_bundle;
+
 use polyplug_abi::{
     AbiError, AbiErrorCode, Array, Buffer, BundleInitContext, DependencyInfo, GuestContractHandle,
     GuestContractInstance, GuestContractInterface, HostApi, HostContractInstance,
@@ -256,7 +256,6 @@ fn init_memory_plugin_interface(library: &Library) -> *const GuestContractInterf
     let host_interface: HostApi = HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: registry_register_callback,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: noop_alloc,
         free: noop_free,
         find_guest_contract: noop_find_guest_contract,

@@ -25,7 +25,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
-use polyplug_abi::in_process::reject_in_process_bundle;
+
 use polyplug_utils::BundleId;
 use polyplug_utils::GuestContractId;
 
@@ -281,7 +281,6 @@ fn test_init_registers_interface() {
     let host_interface: HostApi = HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: capture_register,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: noop_alloc,
         free: noop_free,
         find_guest_contract: noop_find_guest_contract,

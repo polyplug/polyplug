@@ -31,7 +31,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::StringView;
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::ffi as abi_ffi;
-use polyplug_abi::in_process::reject_in_process_bundle;
+
 use polyplug_abi::string_view_null;
 use polyplug_codegen::{GenerateConfig, Lang, Side};
 use polyplug_utils::BundleId;
@@ -456,7 +456,6 @@ fn test_rust_codegen_compile_and_run() {
     let host_abi: HostApi = HostApi {
         runtime: ptr::null_mut(),
         register_guest_contract: capture_interface_callback,
-        register_in_process_bundle: reject_in_process_bundle,
         alloc: stub_alloc,
         free: stub_free,
         find_guest_contract: stub_find_guest_contract,

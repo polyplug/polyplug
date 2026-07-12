@@ -42,7 +42,6 @@ public sealed class Runtime
     private GetErrorLenDelegate? _getErrorLenFn;
     private RegisterHostContractDelegate? _registerHostContractFn;
     private RegisterLoaderDelegate? _registerLoaderFn;
-    private RegisterInProcessBundleDelegate? _registerInProcessBundleFn;
     private FreeDelegate? _freeFn;
 
     // ─── Function pointer delegate types (18-03) ─────────────────────────────────
@@ -85,12 +84,6 @@ public sealed class Runtime
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void RegisterLoaderDelegate(nint host, nint loaderPtr, out AbiError outErr);
 
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private unsafe delegate void RegisterInProcessBundleDelegate(
-        nint host,
-        InProcessBundleRegistration* registration,
-        out ulong outBundleId,
-        out AbiError outErr);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void FreeDelegate(nint host, nint ptr, nuint size, nuint align);
@@ -275,8 +268,6 @@ public sealed class Runtime
         _getErrorLenFn = Marshal.GetDelegateForFunctionPointer<GetErrorLenDelegate>(_hostStruct.GetErrorLen);
         _registerHostContractFn = Marshal.GetDelegateForFunctionPointer<RegisterHostContractDelegate>(_hostStruct.RegisterHostContract);
         _registerLoaderFn = Marshal.GetDelegateForFunctionPointer<RegisterLoaderDelegate>(_hostStruct.RegisterLoader);
-        _registerInProcessBundleFn = Marshal.GetDelegateForFunctionPointer<RegisterInProcessBundleDelegate>(
-            _hostStruct.RegisterInProcessBundle);
         _freeFn = Marshal.GetDelegateForFunctionPointer<FreeDelegate>(_hostStruct.Free);
     }
 
@@ -517,10 +508,11 @@ public sealed class Runtime
     }
 
     /// <summary>
-    /// Registers a complete in-process bundle in one native transaction and
-    /// retains its managed resident for this runtime's logical lifetime.
+    /// Registers a generated in-process bundle through canonical manifest staging.
+    /// The resident transfers to this runtime only after every contract registers
+    /// and the staged transaction commits successfully.
     /// </summary>
-    /// <param name="bundle">Generated registration and its managed resident.</param>
+    /// <param name="bundle">Generated manifest, descriptor/interface registrar, and managed resident.</param>
     /// <returns>The stable identifier derived by the runtime for the bundle.</returns>
     public unsafe ulong RegisterInProcessBundle(InProcessBundle bundle)
     {
@@ -530,21 +522,45 @@ public sealed class Runtime
         {
             throw new InvalidOperationException("In-process bundle has already been registered.");
         }
+
+        ulong bundleId = 0;
+        bool staged = false;
         try
         {
-            InProcessBundleRegistration registration = bundle.Registration;
             lock (_inProcessBundlesGate)
             {
-                ulong bundleId = 0;
-                AbiError error = default;
-                _registerInProcessBundleFn!(_host, &registration, out bundleId, out error);
-                CheckAbiError(error, "Failed to register in-process bundle.");
+                _inProcessBundles.EnsureCapacity(_inProcessBundles.Count + 1);
+                byte[] manifest = bundle.Manifest;
+                AbiError beginError = default;
+                fixed (byte* manifestBytes = manifest)
+                {
+                    NativeMethods.PolyplugBeginInProcessBundle(
+                        _host,
+                        manifestBytes,
+                        (nuint)manifest.Length,
+                        (uint)SupportedLanguage.Dotnet,
+                        &bundleId,
+                        &beginError);
+                    CheckAbiError(beginError, "Failed to begin in-process bundle registration.");
+                }
+
+                staged = true;
+                CheckAbiError(bundle.RegisterContracts(_host), "Failed to register in-process guest contract.");
+                AbiError commitError = default;
+                NativeMethods.PolyplugCommitInProcessBundle(_host, bundleId, &commitError);
+                staged = false;
+                CheckAbiError(commitError, "Failed to commit in-process bundle registration.");
                 _inProcessBundles.Add(bundleId, bundle);
                 return bundleId;
             }
         }
         catch
         {
+            if (staged)
+            {
+                NativeMethods.PolyplugAbortInProcessBundle(_host, bundleId);
+            }
+
             bundle.CancelTransfer();
             throw;
         }

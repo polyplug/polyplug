@@ -9,7 +9,6 @@ pub mod dispatch;
 pub mod ffi;
 pub mod guest;
 pub mod host;
-pub mod in_process;
 pub mod plugin;
 pub mod runtime;
 mod supported_language;
@@ -41,9 +40,6 @@ pub use types::{abi_error_ok, string_view_from_static, string_view_null};
 // ─── New exports from guest module ───────────────────────────────────────────
 
 pub use guest::{GuestContractInstance, GuestContractInterface};
-pub use in_process::{
-    InProcessBundleMetadata, InProcessBundleRegistration, InProcessContractRegistration,
-};
 
 // ─── New exports from host module ────────────────────────────────────────────
 

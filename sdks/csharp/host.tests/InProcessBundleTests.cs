@@ -1,87 +1,28 @@
 using System;
-using System.Reflection;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
+
 using Polyplug.Abi;
 using Polyplug.Host;
+
 using Xunit;
 
 namespace Polyplug.Host.Tests;
 
 public sealed unsafe class InProcessBundleTests
 {
-    [Fact]
-    public void RegistrationIsAtomicAndResidentSurvivesGcUntilSuccessfulUnload()
+    static InProcessBundleTests()
     {
-        using FakeHost host = new();
-        Runtime runtime = new(host.Pointer, default, default);
-        try
-        {
-            WeakReference residentReference;
-
-            {
-                RegistrationResident resident = new(contractCount: 2);
-                residentReference = new WeakReference(resident);
-                InProcessBundle bundle = new(resident.Registration, resident);
-
-                ulong bundleId = runtime.RegisterInProcessBundle(bundle);
-
-                Assert.Equal(FakeHost.BundleId, bundleId);
-                Assert.Equal((nuint)2, FakeHost.CapturedRegistration.ContractCount);
-                Assert.Equal(1, runtime.InProcessBundleCount);
-            }
-
-            Collect();
-            Assert.True(residentReference.IsAlive);
-
-            FakeHost.UnloadError = AbiErrorCode.Generic;
-            Assert.Throws<InvalidOperationException>(() => runtime.UnloadBundle(FakeHost.BundleId));
-            Assert.Equal(1, runtime.InProcessBundleCount);
-
-            FakeHost.UnloadError = AbiErrorCode.Ok;
-            runtime.UnloadBundle(FakeHost.BundleId);
-            Assert.Equal(0, runtime.InProcessBundleCount);
-        }
-        finally
-        {
-            Detach(runtime);
-        }
+        TestNativeLibraries.EnsureInstalled();
     }
 
     [Fact]
-    public void FailedRegistrationDoesNotRetainResident()
+    public void RegistrationStagesCanonicalManifestAndKeepsStatePerRuntime()
     {
-        using FakeHost host = new();
-        Runtime runtime = new(host.Pointer, default, default);
-        RegistrationResident resident = new(contractCount: 1);
-        try
-        {
-            InProcessBundle bundle = new(resident.Registration, resident);
-            FakeHost.RegisterError = AbiErrorCode.Generic;
-
-            Assert.Throws<InvalidOperationException>(() => runtime.RegisterInProcessBundle(bundle));
-            Assert.Equal(0, runtime.InProcessBundleCount);
-            Assert.False(resident.IsDisposed);
-            FakeHost.RegisterError = AbiErrorCode.Ok;
-            ulong bundleId = runtime.RegisterInProcessBundle(bundle);
-            Assert.Equal(FakeHost.BundleId, bundleId);
-            Assert.Throws<InvalidOperationException>(() => runtime.RegisterInProcessBundle(bundle));
-            runtime.UnloadBundle(bundleId);
-        }
-        finally
-        {
-            resident.Dispose();
-            Detach(runtime);
-        }
-    }
-
-    [Fact]
-    public void GeneratedAdapterKeepsStatePerRuntimeAcrossGcAndUnloadFailure()
-    {
-        using FakeHost hostA = new();
-        using FakeHost hostB = new();
-        Runtime runtimeA = new(hostA.Pointer, default, default);
-        Runtime runtimeB = new(hostB.Pointer, default, default);
+        Runtime runtimeA = new();
+        Runtime runtimeB = new();
         try
         {
             int callsA = 0;
@@ -91,40 +32,113 @@ public sealed unsafe class InProcessBundleTests
             InProcessBundle bundleB = transformer.InProcessBundleFactory.CreateInProcessBundle(
                 _ => new StatefulTransformer(() => callsB++));
 
-            runtimeA.RegisterInProcessBundle(bundleA);
-            InProcessBundleRegistration registrationA = FakeHost.CapturedRegistration;
-            runtimeB.RegisterInProcessBundle(bundleB);
-            InProcessBundleRegistration registrationB = FakeHost.CapturedRegistration;
+            ulong bundleIdA = runtimeA.RegisterInProcessBundle(bundleA);
+            ulong bundleIdB = runtimeB.RegisterInProcessBundle(bundleB);
 
             Collect();
-            InvokeTransform(runtimeA.HostHandle, registrationA);
-            InvokeTransform(runtimeB.HostHandle, registrationB);
-            Assert.Equal(1, callsA);
-            Assert.Equal(1, callsB);
+            InvokeTransform(runtimeA, ref callsA);
+            InvokeTransform(runtimeB, ref callsB);
 
-            FakeHost.UnloadError = AbiErrorCode.Generic;
-            Assert.Throws<InvalidOperationException>(() => runtimeA.UnloadBundle(FakeHost.BundleId));
-            InvokeTransform(runtimeA.HostHandle, registrationA);
-            Assert.Equal(2, callsA);
-
-            FakeHost.UnloadError = AbiErrorCode.Ok;
-            runtimeA.UnloadBundle(FakeHost.BundleId);
-            runtimeB.UnloadBundle(FakeHost.BundleId);
+            runtimeA.UnloadBundle(bundleIdA);
+            runtimeB.UnloadBundle(bundleIdB);
         }
         finally
         {
-            Detach(runtimeA);
-            Detach(runtimeB);
+            GC.KeepAlive(runtimeA);
+            GC.KeepAlive(runtimeB);
         }
     }
 
-    private static void InvokeTransform(nint host, InProcessBundleRegistration registration)
+    [Fact]
+    public void ContractRegistrationFailureAbortsStagingAndDoesNotTransferResident()
     {
-        InProcessContractRegistration contract = Marshal.PtrToStructure<InProcessContractRegistration>(registration.Contracts);
-        GuestContractInterface iface = Marshal.PtrToStructure<GuestContractInterface>(contract.Interface);
+        Runtime runtime = new();
+        CommitFailureResident failedResident = new(failRegistration: true);
+        try
+        {
+            InProcessBundle failedBundle = new(
+                ReadTransformerManifest(),
+                failedResident,
+                failedResident.RegisterContracts);
+
+            Assert.Throws<InvalidOperationException>(() => runtime.RegisterInProcessBundle(failedBundle));
+            Assert.False(failedResident.IsDisposed);
+            Assert.Equal(0, runtime.InProcessBundleCount);
+
+            failedResident.AllowRegistration();
+            ulong bundleId = runtime.RegisterInProcessBundle(failedBundle);
+            runtime.UnloadBundle(bundleId);
+        }
+        finally
+        {
+            failedResident.Dispose();
+            GC.KeepAlive(runtime);
+        }
+    }
+
+    [Fact]
+    public void CommitFailureDiscardsStagingWithoutAbortingTwice()
+    {
+        Runtime runtime = new();
+        CommitFailureResident failedResident = new();
+        try
+        {
+            string manifest = Encoding.UTF8.GetString(ReadTransformerManifest());
+            string invalidManifest = manifest.Replace(
+                "\"data.Transformer@1\" = 1",
+                "\"data.Transformer@1\" = 2",
+                StringComparison.Ordinal);
+            Assert.NotEqual(manifest, invalidManifest);
+            InProcessBundle failedBundle = new(
+                Encoding.UTF8.GetBytes(invalidManifest),
+                failedResident,
+                failedResident.RegisterContracts);
+
+            Assert.Throws<InvalidOperationException>(() => runtime.RegisterInProcessBundle(failedBundle));
+            Assert.False(failedResident.IsDisposed);
+            Assert.Equal(0, runtime.InProcessBundleCount);
+
+            InProcessBundle succeedingBundle = CreateTransformerBundle(() => { });
+            ulong bundleId = runtime.RegisterInProcessBundle(succeedingBundle);
+            runtime.UnloadBundle(bundleId);
+        }
+        finally
+        {
+            failedResident.Dispose();
+            GC.KeepAlive(runtime);
+        }
+    }
+
+    private static InProcessBundle CreateTransformerBundle(Action increment)
+    {
+        return transformer.InProcessBundleFactory.CreateInProcessBundle(
+            _ => new StatefulTransformer(increment));
+    }
+
+    private static byte[] ReadTransformerManifest()
+    {
+        return File.ReadAllBytes(Path.Combine(
+            TestNativeLibraries.RepoRoot,
+            "examples",
+            "guests",
+            "csharp",
+            "transformer",
+            "generated",
+            "manifest.toml"));
+    }
+
+    private static void InvokeTransform(Runtime runtime, ref int calls)
+    {
+        GuestContractHandle handle = runtime.FindGuestContract(
+            TransformerInterfaces.DATA_TRANSFORMER_CONTRACT_ID,
+            minVersion: 1);
+        nint interfacePtr = runtime.ResolveGuestContract(handle);
+        Assert.NotEqual(nint.Zero, interfacePtr);
+
+        GuestContractInterface iface = Marshal.PtrToStructure<GuestContractInterface>(interfacePtr);
         var create = (delegate* unmanaged[Cdecl]<nint, VmLoaderData, nint, nint, GuestContractInstance*, void>)iface.CreateInstance;
         GuestContractInstance instance = default;
-        create(iface.AdapterContext, default, host, nint.Zero, &instance);
+        create(iface.AdapterContext, default, runtime.HostHandle, nint.Zero, &instance);
         Assert.NotEqual(nint.Zero, instance.Data);
 
         var dispatch = (delegate* unmanaged[Cdecl]<nint, GuestContractInstance, nint, nint, AbiError*, void>)Marshal.ReadIntPtr(iface.Dispatch.Native.Functions);
@@ -138,6 +152,7 @@ public sealed unsafe class InProcessBundleTests
             dispatch(iface.AdapterContext, instance, (nint)(&input), (nint)(&output), &error);
             Assert.Equal((uint)AbiErrorCode.Ok, error.Code);
             Assert.Equal((nuint)1, output.Len);
+            Assert.Equal(1, calls);
         }
         finally
         {
@@ -145,7 +160,7 @@ public sealed unsafe class InProcessBundleTests
         }
 
         var destroy = (delegate* unmanaged[Cdecl]<nint, VmLoaderData, nint, GuestContractInstance, void>)iface.DestroyInstance;
-        destroy(iface.AdapterContext, default, host, instance);
+        destroy(iface.AdapterContext, default, runtime.HostHandle, instance);
     }
 
     private sealed class StatefulTransformer(Action increment) : IDataTransformerGuestContract
@@ -156,44 +171,77 @@ public sealed unsafe class InProcessBundleTests
             return input;
         }
     }
-    private static void Collect()
-    {
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        GC.Collect();
-    }
 
-    private static void Detach(Runtime runtime)
-    {
-        typeof(Runtime).GetField("_host", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(runtime, nint.Zero);
-    }
+    private sealed class CommitFailureResident : IDisposable
 
-    private sealed class RegistrationResident : IDisposable
     {
-        private readonly ulong[] _dependencies;
-        private readonly InProcessContractRegistration[] _contracts;
-        private GCHandle _dependenciesPin;
-        private GCHandle _contractsPin;
+        private readonly nint[] _functions;
+        private readonly GuestContractInterface[] _interfaces;
+        private readonly PluginDescriptor[] _descriptors;
+        private readonly byte[] _pluginName = Encoding.UTF8.GetBytes("transformer");
+        private readonly byte[] _contractName = Encoding.UTF8.GetBytes("data.Transformer@1");
+        private readonly GCHandle[] _pins;
 
-        internal RegistrationResident(int contractCount)
+        private bool _failRegistration;
+
+        internal CommitFailureResident(bool failRegistration = false)
         {
-            _dependencies = [0xD1UL];
-            _contracts = new InProcessContractRegistration[contractCount];
-            _dependenciesPin = GCHandle.Alloc(_dependencies, GCHandleType.Pinned);
-            _contractsPin = GCHandle.Alloc(_contracts, GCHandleType.Pinned);
-            Registration = new InProcessBundleRegistration
+            _failRegistration = failRegistration;
+            _functions = [(nint)(delegate* unmanaged[Cdecl]<nint, GuestContractInstance, nint, nint, AbiError*, void>)&Dispatch];
+            _pins = new GCHandle[5];
+            _pins[0] = GCHandle.Alloc(_functions, GCHandleType.Pinned);
+            _interfaces =
+            [
+                new GuestContractInterface
+                {
+                    ContractId = 0x4775991362CD68EEUL,
+                    ContractVersion = new Polyplug.Abi.Version { Major = 1, Minor = 0, Patch = 0 },
+                    DispatchType = DispatchType.Native,
+                    CreateInstance = (nint)(delegate* unmanaged[Cdecl]<nint, VmLoaderData, nint, nint, GuestContractInstance*, void>)&CreateInstance,
+                    DestroyInstance = (nint)(delegate* unmanaged[Cdecl]<nint, VmLoaderData, nint, GuestContractInstance, void>)&DestroyInstance,
+                    Dispatch = new DispatchMechanisms
+                    {
+                        Native = new NativeDispatch { FunctionCount = 1, Functions = _pins[0].AddrOfPinnedObject() },
+                    },
+                },
+            ];
+            _descriptors = new PluginDescriptor[1];
+            _pins[1] = GCHandle.Alloc(_interfaces, GCHandleType.Pinned);
+            _pins[2] = GCHandle.Alloc(_descriptors, GCHandleType.Pinned);
+            _pins[3] = GCHandle.Alloc(_pluginName, GCHandleType.Pinned);
+            _pins[4] = GCHandle.Alloc(_contractName, GCHandleType.Pinned);
+            _descriptors[0] = new PluginDescriptor
             {
-                DependencyIds = _dependenciesPin.AddrOfPinnedObject(),
-                DependencyCount = (nuint)_dependencies.Length,
-                Contracts = _contractsPin.AddrOfPinnedObject(),
-                ContractCount = (nuint)_contracts.Length,
+                Name = new StringView { Ptr = _pins[3].AddrOfPinnedObject(), Len = (nuint)_pluginName.Length },
+                ContractName = new StringView { Ptr = _pins[4].AddrOfPinnedObject(), Len = (nuint)_contractName.Length },
+                Version = new Polyplug.Abi.Version { Major = 1, Minor = 0, Patch = 0 },
             };
         }
 
-        internal InProcessBundleRegistration Registration { get; }
-
         internal bool IsDisposed { get; private set; }
+
+        internal void AllowRegistration()
+        {
+            _failRegistration = false;
+        }
+
+        internal unsafe AbiError RegisterContracts(nint hostPtr)
+        {
+            if (_failRegistration)
+            {
+                return new AbiError { Code = (uint)AbiErrorCode.Generic };
+            }
+
+            var host = (HostApi*)hostPtr;
+            var register = (delegate* unmanaged[Cdecl]<nint, PluginDescriptor*, GuestContractInterface*, AbiError*, void>)host->RegisterGuestContract;
+            AbiError error = default;
+            register(
+                hostPtr,
+                (PluginDescriptor*)_pins[2].AddrOfPinnedObject(),
+                (GuestContractInterface*)_pins[1].AddrOfPinnedObject(),
+                &error);
+            return error;
+        }
 
         public void Dispose()
         {
@@ -202,74 +250,70 @@ public sealed unsafe class InProcessBundleTests
                 return;
             }
 
-            _dependenciesPin.Free();
-            _contractsPin.Free();
             IsDisposed = true;
+            foreach (GCHandle pin in _pins)
+            {
+                if (pin.IsAllocated)
+                {
+                    pin.Free();
+                }
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+        private static void CreateInstance(
+            nint adapterContext,
+            VmLoaderData loaderData,
+            nint host,
+            nint args,
+            GuestContractInstance* outInstance)
+        {
+            _ = adapterContext;
+            _ = loaderData;
+            _ = host;
+            _ = args;
+            if (outInstance != null)
+            {
+                *outInstance = default;
+            }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+        private static void DestroyInstance(
+            nint adapterContext,
+            VmLoaderData loaderData,
+            nint host,
+            GuestContractInstance instance)
+        {
+            _ = adapterContext;
+            _ = loaderData;
+            _ = host;
+            _ = instance;
+        }
+
+        [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+        private static void Dispatch(
+            nint adapterContext,
+            GuestContractInstance instance,
+            nint args,
+            nint output,
+            AbiError* outError)
+        {
+            _ = adapterContext;
+            _ = instance;
+            _ = args;
+            _ = output;
+            if (outError != null)
+            {
+                *outError = new AbiError { Code = (uint)AbiErrorCode.Ok };
+            }
         }
     }
 
-    private sealed class FakeHost : IDisposable
+    private static void Collect()
     {
-        internal const ulong BundleId = 0xB0A7D1EUL;
-        private readonly nint _memory;
-
-        internal FakeHost()
-        {
-            RegisterError = AbiErrorCode.Ok;
-            UnloadError = AbiErrorCode.Ok;
-            CapturedRegistration = default;
-
-            HostApi api = new();
-            object boxed = api;
-            foreach (FieldInfo field in typeof(HostApi).GetFields(BindingFlags.Public | BindingFlags.Instance))
-            {
-                if (field.FieldType == typeof(nint))
-                {
-                    field.SetValue(boxed, (nint)(delegate* unmanaged[Cdecl]<void>)&NeverCall);
-                }
-            }
-            api = (HostApi)boxed;
-            api.RegisterInProcessBundle = (nint)(delegate* unmanaged[Cdecl]<nint, InProcessBundleRegistration*, ulong*, AbiError*, void>)&Register;
-            api.UnloadBundle = (nint)(delegate* unmanaged[Cdecl]<nint, ulong, AbiError*, void>)&Unload;
-
-            _memory = Marshal.AllocHGlobal(Marshal.SizeOf<HostApi>());
-            Marshal.StructureToPtr(api, _memory, false);
-        }
-
-        internal nint Pointer => _memory;
-        internal static AbiErrorCode RegisterError { get; set; }
-        internal static AbiErrorCode UnloadError { get; set; }
-        internal static InProcessBundleRegistration CapturedRegistration { get; private set; }
-
-        public void Dispose()
-        {
-            Marshal.DestroyStructure<HostApi>(_memory);
-            Marshal.FreeHGlobal(_memory);
-        }
-
-        [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-        private static void NeverCall()
-        {
-        }
-
-        [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-        private static void Register(nint host, InProcessBundleRegistration* registration, ulong* outBundleId, AbiError* outError)
-        {
-            _ = host;
-            if (registration != null)
-            {
-                CapturedRegistration = *registration;
-            }
-            *outBundleId = BundleId;
-            *outError = new AbiError { Code = (uint)RegisterError };
-        }
-
-        [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-        private static void Unload(nint host, ulong bundleId, AbiError* outError)
-        {
-            _ = host;
-            _ = bundleId;
-            *outError = new AbiError { Code = (uint)UnloadError };
-        }
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
     }
 }

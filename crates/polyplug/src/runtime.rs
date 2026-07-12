@@ -40,8 +40,8 @@ use polyplug_abi::runtime::{Compatibility, ReloadPhase, RuntimeConfig, Signature
 use polyplug_abi::types::{Ed25519PublicKey, LogLevel};
 use polyplug_abi::{
     AbiError, AbiErrorCode, Array, DependencyInfo, GuestContractHandle, GuestContractInterface,
-    HostApi, HostContractInstance, HostContractInterface, InProcessBundleRegistration,
-    InProcessContractRegistration, PluginDescriptor, StringView, SupportedLanguage, types::Version,
+    HostApi, HostContractInstance, HostContractInterface, PluginDescriptor, StringView,
+    SupportedLanguage, types::Version,
 };
 use polyplug_signing::{
     BundleVerifier, PinnedKeyVerifier, SigError, verify_bundle as signing_verify_bundle,
@@ -82,49 +82,6 @@ pub(crate) struct ReloadCallback(pub(crate) Arc<dyn Fn(*mut c_void, ReloadPhase)
 pub(crate) struct LoadOptions {
     pub compatibility: Compatibility,
     pub ignore_function_count_mismatch: bool,
-}
-
-/// The runtime instance.
-/// Rust-owned in-process registration coupled with its runtime-local resident.
-///
-/// Core reads the C-ABI registration tables synchronously and retains `resident`
-/// until the bundle is logically unloaded. The resident never crosses the ABI.
-pub struct InProcessBundle<R> {
-    registration: InProcessBundleRegistration,
-    _owned_contracts: Option<Box<[InProcessContractRegistration]>>,
-    resident: Box<R>,
-}
-
-impl<R> InProcessBundle<R> {
-    /// Create an in-process bundle registration with a Rust-owned resident.
-    ///
-    /// The pointer-bearing fields in `registration` must remain valid through the
-    /// synchronous `Runtime::register_in_process_bundle` call.
-    pub fn new(registration: InProcessBundleRegistration, resident: R) -> Self {
-        Self {
-            registration,
-            _owned_contracts: None,
-            resident: Box::new(resident),
-        }
-    }
-
-    /// Create an in-process bundle whose registrations borrow its boxed resident.
-    ///
-    /// `contracts` is retained with the bundle so its callback contexts remain valid
-    /// through registration. The runtime copies the tables synchronously.
-    pub fn with_boxed_resident(
-        mut registration: InProcessBundleRegistration,
-        contracts: Box<[InProcessContractRegistration]>,
-        resident: Box<R>,
-    ) -> Self {
-        registration.contracts = contracts.as_ptr();
-        registration.contract_count = contracts.len();
-        Self {
-            registration,
-            _owned_contracts: Some(contracts),
-            resident,
-        }
-    }
 }
 
 pub struct Runtime {
@@ -263,54 +220,140 @@ impl Runtime {
         RuntimeBuilder::new()
     }
 
-    /// Atomically register a complete Rust-owned in-process bundle.
+    /// Register a Rust-owned in-process bundle through the canonical staged manifest path.
     ///
-    /// Core copies and validates the ABI registration input before publishing it
-    /// through the same prepared-bundle transaction used by loaders. The resident is
-    /// retained by this runtime until logical unload removes the bundle.
-    pub fn register_in_process_bundle<R>(
+    /// `manifest` supplies the existing bundle identity, dependency, lifecycle, and
+    /// provider declarations. `register` invokes the existing `HostApi::register_guest_contract`
+    /// callback once for each generated `PluginDescriptor` and `GuestContractInterface`.
+    /// The resident transfers to this runtime only after every registration validates and the
+    /// staged bundle publishes atomically.
+    pub fn register_in_process_bundle<R, F>(
         &self,
-        bundle: InProcessBundle<R>,
+        manifest: ManifestData,
+        language: SupportedLanguage,
+        resident: R,
+        register: F,
     ) -> Result<BundleId, RuntimeError>
     where
         R: Any + Send + Sync,
+        F: FnOnce(*const HostApi) -> AbiError,
     {
+        let bundle_id: BundleId = self.begin_in_process_bundle(manifest, language)?;
+        let error: AbiError = register(self.host_abi());
+        if !error.is_ok() {
+            self.abort_in_process_bundle(bundle_id);
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: self
+                    .registry
+                    .prepared_manifest(bundle_id)
+                    .map_or_else(|| bundle_id.id().to_string(), |manifest| manifest.name),
+                error: "generated guest registration failed".to_owned(),
+            }));
+        }
+        let registration_result: Result<BundleId, RuntimeError> =
+            self.commit_in_process_bundle(bundle_id);
+        if registration_result.is_err() {
+            self.registry.discard_prepared_bundle(bundle_id);
+            return registration_result;
+        }
+
         let mut residents: RecoveringGuard<
             MutexGuard<'_, HashMap<BundleId, Box<dyn Any + Send + Sync>>>,
         > = self
             .in_process_residents
             .lock()
             .recover_poisoned(self.logger, "runtime");
-        // SAFETY: InProcessBundle::new requires its pointer-bearing fields to remain
-        // valid for this synchronous registration call.
-        let bundle_id: BundleId = unsafe {
-            self.registry
-                .register_in_process_bundle(&bundle.registration)?
-        };
         let previous: Option<Box<dyn Any + Send + Sync>> =
-            residents.insert(bundle_id, bundle.resident);
+            residents.insert(bundle_id, Box::new(resident));
         debug_assert!(
             previous.is_none(),
             "logical unload must release the prior in-process resident"
         );
+        registration_result
+    }
+
+    /// Begin a non-Rust in-process registration transaction from canonical manifest data.
+    ///
+    /// The caller must register each contract through `HostApi::register_guest_contract` on the
+    /// current thread, then call `commit_in_process_bundle` or `abort_in_process_bundle`.
+    pub(crate) fn begin_in_process_bundle(
+        &self,
+        manifest: ManifestData,
+        language: SupportedLanguage,
+    ) -> Result<BundleId, RuntimeError> {
+        manifest
+            .validate()
+            .map_err(|error: ManifestError| RuntimeError::Loader(error.into()))?;
+        let bundle_id: BundleId = BundleId::new(&manifest.name);
+        if self.registry.get_bundle_descriptor(bundle_id).is_some() {
+            return Err(RuntimeError::Registry(
+                RegistryError::BundleAlreadyRegistered {
+                    bundle: manifest.name,
+                },
+            ));
+        }
+        self.registry.begin_prepared_bundle(manifest, language);
+        self.push_init_bundle_id(bundle_id.id());
         Ok(bundle_id)
     }
 
-    /// Register ABI tables submitted by a non-Rust host SDK.
-    ///
-    /// That SDK retains its own language-native resident keyed by the returned ID.
-    ///
-    /// # Safety
-    ///
-    /// `registration` and all pointer-bearing contents must satisfy the ABI contract
-    /// for this synchronous call.
-    pub(crate) unsafe fn register_in_process_registration(
+    /// Validate and atomically publish a complete in-process registration transaction.
+    pub(crate) fn commit_in_process_bundle(
         &self,
-        registration: &InProcessBundleRegistration,
+        bundle_id: BundleId,
     ) -> Result<BundleId, RuntimeError> {
-        // SAFETY: this method's caller guarantees the complete registration and
-        // every pointer-bearing member remain valid for the synchronous copy.
-        unsafe { self.registry.register_in_process_bundle(registration) }.map_err(Into::into)
+        let result: Result<BundleId, RuntimeError> = (|| {
+            let prepared = self
+                .registry
+                .take_prepared_bundle(bundle_id)
+                .ok_or_else(|| {
+                    RuntimeError::Registry(RegistryError::MissingBundleMetadata {
+                        bundle_id: bundle_id.id(),
+                    })
+                })?;
+            let (manifest, language, contracts) = prepared.into_parts();
+            self.validate_prepared_provider_set(&manifest, &contracts)?;
+            if self.config.compatibility != Compatibility::Yolo {
+                self.validate_prepared_function_counts(
+                    &manifest,
+                    &contracts,
+                    self.config.compatibility,
+                )?;
+            }
+            let version: Version =
+                parse_manifest_version(&manifest.version, &manifest.name, &manifest.path)?;
+            let dependencies: HashSet<GuestContractId> = manifest
+                .dependencies
+                .iter()
+                .map(|dependency: &RawManifestDependency| dependency.contract_id)
+                .collect();
+            let bundle_dependencies: Vec<BundleDependency> = parsed_bundle_dependencies(&manifest);
+            self.registry.register_prepared_bundle(
+                BundleDescriptor {
+                    id: bundle_id,
+                    name: manifest.name.clone(),
+                    version,
+                    runtime: language,
+                    file_path: manifest.path.clone(),
+                    dependencies: bundle_dependencies,
+                },
+                dependencies,
+                contracts,
+            )?;
+            self.bundle_manifests
+                .lock()
+                .recover_poisoned(self.logger, "runtime")
+                .insert(manifest.name.clone(), manifest);
+            Ok(bundle_id)
+        })();
+        self.pop_init_bundle_id();
+        result
+    }
+
+    /// Discard an uncommitted in-process registration transaction.
+    pub(crate) fn abort_in_process_bundle(&self, bundle_id: BundleId) {
+        self.registry.discard_prepared_bundle(bundle_id);
+        self.pop_init_bundle_id();
     }
 
     /// Find the first provider of a contract.
@@ -1975,81 +2018,6 @@ unsafe fn host_register_guest_contract_impl(
     }
 }
 
-/// HostApi callback that registers one complete in-process bundle transaction.
-///
-/// The callback accepts metadata and interface tables only. Each host SDK retains its
-/// language-native implementation resident outside this ABI.
-pub(crate) unsafe extern "C" fn host_register_in_process_bundle(
-    this: *const HostApi,
-    registration: *const InProcessBundleRegistration,
-    out_bundle_id: *mut u64,
-    out_err: *mut AbiError,
-) {
-    if !out_bundle_id.is_null() {
-        // SAFETY: out_bundle_id is non-null and writable per the ABI contract.
-        unsafe { out_bundle_id.write(0) };
-    }
-    let result: AbiError = if this.is_null() {
-        AbiError {
-            code: AbiErrorCode::InvalidPointer as u32,
-            message: StringView::from_static(
-                b"register_in_process_bundle: HostApi pointer is null",
-            ),
-        }
-    } else if registration.is_null() {
-        AbiError {
-            code: AbiErrorCode::InvalidPointer as u32,
-            message: StringView::from_static(
-                b"register_in_process_bundle: registration pointer is null",
-            ),
-        }
-    } else if out_bundle_id.is_null() {
-        AbiError {
-            code: AbiErrorCode::InvalidPointer as u32,
-            message: StringView::from_static(
-                b"register_in_process_bundle: bundle ID output pointer is null",
-            ),
-        }
-    } else {
-        // SAFETY: this and registration were checked non-null; the ABI requires the
-        // pointed HostApi and registration graph to remain valid for this call.
-        let runtime_ptr: *const Runtime = unsafe { (*this).runtime.cast::<Runtime>() };
-        if runtime_ptr.is_null() {
-            AbiError {
-                code: AbiErrorCode::InvalidPointer as u32,
-                message: StringView::from_static(
-                    b"register_in_process_bundle: Runtime pointer is null",
-                ),
-            }
-        } else {
-            // SAFETY: HostApi.runtime points at a live Runtime for this call.
-            let runtime: &Runtime = unsafe { &*runtime_ptr };
-            // SAFETY: registration is non-null and valid for the synchronous call.
-            let registration_ref: &InProcessBundleRegistration = unsafe { &*registration };
-            // SAFETY: the non-null registration and every pointer-bearing member
-            // are valid for this synchronous host callback.
-            match unsafe { runtime.register_in_process_registration(registration_ref) } {
-                Ok(bundle_id) => {
-                    // SAFETY: out_bundle_id was checked non-null and is writable.
-                    unsafe { out_bundle_id.write(bundle_id.id()) };
-                    AbiError::ok()
-                }
-                Err(error) => {
-                    runtime.set_last_error(error.to_string());
-                    AbiError {
-                        code: AbiErrorCode::Generic as u32,
-                        message: StringView::null(),
-                    }
-                }
-            }
-        }
-    };
-    if !out_err.is_null() {
-        // SAFETY: out_err is non-null and writable per the ABI contract.
-        unsafe { out_err.write(result) };
-    }
-}
-
 /// HostApi.alloc callback — allocate memory via the host allocator.
 ///
 /// # Safety
@@ -3033,13 +3001,14 @@ mod tests {
     #![allow(clippy::expect_used)]
     use core::cell::Cell;
     use core::sync::atomic::{AtomicBool, Ordering};
+    use std::collections::HashMap;
     use std::fs;
     use std::panic;
+    use std::path::PathBuf;
 
     use polyplug_abi::{DispatchMechanisms, NativeDispatch};
     use polyplug_utils::{HostContractId, guest_contract_id, host_contract_id};
 
-    use polyplug_abi::{InProcessBundleMetadata, InProcessContractRegistration, SupportedLanguage};
     use tempfile::TempDir;
 
     use super::*;
@@ -3234,47 +3203,33 @@ mod tests {
                 },
             },
         };
-        let contract_a: InProcessContractRegistration = InProcessContractRegistration {
-            descriptor: PluginDescriptor {
-                name: StringView::from_static(b"resident-provider"),
-                contract_name: StringView::from_static(b"resident.contract"),
-                version: Version {
-                    major: 1,
-                    minor: 0,
-                    patch: 0,
-                },
+        let descriptor: PluginDescriptor = PluginDescriptor {
+            name: StringView::from_static(b"resident-provider"),
+            contract_name: StringView::from_static(b"resident.contract"),
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
             },
-            interface: &interface_a,
-            adapter_context: ptr::null_mut(),
         };
-        let registration_a: InProcessBundleRegistration = InProcessBundleRegistration {
-            metadata: InProcessBundleMetadata {
-                name: StringView::from_static(b"runtime-local-resident"),
-                version: Version {
-                    major: 1,
-                    minor: 0,
-                    patch: 0,
-                },
-                runtime: SupportedLanguage::Rust,
-            },
-            dependency_ids: ptr::null(),
-            dependency_count: 0,
-            contracts: &contract_a,
-            contract_count: 1,
+        let mut function_count: HashMap<String, u32> = HashMap::new();
+        function_count.insert("resident.contract@1".to_owned(), 0);
+        let manifest: ManifestData = ManifestData {
+            loader: "rust".to_owned(),
+            name: "runtime-local-resident".to_owned(),
+            dependencies: Vec::new(),
+            id: BundleId::new("runtime-local-resident").id(),
+            version: "1.0.0".to_owned(),
+            file: "in-process".to_owned(),
+            provides: vec!["resident.contract@1.0.0".to_owned()],
+            function_count,
+            needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
+            path: PathBuf::new(),
         };
-
         let interface_b: GuestContractInterface = GuestContractInterface {
             contract_id: GuestContractId::from_u64(0xA173_3A09_4E02_0001),
             ..interface_a
-        };
-        let contract_b: InProcessContractRegistration = InProcessContractRegistration {
-            descriptor: contract_a.descriptor,
-            interface: &interface_b,
-            adapter_context: ptr::null_mut(),
-        };
-        let registration_b: InProcessBundleRegistration = InProcessBundleRegistration {
-            contracts: &contract_b,
-            ..registration_a
         };
 
         let runtime_a: Arc<Runtime> = Runtime::builder().build().expect("build first runtime");
@@ -3282,20 +3237,48 @@ mod tests {
         let dropped_a: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
         let dropped_b: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
         let bundle_a: BundleId = runtime_a
-            .register_in_process_bundle(InProcessBundle::new(
-                registration_a,
+            .register_in_process_bundle(
+                manifest.clone(),
+                SupportedLanguage::Rust,
                 Resident {
                     dropped: Arc::clone(&dropped_a),
                 },
-            ))
+                |host| {
+                    let mut error: AbiError = AbiError::ok();
+                    // SAFETY: host belongs to the active staging transaction and both tables live through this call.
+                    unsafe {
+                        ((*host).register_guest_contract)(
+                            host,
+                            &descriptor,
+                            &interface_a,
+                            &mut error,
+                        );
+                    }
+                    error
+                },
+            )
             .expect("register first runtime bundle");
         runtime_b
-            .register_in_process_bundle(InProcessBundle::new(
-                registration_b,
+            .register_in_process_bundle(
+                manifest,
+                SupportedLanguage::Rust,
                 Resident {
                     dropped: Arc::clone(&dropped_b),
                 },
-            ))
+                |host| {
+                    let mut error: AbiError = AbiError::ok();
+                    // SAFETY: host belongs to the active staging transaction and both tables live through this call.
+                    unsafe {
+                        ((*host).register_guest_contract)(
+                            host,
+                            &descriptor,
+                            &interface_b,
+                            &mut error,
+                        );
+                    }
+                    error
+                },
+            )
             .expect("register second runtime bundle");
 
         assert!(!dropped_a.load(Ordering::SeqCst));
@@ -3383,7 +3366,6 @@ mod tests {
         let host_interface: HostApi = HostApi {
             runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
-            register_in_process_bundle: host_register_in_process_bundle,
             alloc: host_alloc,
             free: host_free,
             find_guest_contract: host_find_guest_contract,
@@ -4491,7 +4473,6 @@ mod tests {
         let host_interface: HostApi = HostApi {
             runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
-            register_in_process_bundle: host_register_in_process_bundle,
             alloc: host_alloc,
             free: host_free,
             find_guest_contract: host_find_guest_contract,
@@ -4536,7 +4517,6 @@ mod tests {
         let host_interface: HostApi = HostApi {
             runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
-            register_in_process_bundle: host_register_in_process_bundle,
             alloc: host_alloc,
             free: host_free,
             find_guest_contract: host_find_guest_contract,
@@ -4656,7 +4636,6 @@ mod tests {
         let host_interface: HostApi = HostApi {
             runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
-            register_in_process_bundle: host_register_in_process_bundle,
             alloc: host_alloc,
             free: host_free,
             find_guest_contract: host_find_guest_contract,
@@ -4747,7 +4726,6 @@ mod tests {
         let host_interface: HostApi = HostApi {
             runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
-            register_in_process_bundle: host_register_in_process_bundle,
             alloc: host_alloc,
             free: host_free,
             find_guest_contract: host_find_guest_contract,
@@ -4849,7 +4827,6 @@ mod tests {
         let host_interface: HostApi = HostApi {
             runtime: Arc::as_ptr(&runtime) as *mut c_void,
             register_guest_contract: host_register_guest_contract,
-            register_in_process_bundle: host_register_in_process_bundle,
             alloc: host_alloc,
             free: host_free,
             find_guest_contract: host_find_guest_contract,

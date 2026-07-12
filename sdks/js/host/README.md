@@ -47,17 +47,22 @@ once create returns.
 
 ## In-process bundles
 
-Generated JavaScript host bindings create an `InProcessBundle` containing one
-complete canonical registration table and a rooted resident. Register it
-synchronously with `Runtime.registerInProcessBundle(bundle)`. The runtime takes
-sole ownership of the resident only after core accepts the entire bundle; the
-resident keeps generated callback handles, implementation factories, objects,
-and table storage reachable for the registered lifetime.
-Successful registration transfers that resident exactly once; a rejected
-registration leaves the bundle reusable.
-Generated callback adapters forward their runtime-local opaque context on every
-lifecycle and dispatch call. A thrown JavaScript callback exception is reported
-to the ABI caller as `AbiErrorCode.Panic`.
+Generated JavaScript bindings export `POLYPLUG_MANIFEST`, the canonical UTF-8
+manifest bytes retained by the bundle. Build an `InProcessBundle` from those
+bytes and its rooted resident, then register it synchronously with
+`Runtime.registerInProcessBundle(bundle)`. The runtime begins native staging,
+uses the existing `HostApi.register_guest_contract` once for each
+`PluginDescriptor` / `GuestContractInterface` pair, and commits atomically.
+Registration failure before commit aborts staging; a commit error has already
+discarded staging in core and leaves the bundle reusable. The runtime takes sole
+ownership of the resident only after commit succeeds, keeping generated callback
+handles, implementation factories, objects, descriptors, and interface storage
+reachable for the registered lifetime.
+
+Generated callback adapters retain their runtime-local opaque context inside
+`GuestContractInterface`; core forwards it to every lifecycle and dispatch
+callback. A thrown JavaScript callback exception is reported to the ABI caller
+as `AbiErrorCode.Panic`.
 
 Pass the JavaScript loader's bridge library explicitly when creating each
 adapter. The bridge expands lifecycle and VM ABI records in Rust, so JavaScript

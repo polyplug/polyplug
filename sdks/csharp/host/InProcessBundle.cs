@@ -6,32 +6,41 @@ using Polyplug.Abi;
 namespace Polyplug.Host;
 
 /// <summary>
-/// Complete in-process registration and the managed state that keeps every
-/// pointer-bearing registration table and callback target alive.
+/// Canonical manifest, contract registrar, and managed state for one in-process
+/// bundle. The resident remains owned by its creator until the staged transaction
+/// commits successfully.
 /// </summary>
 public sealed class InProcessBundle
 {
     private readonly object _resident;
+    private readonly Func<nint, AbiError> _registerContracts;
     private int _released;
     private int _transferred;
 
     /// <summary>
-    /// Creates a bundle registration. The supplied resident is retained by the
-    /// owning <see cref="Runtime"/> only after native registration succeeds.
+    /// Creates a bundle backed by canonical manifest bytes and existing
+    /// <see cref="PluginDescriptor"/> / <see cref="GuestContractInterface"/> pairs.
     /// </summary>
-    /// <param name="registration">The complete canonical registration input.</param>
-    /// <param name="resident">Managed tables, delegates, factories, and implementations referenced by the registration.</param>
-    public InProcessBundle(InProcessBundleRegistration registration, object resident)
+    /// <param name="manifest">Canonical manifest bytes for the bundle.</param>
+    /// <param name="resident">Managed delegates, factories, interfaces, and implementation objects.</param>
+    /// <param name="registerContracts">Registers every descriptor/interface pair with the active staging transaction.</param>
+    public InProcessBundle(byte[] manifest, object resident, Func<nint, AbiError> registerContracts)
     {
+        ArgumentNullException.ThrowIfNull(manifest);
         ArgumentNullException.ThrowIfNull(resident);
-        Registration = registration;
+        ArgumentNullException.ThrowIfNull(registerContracts);
+        if (manifest.Length == 0)
+        {
+            throw new ArgumentException("In-process manifest must not be empty.", nameof(manifest));
+        }
+
+        Manifest = manifest;
         _resident = resident;
+        _registerContracts = registerContracts;
     }
 
-    /// <summary>The canonical registration passed synchronously to the runtime.</summary>
-    public InProcessBundleRegistration Registration { get; }
-
-    internal object Resident => _resident;
+    internal byte[] Manifest { get; }
+    internal AbiError RegisterContracts(nint host) => _registerContracts(host);
     internal bool TryReserveTransfer() =>
         Interlocked.CompareExchange(ref _transferred, 1, 0) == 0;
 

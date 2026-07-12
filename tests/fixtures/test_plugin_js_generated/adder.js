@@ -6,7 +6,7 @@
 // shape through these wrappers. Rebuilt by tests/fixtures/build_all.sh.
 
 import { setTestAdderFactory } from './generated/guest/contracts';
-import { polyplug_init } from './generated/guest/init';
+import { POLYPLUG_MANIFEST, polyplug_init } from './generated/guest/init';
 
 // The factory receives the bridge + host vtable lo/hi explicitly (no global —
 // Rule 12). A StringView-returning method returns a plain string; the generated
@@ -22,4 +22,4 @@ setTestAdderFactory((bridge, hostLo, hostHi) => ({
     fn3: () => {},
 }));
 
-export { polyplug_init };
+export { POLYPLUG_MANIFEST, polyplug_init };

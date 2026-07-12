@@ -16,6 +16,13 @@ ffi.cdef([[
     const HostApi* polyplug_runtime_create(const void* config);
     void polyplug_runtime_destroy(const HostApi* host);
 
+    void polyplug_begin_in_process_bundle(
+        const HostApi* host, const uint8_t* manifest_bytes, size_t manifest_len,
+        uint32_t language, uint64_t* out_bundle_id, AbiError* out_error);
+    void polyplug_commit_in_process_bundle(
+        const HostApi* host, uint64_t bundle_id, AbiError* out_error);
+    void polyplug_abort_in_process_bundle(const HostApi* host, uint64_t bundle_id);
+
     // ─── Custom-logger bridge (polyplug_lua loader-cdylib trampoline) ───
     // LuaJIT FFI callbacks cannot receive structs by value, so a Lua host can
     // never install RuntimeConfig.log directly (its scope/message StringViews
@@ -88,11 +95,18 @@ local FIND_GUEST_CONTRACT_FN_T = ffi.typeof("GuestContractHandle(*)(const HostAp
 local FIND_ALL_FN_T = ffi.typeof(M.FIND_ALL_FN_SIGNATURE)
 local HOST_FREE_FN_T = ffi.typeof("void(*)(const HostApi*, void*, size_t, size_t)")
 local RESOLVE_GUEST_CONTRACT_FN_T = ffi.typeof("const GuestContractInterface*(*)(const HostApi*, GuestContractHandle)")
-local REGISTER_HOST_CONTRACT_FN_T = ffi.typeof("void(*)(const HostApi*, const HostContractInterface*, AbiError*)")
-local REGISTER_LOADER_FN_T = ffi.typeof("void(*)(const HostApi*, void*, AbiError*)")
-local REGISTER_IN_PROCESS_BUNDLE_FN_T = ffi.typeof(
-    "void(*)(const HostApi*, const InProcessBundleRegistration*, uint64_t*, AbiError*)"
+local REGISTER_GUEST_CONTRACT_FN_T = ffi.typeof(
+    "void(*)(const HostApi*, const PluginDescriptor*, const GuestContractInterface*, AbiError*)"
 )
+local REGISTER_HOST_CONTRACT_FN_T = ffi.typeof(
+    "void(*)(const HostApi*, const HostContractInterface*, AbiError*)"
+)
+local REGISTER_LOADER_FN_T = ffi.typeof("void(*)(const HostApi*, void*, AbiError*)")
+local BEGIN_IN_PROCESS_BUNDLE_FN_T = ffi.typeof(
+    "void(*)(const HostApi*, const uint8_t*, size_t, uint32_t, uint64_t*, AbiError*)"
+)
+local COMMIT_IN_PROCESS_BUNDLE_FN_T = ffi.typeof("void(*)(const HostApi*, uint64_t, AbiError*)")
+local ABORT_IN_PROCESS_BUNDLE_FN_T = ffi.typeof("void(*)(const HostApi*, uint64_t)")
 
 M.bundle_id = abi.bundle_id
 M.host_contract_id = abi.host_contract_id
@@ -432,35 +446,64 @@ function M.Runtime:reload_bundle(path)
     end
 end
 
---- Register one complete generated in-process bundle.
+--- Register one generated in-process bundle through canonical manifest staging.
 ---
---- `bundle` is the generated adapter's owned registration object. Its
---- `registration` cdata and `resident` table stay alive through the synchronous
---- ABI call; on success the resident is retained by this Runtime under the
---- returned bundle id. This method deliberately accepts no implementation
---- pointer: generated adapters keep language objects in the resident.
---- @param bundle table  Generated bundle with `registration` and `resident`.
+--- The generated bundle owns canonical manifest bytes, descriptor/interface pairs,
+--- and its Lua resident. This method starts staging, registers each pair through
+--- HostApi.register_guest_contract, then commits atomically. A registration failure
+--- aborts the open stage; a rejected commit has already discarded it.
+--- @param bundle table  Generated bundle with `manifest`, `contracts`, and `resident`.
 --- @return cdata         Nonzero uint64 bundle id.
 function M.Runtime:register_in_process_bundle(bundle)
     if self._destroyed or self._host == nil then
         error("register_in_process_bundle: runtime is destroyed", 2)
     end
-    if type(bundle) ~= "table" or bundle.registration == nil or bundle.resident == nil then
-        error("register_in_process_bundle: expected generated bundle { registration, resident }", 2)
+    if type(bundle) ~= "table" or type(bundle.manifest) ~= "string"
+        or type(bundle.contracts) ~= "table" or bundle.resident == nil then
+        error("register_in_process_bundle: expected generated bundle { manifest, contracts, resident }", 2)
     end
 
-    local fn = ffi.cast(
-        REGISTER_IN_PROCESS_BUNDLE_FN_T,
-        self._host_struct.register_in_process_bundle
-    )
+    local manifest_bytes = ffi.new("uint8_t[?]", #bundle.manifest, bundle.manifest)
     local bundle_id = ffi.new("uint64_t[1]")
     local err = ffi.new("AbiError[1]")
-    fn(self._host, bundle.registration, bundle_id, err)
+    local begin = ffi.cast(BEGIN_IN_PROCESS_BUNDLE_FN_T, self._lib.polyplug_begin_in_process_bundle)
+    begin(self._host, manifest_bytes, #bundle.manifest, ffi.C.SupportedLanguage_Lua, bundle_id, err)
     if err[0].code ~= ffi.C.AbiErrorCode_Ok then
-        error("register_in_process_bundle failed: " .. M.last_error(self._host, self._lib), 2)
+        error("register_in_process_bundle begin failed: " .. M.last_error(self._host, self._lib), 2)
     end
 
     local id = bundle_id[0]
+    local abort = ffi.cast(ABORT_IN_PROCESS_BUNDLE_FN_T, self._lib.polyplug_abort_in_process_bundle)
+    local register = ffi.cast(REGISTER_GUEST_CONTRACT_FN_T, self._host_struct.register_guest_contract)
+    local registration_ok, registration_failure = xpcall(function()
+        for index, contract in ipairs(bundle.contracts) do
+            if type(contract) ~= "table" or contract.descriptor == nil or contract.interface == nil then
+                error("register_in_process_bundle: generated contract " .. index .. " is invalid", 0)
+            end
+            register(self._host, contract.descriptor, contract.interface, err)
+            if err[0].code ~= ffi.C.AbiErrorCode_Ok then
+                error("register_in_process_bundle contract registration failed: "
+                    .. M.last_error(self._host, self._lib), 0)
+            end
+        end
+    end, debug.traceback)
+    if not registration_ok then
+        abort(self._host, id)
+        error(registration_failure, 0)
+    end
+
+    local commit = ffi.cast(COMMIT_IN_PROCESS_BUNDLE_FN_T, self._lib.polyplug_commit_in_process_bundle)
+    local commit_returned, commit_failure = xpcall(function()
+        commit(self._host, id, err)
+    end, debug.traceback)
+    if not commit_returned then
+        abort(self._host, id)
+        error(commit_failure, 0)
+    end
+    if err[0].code ~= ffi.C.AbiErrorCode_Ok then
+        error("register_in_process_bundle commit failed: " .. M.last_error(self._host, self._lib), 2)
+    end
+
     local key = tostring(id)
     if self._in_process_residents[key] ~= nil then
         error("register_in_process_bundle: runtime returned a duplicate live bundle id", 2)

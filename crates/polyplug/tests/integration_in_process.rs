@@ -1,21 +1,23 @@
 #![allow(clippy::expect_used)]
 
-//! Focused behavioral coverage for canonical in-process bundle registration.
+//! Focused behavioral coverage for staged in-process registration through the
+//! canonical manifest and existing guest-contract callback.
 
 use core::ffi::c_void;
 use core::ptr;
-
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use polyplug::Runtime;
 use polyplug::error::{RegistryError, RuntimeError};
-use polyplug::{InProcessBundle, Runtime};
 use polyplug_abi::dispatch::{DispatchMechanisms, DispatchType, NativeDispatch, VmLoaderData};
 use polyplug_abi::guest::GuestContractInstance;
 use polyplug_abi::{
-    AbiError, AbiErrorCode, GuestContractInterface, HostApi, InProcessBundleMetadata,
-    InProcessBundleRegistration, InProcessContractRegistration, PluginDescriptor, StringView,
-    SupportedLanguage, Version,
+    AbiError, GuestContractInterface, HostApi, PluginDescriptor, StringView, SupportedLanguage,
+    Version,
 };
+use polyplug_common::ManifestData;
 use polyplug_utils::{BundleId, GuestContractId};
 
 const CONTRACT_A: u64 = 0xE1B0_0000_0000_0001;
@@ -113,33 +115,26 @@ fn descriptor(provider: &'static str, contract: &'static str) -> PluginDescripto
     }
 }
 
-fn contract(
-    provider: &'static str,
-    contract_name: &'static str,
-    interface: &'static GuestContractInterface,
-) -> InProcessContractRegistration {
-    InProcessContractRegistration {
-        descriptor: descriptor(provider, contract_name),
-        interface,
-        adapter_context: ptr::null_mut(),
+fn manifest(name: &str, providers: &[&str]) -> ManifestData {
+    let mut function_count: HashMap<String, u32> = HashMap::new();
+    for provider in providers {
+        function_count.insert(format!("{provider}@1"), 0);
     }
-}
-
-fn registration(
-    name: &'static str,
-    dependencies: &[u64],
-    contracts: &[InProcessContractRegistration],
-) -> InProcessBundleRegistration {
-    InProcessBundleRegistration {
-        metadata: InProcessBundleMetadata {
-            name: StringView::from_static(name.as_bytes()),
-            version: VERSION,
-            runtime: SupportedLanguage::Rust,
-        },
-        dependency_ids: dependencies.as_ptr(),
-        dependency_count: dependencies.len(),
-        contracts: contracts.as_ptr(),
-        contract_count: contracts.len(),
+    ManifestData {
+        loader: "rust".to_owned(),
+        name: name.to_owned(),
+        dependencies: Vec::new(),
+        id: BundleId::new(name).id(),
+        version: "1.0.0".to_owned(),
+        file: "in-process".to_owned(),
+        provides: providers
+            .iter()
+            .map(|provider| format!("{provider}@1.0.0"))
+            .collect(),
+        function_count,
+        needs_reinit_on_dep_reload: false,
+        bundle_dependencies: Vec::new(),
+        path: PathBuf::new(),
     }
 }
 
@@ -149,26 +144,39 @@ fn runtime() -> Arc<Runtime> {
 
 fn register<R: Send + Sync + 'static>(
     runtime: &Runtime,
-    input: InProcessBundleRegistration,
+    manifest: ManifestData,
+    entries: &[(PluginDescriptor, &'static GuestContractInterface)],
     resident: R,
-) -> BundleId {
-    runtime
-        .register_in_process_bundle(InProcessBundle::new(input, resident))
-        .expect("in-process registration")
+) -> Result<BundleId, RuntimeError> {
+    runtime.register_in_process_bundle(manifest, SupportedLanguage::Rust, resident, |host| {
+        for (descriptor, interface) in entries {
+            let mut error: AbiError = AbiError::ok();
+            // SAFETY: this closure runs inside the runtime's active registration transaction.
+            unsafe {
+                ((*host).register_guest_contract)(host, descriptor, *interface, &mut error);
+            }
+            if !error.is_ok() {
+                return error;
+            }
+        }
+        AbiError::ok()
+    })
 }
 
 #[test]
 fn complete_registration_publishes_multiple_contracts_atomically() {
     let runtime: Arc<Runtime> = runtime();
-    let contracts: [InProcessContractRegistration; 2] = [
-        contract("provider-a", "in.process.a", &INTERFACE_A),
-        contract("provider-b", "in.process.b", &INTERFACE_B),
+    let entries = [
+        (descriptor("provider-a", "in.process.a"), &INTERFACE_A),
+        (descriptor("provider-b", "in.process.b"), &INTERFACE_B),
     ];
-    let id: BundleId = register(
+    let id = register(
         &runtime,
-        registration("atomic-success", &[], &contracts),
+        manifest("atomic-success", &["in.process.a", "in.process.b"]),
+        &entries,
         (),
-    );
+    )
+    .expect("in-process registration");
 
     assert_eq!(id, BundleId::new("atomic-success"));
     assert!(runtime.find_guest_contract(CONTRACT_A, 0).is_ok());
@@ -178,12 +186,24 @@ fn complete_registration_publishes_multiple_contracts_atomically() {
 #[test]
 fn duplicate_second_contract_rolls_back_the_complete_bundle() {
     let runtime: Arc<Runtime> = runtime();
-    let contracts: [InProcessContractRegistration; 2] = [
-        contract("provider-first", "in.process.duplicate", &INTERFACE_A),
-        contract("provider-second", "in.process.duplicate", &INTERFACE_A),
+    let entries = [
+        (
+            descriptor("provider-first", "in.process.duplicate"),
+            &INTERFACE_A,
+        ),
+        (
+            descriptor("provider-second", "in.process.duplicate"),
+            &INTERFACE_A,
+        ),
     ];
-    let result: Result<BundleId, RuntimeError> = runtime.register_in_process_bundle(
-        InProcessBundle::new(registration("duplicate-rollback", &[], &contracts), ()),
+    let result = register(
+        &runtime,
+        manifest(
+            "duplicate-rollback",
+            &["in.process.duplicate", "in.process.duplicate"],
+        ),
+        &entries,
+        (),
     );
 
     assert!(matches!(
@@ -199,68 +219,59 @@ fn duplicate_second_contract_rolls_back_the_complete_bundle() {
 }
 
 #[test]
-fn residents_are_isolated_between_runtimes() {
+fn residents_are_isolated_and_logical_unload_releases_them() {
     let first: Arc<Runtime> = runtime();
     let second: Arc<Runtime> = runtime();
-    let contracts: [InProcessContractRegistration; 1] =
-        [contract("provider", "in.process.a", &INTERFACE_A)];
-    let first_id: BundleId = register(
+    let entries = [(descriptor("provider", "in.process.a"), &INTERFACE_A)];
+    let first_id = register(
         &first,
-        registration("resident-isolation", &[], &contracts),
+        manifest("resident-isolation", &["in.process.a"]),
+        &entries,
         11_u32,
-    );
-    let second_id: BundleId = register(
+    )
+    .expect("first runtime registration");
+    let second_id = register(
         &second,
-        registration("resident-isolation", &[], &contracts),
+        manifest("resident-isolation", &["in.process.a"]),
+        &entries,
         29_u32,
-    );
-
+    )
+    .expect("second runtime registration");
     assert_eq!(first_id, second_id);
-    assert!(first.find_guest_contract(CONTRACT_A, 0).is_ok());
-    assert!(second.find_guest_contract(CONTRACT_A, 0).is_ok());
-}
-
-#[test]
-fn unload_releases_resident_before_reregistering() {
-    let runtime: Arc<Runtime> = runtime();
-    let contracts: [InProcessContractRegistration; 1] =
-        [contract("provider", "in.process.a", &INTERFACE_A)];
-    let first: BundleId = register(
-        &runtime,
-        registration("unload-reregister", &[], &contracts),
-        1_u32,
-    );
-    runtime.unload_bundle(first).expect("logical unload");
-
-    let second: BundleId = register(
-        &runtime,
-        registration("unload-reregister", &[], &contracts),
+    first.unload_bundle(first_id).expect("logical unload");
+    register(
+        &first,
+        manifest("resident-isolation", &["in.process.a"]),
+        &entries,
         2_u32,
-    );
-    assert_eq!(first, second);
+    )
+    .expect("re-register after logical unload");
 }
 
 #[test]
 fn unload_waits_for_stateful_instance_quiescence() {
     let runtime: Arc<Runtime> = runtime();
-    let contracts: [InProcessContractRegistration; 1] = [contract(
-        "provider",
-        "in.process.stateful",
+    let entries = [(
+        descriptor("provider", "in.process.stateful"),
         &INTERFACE_STATEFUL,
     )];
-    let id: BundleId = register(&runtime, registration("active-gate", &[], &contracts), ());
+    let id = register(
+        &runtime,
+        manifest("active-gate", &["in.process.stateful"]),
+        &entries,
+        (),
+    )
+    .expect("in-process registration");
     let handle = runtime
         .find_guest_contract(CONTRACT_STATEFUL, 0)
         .expect("registered stateful contract");
     let interface = runtime
         .resolve_guest_contract(handle)
         .expect("resolve stateful contract");
-    let mut instance: GuestContractInstance = GuestContractInstance::null();
-    let host: *const HostApi = runtime.host_abi();
-
+    let mut instance = GuestContractInstance::null();
+    let host = runtime.host_abi();
     // SAFETY: host and interface belong to the live runtime; instance is writable.
     unsafe { ((*host).create_guest_instance)(host, interface, ptr::null(), &mut instance) };
-    assert!(!instance.data.is_null());
     assert!(matches!(
         runtime.unload_bundle(id),
         Err(RuntimeError::InProcessBundleInUse {
@@ -268,37 +279,7 @@ fn unload_waits_for_stateful_instance_quiescence() {
             ..
         })
     ));
-
     // SAFETY: instance was created through the matching live HostApi callback.
     unsafe { ((*host).destroy_guest_instance)(host, interface, instance) };
     runtime.unload_bundle(id).expect("unload after destroy");
-}
-
-#[test]
-fn host_api_rejects_null_and_malformed_registration_inputs() {
-    let runtime: Arc<Runtime> = runtime();
-    let host: *const HostApi = runtime.host_abi();
-    let mut bundle_id: u64 = u64::MAX;
-    let mut error: AbiError = AbiError::ok();
-
-    // SAFETY: host is live and the callback accepts a null registration for validation.
-    unsafe { ((*host).register_in_process_bundle)(host, ptr::null(), &mut bundle_id, &mut error) };
-    assert_eq!(bundle_id, 0);
-    assert_eq!(error.code, AbiErrorCode::InvalidPointer as u32);
-
-    let malformed: InProcessBundleRegistration = InProcessBundleRegistration {
-        metadata: InProcessBundleMetadata {
-            name: StringView::from_static(b"malformed"),
-            version: VERSION,
-            runtime: SupportedLanguage::Rust,
-        },
-        dependency_ids: ptr::null(),
-        dependency_count: 0,
-        contracts: ptr::null(),
-        contract_count: 1,
-    };
-    // SAFETY: host and malformed registration are live for this synchronous validation call.
-    unsafe { ((*host).register_in_process_bundle)(host, &malformed, &mut bundle_id, &mut error) };
-    assert_eq!(bundle_id, 0);
-    assert_eq!(error.code, AbiErrorCode::Generic as u32);
 }

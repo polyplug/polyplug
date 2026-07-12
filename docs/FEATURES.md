@@ -37,17 +37,14 @@ near-native dispatch (~2.4 ns/call for native languages).
 
 Key ABI facts (verified in `crates/polyplug_abi/src/host/host_api.rs`):
 
-- **FFI surface is exactly two `#[no_mangle]` exports** — `polyplug_runtime_create`
-  and `polyplug_runtime_destroy` (`crates/polyplug/src/ffi.rs`). Everything else
-  is reached through function-pointer fields on `HostApi`.
-- **Stable layout**: `HostApi` is `192` bytes on 64-bit targets (one runtime
-  pointer, 22 function pointers including `register_in_process_bundle` at offset
-  16, `unload_bundle` at offset 144, `log` at offset 152,
-  `create_guest_instance` at offset 160, `destroy_guest_instance` at offset 168,
-  and `registry_revision` at offset 176) followed by a trailing
-  `reserved: *const c_void` data pointer at offset 184 (always null;
-  forward-compat room only).
-  Layout is locked by `layout_host_api` in `host_api.rs`.
+- **FFI surface** — lifecycle and scoped in-process staging are exported from
+  `crates/polyplug/src/ffi.rs`; normal runtime operations are function-pointer
+  fields on `HostApi`.
+- **Stable layout**: `HostApi` is `184` bytes on 64-bit targets (one runtime
+  pointer, 21 function pointers, and a trailing `reserved: *const c_void`).
+  `unload_bundle` is at offset 136, `log` at 144, `create_guest_instance` at
+  152, `destroy_guest_instance` at 160, `registry_revision` at 168, and
+  `reserved` at 176. Layout is locked by `layout_host_api` in `host_api.rs`.
 - **Plugin entry point is `polyplug_init(const HostApi*, const BundleInitContext*)`**
   (2 args). Plugins register via the self-passing pattern
   `host->register_guest_contract(host, &descriptor, &interface)`.
