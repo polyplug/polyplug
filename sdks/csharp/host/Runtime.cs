@@ -417,6 +417,10 @@ public sealed class Runtime
         }
 
         string message = StringViewToString(error.Message);
+        if (string.IsNullOrEmpty(message))
+        {
+            message = GetLastError();
+        }
         throw new InvalidOperationException(string.IsNullOrEmpty(message) ? fallbackMessage : message);
     }
 
