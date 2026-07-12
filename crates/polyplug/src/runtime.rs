@@ -28,8 +28,33 @@ use std::sync::MutexGuard;
 use std::sync::RwLock;
 use std::sync::RwLockReadGuard;
 use std::sync::RwLockWriteGuard;
-use std::thread;
-use std::thread::ThreadId;
+
+type InitThreadId = u64;
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn pthread_self() -> usize;
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    #[link_name = "GetCurrentThreadId"]
+    fn get_current_thread_id() -> u32;
+}
+
+fn current_init_thread_id() -> InitThreadId {
+    #[cfg(unix)]
+    {
+        // SAFETY: pthread_self takes no arguments and returns the current OS thread handle.
+        unsafe { pthread_self() as InitThreadId }
+    }
+    #[cfg(windows)]
+    {
+        // SAFETY: GetCurrentThreadId takes no arguments and returns the current OS thread ID.
+        unsafe { InitThreadId::from(get_current_thread_id()) }
+    }
+}
 
 use crossbeam_epoch::{Guard as EpochGuard, pin as epoch_pin};
 use ed25519_dalek::VerifyingKey;
@@ -136,13 +161,13 @@ pub struct Runtime {
     pub(crate) host_language: SupportedLanguage,
     /// Per-thread stack of bundle_ids currently inside `polyplug_init`.
     ///
-    /// Replaces the former process-global `thread_local!` (Rule 12: no thread-locals
-    /// for runtime state — this is now instance-owned, so multiple runtimes in one
-    /// process stay isolated). A `Vec` per thread gives reentrancy safety: a nested
-    /// load on the same thread pushes its own id and pops it on completion, restoring
-    /// the outer bundle's id instead of clobbering it. Loaders push before calling
-    /// `polyplug_init` and pop afterwards (including the panic path).
-    pub(crate) init_bundle_stack: Mutex<HashMap<ThreadId, Vec<u64>>>,
+    /// The stack is runtime-owned, so multiple runtimes in one process stay isolated.
+    /// Keys use the OS thread identity because loader cdylibs and core can carry
+    /// separate statically linked Rust standard libraries whose `ThreadId` values
+    /// are not interchangeable. A `Vec` per thread preserves nested-load reentrancy:
+    /// the inner bundle pops back to the outer bundle. Loaders bracket
+    /// `polyplug_init` with a push and pop, including every error path.
+    pub(crate) init_bundle_stack: Mutex<HashMap<InitThreadId, Vec<u64>>>,
     /// Fast-path hint: total number of bundle ids currently pushed across all
     /// threads' init stacks.
     ///
@@ -705,12 +730,12 @@ impl Runtime {
     /// [`Runtime::pop_init_bundle_id`] MUST be called afterwards (including on the
     /// panic path) so the stack does not leak entries.
     pub fn push_init_bundle_id(&self, bundle_id: u64) {
-        let mut stack: RecoveringGuard<MutexGuard<'_, HashMap<ThreadId, Vec<u64>>>> = self
+        let mut stack: RecoveringGuard<MutexGuard<'_, HashMap<InitThreadId, Vec<u64>>>> = self
             .init_bundle_stack
             .lock()
             .recover_poisoned(self.logger, "runtime");
         stack
-            .entry(thread::current().id())
+            .entry(current_init_thread_id())
             .or_default()
             .push(bundle_id);
         // Bump the fast-path hint AFTER inserting into the stack but while still
@@ -723,8 +748,8 @@ impl Runtime {
     ///
     /// Restores the previous (outer) bundle_id for reentrant loads on the same thread.
     pub fn pop_init_bundle_id(&self) {
-        let thread_id: ThreadId = thread::current().id();
-        let mut stack: RecoveringGuard<MutexGuard<'_, HashMap<ThreadId, Vec<u64>>>> = self
+        let thread_id: InitThreadId = current_init_thread_id();
+        let mut stack: RecoveringGuard<MutexGuard<'_, HashMap<InitThreadId, Vec<u64>>>> = self
             .init_bundle_stack
             .lock()
             .recover_poisoned(self.logger, "runtime");
@@ -755,8 +780,8 @@ impl Runtime {
         if self.active_init_count.load(Ordering::Relaxed) == 0 {
             return 0;
         }
-        let thread_id: ThreadId = thread::current().id();
-        let stack: RecoveringGuard<MutexGuard<'_, HashMap<ThreadId, Vec<u64>>>> = self
+        let thread_id: InitThreadId = current_init_thread_id();
+        let stack: RecoveringGuard<MutexGuard<'_, HashMap<InitThreadId, Vec<u64>>>> = self
             .init_bundle_stack
             .lock()
             .recover_poisoned(self.logger, "runtime");
@@ -3005,6 +3030,7 @@ mod tests {
     use std::fs;
     use std::panic;
     use std::path::PathBuf;
+    use std::thread;
 
     use polyplug_abi::{DispatchMechanisms, NativeDispatch};
     use polyplug_utils::{HostContractId, guest_contract_id, host_contract_id};
