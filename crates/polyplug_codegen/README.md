@@ -15,10 +15,12 @@ this library.
 2. **Contract-binding consumers** call `generate`, `generate_ir`, and
    `write_output` to parse a manifest or render validated IR, then write the
    generated files. Rust in-process guests use `generate_rust_guest` with
-   `RustGuestMode::InProcess`; the existing `generate` API and `polyplugc` CLI
-   retain disk-bundle output. `write_output` accepts only relative file paths
-   without root, prefix, or parent-directory components. The `polyplugc` CLI
-   calls the same disk-generation API.
+   `RustGuestMode::InProcess`; their generated `InProcessFactory::new` accepts
+   `Send + Sync + 'static` function items or captured closures and the runtime
+   owns the resulting resident after canonical registration commits. The existing
+   `generate` API and `polyplugc` CLI retain disk-bundle output. `write_output`
+   accepts only relative file paths without root, prefix, or parent-directory
+   components. The `polyplugc` CLI calls the same disk-generation API.
 
 ## Modules
 

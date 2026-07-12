@@ -94,6 +94,7 @@ fn write_consumer_manifest(root: &Path) {
 
 fn write_consumer_main(path: &Path) {
     let source = r#"
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use polyplug::{Runtime, error::RegistryError};
@@ -115,10 +116,10 @@ impl first_guest::contracts::EmbeddedAlphaGuestContract for FirstAlpha {
     }
 }
 
-struct FirstShared;
+struct FirstShared(u32);
 impl first_guest::contracts::EmbeddedSharedGuestContract for FirstShared {
     fn value(&self) -> Result<u32, GuestError> {
-        Ok(17)
+        Ok(self.0)
     }
 }
 
@@ -129,12 +130,15 @@ impl second_guest::contracts::EmbeddedBetaGuestContract for SecondBeta {
     }
 }
 
-fn first_alpha(_host: HostContext) -> Box<dyn first_guest::contracts::EmbeddedAlphaGuestContract> {
-    Box::new(FirstAlpha)
+struct DropProbe(Arc<AtomicUsize>);
+impl Drop for DropProbe {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
-fn first_shared(_host: HostContext) -> Box<dyn first_guest::contracts::EmbeddedSharedGuestContract> {
-    Box::new(FirstShared)
+fn first_alpha(_host: HostContext) -> Box<dyn first_guest::contracts::EmbeddedAlphaGuestContract> {
+    Box::new(FirstAlpha)
 }
 
 fn second_beta(_host: HostContext) -> Box<dyn second_guest::contracts::EmbeddedBetaGuestContract> {
@@ -143,18 +147,30 @@ fn second_beta(_host: HostContext) -> Box<dyn second_guest::contracts::EmbeddedB
 
 fn main() {
     let runtime: Arc<Runtime> = Runtime::builder().build().expect("build runtime");
+    let first_factory_drops = Arc::new(AtomicUsize::new(0));
+    let first_factory_probe = DropProbe(Arc::clone(&first_factory_drops));
     let first_id = first_guest::init::register_in_process_bundle(
         &runtime,
         first_guest::interfaces::InProcessFactories {
-            embedded_alpha: first_alpha,
-            embedded_shared: first_shared,
+            embedded_alpha: first_guest::interfaces::InProcessFactory::new(first_alpha),
+            embedded_shared: first_guest::interfaces::InProcessFactory::new(
+                move |_host: HostContext| -> Box<dyn first_guest::contracts::EmbeddedSharedGuestContract> {
+                    let _ = &first_factory_probe;
+                    Box::new(FirstShared(17))
+                },
+            ),
         },
     )
     .expect("register first generated in-process bundle atomically");
+    assert_eq!(
+        first_factory_drops.load(Ordering::SeqCst),
+        0,
+        "the runtime owns successful captured factories",
+    );
     second_guest::init::register_in_process_bundle(
         &runtime,
         second_guest::interfaces::InProcessFactories {
-            embedded_beta: second_beta,
+            embedded_beta: second_guest::interfaces::InProcessFactory::new(second_beta),
         },
     )
     .expect("register second generated in-process bundle");
@@ -164,9 +180,19 @@ fn main() {
         .is_ok());
 
     let isolated: Arc<Runtime> = Runtime::builder().build().expect("build isolated runtime");
-    assert!(isolated
-        .find_guest_contract(first_host::host::types::EMBEDDED_ALPHA_CONTRACT_ID, 0)
-        .is_err());
+    let isolated_shared_value = 43;
+    let isolated_first_id = first_guest::init::register_in_process_bundle(
+        &isolated,
+        first_guest::interfaces::InProcessFactories {
+            embedded_alpha: first_guest::interfaces::InProcessFactory::new(first_alpha),
+            embedded_shared: first_guest::interfaces::InProcessFactory::new(
+                move |_host: HostContext| -> Box<dyn first_guest::contracts::EmbeddedSharedGuestContract> {
+                    Box::new(FirstShared(isolated_shared_value))
+                },
+            ),
+        },
+    )
+    .expect("register isolated generated bundle");
 
     let alpha_handle = runtime
         .find_guest_contract(first_host::host::types::EMBEDDED_ALPHA_CONTRACT_ID, 0)
@@ -178,6 +204,30 @@ fn main() {
     .expect("create alpha caller");
     assert_eq!(alpha.value().expect("call alpha"), 11);
 
+    let shared_handle = runtime
+        .find_guest_contract(first_host::host::types::EMBEDDED_SHARED_CONTRACT_ID, 0)
+        .expect("find first shared");
+    let mut shared = first_host::host::host_callers::EmbeddedSharedContract::new(
+        shared_handle,
+        Arc::clone(&runtime),
+    )
+    .expect("create first shared caller");
+    assert_eq!(shared.value().expect("call first shared"), 17);
+
+    let isolated_shared_handle = isolated
+        .find_guest_contract(first_host::host::types::EMBEDDED_SHARED_CONTRACT_ID, 0)
+        .expect("find isolated shared");
+    let mut isolated_shared = first_host::host::host_callers::EmbeddedSharedContract::new(
+        isolated_shared_handle,
+        Arc::clone(&isolated),
+    )
+    .expect("create isolated shared caller");
+    assert_eq!(
+        isolated_shared.value().expect("call isolated shared"),
+        43,
+        "each runtime retains its own captured factory",
+    );
+
     let beta_handle = runtime
         .find_guest_contract(second_host::host::types::EMBEDDED_BETA_CONTRACT_ID, 0)
         .expect("find beta");
@@ -188,6 +238,27 @@ fn main() {
     .expect("create beta caller");
     assert_eq!(beta.value().expect("call beta"), 29);
 
+    let failed_factory_drops = Arc::new(AtomicUsize::new(0));
+    let failed_factory_probe = DropProbe(Arc::clone(&failed_factory_drops));
+    let failed = first_guest::init::register_in_process_bundle(
+        &runtime,
+        first_guest::interfaces::InProcessFactories {
+            embedded_alpha: first_guest::interfaces::InProcessFactory::new(first_alpha),
+            embedded_shared: first_guest::interfaces::InProcessFactory::new(
+                move |_host: HostContext| -> Box<dyn first_guest::contracts::EmbeddedSharedGuestContract> {
+                    let _ = &failed_factory_probe;
+                    Box::new(FirstShared(61))
+                },
+            ),
+        },
+    );
+    assert!(failed.is_err(), "duplicate registration must fail");
+    assert_eq!(
+        failed_factory_drops.load(Ordering::SeqCst),
+        1,
+        "failed registration must reclaim captured factory ownership",
+    );
+
     let weak = Arc::downgrade(&runtime);
     drop(runtime);
     assert!(weak.upgrade().is_some(), "generated callers retain the runtime Arc");
@@ -195,7 +266,13 @@ fn main() {
 
     let runtime = weak.upgrade().expect("caller-owned runtime remains available");
     drop(alpha);
+    drop(shared);
     runtime.unload_bundle(first_id).expect("unload first bundle");
+    assert_eq!(
+        first_factory_drops.load(Ordering::SeqCst),
+        1,
+        "logical unload releases successful captured factory ownership",
+    );
 
     let stale = alpha_handle;
     assert!(matches!(
@@ -206,8 +283,12 @@ fn main() {
     first_guest::init::register_in_process_bundle(
         &runtime,
         first_guest::interfaces::InProcessFactories {
-            embedded_alpha: first_alpha,
-            embedded_shared: first_shared,
+            embedded_alpha: first_guest::interfaces::InProcessFactory::new(first_alpha),
+            embedded_shared: first_guest::interfaces::InProcessFactory::new(
+                |_host: HostContext| -> Box<dyn first_guest::contracts::EmbeddedSharedGuestContract> {
+                    Box::new(FirstShared(17))
+                },
+            ),
         },
     )
     .expect("re-register first generated bundle");
@@ -220,6 +301,11 @@ fn main() {
     )
     .expect("create re-registered alpha caller");
     assert_eq!(replacement.value().expect("call re-registered alpha"), 11);
+
+    drop(isolated_shared);
+    isolated
+        .unload_bundle(isolated_first_id)
+        .expect("unload isolated bundle");
 }
 "#;
     fs::write(path, source).expect("write consumer main");

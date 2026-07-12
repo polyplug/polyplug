@@ -5,6 +5,7 @@
 
 use core::ffi::c_void;
 use core::ptr;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -142,6 +143,14 @@ fn runtime() -> Arc<Runtime> {
     Runtime::builder().build().expect("runtime build")
 }
 
+struct DropProbe(Arc<AtomicUsize>);
+
+impl Drop for DropProbe {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 fn register<R: Send + Sync + 'static>(
     runtime: &Runtime,
     manifest: ManifestData,
@@ -184,7 +193,7 @@ fn complete_registration_publishes_multiple_contracts_atomically() {
 }
 
 #[test]
-fn duplicate_second_contract_rolls_back_the_complete_bundle() {
+fn duplicate_second_contract_rolls_back_the_complete_bundle_and_reclaims_resident() {
     let runtime: Arc<Runtime> = runtime();
     let entries = [
         (
@@ -196,6 +205,7 @@ fn duplicate_second_contract_rolls_back_the_complete_bundle() {
             &INTERFACE_A,
         ),
     ];
+    let reclaimed: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
     let result = register(
         &runtime,
         manifest(
@@ -203,7 +213,7 @@ fn duplicate_second_contract_rolls_back_the_complete_bundle() {
             &["in.process.duplicate", "in.process.duplicate"],
         ),
         &entries,
-        (),
+        DropProbe(Arc::clone(&reclaimed)),
     );
 
     assert!(matches!(
@@ -216,6 +226,11 @@ fn duplicate_second_contract_rolls_back_the_complete_bundle() {
         runtime.find_guest_contract(CONTRACT_A, 0),
         Err(RegistryError::PluginNotFound { .. })
     ));
+    assert_eq!(
+        reclaimed.load(Ordering::SeqCst),
+        1,
+        "failed registration must reclaim the runtime resident",
+    );
 }
 
 #[test]

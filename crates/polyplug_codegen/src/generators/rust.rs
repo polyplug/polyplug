@@ -736,7 +736,7 @@ fn guest_provider_lower(provider: &GuestProvider<'_>) -> String {
     provider
         .plugin_name
         .map(|plugin_name| plugin_name.to_lowercase().replace('.', "_"))
-        .unwrap_or_else(|| provider.contract.name.replace('.', "_"))
+        .unwrap_or_else(|| provider.contract.name.to_lowercase().replace('.', "_"))
 }
 
 fn guest_provider_upper(provider: &GuestProvider<'_>) -> String {
@@ -760,7 +760,10 @@ fn generate_guest_interfaces_file(
     embedded: bool,
 ) -> Result<(), PolyplugcError> {
     // Shared imports
-    let standard_imports: Vec<&str> = vec!["core::ffi::c_void", "core::ptr"];
+    let mut standard_imports: Vec<&str> = vec!["core::ffi::c_void", "core::ptr"];
+    if embedded {
+        standard_imports.push("std::sync::Arc");
+    }
     out.push_str(&rust_use_block(&[
         &standard_imports,
         &[
@@ -858,13 +861,31 @@ fn generate_guest_interfaces_file(
 
 fn generate_embedded_factory_registry(out: &mut String, ir: &ValidatedIr) {
     let providers: Vec<GuestProvider<'_>> = guest_providers(ir);
+    out.push_str("/// A thread-safe factory retained by one runtime-owned in-process resident.\n");
+    out.push_str("pub struct InProcessFactory<T: ?Sized> {\n");
+    out.push_str("    factory: Arc<dyn Fn(HostContext) -> Box<T> + Send + Sync + 'static>,\n");
+    out.push_str("}\n\n");
+    out.push_str("impl<T: ?Sized> InProcessFactory<T> {\n");
+    out.push_str(
+        "    /// Retain an ordinary function or captured closure for repeated instance creation.\n",
+    );
+    out.push_str("    pub fn new<F>(factory: F) -> Self\n");
+    out.push_str("    where\n");
+    out.push_str("        F: Fn(HostContext) -> Box<T> + Send + Sync + 'static,\n");
+    out.push_str("    {\n");
+    out.push_str("        Self { factory: Arc::new(factory) }\n");
+    out.push_str("    }\n\n");
+    out.push_str("    fn create(&self, host_ctx: HostContext) -> Box<T> {\n");
+    out.push_str("        (self.factory)(host_ctx)\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
     out.push_str("/// Runtime-local author factories for this in-process guest bundle.\n");
     out.push_str("pub struct InProcessFactories {\n");
     for provider in &providers {
         let lower: String = guest_provider_lower(provider);
         let trait_name: String = contract_name_to_guest_trait(&provider.contract.name);
         out.push_str(&format!(
-            "    pub {lower}: fn(HostContext) -> Box<dyn {trait_name}>,\n"
+            "    pub {lower}: InProcessFactory<dyn {trait_name}>,\n"
         ));
     }
     out.push_str("}\n\n");
@@ -878,7 +899,7 @@ fn generate_embedded_factory_registry(out: &mut String, ir: &ValidatedIr) {
         out.push_str("        return None;\n");
         out.push_str("    }\n");
         out.push_str(&format!(
-            "    let factories: &InProcessFactories = unsafe {{ &*(adapter_context as *const InProcessFactories) }};\n    Some((factories.{lower})(host_ctx))\n"
+            "    let factories: &InProcessFactories = unsafe {{ &*(adapter_context as *const InProcessFactories) }};\n    Some(factories.{lower}.create(host_ctx))\n"
         ));
         out.push_str("}\n\n");
     }
@@ -4905,6 +4926,121 @@ mod tests {
     use crate::ir::ReprType;
     use crate::ir::Version;
     use std::path::Path;
+
+    #[test]
+    fn embedded_guest_factories_capture_send_sync_closures_without_globals() {
+        let contract: ResolvedContract = ResolvedContract {
+            name: "in.process.alpha".to_owned(),
+            contract_id: 0xE1B0_0000_0000_0001,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![],
+            docs: None,
+        };
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![contract],
+            host_contracts: vec![],
+            bundle: Some(ResolvedBundle {
+                name: "captured.in-process".to_owned(),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                loader: "native".to_owned(),
+                file: ResolvedBundleFile::Single("captured.so".to_owned()),
+                plugins: vec![ResolvedPlugin {
+                    name: "alpha".to_owned(),
+                    implements: vec!["in.process.alpha@1.0".to_owned()],
+                    optional: vec![],
+                }],
+                bundle_id: 0xE1B0_0000_0000_0002,
+                dependencies: vec![],
+                needs_reinit_on_dep_reload: false,
+            }),
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        RustGenerator
+            .generate_embedded_guest(&ir, "captured-in-process", &mut files)
+            .expect("generate captured in-process guest");
+        let interfaces: &str = &files
+            .files
+            .iter()
+            .find(|file: &&GeneratedFile| file.path == Path::new("guest/interfaces.rs"))
+            .expect("generated interfaces")
+            .content;
+
+        assert!(
+            interfaces.contains("use std::sync::Arc;"),
+            "captured factory must be reference-counted: {interfaces}"
+        );
+        assert!(
+            interfaces.contains("pub struct InProcessFactory<T: ?Sized>")
+                && interfaces
+                    .contains("Arc<dyn Fn(HostContext) -> Box<T> + Send + Sync + 'static>"),
+            "factory must retain a Send + Sync captured closure: {interfaces}"
+        );
+        assert!(
+            interfaces.contains("pub alpha: InProcessFactory<dyn InProcessAlphaGuestContract>"),
+            "provider field must retain its precise guest contract output: {interfaces}"
+        );
+        assert!(
+            interfaces.contains("Some(factories.alpha.create(host_ctx))"),
+            "adapter must invoke the resident factory through adapter_context: {interfaces}"
+        );
+        assert!(
+            !interfaces.contains("pub alpha: fn(HostContext)")
+                && !interfaces.contains("static mut"),
+            "in-process factories must not use function pointers or mutable global state: {interfaces}"
+        );
+    }
+
+    #[test]
+    fn api_only_provider_factory_field_is_lowercase() {
+        let contract: ResolvedContract = ResolvedContract {
+            name: "platform.Plugin".to_owned(),
+            contract_id: 0xE1B0_0000_0000_0003,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![],
+            docs: None,
+        };
+        let provider: GuestProvider<'_> = GuestProvider {
+            plugin_name: None,
+            contract: &contract,
+        };
+        assert_eq!(guest_provider_lower(&provider), "platform_plugin");
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![contract],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        RustGenerator
+            .generate_embedded_guest(&ir, "platform-in-process", &mut files)
+            .expect("generate API-only in-process guest");
+        let interfaces: &str = &files
+            .files
+            .iter()
+            .find(|file: &&GeneratedFile| file.path == Path::new("guest/interfaces.rs"))
+            .expect("generated interfaces")
+            .content;
+        assert!(
+            interfaces
+                .contains("pub platform_plugin: InProcessFactory<dyn PlatformPluginGuestContract>"),
+            "API-only output must expose the canonical lowercase factory field: {interfaces}"
+        );
+    }
 
     #[test]
     fn contract_name_to_struct_conversion() {

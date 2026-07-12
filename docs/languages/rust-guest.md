@@ -89,6 +89,7 @@ use generated::contracts::PipelineDecoderGuestContract;
 
 struct Plugin {
     host: HostContext,
+    prefix: String,
 }
 
 impl PipelineDecoderGuestContract for Plugin {
@@ -96,13 +97,17 @@ impl PipelineDecoderGuestContract for Plugin {
         // SAFETY: `input` is a valid StringView live for this call's duration,
         // per the ABI contract for dispatch arguments.
         let s: &str = unsafe { to_str(&input) }?;
-        self.host.alloc_string(&format!("DECODED:{}", s.replace(',', "|")))
+        self.host
+            .alloc_string(&format!("{}:{}", self.prefix, s.replace(',', "|")))
     }
 }
 
 #[unsafe(no_mangle)]
 pub fn polyplug_create_my_plugin(host: HostContext) -> Box<dyn PipelineDecoderGuestContract> {
-    Box::new(Plugin { host })
+    Box::new(Plugin {
+        host,
+        prefix: String::from("DECODED"),
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -144,29 +149,47 @@ let output = generate_rust_guest(
 write_output(&output, std::path::Path::new("generated"))?;
 ```
 
-The generated module exposes `interfaces::InProcessFactories` and
-`init::register_in_process_bundle`. Supply ordinary factory functions; the
-generated adapter builds the canonical manifest transaction, registers every
-contract through the existing `register_guest_contract` callback, and transfers
-the resident only after the transaction commits:
+The generated module exposes `interfaces::InProcessFactories`,
+`interfaces::InProcessFactory<T>`, and `init::register_in_process_bundle`.
+`InProcessFactory<T>` retains an `Arc<dyn Fn(HostContext) -> Box<T> + Send +
+Sync + 'static>` inside the generated resident. Create each typed field with
+`InProcessFactory::new`: function items remain ergonomic, and closures can
+capture runtime configuration without any global or thread-local handoff.
 
 ```rust
+use generated::interfaces::{InProcessFactories, InProcessFactory};
+
 fn create_my_plugin(host: HostContext) -> Box<dyn PipelineDecoderGuestContract> {
-    Box::new(Plugin { host })
+    Box::new(Plugin {
+        host,
+        prefix: String::from("DECODED"),
+    })
 }
 
+// For an unconfigured provider, use `InProcessFactory::new(create_my_plugin)`.
+let fixture_prefix = String::from("FIXTURE-A");
 generated::init::register_in_process_bundle(
     &runtime,
-    generated::interfaces::InProcessFactories {
-        my_plugin: create_my_plugin,
+    InProcessFactories {
+        my_plugin: InProcessFactory::new(
+            move |host: HostContext| -> Box<dyn PipelineDecoderGuestContract> {
+                Box::new(Plugin {
+                    host,
+                    prefix: fixture_prefix.clone(),
+                })
+            },
+        ),
     },
 )?;
 ```
 
-`Runtime` owns the factory resident until logical unload. Each runtime has a
-separate resident, so the same generated module can use different factories in
-different runtimes. Use ordinary `unload_bundle` and re-registration operations
-for lifecycle management.
+`InProcessFactories` is moved into the generated registration helper. On
+success, the `Runtime` owns that resident until logical unload; on failed
+registration, the helper returns the error and drops the resident, reclaiming
+the captured factories. Each runtime owns a distinct resident, so the same
+generated module can use different captured configuration in different
+runtimes. Use ordinary `unload_bundle` and re-registration operations for
+lifecycle management.
 
 ## 5. Build
 
