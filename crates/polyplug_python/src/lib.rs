@@ -32,9 +32,9 @@ use std::sync::MutexGuard;
 use std::sync::PoisonError;
 
 use pyo3::Bound;
-use pyo3::PyAny;
 use pyo3::PyErr;
 use pyo3::Python;
+use pyo3::types::PyAny;
 use pyo3::types::PyAnyMethods;
 use pyo3::types::PyDict;
 use pyo3::types::PyDictMethods;
@@ -47,7 +47,6 @@ use polyplug::runtime::Runtime;
 use polyplug_abi::BundleInitContext;
 use polyplug_abi::HostApi;
 use polyplug_abi::StringView;
-
 use polyplug_common::ManifestData;
 use polyplug_utils::BundleId;
 

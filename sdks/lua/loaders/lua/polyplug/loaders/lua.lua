@@ -16,6 +16,21 @@ local function get_lib()
 end
 
 local M = {}
+local internal_bridge = nil
+
+function M.internal_plugin_bridge()
+    if internal_bridge == nil then
+        local open = assert(
+            package.loadlib(
+                native.resolve("POLYPLUG_LUA_LIB", "polyplug_lua"),
+                "luaopen_polyplug_lua_bridge"
+            )
+        )
+        internal_bridge = open()
+    end
+    return internal_bridge
+end
+
 
 --- Register the Lua loader with a Runtime.
 -- @param rt Runtime  The polyplug Runtime instance (exposes :register_loader).

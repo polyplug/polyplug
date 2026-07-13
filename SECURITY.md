@@ -42,12 +42,11 @@ polyplug is an **architecture-enforcement runtime, not a security sandbox.** Rea
 boundaries are deliberate, so the following are **by design and not
 vulnerabilities**:
 
-- **Plugins run in-process with full host privileges.** A loaded bundle shares
-  the host's address space and can read/write host memory, call syscalls, and
-  crash the process. polyplug is for *trusted* plugins; isolate untrusted code at
-  the OS level (containers, separate processes).
-- **A plugin crash takes down the host.** There is no in-process fault isolation
-  between a plugin and its host — this is an explicit non-goal.
+- **Plugins execute with full host privileges.** A loaded bundle shares the
+  host's address space and can read/write host memory, call syscalls, and crash
+  the process. polyplug is for *trusted* plugins; isolate untrusted code at the
+  OS level (containers, separate processes). A plugin crash therefore takes down
+  the host; host-process fault isolation is an explicit non-goal.
 - **No runtime resource limits / watchdog.** Per-call timeouts and resource caps
   are a host-side concern, not a runtime feature.
 - **`SignaturePolicy::Off` (the default) loads unsigned bundles.** Signature
@@ -55,9 +54,9 @@ vulnerabilities**:
 
 In scope (please **do** report):
 
-- Memory-safety defects reachable **without** a malicious in-process plugin —
-  e.g. a use-after-free, data race, or out-of-bounds in the runtime, a loader, or
-  generated code triggerable by a *well-behaved* bundle or by host inputs.
+- Memory-safety defects reachable **without** a malicious host-privileged plugin
+  — e.g. a use-after-free, data race, or out-of-bounds in the runtime, a loader,
+  or generated code triggerable by a *well-behaved* bundle or by host inputs.
 - A bundle that bypasses **declared-dependency enforcement** or impersonates
   another bundle's identity despite manifest validation.
 - A way to defeat **bundle signing** under `SignaturePolicy::Required` — e.g.

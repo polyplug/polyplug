@@ -14,12 +14,15 @@
 
 use core::any::Any;
 use core::ffi::c_void;
+use core::panic::AssertUnwindSafe;
 use core::str::FromStr;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use core::{mem, ptr, slice, str};
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::panic::catch_unwind;
+use std::panic::resume_unwind;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -56,6 +59,10 @@ fn current_init_thread_id() -> InitThreadId {
     }
 }
 
+pub(crate) fn current_os_thread_id() -> u64 {
+    current_init_thread_id()
+}
+
 use crossbeam_epoch::{Guard as EpochGuard, pin as epoch_pin};
 use ed25519_dalek::VerifyingKey;
 use polyplug_abi::dispatch::{DispatchType, VmLoaderData};
@@ -89,6 +96,8 @@ pub use crate::runtime_builder::RuntimeBuilder;
 
 use crate::runtime_store::BundleDependency;
 use crate::runtime_store::BundleDescriptor;
+use crate::runtime_store::InternalPluginResident;
+use crate::runtime_store::InternalPluginResidentRelease;
 use crate::runtime_store::PreparedGuestContract;
 use crate::runtime_store::RuntimeStore;
 
@@ -211,23 +220,26 @@ pub struct Runtime {
     /// `RwLock` and stay fully concurrent with an in-flight reload; only
     /// writer-vs-writer reloads serialize here.
     pub(crate) reload_serialize: Mutex<()>,
-    /// Live stateful-instance counts per guest contract.
+    /// Live stateful-instance and in-flight-construction counts per owning bundle.
     ///
-    /// Incremented by `host_create_guest_instance` and decremented by
-    /// `host_destroy_guest_instance` for stateful instances only (a null-`data`
-    /// instance is stateless — the host holds no state for it and it is not
-    /// counted). Drives the accurate reload/unload UB-warning: a bundle whose
-    /// contracts still have live instances when it is reloaded or unloaded is a
-    /// use-after-free hazard the runtime surfaces to the host.
+    /// Construction reserves its count before calling guest code and turns that
+    /// reservation into a live-instance count only when the guest returns state.
+    /// Unload serializes against this reservation before releasing internal backing.
     ///
     /// Instance-owned (Rule 12): each `Runtime` has its own map, so multiple
     /// runtimes in one process never share instance accounting.
-    pub(crate) instance_counts: Mutex<HashMap<GuestContractId, u64>>,
-    /// Rust-owned residents for in-process bundles, keyed by derived bundle ID.
+    pub(crate) instance_counts: Mutex<HashMap<BundleId, u64>>,
+    /// Rust-owned generated internal-plugin provider roots, keyed by bundle ID.
     ///
-    /// A resident is erased only inside Rust. It is never exposed through the C ABI
+    /// A root is erased only inside Rust. It is never exposed through the C ABI
     /// and remains available to generated create-instance thunks until unload.
-    pub(crate) in_process_residents: Mutex<HashMap<BundleId, Box<dyn Any + Send + Sync>>>,
+    pub(crate) internal_plugin_roots: Mutex<HashMap<BundleId, Box<dyn Any + Send + Sync>>>,
+    /// Every internal-plugin transaction marks its bundle before publication.
+    ///
+    /// The marker is source-neutral: it protects wrapper-owned backing just as it
+    /// protects Rust roots and native residents. A failed or aborted transaction
+    /// removes it before returning; logical unload removes it with the bundle.
+    pub(crate) internal_plugin_lifecycle: Mutex<HashSet<BundleId>>,
     /// The owned HostApi handed to plugins. A `Box` gives it a stable heap
     /// address independent of where the `Runtime` value lives, so the pointer
     /// captured by plugins survives the runtime's move into its `Arc`.
@@ -239,34 +251,75 @@ pub struct Runtime {
     pub(crate) host_abi: Box<HostApi>,
 }
 
+/// Narrow Rust-only generated guest provider binding contract. Provider roots stay in `Self`.
+#[doc(hidden)]
+pub trait RustGeneratedInternalPlugin: Send + Sync {
+    fn manifest(&self) -> ManifestData;
+    fn stage(
+        &self,
+        registrar: &mut RustGeneratedInternalPluginRegistrar,
+    ) -> Result<(), RuntimeError>;
+}
+
+/// Runtime-owned staging context for generated Rust internal-plugin provider bindings.
+#[doc(hidden)]
+pub struct RustGeneratedInternalPluginRegistrar {
+    host: *const HostApi,
+    bundle: String,
+}
+
+impl RustGeneratedInternalPluginRegistrar {
+    #[doc(hidden)]
+    pub fn register_contract(
+        &mut self,
+        descriptor: &PluginDescriptor,
+        interface: &GuestContractInterface,
+    ) -> Result<(), RuntimeError> {
+        let mut error: AbiError = AbiError::ok();
+        // SAFETY: Runtime creates this context only during its active prepared transaction.
+        unsafe {
+            ((*self.host).register_guest_contract)(self.host, descriptor, interface, &mut error);
+        }
+        if error.is_ok() {
+            Ok(())
+        } else {
+            Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: self.bundle.clone(),
+                error: "generated guest registration failed".to_owned(),
+            }))
+        }
+    }
+}
+
+/// Publication result consumed immediately by generated internal-plugin bindings.
+#[doc(hidden)]
+pub struct GeneratedInternalPluginRegistration {
+    pub bundle_id: BundleId,
+    pub handles: Vec<GuestContractHandle>,
+}
+
 impl Runtime {
     /// Create a RuntimeBuilder.
     pub fn builder() -> RuntimeBuilder {
         RuntimeBuilder::new()
     }
 
-    /// Register a Rust-owned in-process bundle through the canonical staged manifest path.
-    ///
-    /// `manifest` supplies the existing bundle identity, dependency, lifecycle, and
-    /// provider declarations. `register` invokes the existing `HostApi::register_guest_contract`
-    /// callback once for each generated `PluginDescriptor` and `GuestContractInterface`.
-    /// The resident transfers to this runtime only after every registration validates and the
-    /// staged bundle publishes atomically.
-    pub fn register_in_process_bundle<R, F>(
+    #[cfg(test)]
+    pub(crate) fn register_internal_plugin<R, F>(
         &self,
         manifest: ManifestData,
         language: SupportedLanguage,
-        resident: R,
-        register: F,
+        root: R,
+        stage: F,
     ) -> Result<BundleId, RuntimeError>
     where
         R: Any + Send + Sync,
         F: FnOnce(*const HostApi) -> AbiError,
     {
-        let bundle_id: BundleId = self.begin_in_process_bundle(manifest, language)?;
-        let error: AbiError = register(self.host_abi());
+        let bundle_id: BundleId = self.begin_internal_plugin(manifest, language)?;
+        let error: AbiError = stage(self.host_abi());
         if !error.is_ok() {
-            self.abort_in_process_bundle(bundle_id);
+            self.abort_internal_plugin(bundle_id);
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: self
                     .registry
@@ -276,39 +329,233 @@ impl Runtime {
             }));
         }
         let registration_result: Result<BundleId, RuntimeError> =
-            self.commit_in_process_bundle(bundle_id);
+            self.commit_internal_plugin(bundle_id);
         if registration_result.is_err() {
             self.registry.discard_prepared_bundle(bundle_id);
             return registration_result;
         }
 
-        let mut residents: RecoveringGuard<
+        let mut roots: RecoveringGuard<
             MutexGuard<'_, HashMap<BundleId, Box<dyn Any + Send + Sync>>>,
         > = self
-            .in_process_residents
+            .internal_plugin_roots
             .lock()
             .recover_poisoned(self.logger, "runtime");
-        let previous: Option<Box<dyn Any + Send + Sync>> =
-            residents.insert(bundle_id, Box::new(resident));
+        let previous: Option<Box<dyn Any + Send + Sync>> = roots.insert(bundle_id, Box::new(root));
         debug_assert!(
             previous.is_none(),
-            "logical unload must release the prior in-process resident"
+            "logical unload must release the prior internal-plugin root"
         );
         registration_result
     }
+    /// Register generated internal-plugin bindings through the canonical prepared transaction.
+    ///
+    /// This hidden glue boundary owns the generated aggregate from the start of the
+    /// attempt. The root lock spans publication and insertion, so unload cannot
+    /// observe published interfaces before their backing aggregate is runtime-owned.
+    #[doc(hidden)]
+    pub fn register_generated_internal_plugin<B>(
+        &self,
+        binding: B,
+    ) -> Result<GeneratedInternalPluginRegistration, RuntimeError>
+    where
+        B: RustGeneratedInternalPlugin + 'static,
+    {
+        let mut roots: RecoveringGuard<
+            MutexGuard<'_, HashMap<BundleId, Box<dyn Any + Send + Sync>>>,
+        > = self
+            .internal_plugin_roots
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
+        let manifest: ManifestData = binding.manifest();
+        let bundle_id: BundleId = self.begin_internal_plugin(manifest, SupportedLanguage::Rust)?;
+        let mut registrar = RustGeneratedInternalPluginRegistrar {
+            host: self.host_abi(),
+            bundle: self
+                .registry
+                .prepared_manifest(bundle_id)
+                .map_or_else(|| bundle_id.id().to_string(), |prepared| prepared.name),
+        };
+        let staged = match catch_unwind(AssertUnwindSafe(|| binding.stage(&mut registrar))) {
+            Ok(result) => result,
+            Err(payload) => {
+                self.abort_internal_plugin(bundle_id);
+                resume_unwind(payload);
+            }
+        };
+        if let Err(error) = staged {
+            self.abort_internal_plugin(bundle_id);
+            return Err(error);
+        }
+        let handles: Vec<GuestContractHandle> =
+            match self.commit_internal_plugin_with_handles(bundle_id) {
+                Ok(handles) => handles,
+                Err(error) => {
+                    self.registry.discard_prepared_bundle(bundle_id);
+                    return Err(error);
+                }
+            };
+        let previous: Option<Box<dyn Any + Send + Sync>> =
+            roots.insert(bundle_id, Box::new(binding));
+        debug_assert!(
+            previous.is_none(),
+            "logical unload must release the prior internal-plugin root"
+        );
+        Ok(GeneratedInternalPluginRegistration { bundle_id, handles })
+    }
 
-    /// Begin a non-Rust in-process registration transaction from canonical manifest data.
+    /// Begin an internal-plugin registration transaction from canonical manifest data.
     ///
     /// The caller must register each contract through `HostApi::register_guest_contract` on the
-    /// current thread, then call `commit_in_process_bundle` or `abort_in_process_bundle`.
-    pub(crate) fn begin_in_process_bundle(
+    /// current thread, then call `commit_internal_plugin` or `abort_internal_plugin`.
+    pub(crate) fn begin_internal_plugin(
         &self,
         manifest: ManifestData,
         language: SupportedLanguage,
     ) -> Result<BundleId, RuntimeError> {
+        let bundle_id: BundleId = self.begin_prepared_bundle_transaction(manifest, language)?;
+        let inserted: bool = self
+            .internal_plugin_lifecycle
+            .lock()
+            .recover_poisoned(self.logger, "runtime")
+            .insert(bundle_id);
+        debug_assert!(
+            inserted,
+            "prepared internal-plugin transactions must not overlap"
+        );
+        self.push_init_bundle_id(bundle_id.id());
+        Ok(bundle_id)
+    }
+
+    /// Validate and atomically publish a complete internal-plugin registration transaction.
+    pub(crate) fn commit_internal_plugin(
+        &self,
+        bundle_id: BundleId,
+    ) -> Result<BundleId, RuntimeError> {
+        let compatibility: Compatibility = self.config.compatibility;
+        let result: Result<BundleId, RuntimeError> = self.commit_prepared_bundle_transaction(
+            bundle_id,
+            LoadOptions {
+                compatibility,
+                ignore_function_count_mismatch: false,
+            },
+        );
+        self.pop_init_bundle_id();
+        if result.is_err() {
+            self.remove_internal_plugin_lifecycle_marker(bundle_id);
+        }
+        result
+    }
+
+    fn commit_internal_plugin_with_handles(
+        &self,
+        bundle_id: BundleId,
+    ) -> Result<Vec<GuestContractHandle>, RuntimeError> {
+        let compatibility: Compatibility = self.config.compatibility;
+        let result: Result<Vec<GuestContractHandle>, RuntimeError> = self
+            .commit_prepared_bundle_transaction_with_handles(
+                bundle_id,
+                LoadOptions {
+                    compatibility,
+                    ignore_function_count_mismatch: false,
+                },
+            );
+        self.pop_init_bundle_id();
+        if result.is_err() {
+            self.remove_internal_plugin_lifecycle_marker(bundle_id);
+        }
+        result
+    }
+
+    /// Atomically commit a staged transaction and copy its exact registration-order
+    /// handles into a prevalidated foreign-binding output buffer.
+    pub(crate) fn commit_internal_plugin_into_handles(
+        &self,
+        bundle_id: BundleId,
+        out_handles: &mut [GuestContractHandle],
+    ) -> Result<usize, RuntimeError> {
+        let Some(expected_count) = self.registry.prepared_bundle_contract_count(bundle_id) else {
+            self.abort_internal_plugin(bundle_id);
+            return Err(RuntimeError::Registry(
+                RegistryError::MissingBundleMetadata {
+                    bundle_id: bundle_id.id(),
+                },
+            ));
+        };
+        if expected_count != out_handles.len() {
+            let bundle: String = self
+                .registry
+                .prepared_manifest(bundle_id)
+                .map_or_else(|| bundle_id.id().to_string(), |manifest| manifest.name);
+            self.abort_internal_plugin(bundle_id);
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle,
+                error: format!(
+                    "committed-handle output capacity {} does not match {expected_count} staged providers",
+                    out_handles.len()
+                ),
+            }));
+        }
+        let handles: Vec<GuestContractHandle> =
+            self.commit_internal_plugin_with_handles(bundle_id)?;
+        out_handles.copy_from_slice(&handles);
+        Ok(handles.len())
+    }
+
+    /// Discard an uncommitted internal-plugin registration transaction.
+    pub(crate) fn abort_internal_plugin(&self, bundle_id: BundleId) {
+        if self.registry.discard_prepared_bundle(bundle_id) {
+            self.remove_internal_plugin_lifecycle_marker(bundle_id);
+            self.pop_init_bundle_id();
+        }
+    }
+
+    /// Transfer ownership of a native adapter resident into the current prepared
+    /// internal-plugin transaction.
+    pub(crate) fn attach_internal_plugin_resident(
+        &self,
+        bundle_id: BundleId,
+        context: *mut c_void,
+        owner_thread_id: u64,
+        release: InternalPluginResidentRelease,
+    ) -> Result<(), RuntimeError> {
+        let current_thread_id: u64 = current_os_thread_id();
+        if owner_thread_id != current_thread_id {
+            return Err(RuntimeError::InternalPluginResidentWrongThread {
+                bundle: format!("{:#x}", bundle_id.id()),
+                owner_thread_id,
+                current_thread_id,
+            });
+        }
+        self.registry
+            .attach_prepared_bundle_resident(bundle_id, context, owner_thread_id, release)
+            .map_err(RuntimeError::Registry)
+    }
+
+    fn remove_internal_plugin_lifecycle_marker(&self, bundle_id: BundleId) {
+        self.internal_plugin_lifecycle
+            .lock()
+            .recover_poisoned(self.logger, "runtime")
+            .remove(&bundle_id);
+    }
+
+    /// Validate the canonical manifest metadata consumed by every prepared-bundle transaction.
+    fn validate_prepared_bundle_manifest(
+        &self,
+        manifest: &ManifestData,
+    ) -> Result<(), RuntimeError> {
         manifest
-            .validate()
-            .map_err(|error: ManifestError| RuntimeError::Loader(error.into()))?;
+            .validate_metadata()
+            .map_err(|error: ManifestError| RuntimeError::Loader(error.into()))
+    }
+
+    /// Validate and begin the source-neutral prepared-bundle transaction.
+    fn begin_prepared_bundle_transaction(
+        &self,
+        manifest: ManifestData,
+        language: SupportedLanguage,
+    ) -> Result<BundleId, RuntimeError> {
+        self.validate_prepared_bundle_manifest(&manifest)?;
         let bundle_id: BundleId = BundleId::new(&manifest.name);
         if self.registry.get_bundle_descriptor(bundle_id).is_some() {
             return Err(RuntimeError::Registry(
@@ -318,42 +565,49 @@ impl Runtime {
             ));
         }
         self.registry.begin_prepared_bundle(manifest, language);
-        self.push_init_bundle_id(bundle_id.id());
         Ok(bundle_id)
     }
 
-    /// Validate and atomically publish a complete in-process registration transaction.
-    pub(crate) fn commit_in_process_bundle(
+    /// Validate and atomically publish one complete prepared-bundle transaction.
+    fn commit_prepared_bundle_transaction(
         &self,
         bundle_id: BundleId,
+        opts: LoadOptions,
     ) -> Result<BundleId, RuntimeError> {
-        let result: Result<BundleId, RuntimeError> = (|| {
-            let prepared = self
-                .registry
-                .take_prepared_bundle(bundle_id)
-                .ok_or_else(|| {
-                    RuntimeError::Registry(RegistryError::MissingBundleMetadata {
-                        bundle_id: bundle_id.id(),
-                    })
-                })?;
-            let (manifest, language, contracts) = prepared.into_parts();
-            self.validate_prepared_provider_set(&manifest, &contracts)?;
-            if self.config.compatibility != Compatibility::Yolo {
-                self.validate_prepared_function_counts(
-                    &manifest,
-                    &contracts,
-                    self.config.compatibility,
-                )?;
-            }
-            let version: Version =
-                parse_manifest_version(&manifest.version, &manifest.name, &manifest.path)?;
-            let dependencies: HashSet<GuestContractId> = manifest
-                .dependencies
-                .iter()
-                .map(|dependency: &RawManifestDependency| dependency.contract_id)
-                .collect();
-            let bundle_dependencies: Vec<BundleDependency> = parsed_bundle_dependencies(&manifest);
-            self.registry.register_prepared_bundle(
+        self.commit_prepared_bundle_transaction_with_handles(bundle_id, opts)
+            .map(|_| bundle_id)
+    }
+
+    fn commit_prepared_bundle_transaction_with_handles(
+        &self,
+        bundle_id: BundleId,
+        opts: LoadOptions,
+    ) -> Result<Vec<GuestContractHandle>, RuntimeError> {
+        let mut prepared = self
+            .registry
+            .take_prepared_bundle(bundle_id)
+            .ok_or_else(|| {
+                RuntimeError::Registry(RegistryError::MissingBundleMetadata {
+                    bundle_id: bundle_id.id(),
+                })
+            })?;
+        let mut resident: Option<InternalPluginResident> = prepared.take_resident();
+        let (manifest, language, contracts) = prepared.into_parts();
+        self.validate_prepared_provider_set(&manifest, &contracts)?;
+        if !opts.ignore_function_count_mismatch && opts.compatibility != Compatibility::Yolo {
+            self.validate_prepared_function_counts(&manifest, &contracts, opts.compatibility)?;
+        }
+        let version: Version =
+            parse_manifest_version(&manifest.version, &manifest.name, &manifest.path)?;
+        let dependencies: HashSet<GuestContractId> = manifest
+            .dependencies
+            .iter()
+            .map(|dependency: &RawManifestDependency| dependency.contract_id)
+            .collect();
+        let bundle_dependencies: Vec<BundleDependency> = parsed_bundle_dependencies(&manifest);
+        let handles: Vec<GuestContractHandle> = {
+            let mut residents = self.registry.lock_internal_plugin_residents();
+            let handles = self.registry.register_prepared_bundle(
                 BundleDescriptor {
                     id: bundle_id,
                     name: manifest.name.clone(),
@@ -365,20 +619,17 @@ impl Runtime {
                 dependencies,
                 contracts,
             )?;
-            self.bundle_manifests
-                .lock()
-                .recover_poisoned(self.logger, "runtime")
-                .insert(manifest.name.clone(), manifest);
-            Ok(bundle_id)
-        })();
-        self.pop_init_bundle_id();
-        result
-    }
-
-    /// Discard an uncommitted in-process registration transaction.
-    pub(crate) fn abort_in_process_bundle(&self, bundle_id: BundleId) {
-        self.registry.discard_prepared_bundle(bundle_id);
-        self.pop_init_bundle_id();
+            if let Some(resident) = resident.take() {
+                let previous = residents.insert(bundle_id, resident);
+                debug_assert!(previous.is_none(), "unload must release the prior resident");
+            }
+            handles
+        };
+        self.bundle_manifests
+            .lock()
+            .recover_poisoned(self.logger, "runtime")
+            .insert(manifest.name.clone(), manifest);
+        Ok(handles)
     }
 
     /// Find the first provider of a contract.
@@ -547,6 +798,13 @@ impl Runtime {
         &self.on_reload_cb
     }
 
+    /// Whether final runtime destruction may run on this OS thread.
+    pub(crate) fn can_destroy_on_current_thread(&self) -> bool {
+        !self
+            .registry
+            .has_internal_plugin_resident_owned_by_other_thread()
+    }
+
     /// Emit a Warn-level message through the runtime logger
     /// (`RuntimeConfig::log`, or stderr if no callback is installed).
     pub fn emit_warning(&self, msg: &str) {
@@ -573,71 +831,77 @@ impl Runtime {
         **guard = msg.into();
     }
 
-    /// Record that a stateful instance of `contract_id` was created.
+    /// Reserve one bundle lifecycle slot before invoking a guest constructor.
     ///
-    /// Increments the per-contract live count. Called by
-    /// `host_create_guest_instance` only for non-null (stateful) instances.
-    fn note_instance_created(&self, contract_id: GuestContractId) {
-        let mut guard: RecoveringGuard<MutexGuard<'_, HashMap<GuestContractId, u64>>> = self
+    /// The reservation is acquired while the registry still proves that
+    /// `interface` belongs to a live bundle. Unload holds this same mutex while it
+    /// invalidates the bundle and removes its backing, preventing a constructor that
+    /// already copied an adapter context from running after that backing is released.
+    fn begin_guest_instance_construction(
+        &self,
+        interface: *const GuestContractInterface,
+    ) -> Option<BundleId> {
+        let mut guard: RecoveringGuard<MutexGuard<'_, HashMap<BundleId, u64>>> = self
             .instance_counts
             .lock()
             .recover_poisoned(self.logger, "runtime");
-        let entry: &mut u64 = guard.entry(contract_id).or_insert(0);
+        let bundle_id: BundleId = self.registry.bundle_id_for_guest_interface(interface)?;
+        let entry: &mut u64 = guard.entry(bundle_id).or_insert(0);
+        *entry += 1;
+        Some(bundle_id)
+    }
+
+    /// Finish a construction reservation when no stateful instance was created.
+    fn cancel_guest_instance_construction(&self, bundle_id: BundleId) {
+        self.note_instance_destroyed(bundle_id);
+    }
+
+    #[cfg(test)]
+    /// Record that a stateful instance owned by `bundle_id` was created.
+    fn note_instance_created(&self, bundle_id: BundleId) {
+        let mut guard: RecoveringGuard<MutexGuard<'_, HashMap<BundleId, u64>>> = self
+            .instance_counts
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
+        let entry: &mut u64 = guard.entry(bundle_id).or_insert(0);
         *entry += 1;
     }
 
-    /// Record that a stateful instance of `contract_id` was destroyed.
-    ///
-    /// Saturating decrement; the key is removed once its count reaches zero so the
-    /// map only ever holds contracts with live instances. Called by
-    /// `host_destroy_guest_instance` only for non-null (stateful) instances.
-    fn note_instance_destroyed(&self, contract_id: GuestContractId) {
-        let mut guard: RecoveringGuard<MutexGuard<'_, HashMap<GuestContractId, u64>>> = self
+    /// Record that a stateful instance owned by `bundle_id` was destroyed.
+    fn note_instance_destroyed(&self, bundle_id: BundleId) {
+        let mut guard: RecoveringGuard<MutexGuard<'_, HashMap<BundleId, u64>>> = self
             .instance_counts
             .lock()
             .recover_poisoned(self.logger, "runtime");
-        if let Some(entry) = guard.get_mut(&contract_id) {
+        if let Some(entry) = guard.get_mut(&bundle_id) {
             *entry = entry.saturating_sub(1);
             if *entry == 0 {
-                guard.remove(&contract_id);
+                guard.remove(&bundle_id);
             }
         }
     }
 
-    /// Reset the live stateful-instance accounting for `contracts` to zero.
+    /// Reset the live stateful-instance accounting for one reloaded bundle.
     ///
-    /// Called after a successful reload swap. The swap epoch-reclaims the previous
-    /// interface and the guest-side state of every instance it created, so all
-    /// pre-reload instances of these contracts are dead: a correct caller observes
-    /// the registry revision change and revalidates (recreating its instance on the
-    /// new interface), and even runtime-mediated dispatch on a pre-reload instance
-    /// would touch reclaimed backing. Post-reload instances are created fresh and
-    /// re-increment from zero. Without this, instances abandoned across the reload
-    /// (never destroyed through the now-dead interface) would inflate the diagnostic
-    /// count permanently.
-    pub(crate) fn reset_instance_counts_for_contracts(&self, contracts: &[GuestContractId]) {
-        let mut guard: RecoveringGuard<MutexGuard<'_, HashMap<GuestContractId, u64>>> = self
-            .instance_counts
+    /// A successful reload swap invalidates every pre-reload interface from this
+    /// bundle. A correct caller revalidates and creates a fresh instance, so any
+    /// abandoned old instance must not inflate a later diagnostic count.
+    pub(crate) fn reset_instance_count_for_bundle(&self, bundle_id: BundleId) {
+        self.instance_counts
             .lock()
-            .recover_poisoned(self.logger, "runtime");
-        contracts.iter().for_each(|cid: &GuestContractId| {
-            guard.remove(cid);
-        });
+            .recover_poisoned(self.logger, "runtime")
+            .remove(&bundle_id);
     }
 
-    /// Sum the live stateful-instance counts across the given contract ids.
-    ///
-    /// Used by the reload/unload UB-warning to report how many guest instances a
-    /// bundle's contracts still hold before its interfaces are vacated or freed.
-    pub(crate) fn live_instance_count_for_contracts(&self, contracts: &[GuestContractId]) -> u64 {
-        let guard: RecoveringGuard<MutexGuard<'_, HashMap<GuestContractId, u64>>> = self
-            .instance_counts
+    /// Return the number of live stateful instances or active constructors owned by
+    /// `bundle_id`. Used only by cold reload and unload lifecycle transitions.
+    pub(crate) fn live_instance_count_for_bundle(&self, bundle_id: BundleId) -> u64 {
+        self.instance_counts
             .lock()
-            .recover_poisoned(self.logger, "runtime");
-        contracts
-            .iter()
-            .map(|cid: &GuestContractId| guard.get(cid).copied().unwrap_or(0))
-            .sum()
+            .recover_poisoned(self.logger, "runtime")
+            .get(&bundle_id)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Get the last error message for FFI error reporting.
@@ -942,55 +1206,101 @@ impl Runtime {
             });
         }
 
-        // Capture the loader name BEFORE invalidate: invalidate removes the
-        // bundle metadata, after which the loader string is no longer recoverable.
-        let loader_name: Option<String> = self.bundle_loader_name(&descriptor.name);
+        self.unload_registered_bundle(bundle_id, descriptor)
+    }
 
-        // Fire the Unloading callback BEFORE invalidate so the host can quiesce its
-        // own callers (the same window the reload Preparing phase gives it). The name
-        // is owned by `descriptor`, which outlives this synchronous call.
+    fn ensure_registered_bundle_resident_affinity(
+        &self,
+        bundle_id: BundleId,
+        bundle_name: &str,
+    ) -> Result<(), RuntimeError> {
+        let residents = self.registry.lock_internal_plugin_residents();
+        if let Some(resident) = residents.get(&bundle_id) {
+            let current_thread_id: u64 = current_os_thread_id();
+            if resident.owner_thread_id() != current_thread_id {
+                return Err(RuntimeError::InternalPluginResidentWrongThread {
+                    bundle: bundle_name.to_owned(),
+                    owner_thread_id: resident.owner_thread_id(),
+                    current_thread_id,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Invalidate one registered bundle and release its acquisition backing.
+    ///
+    /// Both direct and cascade unload use this boundary so every invalidated bundle
+    /// observes the same notification, live-instance safety, loader reclamation, and
+    /// runtime-owned resident release sequence.
+    fn unload_registered_bundle(
+        &self,
+        bundle_id: BundleId,
+        descriptor: BundleDescriptor,
+    ) -> Result<(), RuntimeError> {
+        self.ensure_registered_bundle_resident_affinity(bundle_id, &descriptor.name)?;
+        let loader_name: Option<String> = self.bundle_loader_name(&descriptor.name);
         self.fire_unloading(bundle_id, &descriptor.name);
 
-        // A Rust-owned in-process resident cannot be released while one of its
-        // stateful instances is active. Loader-owned bundles retain their existing
-        // warning-only behavior because their host manages the resident externally.
-        let exported_contracts: Vec<GuestContractId> =
-            self.registry.bundle_exported_contracts(bundle_id);
-        let live: u64 = self.live_instance_count_for_contracts(&exported_contracts);
-        let has_in_process_resident: bool = self
-            .in_process_residents
+        // A constructor reserves this mutex before it invokes guest code. Keep the
+        // reservation check and registry invalidation in one critical section: a
+        // constructor either makes the resident visibly in-use or observes the
+        // invalidated interface and returns without dereferencing its context.
+        let mut instance_counts: RecoveringGuard<MutexGuard<'_, HashMap<BundleId, u64>>> = self
+            .instance_counts
             .lock()
-            .recover_poisoned(self.logger, "runtime")
-            .contains_key(&bundle_id);
-        if has_in_process_resident && live > 0 {
-            return Err(RuntimeError::InProcessBundleInUse {
+            .recover_poisoned(self.logger, "runtime");
+        // Runtime lifecycle always acquires backing locks in this order. Generated
+        // Rust registration already holds roots before committing residents.
+        let mut roots: RecoveringGuard<
+            MutexGuard<'_, HashMap<BundleId, Box<dyn Any + Send + Sync>>>,
+        > = self
+            .internal_plugin_roots
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
+        let mut residents = self.registry.lock_internal_plugin_residents();
+        let mut internal_plugin_lifecycle = self
+            .internal_plugin_lifecycle
+            .lock()
+            .recover_poisoned(self.logger, "runtime");
+
+        let live: u64 = instance_counts.get(&bundle_id).copied().unwrap_or(0);
+        let has_internal_plugin_backing: bool = internal_plugin_lifecycle.contains(&bundle_id)
+            || roots.contains_key(&bundle_id)
+            || residents.contains_key(&bundle_id);
+        if has_internal_plugin_backing && live > 0 {
+            return Err(RuntimeError::InternalPluginInUse {
                 bundle: descriptor.name,
                 active_instances: live,
             });
         }
-        if live > 0 {
-            let name: String = descriptor.name.clone();
-            self.logger.log(LogLevel::Warn, "runtime", || {
-                format!(
-                    "unload: bundle '{name}' still has {live} live guest instance(s) across its \
-                     contracts; destroy them before unload to avoid use-after-free. Proceeding anyway."
-                )
-            });
-        }
+        let warning: Option<String> = (live > 0).then(|| {
+            format!(
+                "unload: bundle '{}' still has {live} live guest instance(s) across its \
+                 contracts; destroy them before unload to avoid use-after-free. Proceeding anyway.",
+                descriptor.name
+            )
+        });
 
+        let resident: Option<InternalPluginResident> = residents.remove(&bundle_id);
+        let root: Option<Box<dyn Any + Send + Sync>> = roots.remove(&bundle_id);
         let _count: u32 = self.registry.invalidate_bundle(bundle_id)?;
+        internal_plugin_lifecycle.remove(&bundle_id);
         self.forget_bundle_manifest(&descriptor.name);
-
-        // Invalidate-then-reclaim: now that the bundle is gone from the registry
-        // indices, no new dispatch can reach it. Ask the loader to free its
-        // per-bundle resources at a quiescence point (no-op for non-VM loaders).
-        self.reclaim_via_loader(bundle_id, loader_name.as_deref())?;
-        let _released: Option<Box<dyn Any + Send + Sync>> = self
-            .in_process_residents
-            .lock()
-            .recover_poisoned(self.logger, "runtime")
-            .remove(&bundle_id);
-        Ok(())
+        instance_counts.remove(&bundle_id);
+        drop(internal_plugin_lifecycle);
+        drop(residents);
+        drop(roots);
+        drop(instance_counts);
+        if let Some(warning) = warning {
+            self.logger.log(LogLevel::Warn, "runtime", || warning);
+        }
+        let reclaim_result = self.reclaim_via_loader(bundle_id, loader_name.as_deref());
+        if let Some(resident) = resident {
+            resident.release();
+        }
+        drop(root);
+        reclaim_result
     }
 
     /// Fire the `on_reload_cb` with a `ReloadPhase::unloading` notification, if a
@@ -1065,8 +1375,44 @@ impl Runtime {
     /// each unload is true unload: handles go stale and the interface and per-loader
     /// resources are reclaimed via epoch-deferred reclamation.
     pub fn unload_bundle_cascade(&self, bundle_id: BundleId) -> Result<(), RuntimeError> {
+        let mut affinity_visited: HashSet<BundleId> = HashSet::new();
+        self.ensure_cascade_resident_affinity(bundle_id, &mut affinity_visited)?;
         let mut visited: HashSet<BundleId> = HashSet::new();
         self.unload_bundle_cascade_with_visited(bundle_id, &mut visited)
+    }
+
+    /// Reject a cascade before its first invalidation if any resident belongs to
+    /// another OS thread.
+    fn ensure_cascade_resident_affinity(
+        &self,
+        bundle_id: BundleId,
+        visited: &mut HashSet<BundleId>,
+    ) -> Result<(), RuntimeError> {
+        if !visited.insert(bundle_id) {
+            return Ok(());
+        }
+        let descriptor: BundleDescriptor = self
+            .registry
+            .get_bundle_descriptor(bundle_id)
+            .ok_or_else(|| RuntimeError::BundleNotFound {
+                bundle_name: format!("{:#x}", bundle_id.id()),
+                contract_name: String::new(),
+            })?;
+        self.ensure_registered_bundle_resident_affinity(bundle_id, &descriptor.name)?;
+        let exported: HashSet<GuestContractId> = self
+            .registry
+            .bundle_exported_contracts(bundle_id)
+            .into_iter()
+            .collect();
+        for dependent in self
+            .registry
+            .bundles_depending_on_any(&exported)
+            .into_iter()
+            .filter(|dependent: &BundleId| *dependent != bundle_id)
+        {
+            self.ensure_cascade_resident_affinity(dependent, visited)?;
+        }
+        Ok(())
     }
 
     /// Cascade-unload `bundle_id`, tracking already-unloaded bundles in `visited` to
@@ -1080,12 +1426,13 @@ impl Runtime {
             return Ok(());
         }
 
-        if self.registry.get_bundle_descriptor(bundle_id).is_none() {
-            return Err(RuntimeError::BundleNotFound {
+        let descriptor: BundleDescriptor = self
+            .registry
+            .get_bundle_descriptor(bundle_id)
+            .ok_or_else(|| RuntimeError::BundleNotFound {
                 bundle_name: format!("{:#x}", bundle_id.id()),
                 contract_name: String::new(),
-            });
-        }
+            })?;
 
         let exported: HashSet<GuestContractId> = self
             .registry
@@ -1102,38 +1449,7 @@ impl Runtime {
             self.unload_bundle_cascade_with_visited(dep, visited)?;
         }
 
-        // Capture the loader runtime-name before invalidate removes the metadata,
-        // then reclaim the loader's per-bundle state after invalidate (see
-        // [`Runtime::unload_bundle`]).
-        let bundle_name: String = self
-            .registry
-            .get_bundle_descriptor(bundle_id)
-            .map(|d: BundleDescriptor| d.name)
-            .unwrap_or_default();
-        let loader_name: Option<String> = self.bundle_loader_name(&bundle_name);
-
-        // Fire Unloading before invalidate so the host can quiesce (mirrors unload_bundle).
-        self.fire_unloading(bundle_id, &bundle_name);
-
-        // Warn (do not block) on still-live instances before the bundle is freed
-        // (mirrors unload_bundle).
-        let live: u64 = self
-            .live_instance_count_for_contracts(&self.registry.bundle_exported_contracts(bundle_id));
-        if live > 0 {
-            let name: String = bundle_name.clone();
-            self.logger.log(LogLevel::Warn, "runtime", || {
-                format!(
-                    "unload: bundle '{name}' still has {live} live guest instance(s) across its \
-                     contracts; destroy them before unload to avoid use-after-free. Proceeding anyway."
-                )
-            });
-        }
-
-        let _count: u32 = self.registry.invalidate_bundle(bundle_id)?;
-        self.forget_bundle_manifest(&bundle_name);
-
-        self.reclaim_via_loader(bundle_id, loader_name.as_deref())?;
-        Ok(())
+        self.unload_registered_bundle(bundle_id, descriptor)
     }
 
     /// Load a single plugin bundle explicitly with options.
@@ -1254,13 +1570,9 @@ impl Runtime {
         source: BundleSource,
         opts: LoadOptions,
     ) -> Result<(), RuntimeError> {
-        // Full manifest validation (required fields, id == FNV1a-64(name), well-formed
-        // provides/bundle_dependencies version specs). Folds in the former inline
-        // id == 0 check.
         manifest
             .validate()
-            .map_err(|e: ManifestError| RuntimeError::Loader(e.into()))?;
-
+            .map_err(|error: ManifestError| RuntimeError::Loader(error.into()))?;
         // Enforce the configured bundle signature policy. The verifier picks TOFU
         // vs. key pinning based on whether the host configured a trusted-key
         // allowlist (`RuntimeConfig::trusted_keys`); see `verify_bundle_signature`.
@@ -1290,20 +1602,9 @@ impl Runtime {
                 loader_name: loader_name.to_owned(),
             })
         })?;
+        // Preserve external loading's pre-acquisition version rejection.
+        parse_manifest_version(&manifest.version, &manifest.name, &manifest.path)?;
 
-        // Build the complete metadata before any loader has a chance to allocate
-        // resident state. A malformed version must not turn into a failed partial load.
-        let bundle_version: Version =
-            parse_manifest_version(&manifest.version, &manifest.name, &manifest.path)?;
-        let bundle_dependencies: Vec<BundleDependency> = parsed_bundle_dependencies(&manifest);
-        let bundle_id: BundleId = BundleId::new(&manifest.name);
-        if self.registry.get_bundle_descriptor(bundle_id).is_some() {
-            return Err(RuntimeError::Registry(
-                RegistryError::BundleAlreadyRegistered {
-                    bundle: manifest.name.clone(),
-                },
-            ));
-        }
         if !is_known_runtime_language(&manifest.loader) {
             self.logger.log(LogLevel::Warn, "runtime", || {
                 format!(
@@ -1313,59 +1614,14 @@ impl Runtime {
             });
         }
         let runtime_language: SupportedLanguage = supported_language_from_str(&manifest.loader);
-
-        // The registry keeps this manifest and every guest registration private until
-        // the loader returns successfully and the exact provider/function sets validate.
-        // Dependency callbacks consult this staged manifest during polyplug_init.
-        self.registry
-            .begin_prepared_bundle(manifest.clone(), runtime_language);
+        let bundle_id: BundleId =
+            self.begin_prepared_bundle_transaction(manifest.clone(), runtime_language)?;
 
         let result: Result<(), RuntimeError> = (|| {
             loader
                 .load(&manifest, &source, self)
                 .map_err(RuntimeError::Loader)?;
-
-            let prepared = self
-                .registry
-                .take_prepared_bundle(bundle_id)
-                .ok_or_else(|| {
-                    RuntimeError::Registry(RegistryError::MissingBundleMetadata {
-                        bundle_id: bundle_id.id(),
-                    })
-                })?;
-            let (staged_manifest, staged_language, contracts) = prepared.into_parts();
-            self.validate_prepared_provider_set(&staged_manifest, &contracts)?;
-            if !opts.ignore_function_count_mismatch && opts.compatibility != Compatibility::Yolo {
-                self.validate_prepared_function_counts(
-                    &staged_manifest,
-                    &contracts,
-                    opts.compatibility,
-                )?;
-            }
-
-            let declared_contract_ids: HashSet<GuestContractId> = staged_manifest
-                .dependencies
-                .iter()
-                .map(|dependency: &RawManifestDependency| dependency.contract_id)
-                .collect();
-            self.registry.register_prepared_bundle(
-                BundleDescriptor {
-                    id: bundle_id,
-                    name: staged_manifest.name.clone(),
-                    version: bundle_version,
-                    runtime: staged_language,
-                    file_path: staged_manifest.path.clone(),
-                    dependencies: bundle_dependencies,
-                },
-                declared_contract_ids,
-                contracts,
-            )?;
-
-            let mut manifests: RecoveringGuard<MutexGuard<'_, HashMap<String, ManifestData>>> =
-                self.bundle_manifests
-                    .lock()
-                    .recover_poisoned(self.logger, "runtime");
-            manifests.insert(staged_manifest.name.clone(), staged_manifest);
+            self.commit_prepared_bundle_transaction(bundle_id, opts)?;
             Ok(())
         })();
 
@@ -1398,22 +1654,6 @@ impl Runtime {
             })
             .collect::<Result<Vec<(String, Option<String>)>, RuntimeError>>()?;
         let actual: Vec<(String, Version)> = RuntimeStore::prepared_provider_specs(contracts);
-        if expected.len() != actual.len() {
-            return Err(RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: manifest.name.clone(),
-                error: format!(
-                    "manifest provides {:?}, but loader registered {:?}",
-                    manifest.provides,
-                    actual
-                        .iter()
-                        .map(|(name, version)| format!(
-                            "{name}@{}.{}.{}",
-                            version.major, version.minor, version.patch
-                        ))
-                        .collect::<Vec<String>>()
-                ),
-            }));
-        }
 
         let mut matched: Vec<bool> = vec![false; expected.len()];
         for (actual_name, actual_version) in actual {
@@ -1450,8 +1690,7 @@ impl Runtime {
                                 .unwrap_or(false),
                         },
                     };
-                    (!matched[index] && *expected_name == provider_name && version_matches)
-                        .then_some(index)
+                    (*expected_name == provider_name && version_matches).then_some(index)
                 },
             );
             match expected_index {
@@ -1953,7 +2192,7 @@ unsafe fn host_register_guest_contract_impl(
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
     // Raw guest registration is reserved for a loader-owned polyplug_init
     // invocation. Hosts submit complete static tables through the canonical
-    // in-process registration operation instead.
+    // internal-plugin registration operation instead.
     let bundle_id: u64 = runtime.current_init_bundle_id();
     if bundle_id == 0 {
         const OUTSIDE_INIT: &[u8] =
@@ -2641,10 +2880,14 @@ unsafe fn host_unload_bundle_impl(this: *const HostApi, bundle_id: BundleId) -> 
 
     match runtime.unload_bundle(bundle_id) {
         Ok(()) => AbiError::ok(),
-        Err(e) => {
-            runtime.set_last_error(e.to_string());
+        Err(error) => {
+            let code: AbiErrorCode = match &error {
+                RuntimeError::BundleNotFound { .. } => AbiErrorCode::NotFound,
+                _ => AbiErrorCode::Generic,
+            };
+            runtime.set_last_error(error.to_string());
             AbiError {
-                code: AbiErrorCode::Generic as u32,
+                code: code as u32,
                 message: StringView::null(),
             }
         }
@@ -2943,9 +3186,15 @@ unsafe fn host_create_guest_instance_impl(
     // a freed interface. The guard is named (not `let _ =`) so it lives to the end.
     let _g: EpochGuard = epoch_pin();
 
+    // Reserve the owning bundle before copying or invoking its adapter context. The
+    // reservation and bundle lookup share the unload lifecycle lock, so invalidation
+    // wins before construction begins or construction keeps internal backing alive.
+    let Some(bundle_id) = runtime.begin_guest_instance_construction(interface) else {
+        return GuestContractInstance::null();
+    };
+
     // SAFETY: interface is non-null and points to a runtime-issued
     // GuestContractInterface kept alive by the pin above; reading its fields is sound.
-    let contract_id: GuestContractId = unsafe { (*interface).contract_id };
     // SAFETY: same live, pinned interface; selects the per-instance loader_data
     // (VM contracts route construction through their loader; native ignore it).
     let loader_data: VmLoaderData = unsafe { guest_instance_loader_data(interface) };
@@ -2968,19 +3217,16 @@ unsafe fn host_create_guest_instance_impl(
         )
     };
 
-    if !inst.data.is_null() {
-        runtime.note_instance_created(contract_id);
+    if inst.data.is_null() {
+        runtime.cancel_guest_instance_construction(bundle_id);
     }
     inst
 }
 
 /// HostApi.destroy_guest_instance callback — host-mediated guest instance teardown.
 ///
-/// Mirror of [`host_create_guest_instance`]: invokes the interface's
-/// `destroy_instance` under an epoch pin and updates the runtime's live-instance
-/// accounting. The decrement keys on `instance.contract_id` (not the interface's)
-/// so create/destroy match even if the resolved interface pointer has since changed.
-///
+/// Mirrors [`host_create_guest_instance`]: invokes the interface's `destroy_instance`
+/// under an epoch pin and decrements the owning bundle's live-instance accounting.
 /// # Safety
 /// - `this` must be a valid HostApi pointer with a valid runtime field, or null
 /// - `interface` must be a runtime-issued `GuestContractInterface` pointer, or null
@@ -2997,9 +3243,6 @@ pub(crate) unsafe extern "C" fn host_destroy_guest_instance(
     // SAFETY: this is a valid HostApi pointer passed by the host;
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-
-    let contract_id: GuestContractId = instance.contract_id;
-
     // Pin the epoch across teardown for the same reason as creation: keep the
     // interface's snapshot alive so `destroy_instance` cannot run against a freed
     // interface during a concurrent unload.
@@ -3017,7 +3260,9 @@ pub(crate) unsafe extern "C" fn host_destroy_guest_instance(
     unsafe { ((*interface).destroy_instance)(adapter_context, loader_data, this, instance) };
 
     if !instance.data.is_null() {
-        runtime.note_instance_destroyed(contract_id);
+        if let Some(bundle_id) = runtime.registry.bundle_id_for_guest_interface(interface) {
+            runtime.note_instance_destroyed(bundle_id);
+        }
     }
 }
 
@@ -3025,11 +3270,12 @@ pub(crate) unsafe extern "C" fn host_destroy_guest_instance(
 mod tests {
     #![allow(clippy::expect_used)]
     use core::cell::Cell;
-    use core::sync::atomic::{AtomicBool, Ordering};
+    use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::collections::HashMap;
     use std::fs;
     use std::panic;
     use std::path::PathBuf;
+    use std::sync::{Weak, mpsc};
     use std::thread;
 
     use polyplug_abi::{DispatchMechanisms, NativeDispatch};
@@ -3169,7 +3415,7 @@ mod tests {
     }
 
     #[test]
-    fn in_process_residents_are_runtime_local_and_release_on_logical_unload() {
+    fn internal_plugin_roots_are_runtime_local_and_release_on_logical_unload() {
         struct Resident {
             dropped: Arc<AtomicBool>,
         }
@@ -3246,7 +3492,7 @@ mod tests {
             dependencies: Vec::new(),
             id: BundleId::new("runtime-local-resident").id(),
             version: "1.0.0".to_owned(),
-            file: "in-process".to_owned(),
+            file: String::new(),
             provides: vec!["resident.contract@1.0.0".to_owned()],
             function_count,
             needs_reinit_on_dep_reload: false,
@@ -3263,7 +3509,7 @@ mod tests {
         let dropped_a: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
         let dropped_b: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
         let bundle_a: BundleId = runtime_a
-            .register_in_process_bundle(
+            .register_internal_plugin(
                 manifest.clone(),
                 SupportedLanguage::Rust,
                 Resident {
@@ -3285,7 +3531,7 @@ mod tests {
             )
             .expect("register first runtime bundle");
         runtime_b
-            .register_in_process_bundle(
+            .register_internal_plugin(
                 manifest,
                 SupportedLanguage::Rust,
                 Resident {
@@ -3324,7 +3570,7 @@ mod tests {
         assert!(!active.data.is_null());
         assert!(matches!(
             runtime_a.unload_bundle(bundle_a),
-            Err(RuntimeError::InProcessBundleInUse {
+            Err(RuntimeError::InternalPluginInUse {
                 active_instances: 1,
                 ..
             })
@@ -3348,9 +3594,216 @@ mod tests {
     }
 
     #[test]
+    fn unload_waits_for_in_flight_internal_resident_construction() {
+        struct BlockingResident {
+            started: mpsc::Sender<()>,
+            proceed: mpsc::Receiver<()>,
+            releases: Arc<AtomicUsize>,
+        }
+
+        unsafe extern "C" fn create_blocking_instance(
+            adapter_context: *mut c_void,
+            _loader_data: VmLoaderData,
+            _host: *const HostApi,
+            _args: *const (),
+            out_instance: *mut GuestContractInstance,
+        ) {
+            // SAFETY: the resident stays runtime-owned until this constructor returns.
+            let resident: &BlockingResident =
+                unsafe { &*adapter_context.cast::<BlockingResident>() };
+            let _ = resident.started.send(());
+            if resident.proceed.recv().is_err() {
+                return;
+            }
+            if !out_instance.is_null() {
+                let state: *mut u8 = Box::into_raw(Box::new(0_u8));
+                // SAFETY: the non-null output is writable for this callback.
+                unsafe {
+                    out_instance.write(GuestContractInstance {
+                        data: state.cast(),
+                        contract_id: GuestContractId::from_u64(0xA173_3A09_4E02_0002),
+                    })
+                };
+            }
+        }
+
+        unsafe extern "C" fn destroy_blocking_instance(
+            _adapter_context: *mut c_void,
+            _loader_data: VmLoaderData,
+            _host: *const HostApi,
+            instance: GuestContractInstance,
+        ) {
+            if !instance.data.is_null() {
+                // SAFETY: create_blocking_instance allocated this exact state.
+                unsafe { drop(Box::from_raw(instance.data.cast::<u8>())) };
+            }
+        }
+
+        unsafe extern "C" fn release_blocking_resident(adapter_context: *mut c_void) {
+            // SAFETY: ownership transfers exactly once through the resident callback.
+            let resident: Box<BlockingResident> =
+                unsafe { Box::from_raw(adapter_context.cast::<BlockingResident>()) };
+            resident.releases.fetch_add(1, Ordering::SeqCst);
+        }
+
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
+        let contract_id: GuestContractId = GuestContractId::from_u64(0xA173_3A09_4E02_0002);
+        let manifest: ManifestData =
+            transaction_manifest("in-flight-resident", &["inflight.resident"], Vec::new());
+        let descriptor: PluginDescriptor = PluginDescriptor {
+            name: StringView::from_static(b"in-flight-resident"),
+            contract_name: StringView::from_static(b"inflight.resident"),
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+        };
+        let (started_tx, started_rx) = mpsc::channel();
+        let (proceed_tx, proceed_rx) = mpsc::channel();
+        let releases: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        let context: *mut c_void = Box::into_raw(Box::new(BlockingResident {
+            started: started_tx,
+            proceed: proceed_rx,
+            releases: Arc::clone(&releases),
+        }))
+        .cast();
+        let interface: GuestContractInterface = GuestContractInterface {
+            contract_id,
+            contract_version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            dispatch_type: DispatchType::Native,
+            adapter_context: context,
+            create_instance: create_blocking_instance,
+            destroy_instance: destroy_blocking_instance,
+            dispatch: DispatchMechanisms {
+                native: NativeDispatch {
+                    function_count: 0,
+                    functions: ptr::null(),
+                },
+            },
+        };
+        let bundle_id: BundleId = runtime
+            .begin_internal_plugin(manifest, SupportedLanguage::Lua)
+            .expect("begin transaction");
+        runtime
+            .attach_internal_plugin_resident(
+                bundle_id,
+                context,
+                current_os_thread_id(),
+                release_blocking_resident,
+            )
+            .expect("attach resident");
+        let host: *const HostApi = runtime.host_abi();
+        let mut error: AbiError = AbiError::ok();
+        // SAFETY: the host transaction is active and descriptor/interface live through staging.
+        unsafe {
+            ((*host).register_guest_contract)(host, &descriptor, &interface, &mut error);
+        }
+        assert!(error.is_ok());
+        runtime
+            .commit_internal_plugin(bundle_id)
+            .expect("commit resident bundle");
+
+        let handle: GuestContractHandle = runtime
+            .find_guest_contract(contract_id.id(), 0)
+            .expect("find resident contract");
+        let interface: *const GuestContractInterface = runtime
+            .resolve_guest_contract(handle)
+            .expect("resolve resident contract");
+        let creator_host: usize = host as usize;
+        let creator_interface: usize = interface as usize;
+        let creator = thread::spawn(move || {
+            let host: *const HostApi = creator_host as *const HostApi;
+            let interface: *const GuestContractInterface =
+                creator_interface as *const GuestContractInterface;
+            let mut instance: GuestContractInstance = GuestContractInstance::null();
+            // SAFETY: the runtime stays alive while this creator is joined.
+            unsafe {
+                ((*host).create_guest_instance)(host, interface, ptr::null(), &mut instance);
+            }
+            instance
+        });
+        started_rx.recv().expect("constructor must begin");
+        assert!(matches!(
+            runtime.unload_bundle(bundle_id),
+            Err(RuntimeError::InternalPluginInUse {
+                active_instances: 1,
+                ..
+            })
+        ));
+        assert_eq!(releases.load(Ordering::SeqCst), 0);
+        proceed_tx.send(()).expect("unblock constructor");
+        let instance: GuestContractInstance = creator.join().expect("creator must complete");
+        assert!(!instance.data.is_null());
+        // SAFETY: the instance was created by this exact resident-backed interface.
+        unsafe { ((*host).destroy_guest_instance)(host, interface, instance) };
+        runtime
+            .unload_bundle(bundle_id)
+            .expect("unload after construction quiesces");
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn registration_and_unload_acquire_backing_locks_in_one_order() {
+        let (unloading_tx, unloading_rx) = mpsc::channel();
+        let runtime: Arc<Runtime> = Runtime::builder()
+            .on_reload(move |_user_data, _phase| {
+                unloading_tx.send(()).expect("unload notification receiver");
+            })
+            .build()
+            .expect("build");
+        let bundle_id: BundleId = BundleId::from_u64(0xA173_3A09_4E02_0003);
+        register_native_caller_contract(&runtime.registry, 0xA173_3A09_4E02_0003, bundle_id.id());
+        let roots = runtime.internal_plugin_roots.lock().expect("root lock");
+        let unload_runtime: Arc<Runtime> = Arc::clone(&runtime);
+        let unload = thread::spawn(move || unload_runtime.unload_bundle(bundle_id));
+        unloading_rx
+            .recv()
+            .expect("unload must notify before acquiring backing locks");
+
+        assert!(
+            runtime.registry.resident_lock_is_available_for_test(),
+            "unload must wait on roots before taking residents"
+        );
+        drop(roots);
+        unload
+            .join()
+            .expect("unload thread must complete")
+            .expect("unload must succeed");
+    }
+
+    #[test]
     fn abi_ok_constant() {
         assert_eq!(AbiErrorCode::Ok, AbiErrorCode::Ok);
         assert_eq!(AbiErrorCode::Ok as u32, 0_u32);
+    }
+
+    #[test]
+    fn host_api_unload_absent_bundle_returns_not_found_and_retains_detail() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
+        let host: *const HostApi = host_with_runtime(&runtime);
+        let mut error: AbiError = AbiError::ok();
+
+        // SAFETY: `host` is the live runtime's ABI table and `error` is writable.
+        unsafe {
+            ((*host).unload_bundle)(host, BundleId::from_u64(0xA11C_E000_0000_0001), &mut error)
+        };
+
+        assert_eq!(error.code, AbiErrorCode::NotFound as u32);
+        // SAFETY: `host` is the live runtime's ABI table.
+        let error_len: usize = unsafe { ((*host).get_error_len)(host) };
+        assert_ne!(error_len, 0, "unload error detail must be retained");
+        let mut detail: Vec<u8> = vec![0; error_len];
+        // SAFETY: `host` is live and `detail` owns a writable buffer of `error_len` bytes.
+        let written: usize =
+            unsafe { ((*host).get_last_error)(host, detail.as_mut_ptr(), detail.len()) };
+        assert_eq!(written, error_len);
+        let detail: String = String::from_utf8(detail).expect("last error must be UTF-8");
+        assert!(detail.contains("bundle not found"), "detail: {detail}");
     }
 
     /// TH-06: Verify host callbacks in runtime.rs use HostApi self-passing pattern.
@@ -3680,8 +4133,8 @@ mod tests {
     }
 
     /// Register a native-dispatch contract whose `create_instance` returns a
-    /// non-null (stateful) instance, returning the leaked interface pointer so the
-    /// test can drive `host_create_guest_instance` / `host_destroy_guest_instance`.
+    /// non-null (stateful) instance, returning the runtime-issued interface pointer
+    /// so the test can drive `host_create_guest_instance` / `host_destroy_guest_instance`.
     fn register_stateful_contract(
         registry: &RuntimeStore,
         contract_id: u64,
@@ -3724,23 +4177,23 @@ mod tests {
                 BundleId::from_u64(bundle_id),
             )
         };
-        if let Err(e) = result {
-            panic!("failed to register stateful contract: {e}");
-        }
-        interface as *const GuestContractInterface
+        let handle: GuestContractHandle = result.expect("register stateful contract");
+        registry
+            .resolve_guest_contract(handle)
+            .expect("resolve runtime-issued stateful interface")
     }
 
     #[test]
     fn host_instance_lifecycle_counts_stateful_instances() {
         let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
         let contract_id: u64 = STATEFUL_CONTRACT_ID;
-        let cid: GuestContractId = GuestContractId::from_u64(contract_id);
+        let bundle_id: BundleId = BundleId::from_u64(0x1);
         let interface: *const GuestContractInterface =
-            register_stateful_contract(&runtime.registry, contract_id, 0x1);
+            register_stateful_contract(&runtime.registry, contract_id, bundle_id.id());
         let host: *const HostApi = host_with_runtime(&runtime);
 
         assert_eq!(
-            runtime.live_instance_count_for_contracts(&[cid]),
+            runtime.live_instance_count_for_bundle(bundle_id),
             0,
             "no instances created yet"
         );
@@ -3755,7 +4208,7 @@ mod tests {
         unsafe { host_create_guest_instance(host, interface, ptr::null(), &mut inst_b) };
         assert!(!inst_a.data.is_null() && !inst_b.data.is_null());
         assert_eq!(
-            runtime.live_instance_count_for_contracts(&[cid]),
+            runtime.live_instance_count_for_bundle(bundle_id),
             2,
             "two stateful instances counted"
         );
@@ -3766,7 +4219,7 @@ mod tests {
         // SAFETY: as above.
         unsafe { host_destroy_guest_instance(host, interface, inst_b) };
         assert_eq!(
-            runtime.live_instance_count_for_contracts(&[cid]),
+            runtime.live_instance_count_for_bundle(bundle_id),
             0,
             "count returns to zero after destroy"
         );
@@ -3776,8 +4229,8 @@ mod tests {
     fn host_instance_lifecycle_ignores_stateless_instances() {
         let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
         let contract_id: u64 = 0x0FED_CBA9_8765_4321;
-        let cid: GuestContractId = GuestContractId::from_u64(contract_id);
-        register_native_caller_contract(&runtime.registry, contract_id, 0x1);
+        let bundle_id: BundleId = BundleId::from_u64(0x1);
+        register_native_caller_contract(&runtime.registry, contract_id, bundle_id.id());
         let host: *const HostApi = host_with_runtime(&runtime);
 
         // resolve the registered interface through the host vtable, mirroring the
@@ -3796,7 +4249,7 @@ mod tests {
         unsafe { host_create_guest_instance(host, interface, ptr::null(), &mut inst) };
         assert!(inst.data.is_null(), "stateless instance has null data");
         assert_eq!(
-            runtime.live_instance_count_for_contracts(&[cid]),
+            runtime.live_instance_count_for_bundle(bundle_id),
             0,
             "stateless instances are not counted"
         );
@@ -3804,7 +4257,67 @@ mod tests {
         // Destroying it is a no-op for the counter too.
         // SAFETY: as above.
         unsafe { host_destroy_guest_instance(host, interface, inst) };
-        assert_eq!(runtime.live_instance_count_for_contracts(&[cid]), 0);
+        assert_eq!(runtime.live_instance_count_for_bundle(bundle_id), 0);
+    }
+
+    #[test]
+    fn shared_contract_instances_are_counted_by_bundle_owner() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
+        let bundle_a: BundleId = BundleId::from_u64(0xA);
+        let bundle_b: BundleId = BundleId::from_u64(0xB);
+        let interface_a: *const GuestContractInterface =
+            register_stateful_contract(&runtime.registry, STATEFUL_CONTRACT_ID, bundle_a.id());
+        let interface_b: *const GuestContractInterface =
+            register_stateful_contract(&runtime.registry, STATEFUL_CONTRACT_ID, bundle_b.id());
+        runtime
+            .internal_plugin_roots
+            .lock()
+            .expect("internal-plugin root lock")
+            .insert(bundle_b, Box::new(()));
+        let host: *const HostApi = host_with_runtime(&runtime);
+        let mut instance_a: GuestContractInstance = GuestContractInstance::null();
+        let mut instance_b: GuestContractInstance = GuestContractInstance::null();
+
+        // SAFETY: both interfaces are runtime-issued and both outputs are writable.
+        unsafe {
+            host_create_guest_instance(host, interface_a, ptr::null(), &mut instance_a);
+            host_create_guest_instance(host, interface_b, ptr::null(), &mut instance_b);
+        }
+        assert_eq!(runtime.live_instance_count_for_bundle(bundle_a), 1);
+        assert_eq!(runtime.live_instance_count_for_bundle(bundle_b), 1);
+        assert!(matches!(
+            runtime.unload_bundle(bundle_b),
+            Err(RuntimeError::InternalPluginInUse {
+                active_instances: 1,
+                ..
+            })
+        ));
+
+        // SAFETY: instance_b was created through interface_b.
+        unsafe { host_destroy_guest_instance(host, interface_b, instance_b) };
+        assert_eq!(runtime.live_instance_count_for_bundle(bundle_a), 1);
+        assert_eq!(runtime.live_instance_count_for_bundle(bundle_b), 0);
+        runtime
+            .unload_bundle(bundle_b)
+            .expect("A's live instance must not block B's unload");
+
+        // SAFETY: instance_a was created through interface_a.
+        unsafe { host_destroy_guest_instance(host, interface_a, instance_a) };
+        assert_eq!(runtime.live_instance_count_for_bundle(bundle_a), 0);
+    }
+
+    #[test]
+    fn reload_counter_reset_only_affects_target_bundle() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("build");
+        let bundle_a: BundleId = BundleId::from_u64(0xA);
+        let bundle_b: BundleId = BundleId::from_u64(0xB);
+        runtime.note_instance_created(bundle_a);
+        runtime.note_instance_created(bundle_b);
+
+        runtime.reset_instance_count_for_bundle(bundle_a);
+
+        assert_eq!(runtime.live_instance_count_for_bundle(bundle_a), 0);
+        assert_eq!(runtime.live_instance_count_for_bundle(bundle_b), 1);
     }
 
     // ─── init-stack fast path (active_init_count) ────────────────────────────
@@ -5028,6 +5541,15 @@ mod tests {
             contract_id: u64,
             contract_name: &'static str,
         ) -> Result<(), LoaderError> {
+            Self::register_named(runtime, contract_id, contract_name, "transaction-loader")
+        }
+
+        fn register_named(
+            runtime: &Runtime,
+            contract_id: u64,
+            contract_name: &'static str,
+            provider_name: &'static str,
+        ) -> Result<(), LoaderError> {
             let interface: GuestContractInterface = GuestContractInterface {
                 contract_id: GuestContractId::from_u64(contract_id),
                 contract_version: Version {
@@ -5047,7 +5569,7 @@ mod tests {
                 },
             };
             let descriptor: PluginDescriptor = PluginDescriptor {
-                name: StringView::from_static(b"transaction-loader"),
+                name: StringView::from_static(provider_name.as_bytes()),
                 contract_name: StringView::from_static(contract_name.as_bytes()),
                 version: Version {
                     major: 1,
@@ -5175,6 +5697,624 @@ mod tests {
 
     fn load_transaction(runtime: &Runtime, manifest: ManifestData) -> Result<(), RuntimeError> {
         runtime.load_bundle_from_source(manifest, BundleSource::Code(String::new()))
+    }
+
+    #[test]
+    fn capacity_failed_handle_commit_consumes_transaction() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("runtime build");
+        let unloads: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        runtime
+            .register_loader(Box::new(TransactionLoader {
+                mode: TransactionLoadMode::Success,
+                unloads,
+            }))
+            .expect("loader registration");
+        let contract_id: u64 = 0xDD00_0000_0000_0003;
+        load_transaction(
+            &runtime,
+            transaction_manifest(
+                "committed-handle-older-provider",
+                &["transaction.provider"],
+                Vec::new(),
+            ),
+        )
+        .expect("load older provider");
+        let older: GuestContractHandle = runtime
+            .find_guest_contract(contract_id, 0)
+            .expect("resolve older provider");
+
+        let manifest: ManifestData = transaction_manifest(
+            "committed-handle-current-providers",
+            &["transaction.provider"],
+            Vec::new(),
+        );
+        let bundle_id: BundleId = runtime
+            .begin_internal_plugin(manifest, SupportedLanguage::Cpp)
+            .expect("begin generated providers");
+        TransactionLoader::register_named(
+            &runtime,
+            contract_id,
+            "transaction.provider",
+            "current-provider-a",
+        )
+        .expect("stage first generated provider");
+        TransactionLoader::register_named(
+            &runtime,
+            contract_id,
+            "transaction.provider",
+            "current-provider-b",
+        )
+        .expect("stage second generated provider");
+        let mut insufficient: [GuestContractHandle; 1] = [GuestContractHandle::null()];
+        assert!(
+            runtime
+                .commit_internal_plugin_into_handles(bundle_id, &mut insufficient)
+                .is_err(),
+            "insufficient output capacity must fail before publication"
+        );
+        assert!(
+            runtime.registry.get_bundle_descriptor(bundle_id).is_none(),
+            "a capacity failure must leave the transaction unpublished"
+        );
+        assert!(
+            runtime.registry.prepared_manifest(bundle_id).is_none(),
+            "a failed commit attempt must consume its prepared transaction"
+        );
+        assert_eq!(
+            runtime.current_init_bundle_id(),
+            0,
+            "a failed commit attempt must pop its initialization stack entry"
+        );
+        let mut handles: [GuestContractHandle; 2] = [GuestContractHandle::null(); 2];
+        assert!(
+            runtime
+                .commit_internal_plugin_into_handles(bundle_id, &mut handles)
+                .is_err(),
+            "a consumed transaction must reject retries"
+        );
+        let mut all: [GuestContractHandle; 1] = [GuestContractHandle::null()];
+        assert_eq!(runtime.find_all_by_contract(contract_id, 0, &mut all), 1);
+        assert_eq!(all[0], older);
+    }
+
+    #[test]
+    fn capacity_failed_handle_commit_releases_attached_resident_once() {
+        unsafe extern "C" fn release_resident(context: *mut c_void) {
+            // SAFETY: this callback owns the allocation transferred into the resident.
+            let releases: Box<Arc<AtomicUsize>> =
+                unsafe { Box::from_raw(context.cast::<Arc<AtomicUsize>>()) };
+            releases.fetch_add(1, Ordering::SeqCst);
+        }
+
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("runtime build");
+        let bundle_id: BundleId = runtime
+            .begin_internal_plugin(
+                transaction_manifest(
+                    "capacity-release-resident",
+                    &["transaction.provider"],
+                    Vec::new(),
+                ),
+                SupportedLanguage::Lua,
+            )
+            .expect("begin transaction");
+        let releases: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        let context: *mut c_void = Box::into_raw(Box::new(Arc::clone(&releases))).cast();
+        runtime
+            .attach_internal_plugin_resident(
+                bundle_id,
+                context,
+                current_os_thread_id(),
+                release_resident,
+            )
+            .expect("attach resident");
+        TransactionLoader::register(&runtime, 0xDD00_0000_0004, "transaction.provider")
+            .expect("stage provider");
+
+        let mut no_handles: [GuestContractHandle; 0] = [];
+        assert!(
+            runtime
+                .commit_internal_plugin_into_handles(bundle_id, &mut no_handles)
+                .is_err(),
+            "wrong output capacity must reject the transaction"
+        );
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
+        assert!(
+            runtime.registry.prepared_manifest(bundle_id).is_none(),
+            "the resident must not remain staged after the failed commit"
+        );
+        assert_eq!(runtime.current_init_bundle_id(), 0);
+    }
+
+    #[test]
+    fn failed_or_aborted_internal_transaction_clears_lifecycle_marker() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("runtime build");
+        let aborted: BundleId = runtime
+            .begin_internal_plugin(
+                transaction_manifest(
+                    "aborted-internal-lifecycle-marker",
+                    &["transaction.provider"],
+                    Vec::new(),
+                ),
+                SupportedLanguage::Python,
+            )
+            .expect("begin abortable transaction");
+        assert!(
+            runtime
+                .internal_plugin_lifecycle
+                .lock()
+                .expect("lifecycle marker lock")
+                .contains(&aborted)
+        );
+        runtime.abort_internal_plugin(aborted);
+        assert!(
+            !runtime
+                .internal_plugin_lifecycle
+                .lock()
+                .expect("lifecycle marker lock")
+                .contains(&aborted),
+            "aborting must clear the uncommitted marker"
+        );
+
+        let failed: BundleId = runtime
+            .begin_internal_plugin(
+                transaction_manifest(
+                    "failed-internal-lifecycle-marker",
+                    &["transaction.provider"],
+                    Vec::new(),
+                ),
+                SupportedLanguage::JavaScript,
+            )
+            .expect("begin failing transaction");
+        assert!(
+            runtime
+                .internal_plugin_lifecycle
+                .lock()
+                .expect("lifecycle marker lock")
+                .contains(&failed)
+        );
+        assert!(
+            runtime.commit_internal_plugin(failed).is_err(),
+            "a provider-free transaction must fail to commit"
+        );
+        assert!(
+            !runtime
+                .internal_plugin_lifecycle
+                .lock()
+                .expect("lifecycle marker lock")
+                .contains(&failed),
+            "a failed commit must clear the consumed transaction marker"
+        );
+    }
+
+    #[test]
+    fn abort_after_commit_preserves_live_instance_unload_refusal() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("runtime build");
+        let contract_id: u64 = 0xDD00_0000_0000_0005;
+        let bundle_id: BundleId = runtime
+            .begin_internal_plugin(
+                transaction_manifest(
+                    "committed-internal-lifecycle-marker",
+                    &["transaction.provider"],
+                    Vec::new(),
+                ),
+                SupportedLanguage::Python,
+            )
+            .expect("begin transaction");
+        TransactionLoader::register(&runtime, contract_id, "transaction.provider")
+            .expect("stage provider");
+        runtime
+            .commit_internal_plugin(bundle_id)
+            .expect("commit transaction");
+
+        runtime.abort_internal_plugin(bundle_id);
+        assert!(
+            runtime
+                .internal_plugin_lifecycle
+                .lock()
+                .expect("lifecycle marker lock")
+                .contains(&bundle_id),
+            "aborting a committed transaction must leave its lifecycle marker published"
+        );
+        runtime
+            .instance_counts
+            .lock()
+            .expect("instance count lock")
+            .insert(bundle_id, 1);
+
+        assert!(matches!(
+            runtime.unload_bundle(bundle_id),
+            Err(RuntimeError::InternalPluginInUse {
+                active_instances: 1,
+                ..
+            })
+        ));
+        assert!(
+            runtime.registry.get_bundle_descriptor(bundle_id).is_some(),
+            "the refused unload must leave the committed bundle published"
+        );
+    }
+
+    #[test]
+    fn external_unload_reentrant_logger_runs_after_runtime_guards_release() {
+        let bundle_id: BundleId = BundleId::from_u64(0xA173_3A09_4E02_0005);
+        let callback_runtime: Arc<Mutex<Option<Weak<Runtime>>>> = Arc::new(Mutex::new(None));
+        let logger_runtime: Arc<Mutex<Option<Weak<Runtime>>>> = Arc::clone(&callback_runtime);
+        let warnings: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        let logger_warnings: Arc<AtomicUsize> = Arc::clone(&warnings);
+        let runtime: Arc<Runtime> = Runtime::builder()
+            .logger(move |_level, scope, message| {
+                if scope == "runtime" && message.contains("still has") {
+                    let runtime: Arc<Runtime> = logger_runtime
+                        .lock()
+                        .expect("logger runtime lock")
+                        .as_ref()
+                        .and_then(Weak::upgrade)
+                        .expect("runtime must remain live while logging");
+                    assert_eq!(runtime.live_instance_count_for_bundle(bundle_id), 0);
+                    logger_warnings.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+            .build()
+            .expect("runtime build");
+        *callback_runtime
+            .lock()
+            .expect("install runtime weak reference") = Some(Arc::downgrade(&runtime));
+        register_native_caller_contract(&runtime.registry, 0xA173_3A09_4E02_0005, bundle_id.id());
+        runtime
+            .instance_counts
+            .lock()
+            .expect("instance count lock")
+            .insert(bundle_id, 1);
+
+        runtime
+            .unload_bundle(bundle_id)
+            .expect("external bundle unload must complete without logger deadlock");
+
+        assert_eq!(warnings.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn wrong_thread_direct_unload_does_not_notify_or_invalidate_bundle() {
+        unsafe extern "C" fn release_resident(context: *mut c_void) {
+            // SAFETY: this callback owns the allocation transferred into the resident.
+            let releases: Box<Arc<AtomicUsize>> =
+                unsafe { Box::from_raw(context.cast::<Arc<AtomicUsize>>()) };
+            releases.fetch_add(1, Ordering::SeqCst);
+        }
+
+        let bundle_id: BundleId = BundleId::from_u64(0xA173_3A09_4E02_0006);
+        let notifications: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        let callback_notifications: Arc<AtomicUsize> = Arc::clone(&notifications);
+        let runtime: Arc<Runtime> = Runtime::builder()
+            .on_reload(move |_user_data, _phase| {
+                callback_notifications.fetch_add(1, Ordering::SeqCst);
+            })
+            .build()
+            .expect("runtime build");
+        let contract_id: u64 = 0xA173_3A09_4E02_0006;
+        register_native_caller_contract(&runtime.registry, contract_id, bundle_id.id());
+        let releases: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        let context: *mut c_void = Box::into_raw(Box::new(Arc::clone(&releases))).cast();
+        runtime.registry.lock_internal_plugin_residents().insert(
+            bundle_id,
+            InternalPluginResident::new(context, current_os_thread_id(), release_resident),
+        );
+
+        let off_owner_runtime: Arc<Runtime> = Arc::clone(&runtime);
+        let result = thread::spawn(move || off_owner_runtime.unload_bundle(bundle_id))
+            .join()
+            .expect("off-owner unload must return");
+        assert!(matches!(
+            result,
+            Err(RuntimeError::InternalPluginResidentWrongThread { .. })
+        ));
+        assert_eq!(notifications.load(Ordering::SeqCst), 0);
+        assert!(
+            runtime.find_guest_contract(contract_id, 0).is_ok(),
+            "wrong-thread unload must leave the bundle resolvable"
+        );
+        assert_eq!(releases.load(Ordering::SeqCst), 0);
+
+        runtime
+            .unload_bundle(bundle_id)
+            .expect("owner-thread unload must proceed");
+        assert_eq!(notifications.load(Ordering::SeqCst), 1);
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
+    }
+    #[test]
+    fn external_transaction_preserves_descriptor_handle_and_revision() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("runtime build");
+        let unloads: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        runtime
+            .register_loader(Box::new(TransactionLoader {
+                mode: TransactionLoadMode::Success,
+                unloads: Arc::clone(&unloads),
+            }))
+            .expect("loader registration");
+        let manifest: ManifestData = transaction_manifest(
+            "transaction-observable-state",
+            &["transaction.provider"],
+            Vec::new(),
+        );
+        let bundle_id: BundleId = BundleId::new(&manifest.name);
+        let revision_before: u64 = runtime.registry.current_revision();
+
+        load_transaction(&runtime, manifest).expect("external transaction load");
+
+        let descriptor: BundleDescriptor = runtime
+            .registry
+            .get_bundle_descriptor(bundle_id)
+            .expect("external bundle descriptor");
+        assert_eq!(descriptor.id, bundle_id);
+        assert_eq!(descriptor.name, "transaction-observable-state");
+        assert_eq!(
+            descriptor.version,
+            Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            }
+        );
+        assert_eq!(descriptor.runtime, SupportedLanguage::Rust);
+        assert_eq!(descriptor.file_path, PathBuf::new());
+        assert!(descriptor.dependencies.is_empty());
+        assert_eq!(runtime.registry.current_revision(), revision_before + 1);
+        assert_eq!(
+            runtime
+                .find_guest_contract(0xDD00_0000_0000_0003, 0)
+                .expect("external handle"),
+            GuestContractHandle {
+                index: 0,
+                generation: 0,
+            }
+        );
+        assert_eq!(unloads.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn cascade_unload_keeps_residents_until_live_instances_are_destroyed() {
+        struct Resident {
+            drops: Arc<AtomicUsize>,
+        }
+
+        impl Drop for Resident {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        unsafe extern "C" fn create_stateless_instance(
+            _adapter_context: *mut c_void,
+            _loader_data: VmLoaderData,
+            _host: *const HostApi,
+            _args: *const (),
+            out_instance: *mut GuestContractInstance,
+        ) {
+            if !out_instance.is_null() {
+                // SAFETY: the non-null output slot is writable for this callback.
+                unsafe { out_instance.write(GuestContractInstance::null()) };
+            }
+        }
+
+        unsafe extern "C" fn create_stateful_instance(
+            _adapter_context: *mut c_void,
+            _loader_data: VmLoaderData,
+            _host: *const HostApi,
+            _args: *const (),
+            out_instance: *mut GuestContractInstance,
+        ) {
+            if !out_instance.is_null() {
+                let state: *mut u8 = Box::into_raw(Box::new(0));
+                // SAFETY: the non-null output slot is writable for this callback.
+                unsafe {
+                    out_instance.write(GuestContractInstance {
+                        data: state.cast(),
+                        contract_id: GuestContractId::new("cascade.dependent", 1),
+                    })
+                };
+            }
+        }
+
+        unsafe extern "C" fn destroy_stateful_instance(
+            _adapter_context: *mut c_void,
+            _loader_data: VmLoaderData,
+            _host: *const HostApi,
+            instance: GuestContractInstance,
+        ) {
+            if !instance.data.is_null() {
+                // SAFETY: create_stateful_instance allocated this exact boxed byte.
+                unsafe { drop(Box::from_raw(instance.data.cast::<u8>())) };
+            }
+        }
+
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("runtime build");
+        let provider_contract_id: u64 = GuestContractId::new("cascade.provider", 1).id();
+        let dependent_contract_id: u64 = GuestContractId::new("cascade.dependent", 1).id();
+        let provider_manifest: ManifestData = transaction_manifest(
+            "cascade-resident-provider",
+            &["cascade.provider"],
+            Vec::new(),
+        );
+        let dependent_manifest: ManifestData = transaction_manifest(
+            "cascade-resident-dependent",
+            &["cascade.dependent"],
+            vec![RawManifestDependency {
+                kind: "contract".to_owned(),
+                contract: "cascade.provider".to_owned(),
+                min_version: "1.0.0".to_owned(),
+                bundle: None,
+                contract_id: GuestContractId::from_u64(provider_contract_id),
+                bundle_id: None,
+            }],
+        );
+        let provider_bundle_id: BundleId = BundleId::new(&provider_manifest.name);
+        let dependent_bundle_id: BundleId = BundleId::new(&dependent_manifest.name);
+        let provider_drops: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        let dependent_drops: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        let provider_interface: GuestContractInterface = GuestContractInterface {
+            contract_id: GuestContractId::from_u64(provider_contract_id),
+            contract_version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            dispatch_type: DispatchType::Native,
+            adapter_context: ptr::null_mut(),
+            create_instance: create_stateless_instance,
+            destroy_instance: transaction_destroy_instance,
+            dispatch: DispatchMechanisms {
+                native: NativeDispatch {
+                    function_count: 0,
+                    functions: ptr::null(),
+                },
+            },
+        };
+        let dependent_interface: GuestContractInterface = GuestContractInterface {
+            contract_id: GuestContractId::from_u64(dependent_contract_id),
+            contract_version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            dispatch_type: DispatchType::Native,
+            adapter_context: ptr::null_mut(),
+            create_instance: create_stateful_instance,
+            destroy_instance: destroy_stateful_instance,
+            dispatch: DispatchMechanisms {
+                native: NativeDispatch {
+                    function_count: 0,
+                    functions: ptr::null(),
+                },
+            },
+        };
+        let provider_descriptor: PluginDescriptor = PluginDescriptor {
+            name: StringView::from_static(b"cascade-resident-provider"),
+            contract_name: StringView::from_static(b"cascade.provider"),
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+        };
+        let dependent_descriptor: PluginDescriptor = PluginDescriptor {
+            name: StringView::from_static(b"cascade-resident-dependent"),
+            contract_name: StringView::from_static(b"cascade.dependent"),
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+        };
+
+        runtime
+            .register_internal_plugin(
+                provider_manifest,
+                SupportedLanguage::Rust,
+                Resident {
+                    drops: Arc::clone(&provider_drops),
+                },
+                |host| {
+                    let mut error: AbiError = AbiError::ok();
+                    // SAFETY: host belongs to the active staging transaction and these tables
+                    // remain live until the cascade test completes.
+                    unsafe {
+                        ((*host).register_guest_contract)(
+                            host,
+                            &provider_descriptor,
+                            &provider_interface,
+                            &mut error,
+                        );
+                    }
+                    error
+                },
+            )
+            .expect("register provider");
+        runtime
+            .register_internal_plugin(
+                dependent_manifest,
+                SupportedLanguage::Rust,
+                Resident {
+                    drops: Arc::clone(&dependent_drops),
+                },
+                |host| {
+                    let mut error: AbiError = AbiError::ok();
+                    // SAFETY: host belongs to the active staging transaction and these tables
+                    // remain live until the cascade test completes.
+                    unsafe {
+                        ((*host).register_guest_contract)(
+                            host,
+                            &dependent_descriptor,
+                            &dependent_interface,
+                            &mut error,
+                        );
+                    }
+                    error
+                },
+            )
+            .expect("register dependent");
+
+        let active_interface: *const GuestContractInterface = runtime
+            .resolve_guest_contract(
+                runtime
+                    .find_guest_contract(dependent_contract_id, 0)
+                    .expect("dependent handle"),
+            )
+            .expect("dependent interface");
+        let host: *const HostApi = runtime.host_abi();
+        let mut active: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: the host and active interface belong to this runtime; active is writable.
+        unsafe {
+            ((*host).create_guest_instance)(host, active_interface, ptr::null(), &mut active);
+        }
+        assert!(!active.data.is_null());
+
+        assert!(matches!(
+            runtime.unload_bundle_cascade(provider_bundle_id),
+            Err(RuntimeError::InternalPluginInUse {
+                bundle,
+                active_instances: 1,
+            }) if bundle == "cascade-resident-dependent"
+        ));
+        assert_eq!(provider_drops.load(Ordering::SeqCst), 0);
+        assert_eq!(dependent_drops.load(Ordering::SeqCst), 0);
+        assert!(
+            runtime
+                .registry
+                .get_bundle_descriptor(provider_bundle_id)
+                .is_some()
+        );
+        assert!(
+            runtime
+                .registry
+                .get_bundle_descriptor(dependent_bundle_id)
+                .is_some()
+        );
+
+        // SAFETY: active was created through this exact runtime interface.
+        unsafe {
+            ((*host).destroy_guest_instance)(host, active_interface, active);
+        }
+        runtime
+            .unload_bundle_cascade(provider_bundle_id)
+            .expect("cascade unload after instance destruction");
+        assert_eq!(provider_drops.load(Ordering::SeqCst), 1);
+        assert_eq!(dependent_drops.load(Ordering::SeqCst), 1);
+        assert!(
+            runtime
+                .registry
+                .get_bundle_descriptor(provider_bundle_id)
+                .is_none()
+        );
+        assert!(
+            runtime
+                .registry
+                .get_bundle_descriptor(dependent_bundle_id)
+                .is_none()
+        );
+
+        assert!(runtime.unload_bundle_cascade(provider_bundle_id).is_err());
+        assert_eq!(provider_drops.load(Ordering::SeqCst), 1);
+        assert_eq!(dependent_drops.load(Ordering::SeqCst), 1);
     }
 
     #[test]

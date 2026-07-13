@@ -6,11 +6,11 @@ using Polyplug.Abi;
 namespace Polyplug.Host;
 
 /// <summary>
-/// Canonical manifest, contract registrar, and managed state for one in-process
-/// bundle. The resident remains owned by its creator until the staged transaction
+/// Canonical manifest, contract registrar, and managed state for one internal
+/// plugin. The resident remains owned by its creator until the staged transaction
 /// commits successfully.
 /// </summary>
-public sealed class InProcessBundle
+public sealed class InternalPluginBundle
 {
     private readonly object _resident;
     private readonly Func<nint, AbiError> _registerContracts;
@@ -18,20 +18,20 @@ public sealed class InProcessBundle
     private int _transferred;
 
     /// <summary>
-    /// Creates a bundle backed by canonical manifest bytes and existing
+    /// Creates an internal plugin backed by canonical manifest bytes and existing
     /// <see cref="PluginDescriptor"/> / <see cref="GuestContractInterface"/> pairs.
     /// </summary>
-    /// <param name="manifest">Canonical manifest bytes for the bundle.</param>
+    /// <param name="manifest">Canonical manifest bytes for the plugin.</param>
     /// <param name="resident">Managed delegates, factories, interfaces, and implementation objects.</param>
     /// <param name="registerContracts">Registers every descriptor/interface pair with the active staging transaction.</param>
-    public InProcessBundle(byte[] manifest, object resident, Func<nint, AbiError> registerContracts)
+    public InternalPluginBundle(byte[] manifest, object resident, Func<nint, AbiError> registerContracts)
     {
         ArgumentNullException.ThrowIfNull(manifest);
         ArgumentNullException.ThrowIfNull(resident);
         ArgumentNullException.ThrowIfNull(registerContracts);
         if (manifest.Length == 0)
         {
-            throw new ArgumentException("In-process manifest must not be empty.", nameof(manifest));
+            throw new ArgumentException("Internal plugin manifest must not be empty.", nameof(manifest));
         }
 
         Manifest = manifest;
@@ -43,6 +43,7 @@ public sealed class InProcessBundle
     internal AbiError RegisterContracts(nint host) => _registerContracts(host);
     internal bool TryReserveTransfer() =>
         Interlocked.CompareExchange(ref _transferred, 1, 0) == 0;
+
 
     internal void CancelTransfer() =>
         Interlocked.CompareExchange(ref _transferred, 0, 1);

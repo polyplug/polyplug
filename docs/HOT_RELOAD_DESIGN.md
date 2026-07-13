@@ -100,7 +100,7 @@ The old interface stays active and valid.
 `ReloadPhase` is an FFI-safe `#[repr(C)]` struct (a tagged union — `phase_type`
 selects the active variant), not a Rust enum. There is no `retry_count` field.
 
-```rust
+```rust,ignore
 #[repr(u32)]
 pub enum ReloadPhaseType {
     Preparing = 0,  // BEFORE interface swap — host must destroy instances
@@ -127,7 +127,7 @@ the call, so callbacks must copy anything they retain.
 
 ### RuntimeBuilder
 
-```rust
+```rust,ignore
 impl RuntimeBuilder {
     /// Register a callback for reload notifications.
     ///
@@ -142,7 +142,7 @@ impl RuntimeBuilder {
 
 ### RuntimeConfig
 
-```rust
+```rust,ignore
 pub struct RuntimeConfig {
     /// Version compatibility policy for loaded bundles. (offset 0)
     pub compatibility: Compatibility,
@@ -187,14 +187,14 @@ If an application doesn't need hot-reload, it shouldn't take on this coordinatio
 
 #### Error When Disabled
 
-```rust
+```rust,ignore
 let rt = Runtime::builder().build()?;  // hot_reload_enabled = false (default)
 rt.reload_bundle(path)?;  // Returns Err(RuntimeError::HotReloadDisabled)
 ```
 
 ### Example: Enabling Hot-Reload
 
-```rust
+```rust,ignore
 use polyplug_abi::runtime::RuntimeConfig;
 use polyplug_abi::runtime::{Compatibility, ReloadPhaseType};
 
@@ -245,7 +245,7 @@ For language-specific API details and examples, see the SDK documentation:
 
 ## Reload Flow Diagram
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────┐
 │                    HOT-RELOAD FLOW                                   │
 ├─────────────────────────────────────────────────────────────────────┤

@@ -11,63 +11,91 @@ using Xunit;
 
 namespace Polyplug.Host.Tests;
 
-public sealed unsafe class InProcessBundleTests
+public sealed unsafe class InternalPluginBundleTests
 {
-    static InProcessBundleTests()
+    static InternalPluginBundleTests()
     {
         TestNativeLibraries.EnsureInstalled();
     }
 
     [Fact]
-    public void RegistrationStagesCanonicalManifestAndKeepsStatePerRuntime()
+    public void RegistrationStagesCanonicalManifestAndKeepsResidentsPerRuntime()
     {
         Runtime runtimeA = new();
         Runtime runtimeB = new();
+        CommitFailureResident residentA = new();
+        CommitFailureResident residentB = new();
         try
         {
-            int callsA = 0;
-            int callsB = 0;
-            InProcessBundle bundleA = transformer.InProcessBundleFactory.CreateInProcessBundle(
-                _ => new StatefulTransformer(() => callsA++));
-            InProcessBundle bundleB = transformer.InProcessBundleFactory.CreateInProcessBundle(
-                _ => new StatefulTransformer(() => callsB++));
+            InternalPluginBundle pluginA = new(
+                ReadTransformerManifest(),
+                residentA,
+                residentA.RegisterContracts);
+            InternalPluginBundle pluginB = new(
+                ReadTransformerManifest(),
+                residentB,
+                residentB.RegisterContracts);
 
-            ulong bundleIdA = runtimeA.RegisterInProcessBundle(bundleA);
-            ulong bundleIdB = runtimeB.RegisterInProcessBundle(bundleB);
+            InternalPluginRegistration registrationA = runtimeA.RegisterInternalPlugin(pluginA, providerCount: 1);
+            InternalPluginRegistration registrationB = runtimeB.RegisterInternalPlugin(pluginB, providerCount: 1);
 
-            Collect();
-            InvokeTransform(runtimeA, ref callsA);
-            InvokeTransform(runtimeB, ref callsB);
+            Assert.Single(registrationA.Handles);
+            Assert.Single(registrationB.Handles);
+            Assert.Equal(1, runtimeA.InternalPluginCount);
+            Assert.Equal(1, runtimeB.InternalPluginCount);
 
-            runtimeA.UnloadBundle(bundleIdA);
-            runtimeB.UnloadBundle(bundleIdB);
+            runtimeA.UnloadBundle(registrationA.BundleId);
+            runtimeB.UnloadBundle(registrationB.BundleId);
+            Assert.True(residentA.IsDisposed);
+            Assert.True(residentB.IsDisposed);
         }
         finally
         {
+            residentA.Dispose();
+            residentB.Dispose();
             GC.KeepAlive(runtimeA);
             GC.KeepAlive(runtimeB);
         }
     }
 
     [Fact]
-    public void ContractRegistrationFailureAbortsStagingAndDoesNotTransferResident()
+    public void FailedRegistrationConsumesInputAndRequiresFreshPlugin()
     {
         Runtime runtime = new();
         CommitFailureResident failedResident = new(failRegistration: true);
         try
         {
-            InProcessBundle failedBundle = new(
+            InternalPluginBundle failedPlugin = new(
                 ReadTransformerManifest(),
                 failedResident,
                 failedResident.RegisterContracts);
 
-            Assert.Throws<InvalidOperationException>(() => runtime.RegisterInProcessBundle(failedBundle));
-            Assert.False(failedResident.IsDisposed);
-            Assert.Equal(0, runtime.InProcessBundleCount);
+            Assert.Throws<InvalidOperationException>(
+                () => runtime.RegisterInternalPlugin(failedPlugin, providerCount: 1));
+            Assert.True(failedResident.IsDisposed);
+            Assert.Equal(0, runtime.InternalPluginCount);
 
             failedResident.AllowRegistration();
-            ulong bundleId = runtime.RegisterInProcessBundle(failedBundle);
-            runtime.UnloadBundle(bundleId);
+            Assert.Throws<InvalidOperationException>(
+                () => runtime.RegisterInternalPlugin(failedPlugin, providerCount: 1));
+
+            CommitFailureResident freshResident = new();
+            try
+            {
+                InternalPluginBundle freshPlugin = new(
+                    ReadTransformerManifest(),
+                    freshResident,
+                    freshResident.RegisterContracts);
+                InternalPluginRegistration registered =
+                    runtime.RegisterInternalPlugin(freshPlugin, providerCount: 1);
+                Assert.Single(registered.Handles);
+                runtime.UnloadBundle(registered.BundleId);
+                Assert.True(freshResident.IsDisposed);
+            }
+            finally
+            {
+                freshResident.Dispose();
+            }
         }
         finally
         {
@@ -77,7 +105,7 @@ public sealed unsafe class InProcessBundleTests
     }
 
     [Fact]
-    public void CommitFailureDiscardsStagingWithoutAbortingTwice()
+    public void CommitFailureDiscardsStagingAndAllowsFreshInternalPlugin()
     {
         Runtime runtime = new();
         CommitFailureResident failedResident = new();
@@ -89,30 +117,38 @@ public sealed unsafe class InProcessBundleTests
                 "\"data.Transformer@1\" = 2",
                 StringComparison.Ordinal);
             Assert.NotEqual(manifest, invalidManifest);
-            InProcessBundle failedBundle = new(
+            InternalPluginBundle failedPlugin = new(
                 Encoding.UTF8.GetBytes(invalidManifest),
                 failedResident,
                 failedResident.RegisterContracts);
 
-            Assert.Throws<InvalidOperationException>(() => runtime.RegisterInProcessBundle(failedBundle));
-            Assert.False(failedResident.IsDisposed);
-            Assert.Equal(0, runtime.InProcessBundleCount);
+            Assert.Throws<InvalidOperationException>(
+                () => runtime.RegisterInternalPlugin(failedPlugin, providerCount: 1));
+            Assert.True(failedResident.IsDisposed);
+            Assert.Equal(0, runtime.InternalPluginCount);
 
-            InProcessBundle succeedingBundle = CreateTransformerBundle(() => { });
-            ulong bundleId = runtime.RegisterInProcessBundle(succeedingBundle);
-            runtime.UnloadBundle(bundleId);
+            CommitFailureResident freshResident = new();
+            try
+            {
+                InternalPluginBundle freshPlugin = new(
+                    ReadTransformerManifest(),
+                    freshResident,
+                    freshResident.RegisterContracts);
+                InternalPluginRegistration registration =
+                    runtime.RegisterInternalPlugin(freshPlugin, providerCount: 1);
+                runtime.UnloadBundle(registration.BundleId);
+                Assert.True(freshResident.IsDisposed);
+            }
+            finally
+            {
+                freshResident.Dispose();
+            }
         }
         finally
         {
             failedResident.Dispose();
             GC.KeepAlive(runtime);
         }
-    }
-
-    private static InProcessBundle CreateTransformerBundle(Action increment)
-    {
-        return transformer.InProcessBundleFactory.CreateInProcessBundle(
-            _ => new StatefulTransformer(increment));
     }
 
     private static byte[] ReadTransformerManifest()
@@ -127,50 +163,6 @@ public sealed unsafe class InProcessBundleTests
             "manifest.toml"));
     }
 
-    private static void InvokeTransform(Runtime runtime, ref int calls)
-    {
-        GuestContractHandle handle = runtime.FindGuestContract(
-            TransformerInterfaces.DATA_TRANSFORMER_CONTRACT_ID,
-            minVersion: 1);
-        nint interfacePtr = runtime.ResolveGuestContract(handle);
-        Assert.NotEqual(nint.Zero, interfacePtr);
-
-        GuestContractInterface iface = Marshal.PtrToStructure<GuestContractInterface>(interfacePtr);
-        var create = (delegate* unmanaged[Cdecl]<nint, VmLoaderData, nint, nint, GuestContractInstance*, void>)iface.CreateInstance;
-        GuestContractInstance instance = default;
-        create(iface.AdapterContext, default, runtime.HostHandle, nint.Zero, &instance);
-        Assert.NotEqual(nint.Zero, instance.Data);
-
-        var dispatch = (delegate* unmanaged[Cdecl]<nint, GuestContractInstance, nint, nint, AbiError*, void>)Marshal.ReadIntPtr(iface.Dispatch.Native.Functions);
-        byte[] bytes = [1];
-        GCHandle inputPin = GCHandle.Alloc(bytes, GCHandleType.Pinned);
-        try
-        {
-            StringView input = new() { Ptr = inputPin.AddrOfPinnedObject(), Len = (nuint)bytes.Length };
-            StringView output = default;
-            AbiError error = default;
-            dispatch(iface.AdapterContext, instance, (nint)(&input), (nint)(&output), &error);
-            Assert.Equal((uint)AbiErrorCode.Ok, error.Code);
-            Assert.Equal((nuint)1, output.Len);
-            Assert.Equal(1, calls);
-        }
-        finally
-        {
-            inputPin.Free();
-        }
-
-        var destroy = (delegate* unmanaged[Cdecl]<nint, VmLoaderData, nint, GuestContractInstance, void>)iface.DestroyInstance;
-        destroy(iface.AdapterContext, default, runtime.HostHandle, instance);
-    }
-
-    private sealed class StatefulTransformer(Action increment) : IDataTransformerGuestContract
-    {
-        public StringView Transform(StringView input)
-        {
-            increment();
-            return input;
-        }
-    }
 
     private sealed class CommitFailureResident : IDisposable
 

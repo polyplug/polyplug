@@ -4,9 +4,8 @@ Build polyplug hosts and plugins in JavaScript/TypeScript. The host side loads
 the native runtime through FFI; guest plugins run in an embedded QuickJS VM.
 Strings are native UTF-8 — no transcoding.
 
-> **Runtime: Deno.** The host loader uses `Deno.dlopen` and `Deno.build` /
-> `Deno.env`. The package installs under Node.js but the host loader throws
-> there. A Node FFI backend is planned — until then, run hosts on Deno.
+> **Host runtime: Deno.** The host uses `Deno.dlopen` for FFI. Generated host
+> caller bindings target Deno as well.
 
 ## Install
 
@@ -30,21 +29,54 @@ npm install -g @polyplug/cli          # or, on Deno: deno install -gA -n polyplu
 ## Generate bindings
 
 ```bash
-polyplugc generate --bundle bundle.toml --lang js --out ./generated
+polyplugc generate --bundle bundle.toml --lang js-quickjs --out ./generated
 ```
 
 ## Host application
 
 ```typescript
-import { Runtime } from "@polyplug/host";
+import { openPolyplug, runtimeNew } from "@polyplug/host";
 
-const runtime = Runtime.builder().pluginDir("./plugins").build();
+const runtime = runtimeNew(openPolyplug("./libpolyplug.so"));
+runtime.loadBundle("./plugins/my_plugin");
 
-const decoder = PipelineDecoder.create(runtime);
+const decoder = PipelineDecoderContract.create(runtime);
 if (decoder) {
     const result = decoder.decode(input);
 }
 ```
+
+## Internal plugins
+
+The default command emits external plugin bindings. Generate the internal
+profile explicitly when the application supplies JavaScript/TypeScript
+implementations:
+
+```bash
+polyplugc generate --bundle bundle.toml --internal --lang js-quickjs --out ./generated
+```
+
+The generated `internal.ts` exports `InternalProviders`, `Registration`, and
+`register(runtime, providers)`. Each `InternalProviders` property is a factory
+returning a typed implementation:
+
+```typescript
+import { InternalProviders, register } from "./generated/internal/<bundle>-<bundle-id-hex>/internal.ts";
+
+const registration = register(runtime, new InternalProviders({
+    platform_plugin_platform_plugin: () => new PlatformPlugin(),
+}));
+const bundleId = registration.bundleId;
+```
+
+The registrar consumes provider factories per attempt, validates the exact
+manifest provider/function/dependency set, and atomically publishes it.
+`Registration` exposes named generated host caller bindings from the committed
+handles; use them exactly like callers found after external plugin loading.
+Before `runtime.unloadBundle(bundleId)`, the application must quiesce every
+caller and destroy all guest instances for the bundle. A successful unload
+invalidates those callers and releases the generated provider roots; callers
+must not be used afterward.
 
 ## Plugin author
 

@@ -21,6 +21,5 @@
     <ProjectReference Include="..\host\Polyplug.Host.csproj" />
     <!-- ReloadRuntimeTests drives a REAL reload through the native loader. -->
     <ProjectReference Include="..\loaders\Native\Polyplug.Loaders.Native.csproj" />
-    <ProjectReference Include="..\..\..\examples\guests\csharp\transformer\Transformer.csproj" />
   </ItemGroup>
 </Project>

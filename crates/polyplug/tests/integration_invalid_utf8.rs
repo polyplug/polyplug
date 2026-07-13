@@ -40,7 +40,7 @@ fn test_load_bundle_invalid_utf8_path() {
         "last_error must be set after invalid UTF-8 path"
     );
     // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn test_reload_bundle_invalid_utf8_path() {
         "last_error must be set after invalid UTF-8 path"
     );
     // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 #[test]
@@ -90,5 +90,5 @@ fn test_runtime_healthy_after_invalid_utf8() {
     );
     let _ = result2;
     // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }

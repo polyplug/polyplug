@@ -1,14 +1,14 @@
 # Debugging Native Crashes
 
-polyplug runs plugins **in-process, with the host's privileges, and no sandbox** (see
-the [Trust Model](TRUST_MODEL.md)). That is the right model for *trusted* plugins, and it
-has a direct operational consequence: **a defect in a plugin can crash the host
-process.** There is no fault isolation boundary to catch a wild pointer write, a stack
-smash, or a foreign-memory free inside a loaded bundle.
+polyplug executes plugins **with the host's privileges and no sandbox** (see the
+[Trust Model](TRUST_MODEL.md)). That is the right model for *trusted* plugins,
+and it has a direct operational consequence: **a defect in a plugin can crash
+the host process.** There is no fault-isolation boundary to catch a wild pointer
+write, stack smash, or foreign-memory free inside a loaded bundle.
 
-> If you are evaluating *whether* in-process is acceptable for your threat model, read
-> the [Trust Model](TRUST_MODEL.md) first — this guide assumes you have already chosen the
-> trusted-plugin path.
+> If you are evaluating this host-process trust model, read the
+> [Trust Model](TRUST_MODEL.md) first — this guide assumes you have already chosen
+> the trusted-plugin path.
 
 ---
 
@@ -157,7 +157,7 @@ lldb ./your-host -c /cores/core.<PID>
 The OS Windows Error Reporting path writes a `.dmp`. Configure it via the
 `LocalDumps` registry key, then open the dump:
 
-```
+```console
 cdb -z C:\path\to\crash.dmp
 0:000> !analyze -v
 0:000> ~*k                 :: stacks for all threads
@@ -296,7 +296,7 @@ its own way to recover a *language-level* stack on top of the native one.
 
 ## See also
 
-- [Trust Model](TRUST_MODEL.md) — the in-process trust boundary and the full threat model.
+- [Trust Model](TRUST_MODEL.md) — the host-process trust boundary and the full threat model.
 - [Unload Design](UNLOAD_DESIGN.md) and [Hot Reload](HOT_RELOAD_DESIGN.md) — the
   epoch-reclaim protocol and the quiesce contract in depth.
 - [ABI Architecture](ABI_ARCHITECTURE.md) — why freshly generated callers cannot drift.

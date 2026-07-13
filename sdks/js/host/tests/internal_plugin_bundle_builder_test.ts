@@ -1,6 +1,6 @@
 import {
-    buildInProcessBundle,
-    buildInProcessGuestContract,
+    buildInternalPluginBundle,
+    buildInternalPluginGuestContract,
 } from "../polyplug/mod.js";
 import {
     HOST_API_REGISTER_GUEST_CONTRACT_OFFSET,
@@ -26,22 +26,22 @@ function readString(view: FfiPointerView, offset: number): string {
     return new TextDecoder().decode(backend.pointerView(pointer).getArrayBuffer(length));
 }
 
-test("in-process bundle stages existing descriptor/interface pairs from canonical manifest bytes", () => {
+test("internal-plugin bundle stages existing descriptor/interface pairs from canonical manifest bytes", () => {
     const backend = getBackend();
     const bridge = bridgeLibrary();
-    const first = buildInProcessGuestContract({
+    const first = buildInternalPluginGuestContract({
         contractId: 0xA001n,
         version: { major: 1, minor: 0, patch: 0 },
         implementation: {},
         methods: [],
     }, bridge);
-    const second = buildInProcessGuestContract({
+    const second = buildInternalPluginGuestContract({
         contractId: 0xA002n,
         version: { major: 1, minor: 0, patch: 0 },
         implementation: {},
         methods: [],
     }, bridge);
-    const bundle = buildInProcessBundle({
+    const bundle = buildInternalPluginBundle({
         manifest: MANIFEST,
         contracts: [
             {
@@ -80,7 +80,7 @@ test("in-process bundle stages existing descriptor/interface pairs from canonica
     );
 
     try {
-        bundle._reserveInProcessTransfer();
+        bundle._reserveInternalPluginTransfer();
         bundle._registerGuestContracts(backend.pointerOf(hostTable));
         assertEquals(staged.length, 2);
         assertEquals(staged[0].provider, "js-first");
@@ -90,7 +90,7 @@ test("in-process bundle stages existing descriptor/interface pairs from canonica
         assertEquals(staged[1].contract, "js.second");
         assertEquals(staged[1].interfacePtr, backend.pointerValue(second.interfacePtr));
     } finally {
-        bundle._takeInProcessResident().release();
+        bundle._takeInternalPluginResident().release();
         register.close();
     }
 });

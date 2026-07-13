@@ -181,6 +181,7 @@ pub(crate) struct RawBundleMeta {
     pub api: Option<String>,
     #[serde(default)]
     pub loader: String,
+    #[serde(default)]
     pub file: RawBundleFile,
     #[serde(default)]
     pub needs_reinit_on_dep_reload: bool,
@@ -427,6 +428,12 @@ fn normalize_source_line_endings(source: &str) -> Cow<'_, str> {
 }
 // ─── Parse entry points ───────────────────────────────────────────────────────
 
+#[derive(Clone, Copy)]
+enum BundleParseMode {
+    External,
+    Internal,
+}
+
 pub fn parse_api(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
     let content: String = fs::read_to_string(path).map_err(|e| PolyplugcError::ReadFailed {
         path: path.to_string_lossy().into_owned(),
@@ -473,10 +480,25 @@ fn parse_bundle_str_with_file(content: &str, file: &str) -> Result<ValidatedIr, 
             location,
         }
     })?;
-    lower_bundle(raw, content.as_ref(), file)
+    lower_bundle(raw, content.as_ref(), file, BundleParseMode::External)
 }
 
 pub fn parse_bundle_with_api(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
+    parse_bundle_with_api_mode(path, BundleParseMode::External)
+}
+
+/// Parse one bundle plus its API schema for the internal Rust generation profile.
+///
+/// Internal bundles share all canonical metadata and provider validation while
+/// deliberately omitting external loader/artifact acquisition validation.
+pub fn parse_bundle_with_api_internal(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
+    parse_bundle_with_api_mode(path, BundleParseMode::Internal)
+}
+
+fn parse_bundle_with_api_mode(
+    path: &Path,
+    mode: BundleParseMode,
+) -> Result<ValidatedIr, PolyplugcError> {
     let content: String = fs::read_to_string(path).map_err(|e| PolyplugcError::ReadFailed {
         path: path.to_string_lossy().into_owned(),
         source: e,
@@ -509,7 +531,7 @@ pub fn parse_bundle_with_api(path: &Path) -> Result<ValidatedIr, PolyplugcError>
     };
     check_bundle_name_conflict(&raw.bundle.name, &api_ir.contracts)?;
 
-    let bundle_ir: ValidatedIr = lower_bundle(raw, &content, &file)?;
+    let bundle_ir: ValidatedIr = lower_bundle(raw, &content, &file, mode)?;
     Ok(ValidatedIr {
         types: api_ir.types,
         enums: api_ir.enums,
@@ -1195,6 +1217,7 @@ fn lower_bundle(
     raw: RawBundleSchema,
     source: &str,
     file: &str,
+    mode: BundleParseMode,
 ) -> Result<ValidatedIr, PolyplugcError> {
     let bundle_version: Version = parse_version_spanned(&raw.bundle.version, file, source)?;
     let mut plugins: Vec<ResolvedPlugin> = Vec::new();
@@ -1240,47 +1263,61 @@ fn lower_bundle(
         resolved_deps.push(resolved);
     }
     let loader: String = raw.bundle.loader.to_lowercase();
-    let is_native: bool = loader == "rust" || loader == "cpp" || loader == "native";
-    let resolved_file: ResolvedBundleFile = match &raw.bundle.file {
-        RawBundleFile::PlatformMap(os_map) if is_native => {
-            let mut map: HashMap<PlatformKey, String> = HashMap::new();
-            for (os, arch_map) in os_map {
-                for (arch, path) in arch_map {
-                    map.insert(
-                        PlatformKey {
-                            os: os.clone(),
-                            arch: arch.clone(),
-                        },
-                        path.clone(),
-                    );
+    let resolved_file: ResolvedBundleFile = match mode {
+        BundleParseMode::Internal => ResolvedBundleFile::Absent,
+        BundleParseMode::External => {
+            if loader.is_empty() {
+                return Err(PolyplugcError::ValidationFailed {
+                    message: "bundle.loader field is required".to_owned(),
+                });
+            }
+            let is_native: bool = loader == "rust" || loader == "cpp" || loader == "native";
+            match &raw.bundle.file {
+                RawBundleFile::PlatformMap(os_map) if is_native => {
+                    let mut map: HashMap<PlatformKey, String> = HashMap::new();
+                    for (os, arch_map) in os_map {
+                        for (arch, path) in arch_map {
+                            map.insert(
+                                PlatformKey {
+                                    os: os.clone(),
+                                    arch: arch.clone(),
+                                },
+                                path.clone(),
+                            );
+                        }
+                    }
+                    ResolvedBundleFile::PlatformMap(map)
+                }
+                RawBundleFile::Single(path) if !path.is_empty() && !is_native => {
+                    ResolvedBundleFile::Single(path.clone())
+                }
+                RawBundleFile::PlatformMap(_) if !is_native => {
+                    return Err(PolyplugcError::ValidationFailed {
+                        message: format!(
+                            "loader '{}' requires a flat file field (file = \"path\"), not [bundle.file] table",
+                            loader
+                        ),
+                    });
+                }
+                RawBundleFile::Single(path) if is_native && !path.is_empty() => {
+                    return Err(PolyplugcError::ValidationFailed {
+                        message: format!(
+                            "loader '{}' requires [bundle.file] table with platform entries, not a flat file field",
+                            loader
+                        ),
+                    });
+                }
+                _ => {
+                    return Err(PolyplugcError::ValidationFailed {
+                        message: "bundle.file field is required".to_string(),
+                    });
                 }
             }
-            ResolvedBundleFile::PlatformMap(map)
         }
-        RawBundleFile::Single(path) if !path.is_empty() && !is_native => {
-            ResolvedBundleFile::Single(path.clone())
-        }
-        RawBundleFile::PlatformMap(_) if !is_native => {
-            return Err(PolyplugcError::ValidationFailed {
-                message: format!(
-                    "loader '{}' requires a flat file field (file = \"path\"), not [bundle.file] table",
-                    loader
-                ),
-            });
-        }
-        RawBundleFile::Single(_) if is_native => {
-            return Err(PolyplugcError::ValidationFailed {
-                message: format!(
-                    "loader '{}' requires [bundle.file] table with platform entries, not a flat file field",
-                    loader
-                ),
-            });
-        }
-        _ => {
-            return Err(PolyplugcError::ValidationFailed {
-                message: "bundle.file field is required".to_string(),
-            });
-        }
+    };
+    let resolved_loader: String = match mode {
+        BundleParseMode::External => raw.bundle.loader.clone(),
+        BundleParseMode::Internal => String::new(),
     };
     // Suppress unused warning — `source` is accepted for API consistency with lower_api
     // but bundle lowering currently has no field-level type refs to resolve.
@@ -1293,7 +1330,7 @@ fn lower_bundle(
         bundle: Some(ResolvedBundle {
             name: raw.bundle.name.clone(),
             version: bundle_version,
-            loader: raw.bundle.loader.clone(),
+            loader: resolved_loader,
             file: resolved_file,
             bundle_id: dep_bundle_id,
             plugins,
@@ -1314,7 +1351,7 @@ mod tests {
 
     const SAMPLE_API: &str = "[[plugin_contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n[[plugin_contract.functions]]\nname = \"decode\"\n\n[[plugin_contract.functions]]\nname = \"supported_formats\"\n    return = \"StringView\"";
 
-    const SAMPLE_BUNDLE: &str = "[bundle]\nname = \"image-plugin\"\nversion = \"1.0.0\"\nfile = \"test.so\"\n\n[[plugin]]\nname = \"jpeg_decoder\"\nimplements = [\"image.decode@1.0\"]";
+    const SAMPLE_BUNDLE: &str = "[bundle]\nname = \"image-plugin\"\nversion = \"1.0.0\"\nloader = \"python\"\nfile = \"test.py\"\n\n[[plugin]]\nname = \"jpeg_decoder\"\nimplements = [\"image.decode@1.0\"]";
 
     #[test]
     fn parse_minimal_api() {
@@ -1350,7 +1387,7 @@ mod tests {
         // behind pipeline.Decoder, each fronting a different backend). The api forbids
         // two contracts of the same name, so both providers share the identical
         // contract id — the generator emits that const once and one interface each.
-        let toml: &str = "[bundle]\nname = \"multi-bundle\"\nversion = \"1.0.0\"\nfile = \"test.so\"\n\n[[plugin]]\nname = \"decoder_a\"\nimplements = [\"pipeline.Decoder@1.0\"]\n\n[[plugin]]\nname = \"decoder_b\"\nimplements = [\"pipeline.Decoder@1.0\"]";
+        let toml: &str = "[bundle]\nname = \"multi-bundle\"\nversion = \"1.0.0\"\nloader = \"python\"\nfile = \"test.py\"\n\n[[plugin]]\nname = \"decoder_a\"\nimplements = [\"pipeline.Decoder@1.0\"]\n\n[[plugin]]\nname = \"decoder_b\"\nimplements = [\"pipeline.Decoder@1.0\"]";
         let ir: ValidatedIr =
             parse_bundle_str(toml).expect("multiple providers of one contract must be accepted");
         let bundle: &ResolvedBundle = ir.bundle.as_ref().expect("bundle");
@@ -1374,7 +1411,7 @@ mod tests {
     #[test]
     fn bundle_allows_distinct_plugins_and_contracts() {
         // Two plugins, two distinct contracts, distinct names → no collision.
-        let toml: &str = "[bundle]\nname = \"ok-bundle\"\nversion = \"1.0.0\"\nfile = \"test.so\"\n\n[[plugin]]\nname = \"decoder\"\nimplements = [\"pipeline.Decoder@1.0\"]\n\n[[plugin]]\nname = \"encoder\"\nimplements = [\"pipeline.Encoder@1.0\"]";
+        let toml: &str = "[bundle]\nname = \"ok-bundle\"\nversion = \"1.0.0\"\nloader = \"python\"\nfile = \"test.py\"\n\n[[plugin]]\nname = \"decoder\"\nimplements = [\"pipeline.Decoder@1.0\"]\n\n[[plugin]]\nname = \"encoder\"\nimplements = [\"pipeline.Encoder@1.0\"]";
         let ir: ValidatedIr = parse_bundle_str(toml).expect("distinct plugins must be accepted");
         assert_eq!(ir.bundle.as_ref().expect("bundle").plugins.len(), 2);
     }
@@ -1516,7 +1553,7 @@ mod tests {
     #[test]
     fn parse_bundle_with_dependency() {
         let toml: &str = concat!(
-            "[bundle]\nname = \"audio-engine\"\nversion = \"1.0.0\"\nfile = \"test.so\"\n\n",
+            "[bundle]\nname = \"audio-engine\"\nversion = \"1.0.0\"\nloader = \"python\"\nfile = \"test.py\"\n\n",
             "[[plugin]]\nname = \"decoder\"\nversion = \"1.0.0\"\nimplements = [\"audio.decode@1.0\"]\n\n",
             "[[dependency]]\nkind = \"contract\"\ncontract = \"audio-decoder\"\nmin_version = \"1.0\"\n"
         );

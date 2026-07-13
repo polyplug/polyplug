@@ -51,6 +51,10 @@ pub enum PolyplugcError {
         path: String,
     },
 
+    DuplicateOutputPath {
+        path: String,
+    },
+
     ReadFailed {
         path: String,
         source: io::Error,
@@ -206,6 +210,10 @@ impl fmt::Display for PolyplugcError {
                     f,
                     "generated output path `{path}` must be relative and must not traverse parent directories"
                 )
+            }
+
+            PolyplugcError::DuplicateOutputPath { path } => {
+                write!(f, "generated output contains duplicate path `{path}`")
             }
 
             PolyplugcError::ReadFailed { path, source } => {

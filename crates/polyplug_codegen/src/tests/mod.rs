@@ -2,8 +2,12 @@
 
 mod arena_parity;
 mod documentation;
+mod generator_baseline;
 mod generator_correctness;
-mod in_process_rust;
 mod incremental_write;
+mod internal_plugin_csharp;
+mod internal_plugin_js;
+mod internal_plugin_python;
+mod internal_plugin_rust;
 mod parser_errors;
 mod toml_malformed;

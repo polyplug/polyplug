@@ -27,15 +27,17 @@ internal static partial class NativeMethods
 
     /// <summary>
     /// Destroys a runtime instance.
-    /// Takes HostApi pointer returned by polyplug_runtime_create.
+    /// Returns <see langword="true"/> only when native ownership was consumed;
+    /// <see langword="false"/> leaves the handle live for its owner thread to retry.
     /// </summary>
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_destroy")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial void PolyplugRuntimeDestroy(nint host);
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal static partial bool PolyplugRuntimeDestroy(nint host);
 
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_begin_in_process_bundle")]
+    [LibraryImport(NativeLib, EntryPoint = "polyplug_begin_internal_plugin")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static unsafe partial void PolyplugBeginInProcessBundle(
+    internal static unsafe partial void PolyplugBeginInternalPlugin(
         nint host,
         byte* manifestBytes,
         nuint manifestLen,
@@ -43,14 +45,17 @@ internal static partial class NativeMethods
         ulong* outBundleId,
         AbiError* outError);
 
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_commit_in_process_bundle")]
+    [LibraryImport(NativeLib, EntryPoint = "polyplug_commit_internal_plugin_with_handles")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static unsafe partial void PolyplugCommitInProcessBundle(
+    internal static unsafe partial void PolyplugCommitInternalPluginWithHandles(
         nint host,
         ulong bundleId,
+        GuestContractHandle* handles,
+        nuint handleCapacity,
+        nuint* outHandleCount,
         AbiError* outError);
 
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_abort_in_process_bundle")]
+    [LibraryImport(NativeLib, EntryPoint = "polyplug_abort_internal_plugin")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    internal static partial void PolyplugAbortInProcessBundle(nint host, ulong bundleId);
+    internal static partial void PolyplugAbortInternalPlugin(nint host, ulong bundleId);
 }

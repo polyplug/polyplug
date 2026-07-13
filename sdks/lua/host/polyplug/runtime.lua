@@ -14,14 +14,19 @@ ffi.cdef([[
     // polyplug_runtime_create takes a `const RuntimeConfig*` (or NULL); the
     // on_reload callback pointer lives INSIDE RuntimeConfig (offset 8).
     const HostApi* polyplug_runtime_create(const void* config);
-    void polyplug_runtime_destroy(const HostApi* host);
+    bool polyplug_runtime_destroy(const HostApi* host);
 
-    void polyplug_begin_in_process_bundle(
+    void polyplug_begin_internal_plugin(
         const HostApi* host, const uint8_t* manifest_bytes, size_t manifest_len,
         uint32_t language, uint64_t* out_bundle_id, AbiError* out_error);
-    void polyplug_commit_in_process_bundle(
-        const HostApi* host, uint64_t bundle_id, AbiError* out_error);
-    void polyplug_abort_in_process_bundle(const HostApi* host, uint64_t bundle_id);
+    void polyplug_commit_internal_plugin_with_handles(
+        const HostApi* host, uint64_t bundle_id, GuestContractHandle* out_handles,
+        size_t handle_capacity, size_t* out_handle_count, AbiError* out_error);
+    void polyplug_abort_internal_plugin(const HostApi* host, uint64_t bundle_id);
+    bool polyplug_attach_internal_plugin_resident(
+        const HostApi* host, uint64_t bundle_id, void* resident,
+        uint64_t owner_thread_id, void (*release)(void*), AbiError* out_error);
+    uint64_t polyplug_current_os_thread_id(void);
 
     // ─── Custom-logger bridge (polyplug_lua loader-cdylib trampoline) ───
     // LuaJIT FFI callbacks cannot receive structs by value, so a Lua host can
@@ -42,6 +47,7 @@ ffi.cdef([[
 ]])
 
 local M = {}
+local pending_finalizer_runtimes = {}
 
 -- GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` (8 bytes); the null
 -- handle is index == u32::MAX. Null checks test the `.index` field of the returned cdata.
@@ -95,18 +101,25 @@ local FIND_GUEST_CONTRACT_FN_T = ffi.typeof("GuestContractHandle(*)(const HostAp
 local FIND_ALL_FN_T = ffi.typeof(M.FIND_ALL_FN_SIGNATURE)
 local HOST_FREE_FN_T = ffi.typeof("void(*)(const HostApi*, void*, size_t, size_t)")
 local RESOLVE_GUEST_CONTRACT_FN_T = ffi.typeof("const GuestContractInterface*(*)(const HostApi*, GuestContractHandle)")
-local REGISTER_GUEST_CONTRACT_FN_T = ffi.typeof(
-    "void(*)(const HostApi*, const PluginDescriptor*, const GuestContractInterface*, AbiError*)"
-)
 local REGISTER_HOST_CONTRACT_FN_T = ffi.typeof(
     "void(*)(const HostApi*, const HostContractInterface*, AbiError*)"
 )
 local REGISTER_LOADER_FN_T = ffi.typeof("void(*)(const HostApi*, void*, AbiError*)")
-local BEGIN_IN_PROCESS_BUNDLE_FN_T = ffi.typeof(
-    "void(*)(const HostApi*, const uint8_t*, size_t, uint32_t, uint64_t*, AbiError*)"
-)
-local COMMIT_IN_PROCESS_BUNDLE_FN_T = ffi.typeof("void(*)(const HostApi*, uint64_t, AbiError*)")
-local ABORT_IN_PROCESS_BUNDLE_FN_T = ffi.typeof("void(*)(const HostApi*, uint64_t)")
+local UINTPTR_T = ffi.typeof("uintptr_t")
+local MAX_EXACT_LUA_INTEGER = 9007199254740992
+
+local function pointer_token(value)
+    local token = tonumber(ffi.cast(UINTPTR_T, value))
+    if token == nil or token < 0 or token >= MAX_EXACT_LUA_INTEGER then
+        error("polyplug: native pointer cannot be represented exactly by Lua", 3)
+    end
+    return token
+end
+
+
+local function bundle_id_from_parts(low, high)
+    return ffi.new("uint64_t", low) + ffi.new("uint64_t", high) * ffi.new("uint64_t", 4294967296)
+end
 
 M.bundle_id = abi.bundle_id
 M.host_contract_id = abi.host_contract_id
@@ -386,29 +399,29 @@ function M.Runtime.new(opts)
         -- unreferenced).
         _log_cb_cdata = log_cb_cdata,
         _log_bridge = log_bridge,
-        -- Runtime-local in-process residents. A generated bundle owns its
-        -- callbacks, interfaces, backing arrays, factories, and implementation
-        -- registry; retain that one object only after core has atomically
-        -- accepted the complete registration.
-        _in_process_residents = {},
         _destroyed = false
     }
     local obj = setmetatable(self, M.Runtime)
 
-    -- Finalizer: destroy HostApi when GC collects
+    -- Finalizer: release Lua-owned roots only after native ownership was consumed.
     ffi.gc(host_ptr, function(ptr)
         if not self._destroyed and ptr ~= nil then
-            lib.polyplug_runtime_destroy(ptr)
-            if self._reload_cb_cdata ~= nil then
-                self._reload_cb_cdata:free()
-                self._reload_cb_cdata = nil
+            if lib.polyplug_runtime_destroy(ptr) then
+                self._destroyed = true
+                self._host = nil
+                pending_finalizer_runtimes[tostring(ptr)] = nil
+                if self._reload_cb_cdata ~= nil then
+                    self._reload_cb_cdata:free()
+                    self._reload_cb_cdata = nil
+                end
+                if self._log_cb_cdata ~= nil then
+                    self._log_cb_cdata:free()
+                    self._log_cb_cdata = nil
+                end
+                self._log_bridge = nil
+            else
+                pending_finalizer_runtimes[tostring(ptr)] = self
             end
-            if self._log_cb_cdata ~= nil then
-                self._log_cb_cdata:free()
-                self._log_cb_cdata = nil
-            end
-            self._log_bridge = nil
-            self._in_process_residents = {}
         end
     end)
     return obj
@@ -446,72 +459,54 @@ function M.Runtime:reload_bundle(path)
     end
 end
 
---- Register one generated in-process bundle through canonical manifest staging.
+--- Register a generated internal plugin through the native transaction gateway.
 ---
---- The generated bundle owns canonical manifest bytes, descriptor/interface pairs,
---- and its Lua resident. This method starts staging, registers each pair through
---- HostApi.register_guest_contract, then commits atomically. A registration failure
---- aborts the open stage; a rejected commit has already discarded it.
---- @param bundle table  Generated bundle with `manifest`, `contracts`, and `resident`.
---- @return cdata         Nonzero uint64 bundle id.
-function M.Runtime:register_in_process_bundle(bundle)
+--- The resident has copied its manifest and owns all provider metadata before this
+--- method begins. The gateway consumes it on every outcome and returns exact committed
+--- handles in generated-provider order.
+--- @return table `{ bundle_id = uint64, handles = GuestContractHandle[] }`.
+function M.Runtime:register_internal_plugin(resident)
     if self._destroyed or self._host == nil then
-        error("register_in_process_bundle: runtime is destroyed", 2)
+        error("register_internal_plugin: runtime is destroyed", 2)
     end
-    if type(bundle) ~= "table" or type(bundle.manifest) ~= "string"
-        or type(bundle.contracts) ~= "table" or bundle.resident == nil then
-        error("register_in_process_bundle: expected generated bundle { manifest, contracts, resident }", 2)
-    end
-
-    local manifest_bytes = ffi.new("uint8_t[?]", #bundle.manifest, bundle.manifest)
-    local bundle_id = ffi.new("uint64_t[1]")
-    local err = ffi.new("AbiError[1]")
-    local begin = ffi.cast(BEGIN_IN_PROCESS_BUNDLE_FN_T, self._lib.polyplug_begin_in_process_bundle)
-    begin(self._host, manifest_bytes, #bundle.manifest, ffi.C.SupportedLanguage_Lua, bundle_id, err)
-    if err[0].code ~= ffi.C.AbiErrorCode_Ok then
-        error("register_in_process_bundle begin failed: " .. M.last_error(self._host, self._lib), 2)
+    if type(resident) ~= "number" then
+        error("register_internal_plugin: expected a generated native resident", 2)
     end
 
-    local id = bundle_id[0]
-    local abort = ffi.cast(ABORT_IN_PROCESS_BUNDLE_FN_T, self._lib.polyplug_abort_in_process_bundle)
-    local register = ffi.cast(REGISTER_GUEST_CONTRACT_FN_T, self._host_struct.register_guest_contract)
-    local registration_ok, registration_failure = xpcall(function()
-        for index, contract in ipairs(bundle.contracts) do
-            if type(contract) ~= "table" or contract.descriptor == nil or contract.interface == nil then
-                error("register_in_process_bundle: generated contract " .. index .. " is invalid", 0)
-            end
-            register(self._host, contract.descriptor, contract.interface, err)
-            if err[0].code ~= ffi.C.AbiErrorCode_Ok then
-                error("register_in_process_bundle contract registration failed: "
-                    .. M.last_error(self._host, self._lib), 0)
-            end
-        end
-    end, debug.traceback)
-    if not registration_ok then
-        abort(self._host, id)
-        error(registration_failure, 0)
+    local native_bridge = require("polyplug.loaders.lua").internal_plugin_bridge()
+    local result = {
+        native_bridge.register_transaction(
+            resident,
+            pointer_token(self._host),
+            pointer_token(self._lib.polyplug_begin_internal_plugin),
+            pointer_token(self._lib.polyplug_attach_internal_plugin_resident),
+            pointer_token(self._lib.polyplug_current_os_thread_id),
+            pointer_token(self._lib.polyplug_commit_internal_plugin_with_handles),
+            pointer_token(self._lib.polyplug_abort_internal_plugin)
+        )
+    }
+    if result[1] ~= 1 then
+        error("register_internal_plugin failed: " .. M.last_error(self._host, self._lib), 2)
     end
-
-    local commit = ffi.cast(COMMIT_IN_PROCESS_BUNDLE_FN_T, self._lib.polyplug_commit_in_process_bundle)
-    local commit_returned, commit_failure = xpcall(function()
-        commit(self._host, id, err)
-    end, debug.traceback)
-    if not commit_returned then
-        abort(self._host, id)
-        error(commit_failure, 0)
+    local handle_count = result[4]
+    if type(handle_count) ~= "number" or handle_count < 0
+        or #result ~= 4 + handle_count * 2 then
+        error("register_internal_plugin returned an invalid handle list", 2)
     end
-    if err[0].code ~= ffi.C.AbiErrorCode_Ok then
-        error("register_in_process_bundle commit failed: " .. M.last_error(self._host, self._lib), 2)
+    local handles = {}
+    for index = 1, handle_count do
+        local offset = 5 + (index - 1) * 2
+        handles[index] = {
+            index = result[offset],
+            generation = result[offset + 1],
+        }
     end
-
-    local key = tostring(id)
-    if self._in_process_residents[key] ~= nil then
-        error("register_in_process_bundle: runtime returned a duplicate live bundle id", 2)
-    end
-    self._in_process_residents[key] = bundle.resident
-    bundle.resident = nil
-    return id
+    return {
+        bundle_id = bundle_id_from_parts(result[2], result[3]),
+        handles = handles,
+    }
 end
+
 
 --- Unload a plugin bundle by bundle ID.
 -- Calls through HostApi.unload_bundle field.
@@ -525,7 +520,6 @@ function M.Runtime:unload_bundle(bundle_id)
     if err[0].code ~= ffi.C.AbiErrorCode_Ok then
         error("unload_bundle failed: " .. M.last_error(self._host, self._lib))
     end
-    self._in_process_residents[tostring(bundle_id)] = nil
 end
 
 --- Find guest contract by contract_id and minimum version.
@@ -637,25 +631,30 @@ function M.Runtime:host()
 end
 
 --- Destroy the runtime explicitly.
--- Call polyplug_runtime_destroy on the HostApi, then release the owned
--- reload-callback and log-callback FFI cdata (the runtime may invoke them up
--- until destroy).
+--- Returns false without releasing callback or resident ownership when destruction
+--- is rejected for this thread; invoke `destroy()` again on the owner thread.
+--- @return boolean
 function M.Runtime:destroy()
-    if self._host ~= nil and not self._destroyed then
-        self._lib.polyplug_runtime_destroy(self._host)
-        self._destroyed = true
-        self._host = nil
-        if self._reload_cb_cdata ~= nil then
-            self._reload_cb_cdata:free()
-            self._reload_cb_cdata = nil
-        end
-        if self._log_cb_cdata ~= nil then
-            self._log_cb_cdata:free()
-            self._log_cb_cdata = nil
-        end
-        self._log_bridge = nil
-        self._in_process_residents = {}
+    if self._destroyed then
+        return true
     end
+    local host = self._host
+    if host == nil or not self._lib.polyplug_runtime_destroy(host) then
+        return false
+    end
+    self._destroyed = true
+    self._host = nil
+    pending_finalizer_runtimes[tostring(host)] = nil
+    if self._reload_cb_cdata ~= nil then
+        self._reload_cb_cdata:free()
+        self._reload_cb_cdata = nil
+    end
+    if self._log_cb_cdata ~= nil then
+        self._log_cb_cdata:free()
+        self._log_cb_cdata = nil
+    end
+    self._log_bridge = nil
+    return true
 end
 
 return M

@@ -137,7 +137,7 @@ On macOS use `.dylib` and `-Wl,-rpath,@loader_path`; on Windows build
 Copy the built library and the runtime it links next to the generated
 `manifest.toml`:
 
-```
+```text
 dist/my_plugin/
 ├── manifest.toml       # from generated/manifest.toml
 ├── libmy_plugin.so     # the compiled plugin

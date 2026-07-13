@@ -357,13 +357,12 @@ fn test_cpp_codegen_files_exist() {
         String::from_utf8_lossy(&gen_output.stderr),
     );
 
-    // ── 3. Assert all 6 expected guest-side files exist ─────────────────────
-    let expected_files: [&str; 6] = [
+    // ── 3. Assert all 5 expected guest-side files exist ─────────────────────
+    let expected_files: [&str; 5] = [
         "guest/types.hpp",
         "guest/contracts.hpp",
         "guest/interfaces.hpp",
         "guest/init.hpp",
-        "guest/in_process.hpp",
         "manifest.toml",
     ];
     for filename in expected_files {
@@ -376,7 +375,7 @@ fn test_cpp_codegen_files_exist() {
     }
 
     println!(
-        "test_cpp_codegen_files_exist: all 6 guest files present in {} ✓",
+        "test_cpp_codegen_files_exist: all 5 guest files present in {} ✓",
         out_dir.display()
     );
 
@@ -386,7 +385,6 @@ fn test_cpp_codegen_files_exist() {
     if let Ok(version_out) = gpp_version_result {
         if version_out.status.success() {
             let sdks_cpp_abi: PathBuf = workspace_root().join("sdks").join("cpp").join("abi");
-            let sdks_cpp_host: PathBuf = workspace_root().join("sdks").join("cpp").join("host");
             let sdks_cpp_guest: PathBuf = workspace_root().join("sdks").join("cpp").join("guest");
             let interfaces_hpp: PathBuf = out_dir.join("guest").join("interfaces.hpp");
             let out_obj: PathBuf =
@@ -435,29 +433,6 @@ fn test_cpp_codegen_files_exist() {
                 String::from_utf8_lossy(&init_compile_result.stderr),
             );
             println!("test_cpp_codegen_files_exist: init.hpp compiled successfully ✓");
-
-            let in_process_hpp: PathBuf = out_dir.join("guest").join("in_process.hpp");
-            let in_process_obj: PathBuf =
-                PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("test_cpp_codegen_in_process.o");
-            let in_process_compile_result: Output = Command::new("g++")
-                .arg("-std=c++20")
-                .arg(format!("-I{}", out_dir.join("guest").display()))
-                .arg(format!("-I{}", sdks_cpp_abi.display()))
-                .arg(format!("-I{}", sdks_cpp_host.display()))
-                .arg(&in_process_hpp)
-                .arg("-c")
-                .arg("-o")
-                .arg(&in_process_obj)
-                .output()
-                .expect("g++ failed to run");
-
-            assert!(
-                in_process_compile_result.status.success(),
-                "in_process.hpp did not compile:\nstdout: {}\nstderr: {}",
-                String::from_utf8_lossy(&in_process_compile_result.stdout),
-                String::from_utf8_lossy(&in_process_compile_result.stderr),
-            );
-            println!("test_cpp_codegen_files_exist: in_process.hpp compiled successfully ✓");
         } else {
             eprintln!("skipping g++ compile check: g++ --version returned non-zero");
         }
@@ -795,216 +770,6 @@ fn test_exception_isolation_cpp() {
     // Process survived — if we reach this line, no crash occurred
     println!("test_exception_isolation_cpp: exception caught, host survived ✓");
     mem::forget(library);
-}
-
-#[test]
-fn test_cpp_in_process_adapters_are_stateful_and_context_local() {
-    let out_dir: PathBuf =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_cpp_in_process_adapters");
-    let input_dir: PathBuf = out_dir.join("input");
-    let generated_dir: PathBuf = out_dir.join("generated");
-    fs::create_dir_all(&input_dir).expect("failed to create C++ adapter test input directory");
-
-    fs::write(
-        input_dir.join("api.toml"),
-        r#"
-[[contract]]
-name = "test.alpha"
-version = "1.0.0"
-
-[[contract.functions]]
-name = "increment"
-return = "u32"
-
-[[contract]]
-name = "test.beta"
-version = "1.0.0"
-
-[[contract.functions]]
-name = "increment"
-return = "u32"
-"#,
-    )
-    .expect("failed to write C++ adapter test API");
-    fs::write(
-        input_dir.join("bundle.toml"),
-        r#"
-[bundle]
-name = "cpp_in_process_adapters"
-version = "1.0.0"
-api = "api.toml"
-loader = "native"
-
-[bundle.file]
-linux.x86_64 = "libcpp_in_process_adapters.so"
-
-[[plugin]]
-name = "alpha"
-implements = ["test.alpha@1.0"]
-
-[[plugin]]
-name = "beta"
-implements = ["test.beta@1.0"]
-"#,
-    )
-    .expect("failed to write C++ adapter test bundle");
-
-    let generation: Output = Command::new(polyplugc_bin())
-        .arg("generate")
-        .arg("--bundle")
-        .arg(input_dir.join("bundle.toml"))
-        .arg("--lang")
-        .arg("cpp")
-        .arg("--out")
-        .arg(&generated_dir)
-        .output()
-        .expect("failed to generate C++ in-process adapters");
-    assert!(
-        generation.status.success(),
-        "C++ in-process adapter generation failed:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&generation.stdout),
-        String::from_utf8_lossy(&generation.stderr),
-    );
-
-    let driver: PathBuf = out_dir.join("in_process_adapter_driver.cpp");
-    fs::write(
-        &driver,
-        r#"
-#include <cstdint>
-#include <memory>
-#include <stdexcept>
-#include <utility>
-#include <vector>
-
-#include "in_process.hpp"
-
-namespace {
-int alpha_destroyed = 0;
-int beta_destroyed = 0;
-std::vector<std::pair<PluginDescriptor, const GuestContractInterface*>> captured_contracts;
-
-void capture_contract(const HostApi*, const PluginDescriptor* descriptor,
-                      const GuestContractInterface* interface, AbiError* error) {
-    if (descriptor == nullptr || interface == nullptr || error == nullptr) return;
-    captured_contracts.emplace_back(*descriptor, interface);
-    *error = AbiError{};
-}
-
-class Alpha final : public polyplug_plugin::TestAlphaGuestContract {
-public:
-    ~Alpha() override { ++alpha_destroyed; }
-    uint32_t increment() override { return ++value_; }
-private:
-    uint32_t value_ = 0;
-};
-
-class Beta final : public polyplug_plugin::TestBetaGuestContract {
-public:
-    ~Beta() override { ++beta_destroyed; }
-    uint32_t increment() override { return ++value_; }
-private:
-    uint32_t value_ = 40;
-};
-
-bool invoke_twice(const GuestContractInterface* interface, const HostApi& host,
-                  uint32_t first, uint32_t second) {
-    GuestContractInstance instance{nullptr, 0U};
-    interface->create_instance(
-        interface->adapter_context, VmLoaderData{nullptr}, &host, nullptr, &instance);
-    if (instance.data == nullptr) return false;
-
-    auto dispatch = reinterpret_cast<void (*)(void*, GuestContractInstance, const void*, void*, AbiError*)>(
-        interface->dispatch.native.functions[0]);
-    uint32_t result = 0;
-    AbiError error{};
-    dispatch(interface->adapter_context, instance, nullptr, &result, &error);
-    if (error.code != static_cast<uint32_t>(AbiErrorCode::Ok) || result != first) return false;
-    dispatch(interface->adapter_context, instance, nullptr, &result, &error);
-    if (error.code != static_cast<uint32_t>(AbiErrorCode::Ok) || result != second) return false;
-    interface->destroy_instance(
-        interface->adapter_context, VmLoaderData{nullptr}, &host, instance);
-    return true;
-}
-}  // namespace
-
-namespace polyplug_plugin {
-TestAlphaGuestContract* polyplug_create_alpha(const HostApi*) { return nullptr; }
-TestBetaGuestContract* polyplug_create_beta(const HostApi*) { return nullptr; }
-}  // namespace polyplug_plugin
-
-int main() {
-    HostApi host{};
-    host.register_guest_contract = &capture_contract;
-    auto bundle = polyplug_plugin::make_in_process_bundle(
-        [](const HostApi*) { return std::make_unique<Alpha>(); },
-        [](const HostApi*) { return std::make_unique<Beta>(); });
-
-    AbiError registration_error = bundle.register_guest_contracts(&host);
-    if (registration_error.code != static_cast<uint32_t>(AbiErrorCode::Ok)) return 1;
-    if (captured_contracts.size() != 2U) return 2;
-    if (captured_contracts[0].second->adapter_context == captured_contracts[1].second->adapter_context) return 3;
-    if (!invoke_twice(captured_contracts[0].second, host, 1U, 2U)) return 4;
-    if (!invoke_twice(captured_contracts[1].second, host, 41U, 42U)) return 5;
-    if (alpha_destroyed != 1 || beta_destroyed != 1) return 6;
-
-    captured_contracts.clear();
-    auto throwing_bundle = polyplug_plugin::make_in_process_bundle(
-        [](const HostApi*) -> std::unique_ptr<Alpha> { throw std::runtime_error("factory failure"); },
-        [](const HostApi*) { return std::make_unique<Beta>(); });
-    registration_error = throwing_bundle.register_guest_contracts(&host);
-    if (registration_error.code != static_cast<uint32_t>(AbiErrorCode::Ok)) return 7;
-    const GuestContractInterface* throwing = captured_contracts[0].second;
-    GuestContractInstance failed{reinterpret_cast<void*>(1), 99U};
-    throwing->create_instance(
-        throwing->adapter_context, VmLoaderData{nullptr}, &host, nullptr, &failed);
-    if (failed.data != nullptr || failed.contract_id != 0U) return 8;
-    return 0;
-}
-"#,
-    )
-    .expect("failed to write C++ in-process adapter driver");
-
-    let executable: PathBuf = out_dir.join("in_process_adapter_driver");
-    let compile: Output = Command::new("g++")
-        .arg("-std=c++20")
-        .arg(&driver)
-        .arg(format!("-I{}", generated_dir.join("guest").display()))
-        .arg(format!(
-            "-I{}",
-            workspace_root()
-                .join("sdks")
-                .join("cpp")
-                .join("abi")
-                .display()
-        ))
-        .arg(format!(
-            "-I{}",
-            workspace_root()
-                .join("sdks")
-                .join("cpp")
-                .join("host")
-                .display()
-        ))
-        .arg("-o")
-        .arg(&executable)
-        .output()
-        .expect("g++ failed to compile the C++ in-process adapter driver");
-    assert!(
-        compile.status.success(),
-        "C++ in-process adapter driver did not compile:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&compile.stdout),
-        String::from_utf8_lossy(&compile.stderr),
-    );
-    let execution: Output = Command::new(&executable)
-        .output()
-        .expect("failed to run C++ in-process adapter driver");
-    assert!(
-        execution.status.success(),
-        "C++ in-process adapter driver failed with {:?}:\nstdout: {}\nstderr: {}",
-        execution.status.code(),
-        String::from_utf8_lossy(&execution.stdout),
-        String::from_utf8_lossy(&execution.stderr),
-    );
 }
 
 // ─── Enum types codegen test ─────────────────────────────────────────────────

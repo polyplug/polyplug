@@ -1,18 +1,25 @@
 //! Public contract generation and output-writing pipeline.
 
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::io::Write;
 use std::path::Component;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process;
 
 use crate::GenerateConfig;
 use crate::GenerateOutput;
+use crate::InternalCSharpGenerateConfig;
+use crate::InternalCppGenerateConfig;
+use crate::InternalJavaScriptGenerateConfig;
+use crate::InternalLuaGenerateConfig;
+use crate::InternalPythonGenerateConfig;
+use crate::InternalRustGenerateConfig;
 use crate::Lang;
 use crate::PolyplugcError;
-use crate::RustGuestMode;
 use crate::Side;
 
 use crate::generators::CodeGenerator;
@@ -31,38 +38,85 @@ pub fn generate(config: GenerateConfig) -> Result<GenerateOutput, PolyplugcError
     generate_ir(&ir, config.lang, config.side)
 }
 
-/// Generate Rust guest bindings in an explicitly selected linking mode.
-///
-/// The existing [`generate`] API always preserves disk-bundle output. Call this
-/// function with [`RustGuestMode::InProcess`] to generate a runtime-scoped
-/// canonical manifest registration helper for a Rust guest.
-pub fn generate_rust_guest(
-    config: GenerateConfig,
-    mode: RustGuestMode,
+/// Generate the opt-in C++ internal-plugin profile for one bundle.
+pub fn generate_internal_cpp(
+    config: InternalCppGenerateConfig,
 ) -> Result<GenerateOutput, PolyplugcError> {
-    if config.lang != Lang::Rust || config.side != Side::Guest {
-        return Err(PolyplugcError::ValidationFailed {
-            message: "Rust guest modes require Lang::Rust and Side::Guest".to_owned(),
-        });
-    }
-    let ir: ValidatedIr = parse_ir(&config)?;
-    generate_ir_rust_guest(&ir, mode)
+    generate_internal_profile(&config.bundle_toml, "C++", |ir, bundle_name, output| {
+        CppGenerator.generate_internal_bundle(ir, bundle_name, output)
+    })
 }
 
-/// Generate Rust guest bindings from validated IR in an explicitly selected
-/// linking mode.
-pub fn generate_ir_rust_guest(
-    ir: &ValidatedIr,
-    mode: RustGuestMode,
+/// Generate the opt-in C# internal-plugin profile for one bundle.
+pub fn generate_internal_csharp(
+    config: InternalCSharpGenerateConfig,
 ) -> Result<GenerateOutput, PolyplugcError> {
-    let mut files: GenerateOutput = GenerateOutput::default();
-    match mode {
-        RustGuestMode::Disk => RustGenerator.generate_guest(ir, &mut files)?,
-        RustGuestMode::InProcess { bundle_name } => {
-            RustGenerator.generate_embedded_guest(ir, &bundle_name, &mut files)?
-        }
-    }
-    Ok(files)
+    generate_internal_profile(&config.bundle_toml, "C#", |ir, bundle_name, output| {
+        CSharpGenerator.generate_internal_bundle(ir, bundle_name, output)
+    })
+}
+
+/// Generate the opt-in JavaScript internal-plugin profile for one bundle.
+pub fn generate_internal_javascript(
+    config: InternalJavaScriptGenerateConfig,
+) -> Result<GenerateOutput, PolyplugcError> {
+    generate_internal_profile(
+        &config.bundle_toml,
+        "JavaScript",
+        |ir, bundle_name, output| {
+            JsQuickjsGenerator.generate_internal_bundle(ir, bundle_name, output)
+        },
+    )
+}
+
+/// Generate the opt-in Lua internal-plugin profile for one bundle.
+pub fn generate_internal_lua(
+    config: InternalLuaGenerateConfig,
+) -> Result<GenerateOutput, PolyplugcError> {
+    generate_internal_profile(&config.bundle_toml, "Lua", |ir, bundle_name, output| {
+        LuaGenerator.generate_internal_bundle(ir, bundle_name, output)
+    })
+}
+
+/// Generate the opt-in Python internal-plugin profile for one bundle.
+pub fn generate_internal_python(
+    config: InternalPythonGenerateConfig,
+) -> Result<GenerateOutput, PolyplugcError> {
+    generate_internal_profile(&config.bundle_toml, "Python", |ir, bundle_name, output| {
+        PythonGenerator.generate_internal_bundle(ir, bundle_name, output)
+    })
+}
+
+/// Generate the opt-in Rust internal-plugin profile for one bundle.
+///
+/// The profile emits matching generated guest provider bindings and generated host
+/// caller bindings under the validated bundle identity. It does not alter default
+/// `GenerateConfig` generation.
+pub fn generate_internal_rust(
+    config: InternalRustGenerateConfig,
+) -> Result<GenerateOutput, PolyplugcError> {
+    generate_internal_profile(&config.bundle_toml, "Rust", |ir, bundle_name, output| {
+        RustGenerator.generate_internal_bundle(ir, bundle_name, output)
+    })
+}
+
+fn generate_internal_profile(
+    bundle_toml: &Path,
+    language: &str,
+    generate: impl FnOnce(&ValidatedIr, &str, &mut GenerateOutput) -> Result<(), PolyplugcError>,
+) -> Result<GenerateOutput, PolyplugcError> {
+    let ir: ValidatedIr = parser::parse_bundle_with_api_internal(bundle_toml)?;
+    let bundle = ir
+        .bundle
+        .as_ref()
+        .ok_or_else(|| PolyplugcError::ValidationFailed {
+            message: format!("internal {language} generation requires a bundle manifest"),
+        })?;
+    let mut output: GenerateOutput = GenerateOutput::default();
+    generate(&ir, &bundle.name, &mut output)?;
+    prefix_internal_output(&mut output, &bundle.name, bundle.bundle_id);
+    reject_duplicate_output_paths(&output)?;
+    Ok(output)
 }
 
 fn parse_ir(config: &GenerateConfig) -> Result<ValidatedIr, PolyplugcError> {
@@ -104,6 +158,35 @@ pub fn generate_ir(
     Ok(files)
 }
 
+fn prefix_internal_output(output: &mut GenerateOutput, bundle_name: &str, bundle_id: u64) {
+    let readable: String = bundle_name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '_' || character == '-' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let prefix: PathBuf = Path::new("internal").join(format!("{readable}-{bundle_id:016x}"));
+    for file in &mut output.files {
+        file.path = prefix.join(&file.path);
+    }
+}
+
+fn reject_duplicate_output_paths(output: &GenerateOutput) -> Result<(), PolyplugcError> {
+    let mut paths: HashSet<&Path> = HashSet::with_capacity(output.files.len());
+    for file in &output.files {
+        if !paths.insert(file.path.as_path()) {
+            return Err(PolyplugcError::DuplicateOutputPath {
+                path: file.path.to_string_lossy().into_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Outcome of [`write_output`]: how many generated files were (re)written versus
 /// skipped because their on-disk content already matched what would be emitted.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -124,10 +207,10 @@ pub fn write_output(
     output: &GenerateOutput,
     out_dir: &Path,
 ) -> Result<WriteSummary, PolyplugcError> {
+    reject_duplicate_output_paths(output)?;
     for file in &output.files {
         validate_output_path(&file.path)?;
     }
-
     let mut summary: WriteSummary = WriteSummary::default();
     for file in &output.files {
         let file_path = out_dir.join(&file.path);

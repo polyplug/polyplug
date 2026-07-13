@@ -19,6 +19,7 @@ use core::sync::atomic::Ordering;
 use std::env;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(debug_assertions)]
 use std::process;
 use std::sync::Arc;
 use std::thread;

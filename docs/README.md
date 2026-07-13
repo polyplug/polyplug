@@ -24,7 +24,7 @@ per-language **Host** and **Guest** guides in the Languages section.
 | | **polyplug** (native C ABI) | **WASM runtimes** (Extism, Wasmtime) |
 |---|---|---|
 | Best for | Trusted / first-party / vetted-author plugins | Untrusted, third-party, multi-tenant plugins |
-| Isolation | None — plugins run in-process with host privileges | Sandboxed: memory-isolated, capability-gated |
+| Isolation | None — plugins execute with host privileges | Sandboxed: memory-isolated, capability-gated |
 | Dispatch overhead | ~2.4 ns (native), near-zero | Higher — marshalling + sandbox boundary |
 | Data sharing | Zero-copy shared buffers + per-call arena | Copied across the sandbox boundary |
 | Languages | Real CPython, .NET CLR, LuaJIT, QuickJS, native Rust/C++/C# | Anything that compiles to WASM (toolchain maturity varies) |
@@ -36,12 +36,12 @@ run arbitrary untrusted code safely, use a WASM runtime. The full threat model i
 
 ## What polyplug guarantees
 
-Within the trusted, in-process boundary, polyplug guarantees:
+Within the trusted host-process boundary, polyplug guarantees:
 
 - **ABI compatibility is checked at load** — a bundle whose contract version doesn't
   match is rejected with a clear error, never silent UB.
 - **The runtime's own create/destroy path is crash-isolated** — a bug in polyplug's two
-  C ABI exports surfaces as a null/no-op plus a recorded error, never a host abort.
+  C ABI exports surfaces as a null or `false` result, never a host abort.
 - **Lock-free reads + safe true-unload** — contract resolution is lock-free, and
   unloading reclaims the interface and its backing library/VM once no reader is still
   pinned. See [Architecture](ARCHITECTURE.md).

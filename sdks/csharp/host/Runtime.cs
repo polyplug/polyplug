@@ -27,9 +27,9 @@ public sealed class Runtime
     private GCHandle _reloadTrampolineHandle;
 
     // Each entry owns all managed objects that back one successfully registered
-    // in-process bundle. The resident is released only after logical unload.
-    private readonly object _inProcessBundlesGate = new();
-    private readonly Dictionary<ulong, InProcessBundle> _inProcessBundles = new();
+    // internal plugin. The resident is released only after logical unload.
+    private readonly object _internalPluginsGate = new();
+    private readonly Dictionary<ulong, InternalPluginBundle> _internalPlugins = new();
 
     // Cached function pointer delegates (18-03)
     private LoadBundleDelegate? _loadBundleFn;
@@ -273,11 +273,12 @@ public sealed class Runtime
 
     ~Runtime()
     {
-        if (_host != nint.Zero)
+        if (_host != nint.Zero && !NativeMethods.PolyplugRuntimeDestroy(_host))
         {
-            NativeMethods.PolyplugRuntimeDestroy(_host);
-            _host = nint.Zero;
+            GC.ReRegisterForFinalize(this);
+            return;
         }
+        _host = nint.Zero;
 
         // Release the per-instance reload callback storage only after the native
         // runtime is destroyed — the native side may invoke the trampoline (and
@@ -290,21 +291,21 @@ public sealed class Runtime
         {
             _reloadTrampolineHandle.Free();
         }
-        ReleaseInProcessBundles();
+        ReleaseInternalPlugins();
     }
 
-    private void ReleaseInProcessBundles()
+    private void ReleaseInternalPlugins()
     {
-        List<InProcessBundle> bundles;
-        lock (_inProcessBundlesGate)
+        List<InternalPluginBundle> plugins;
+        lock (_internalPluginsGate)
         {
-            bundles = new List<InProcessBundle>(_inProcessBundles.Values);
-            _inProcessBundles.Clear();
+            plugins = new List<InternalPluginBundle>(_internalPlugins.Values);
+            _internalPlugins.Clear();
         }
 
-        foreach (InProcessBundle bundle in bundles)
+        foreach (InternalPluginBundle plugin in plugins)
         {
-            bundle.Release();
+            plugin.Release();
         }
     }
 
@@ -386,14 +387,14 @@ public sealed class Runtime
     public void UnloadBundle(ulong bundleId)
     {
         EnsureHost();
-        InProcessBundle? resident = null;
-        lock (_inProcessBundlesGate)
+        InternalPluginBundle? resident = null;
+        lock (_internalPluginsGate)
         {
             _unloadBundleFn!(_host, bundleId, out AbiError result);
             CheckAbiError(result, "Failed to unload bundle.");
-            if (_inProcessBundles.Remove(bundleId, out InProcessBundle? bundle))
+            if (_internalPlugins.Remove(bundleId, out InternalPluginBundle? plugin))
             {
-                resident = bundle;
+                resident = plugin;
             }
         }
         resident?.Release();
@@ -511,72 +512,91 @@ public sealed class Runtime
         return error.Code;
     }
 
+
     /// <summary>
-    /// Registers a generated in-process bundle through canonical manifest staging.
-    /// The resident transfers to this runtime only after every contract registers
-    /// and the staged transaction commits successfully.
+    /// Registers generated internal plugin bindings through canonical manifest staging.
+    /// An input is consumed for this attempt whether registration succeeds or fails;
+    /// retrying requires a newly created generated input.
     /// </summary>
-    /// <param name="bundle">Generated manifest, descriptor/interface registrar, and managed resident.</param>
-    /// <returns>The stable identifier derived by the runtime for the bundle.</returns>
-    public unsafe ulong RegisterInProcessBundle(InProcessBundle bundle)
+    /// <param name="plugin">Generated manifest, descriptor/interface registrar, and managed resident.</param>
+    /// <param name="providerCount">Exact number of generated providers staged by the binding.</param>
+    /// <returns>The canonical bundle identifier and exact committed handles in provider order.</returns>
+    public unsafe InternalPluginRegistration RegisterInternalPlugin(
+        InternalPluginBundle plugin,
+        int providerCount)
     {
         EnsureHost();
-        ArgumentNullException.ThrowIfNull(bundle);
-        if (!bundle.TryReserveTransfer())
+        ArgumentNullException.ThrowIfNull(plugin);
+        if (providerCount <= 0)
         {
-            throw new InvalidOperationException("In-process bundle has already been registered.");
+            throw new ArgumentOutOfRangeException(nameof(providerCount));
+        }
+        if (!plugin.TryReserveTransfer())
+        {
+            throw new InvalidOperationException("Internal plugin input has already been consumed.");
         }
 
         ulong bundleId = 0;
         bool staged = false;
         try
         {
-            lock (_inProcessBundlesGate)
+            lock (_internalPluginsGate)
             {
-                _inProcessBundles.EnsureCapacity(_inProcessBundles.Count + 1);
-                byte[] manifest = bundle.Manifest;
+                _internalPlugins.EnsureCapacity(_internalPlugins.Count + 1);
+                byte[] manifest = plugin.Manifest;
                 AbiError beginError = default;
                 fixed (byte* manifestBytes = manifest)
                 {
-                    NativeMethods.PolyplugBeginInProcessBundle(
+                    NativeMethods.PolyplugBeginInternalPlugin(
                         _host,
                         manifestBytes,
                         (nuint)manifest.Length,
                         (uint)SupportedLanguage.Dotnet,
                         &bundleId,
                         &beginError);
-                    CheckAbiError(beginError, "Failed to begin in-process bundle registration.");
+                    CheckAbiError(beginError, "Failed to begin internal plugin registration.");
                 }
 
                 staged = true;
-                CheckAbiError(bundle.RegisterContracts(_host), "Failed to register in-process guest contract.");
+                CheckAbiError(plugin.RegisterContracts(_host), "Failed to register internal plugin guest contract.");
+                GuestContractHandle[] handles = new GuestContractHandle[providerCount];
                 AbiError commitError = default;
-                NativeMethods.PolyplugCommitInProcessBundle(_host, bundleId, &commitError);
+                nuint handleCount = 0;
+                fixed (GuestContractHandle* handlePtr = handles)
+                {
+                    NativeMethods.PolyplugCommitInternalPluginWithHandles(
+                        _host,
+                        bundleId,
+                        handlePtr,
+                        (nuint)handles.Length,
+                        &handleCount,
+                        &commitError);
+                }
                 staged = false;
-                CheckAbiError(commitError, "Failed to commit in-process bundle registration.");
-                _inProcessBundles.Add(bundleId, bundle);
-                return bundleId;
+                CheckAbiError(commitError, "Failed to commit internal plugin registration.");
+                _internalPlugins.Add(bundleId, plugin);
+                return new InternalPluginRegistration(bundleId, handles);
             }
         }
         catch
         {
             if (staged)
             {
-                NativeMethods.PolyplugAbortInProcessBundle(_host, bundleId);
+                NativeMethods.PolyplugAbortInternalPlugin(_host, bundleId);
             }
 
-            bundle.CancelTransfer();
+            plugin.Release();
             throw;
         }
     }
 
-    internal int InProcessBundleCount
+    internal int InternalPluginCount
     {
         get
         {
-            lock (_inProcessBundlesGate)
+            lock (_internalPluginsGate)
             {
-                return _inProcessBundles.Count;
+                return _internalPlugins.Count;
             }
         }
     }
@@ -605,4 +625,20 @@ public sealed class Runtime
             Marshal.FreeHGlobal(ptr);
         }
     }
+}
+
+/// <summary>
+/// The canonical result of generated internal plugin registration.
+/// </summary>
+public sealed class InternalPluginRegistration
+{
+    internal InternalPluginRegistration(ulong bundleId, GuestContractHandle[] handles)
+    {
+        BundleId = bundleId;
+        Handles = handles;
+    }
+
+    public ulong BundleId { get; }
+
+    public GuestContractHandle[] Handles { get; }
 }

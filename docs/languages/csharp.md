@@ -48,3 +48,12 @@ New to polyplug? Start with the [Quick Start](../QUICKSTART.md).
 
 Generated code lives under `examples/hosts/csharp/generated/` (host callers) and
 `examples/guests/csharp/<plugin>/generated/` (guest glue).
+
+## Internal plugin profile
+
+External plugins use the standard bundle command. An application can instead
+generate one internal profile with
+`polyplugc generate --bundle bundle.toml --internal --lang csharp --out ./generated`.
+It supplies ordinary C# factories to generated guest provider bindings and
+receives generated host caller bindings from the committed handles; registration,
+calls, and unload then follow the same pipeline as an external plugin.

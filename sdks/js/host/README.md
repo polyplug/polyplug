@@ -45,38 +45,22 @@ The runtime copies `trusted_keys` during `runtimeNew` (`polyplug_runtime_create`
 so the host SDK only holds the packed key buffer across that call and lets it go
 once create returns.
 
-## In-process bundles
+## Internal plugins
 
-Generated JavaScript bindings export `POLYPLUG_MANIFEST`, the canonical UTF-8
-manifest bytes retained by the bundle. Build an `InProcessBundle` from those
-bytes and its rooted resident, then register it synchronously with
-`Runtime.registerInProcessBundle(bundle)`. The runtime begins native staging,
-uses the existing `HostApi.register_guest_contract` once for each
-`PluginDescriptor` / `GuestContractInterface` pair, and commits atomically.
-Registration failure before commit aborts staging; a commit error has already
-discarded staging in core and leaves the bundle reusable. The runtime takes sole
-ownership of the resident only after commit succeeds, keeping generated callback
-handles, implementation factories, objects, descriptors, and interface storage
-reachable for the registered lifetime.
+Generate an internal profile explicitly with
+`polyplugc generate --bundle bundle.toml --internal --lang js-quickjs --out ./generated`.
+Its generated `internal.ts` imports the current host helpers
+`buildInternalPluginBundle`, `buildInternalPluginGuestContract`, and
+`createInternalPluginGuestBridge`, then calls
+`runtime.registerInternalPluginWithHandles`.
 
-Generated callback adapters retain their runtime-local opaque context inside
-`GuestContractInterface`; core forwards it to every lifecycle and dispatch
-callback. A thrown JavaScript callback exception is reported to the ABI caller
-as `AbiErrorCode.Panic`.
+The generated registrar consumes `InternalProviders`, stages each
+`PluginDescriptor` / `GuestContractInterface` pair, validates the exact manifest
+set, and atomically commits. It returns a `Registration` containing `bundleId`
+and named generated host caller bindings constructed from the committed handles.
+Callback roots, implementation factories, and interface storage stay owned by
+the generated bundle until successful `runtime.unloadBundle(bundleId)`.
 
-Pass the JavaScript loader's bridge library explicitly when creating each
-adapter. The bridge expands lifecycle and VM ABI records in Rust, so JavaScript
-callbacks use only pointers and scalar values across Deno, Node, and Bun FFI.
-
-```js
-import { bridgeLibrary } from "@polyplug/loaders/js";
-import { buildInProcessGuestContract } from "@polyplug/host";
-
-const adapter = buildInProcessGuestContract(spec, bridgeLibrary());
-```
-
-`unloadBundle(bundleId)` performs logical unload. If core reports that active
-calls, instances, or leases still prevent unload, the resident remains rooted
-and the bundle remains usable. On successful unload, the runtime releases the
-resident, after which a newly constructed generated bundle may be registered
-under the same bundle name.
+An external plugin is acquired by its loader before the same registration,
+registry, caller, instance, dispatch, and lifecycle pipeline. Applications use
+the resulting typed callers without branching on acquisition origin.

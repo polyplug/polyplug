@@ -89,16 +89,16 @@ fn test_js_host_caller_function_count_guard_is_vm_safe() {
 
     // The caller must emit at least one function-index guard.
     assert!(
-        callers.contains(">= this.#view.functionCount()"),
+        callers.contains(">= view.functionCount()"),
         "expected a function-index guard in the generated JS host caller"
     );
 
     // Every guard line must be gated on a positive (native) count, so VM
     // interfaces (count 0) are never wrongly rejected.
     for line in callers.lines() {
-        if line.contains(">= this.#view.functionCount()") {
+        if line.contains(">= view.functionCount()") {
             assert!(
-                line.contains("this.#view.functionCount() > 0 &&"),
+                line.contains("view.functionCount() > 0 &&"),
                 "JS host caller guard is not VM-safe (rejects VM guests): {}",
                 line.trim()
             );

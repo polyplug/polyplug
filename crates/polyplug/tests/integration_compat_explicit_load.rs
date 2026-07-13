@@ -270,3 +270,20 @@ fn strict_runtime_rejects_mismatched_bundle() {
         ),
     }
 }
+
+#[test]
+fn external_source_load_validates_canonical_metadata_before_acquisition_fields() {
+    let runtime: Arc<Runtime> = Runtime::builder().build().expect("build runtime");
+    let mut manifest: ManifestData = mismatched_manifest();
+    manifest.id = manifest.id.wrapping_add(1);
+    manifest.file.clear();
+
+    let result = runtime.load_bundle_from_source(manifest, BundleSource::Code(String::new()));
+    assert!(
+        matches!(
+            result,
+            Err(RuntimeError::Loader(LoaderError::BundleTampered { .. }))
+        ),
+        "external source loading must keep full manifest validation and report canonical id tampering before missing acquisition fields"
+    );
+}

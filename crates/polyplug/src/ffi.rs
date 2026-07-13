@@ -1,10 +1,10 @@
 //! FFI — public `#[no_mangle]` C ABI entry points for host language bindings.
 //!
 //! The two exports below (`polyplug_runtime_create` / `polyplug_runtime_destroy`)
-//! each wrap their body in `catch_unwind`. This is the **embedder guarantee**: a
-//! defect in polyplug's own create/destroy path surfaces as a null return (or a
-//! no-op destroy), never as a panic unwinding across the C ABI that would abort the
-//! embedding host process. These two are the *only* runtime-side panic guards — the
+//! catch their own panics. This is the **embedder guarantee**: a create failure
+//! returns null; destroy failures before raw `Arc` consumption return `false`; and
+//! teardown panics after consumption return `true`. None unwind across the C ABI and
+//! abort the embedding host process. These two are the *only* runtime-side panic guards — the
 //! `HostApi` field operations (`load_bundle`, `find_guest_contract`, …) are
 //! intentionally NOT guarded: a bug in the runtime there fails fast. Foreign-plugin
 //! failures are the plugin's own responsibility — each language's generated glue
@@ -19,22 +19,29 @@
 //!
 //! All runtime operations are now accessed through the HostApi struct fields:
 //! - `load_bundle`, `reload_bundle`, `unload_bundle` — bundle lifecycle
-//! - `register_in_process_bundle` — complete in-process bundle registration
+//! - `begin_internal_plugin`, `commit_internal_plugin`, `abort_internal_plugin` — internal-plugin registration
 //! - `find_guest_contract`, `find_all_guest_contracts`, `resolve_guest_contract` — contract discovery
 //! - `register_host_contract`, `register_loader` — registration
 //! - `alloc`, `free` — memory management
 
+use core::ffi::c_void;
 use core::panic::AssertUnwindSafe;
 use core::{ptr, slice, str};
 use std::panic::catch_unwind;
 use std::sync::Arc;
 
 use polyplug_abi::runtime::{ReloadPhase, RuntimeConfig};
-use polyplug_abi::{AbiError, AbiErrorCode, HostApi, StringView, SupportedLanguage};
+use polyplug_abi::{
+    AbiError, AbiErrorCode, GuestContractHandle, HostApi, StringView, SupportedLanguage,
+};
 use polyplug_common::ManifestData;
 use polyplug_utils::BundleId;
 
 use crate::runtime::Runtime;
+use crate::runtime::current_os_thread_id;
+
+/// Callback used by a native internal-plugin adapter to release its opaque resident.
+pub type InternalPluginResidentRelease = unsafe extern "C" fn(*mut c_void);
 
 // ─── FFI Entry Points ─────────────────────────────────────────────────────────
 
@@ -52,8 +59,11 @@ use crate::runtime::Runtime;
 ///
 /// # Returns
 /// Pointer to HostApi on success, null on failure.
-/// The HostApi is valid until destroyed via `polyplug_runtime_destroy`, which
-/// must be called **exactly once** for each non-null pointer returned here.
+/// Attempt `polyplug_runtime_destroy` until it returns `true`: a `false` result means
+/// destruction failed before consuming the runtime reference, leaving the pointer valid
+/// for an owner-thread retry. After the single `true` result, the non-null pointer is
+/// consumed and must never be used or passed to destroy again, including when teardown
+/// caught a panic.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_create(config: *const RuntimeConfig) -> *const HostApi {
     catch_unwind(AssertUnwindSafe(|| {
@@ -108,40 +118,57 @@ pub unsafe extern "C" fn polyplug_runtime_create(config: *const RuntimeConfig) -
 
 /// Destroys a runtime instance.
 ///
+/// Returns `true` after consuming a valid runtime reference, and for a null `host`.
+/// An owner-affinity rejection or caught panic before consumption returns `false` and
+/// leaves a non-null `host` live for its owner to retry. Once raw `Arc` consumption
+/// begins, this function returns `true` even when teardown catches a panic; that
+/// non-null `host` has been consumed and must not be used again.
+///
 /// # Safety
-/// Must be called **exactly once** with a `host` pointer previously returned by
-/// `polyplug_runtime_create`. A null `host` is ignored. Calling it more than once,
-/// or concurrently with itself on the same handle, is undefined behavior — the
-/// handle is freed, same as C `free()`. After this call the `HostApi` pointer is
-/// dangling and must not be used.
+/// Must be called once with a `host` pointer previously returned by
+/// `polyplug_runtime_create`, unless a previous call returned `false`. Calling it more
+/// than once after it returns `true`, or concurrently with itself on the same handle,
+/// is undefined behavior.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_runtime_destroy(host: *const HostApi) {
-    catch_unwind(AssertUnwindSafe(|| {
-        if !host.is_null() {
-            // Exactly-once contract: this is the sole legitimate destroy of `host`.
-            // Read the `runtime` field, reconstruct the `Arc<Runtime>` handed out by
-            // `Arc::into_raw` in `polyplug_runtime_create`, and drop it. The drop
-            // cascades into `Runtime`'s teardown, which frees the runtime-owned
-            // `HostApi` box last. No atomic arbiter is needed: the caller guarantees
-            // there is no second or concurrent destroy of this handle (any such call
-            // is undefined behavior, the caller's responsibility — like `free()`).
-            //
-            // SAFETY: `(*host).runtime` was produced by `Arc::into_raw` in
-            // `polyplug_runtime_create` and `host` is a valid, properly aligned
-            // pointer returned by it. The runtime owns the `HostApi` box, so reading
-            // its `runtime` field here is in-bounds and valid; reconstructing and
-            // dropping the `Arc` exactly once balances the original `into_raw`.
-            let runtime_ptr: *const Runtime = unsafe { (*host).runtime as *const Runtime };
-            if !runtime_ptr.is_null() {
-                // SAFETY: see above — balances the `Arc::into_raw` from create.
-                let _runtime: Arc<Runtime> = unsafe { Arc::from_raw(runtime_ptr) };
+pub unsafe extern "C" fn polyplug_runtime_destroy(host: *const HostApi) -> bool {
+    if host.is_null() {
+        return true;
+    }
+
+    // A foreign-thread final drop cannot safely release native residents. Keep all
+    // checks that precede raw Arc reconstruction in this guard so their panic leaves
+    // the host's Arc reference intact and retryable.
+    let runtime_ptr: *const Runtime = match catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: `(*host).runtime` was produced by `Arc::into_raw` in
+        // `polyplug_runtime_create` and `host` is a valid, properly aligned pointer
+        // returned by it. The raw Arc remains owned by this HostApi during this check.
+        let runtime_ptr: *const Runtime = unsafe { (*host).runtime as *const Runtime };
+        if !runtime_ptr.is_null() {
+            // SAFETY: the raw Arc remains owned by this HostApi during this check.
+            let runtime: &Runtime = unsafe { &*runtime_ptr };
+            if !runtime.can_destroy_on_current_thread() {
+                return None;
             }
         }
-    }))
-    .unwrap_or(())
+        Some(runtime_ptr)
+    })) {
+        Ok(Some(runtime_ptr)) => runtime_ptr,
+        Ok(None) | Err(_) => return false,
+    };
+
+    if runtime_ptr.is_null() {
+        return true;
+    }
+
+    // From this point ownership is terminal: Arc::from_raw balances the reference
+    // transferred by create before any teardown can panic.
+    // SAFETY: this balances the Arc::into_raw from create exactly once.
+    let runtime: Arc<Runtime> = unsafe { Arc::from_raw(runtime_ptr) };
+    let _ = catch_unwind(AssertUnwindSafe(|| drop(runtime)));
+    true
 }
 
-/// Begin an in-process registration transaction using canonical manifest TOML.
+/// Begin an internal-plugin registration transaction using canonical manifest TOML.
 ///
 /// Call `HostApi::register_guest_contract` for every provider before committing. The
 /// manifest bytes are copied while parsing; no registration envelope crosses the ABI.
@@ -151,7 +178,7 @@ pub unsafe extern "C" fn polyplug_runtime_destroy(host: *const HostApi) {
 /// `host` must be a live runtime `HostApi`. Non-null output pointers must be
 /// writable, and `manifest_bytes` must reference `manifest_len` readable bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_begin_in_process_bundle(
+pub unsafe extern "C" fn polyplug_begin_internal_plugin(
     host: *const HostApi,
     manifest_bytes: *const u8,
     manifest_len: usize,
@@ -168,7 +195,7 @@ pub unsafe extern "C" fn polyplug_begin_in_process_bundle(
             || out_bundle_id.is_null()
             || (manifest_bytes.is_null() && manifest_len != 0)
         {
-            return Err("invalid in-process registration pointer".to_owned());
+            return Err("invalid internal-plugin registration pointer".to_owned());
         }
         let language: SupportedLanguage = match language {
             0 => SupportedLanguage::Rust,
@@ -177,7 +204,7 @@ pub unsafe extern "C" fn polyplug_begin_in_process_bundle(
             3 => SupportedLanguage::Python,
             4 => SupportedLanguage::Lua,
             5 => SupportedLanguage::JavaScript,
-            _ => return Err("invalid in-process language".to_owned()),
+            _ => return Err("invalid internal-plugin language".to_owned()),
         };
         let manifest_bytes: &[u8] = if manifest_len == 0 {
             &[]
@@ -197,11 +224,11 @@ pub unsafe extern "C" fn polyplug_begin_in_process_bundle(
         // SAFETY: HostApi.runtime is owned by this live runtime.
         let runtime: &Runtime = unsafe { &*runtime_ptr };
         runtime
-            .begin_in_process_bundle(manifest, language)
+            .begin_internal_plugin(manifest, language)
             .map(|bundle_id| bundle_id.id())
             .map_err(|error| error.to_string())
     }))
-    .unwrap_or_else(|_| Err("in-process registration panicked".to_owned()));
+    .unwrap_or_else(|_| Err("internal-plugin registration panicked".to_owned()));
     match result {
         Ok(bundle_id) => {
             // SAFETY: out_bundle_id is non-null on the success path.
@@ -211,18 +238,86 @@ pub unsafe extern "C" fn polyplug_begin_in_process_bundle(
                 unsafe { out_error.write(AbiError::ok()) };
             }
         }
-        Err(error) => write_in_process_error(host, out_error, error),
+        Err(error) => write_internal_plugin_error(host, out_error, error),
     }
 }
 
-/// Commit an in-process registration transaction after all guest contracts staged.
+/// Return the caller's OS thread identity for native resident ownership.
+#[unsafe(no_mangle)]
+pub extern "C" fn polyplug_current_os_thread_id() -> u64 {
+    current_os_thread_id()
+}
+
+/// Attach an opaque native resident to a staged internal-plugin transaction.
+///
+/// The adapter must call this from `owner_thread_id` after begin and before commit
+/// or abort. A successful call transfers the resident to core; failure leaves it
+/// owned by the adapter.
+///
+/// # Safety
+///
+/// `host` must be a live runtime `HostApi`. `resident` and `release` must be
+/// non-null, and `out_error` must be writable when non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_attach_internal_plugin_resident(
+    host: *const HostApi,
+    bundle_id: u64,
+    resident: *mut c_void,
+    owner_thread_id: u64,
+    release: Option<InternalPluginResidentRelease>,
+    out_error: *mut AbiError,
+) -> bool {
+    let result: Result<(), String> = catch_unwind(AssertUnwindSafe(|| {
+        if host.is_null() {
+            return Err("HostApi pointer is null".to_owned());
+        }
+        if resident.is_null() {
+            return Err("native internal-plugin resident must be non-null".to_owned());
+        }
+        let release: InternalPluginResidentRelease = release
+            .ok_or_else(|| "native internal-plugin release callback must be non-null".to_owned())?;
+        if owner_thread_id == 0 {
+            return Err("native internal-plugin owner thread ID must be nonzero".to_owned());
+        }
+        // SAFETY: host is non-null and belongs to a live runtime.
+        let runtime_ptr: *const Runtime = unsafe { (*host).runtime.cast() };
+        if runtime_ptr.is_null() {
+            return Err("runtime pointer is null".to_owned());
+        }
+        // SAFETY: host is live for this registration call.
+        unsafe { &*runtime_ptr }
+            .attach_internal_plugin_resident(
+                BundleId::from_u64(bundle_id),
+                resident,
+                owner_thread_id,
+                release,
+            )
+            .map_err(|error| error.to_string())
+    }))
+    .unwrap_or_else(|_| Err("native internal-plugin resident attachment panicked".to_owned()));
+    match result {
+        Ok(()) => {
+            if !out_error.is_null() {
+                // SAFETY: caller provided writable result storage.
+                unsafe { out_error.write(AbiError::ok()) };
+            }
+            true
+        }
+        Err(error) => {
+            write_internal_plugin_error(host, out_error, error);
+            false
+        }
+    }
+}
+
+/// Commit an internal-plugin registration transaction after all guest contracts staged.
 ///
 /// # Safety
 ///
 /// `host` must be the live runtime that began `bundle_id`, and a non-null
 /// `out_error` must be writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_commit_in_process_bundle(
+pub unsafe extern "C" fn polyplug_commit_internal_plugin(
     host: *const HostApi,
     bundle_id: u64,
     out_error: *mut AbiError,
@@ -238,28 +333,88 @@ pub unsafe extern "C" fn polyplug_commit_in_process_bundle(
         }
         // SAFETY: HostApi.runtime is owned by this live runtime.
         unsafe { &*runtime_ptr }
-            .commit_in_process_bundle(BundleId::from_u64(bundle_id))
+            .commit_internal_plugin(BundleId::from_u64(bundle_id))
             .map(|_| ())
             .map_err(|error| error.to_string())
     }))
-    .unwrap_or_else(|_| Err("in-process registration panicked".to_owned()));
+    .unwrap_or_else(|_| Err("internal-plugin registration panicked".to_owned()));
     match result {
         Ok(()) if !out_error.is_null() => {
             // SAFETY: caller provided writable result storage.
             unsafe { out_error.write(AbiError::ok()) };
         }
         Ok(()) => {}
-        Err(error) => write_in_process_error(host, out_error, error),
+        Err(error) => write_internal_plugin_error(host, out_error, error),
     }
 }
 
-/// Abort an uncommitted in-process registration transaction and release staged data.
+/// Commit an internal-plugin registration transaction and return its exact staged handles.
+///
+/// The caller supplies a buffer sized to the generated provider count. Capacity is
+/// checked before publication, and success writes handles in the same order that
+/// `HostApi::register_guest_contract` staged the providers.
+///
+/// # Safety
+///
+/// `host` must be the live runtime that began `bundle_id`; `out_handles` must be
+/// writable for `handle_capacity` entries when that capacity is nonzero; and
+/// `out_handle_count` and `out_error` must be writable when non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_commit_internal_plugin_with_handles(
+    host: *const HostApi,
+    bundle_id: u64,
+    out_handles: *mut GuestContractHandle,
+    handle_capacity: usize,
+    out_handle_count: *mut usize,
+    out_error: *mut AbiError,
+) {
+    let result: Result<usize, String> = catch_unwind(AssertUnwindSafe(|| {
+        if host.is_null() {
+            return Err("HostApi pointer is null".to_owned());
+        }
+        if out_handle_count.is_null() {
+            return Err("out_handle_count pointer is null".to_owned());
+        }
+        if handle_capacity > 0 && out_handles.is_null() {
+            return Err("out_handles pointer is null for nonzero capacity".to_owned());
+        }
+        // SAFETY: host is non-null and belongs to a live runtime.
+        let runtime_ptr: *const Runtime = unsafe { (*host).runtime.cast() };
+        if runtime_ptr.is_null() {
+            return Err("runtime pointer is null".to_owned());
+        }
+        let handles: &mut [GuestContractHandle] = if handle_capacity == 0 {
+            &mut []
+        } else {
+            // SAFETY: non-nullness and entry capacity are validated above.
+            unsafe { slice::from_raw_parts_mut(out_handles, handle_capacity) }
+        };
+        // SAFETY: HostApi.runtime is owned by this live runtime.
+        unsafe { &*runtime_ptr }
+            .commit_internal_plugin_into_handles(BundleId::from_u64(bundle_id), handles)
+            .map_err(|error| error.to_string())
+    }))
+    .unwrap_or_else(|_| Err("internal-plugin registration panicked".to_owned()));
+    match result {
+        Ok(handle_count) => {
+            // SAFETY: non-nullness was checked before commit.
+            unsafe { out_handle_count.write(handle_count) };
+            if !out_error.is_null() {
+                // SAFETY: caller provided writable result storage.
+                unsafe { out_error.write(AbiError::ok()) };
+            }
+        }
+        Err(error) => write_internal_plugin_error(host, out_error, error),
+    }
+}
+
+/// Abort an uncommitted internal-plugin registration transaction and release staged data.
 ///
 /// # Safety
 ///
 /// `host` must be the live runtime that began `bundle_id`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_abort_in_process_bundle(host: *const HostApi, bundle_id: u64) {
+pub unsafe extern "C" fn polyplug_abort_internal_plugin(host: *const HostApi, bundle_id: u64) {
     if host.is_null() {
         return;
     }
@@ -267,11 +422,11 @@ pub unsafe extern "C" fn polyplug_abort_in_process_bundle(host: *const HostApi, 
     let runtime_ptr: *const Runtime = unsafe { (*host).runtime.cast() };
     if !runtime_ptr.is_null() {
         // SAFETY: HostApi.runtime is owned by this live runtime.
-        unsafe { &*runtime_ptr }.abort_in_process_bundle(BundleId::from_u64(bundle_id));
+        unsafe { &*runtime_ptr }.abort_internal_plugin(BundleId::from_u64(bundle_id));
     }
 }
 
-fn write_in_process_error(host: *const HostApi, out_error: *mut AbiError, error: String) {
+fn write_internal_plugin_error(host: *const HostApi, out_error: *mut AbiError, error: String) {
     if !host.is_null() {
         // SAFETY: non-null HostApi belongs to a live runtime for this callback.
         let runtime_ptr: *const Runtime = unsafe { (*host).runtime.cast() };
@@ -294,6 +449,7 @@ fn write_in_process_error(host: *const HostApi, out_error: *mut AbiError, error:
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
+    use core::ffi::c_void;
     use core::ptr;
     use core::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -301,6 +457,9 @@ mod tests {
 
     use polyplug_abi::runtime::Compatibility;
     use polyplug_abi::{AbiError, AbiErrorCode, GuestContractHandle};
+    use polyplug_utils::BundleId;
+
+    use crate::runtime_store::InternalPluginResident;
 
     use super::*;
 
@@ -310,7 +469,89 @@ mod tests {
         let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host.is_null());
         // SAFETY: host was returned by polyplug_runtime_create and is non-null.
-        unsafe { polyplug_runtime_destroy(host) };
+        assert!(unsafe { polyplug_runtime_destroy(host) });
+    }
+
+    #[test]
+    fn runtime_destroy_is_terminal_after_runtime_owned_root_teardown_panics() {
+        struct PanicOnDrop {
+            drops: Arc<AtomicUsize>,
+        }
+
+        impl Drop for PanicOnDrop {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::SeqCst);
+                panic!("runtime-owned root teardown panicked");
+            }
+        }
+
+        // SAFETY: polyplug_runtime_create has no pointer preconditions.
+        let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
+        assert!(!host.is_null());
+        let drops: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        // SAFETY: host is live and points to its runtime for the duration of this test.
+        let runtime: &Runtime = unsafe { &*((*host).runtime as *const Runtime) };
+        runtime
+            .internal_plugin_roots
+            .lock()
+            .expect("internal plugin roots mutex must not be poisoned")
+            .insert(
+                BundleId::from_u64(0xA173_3A09_4E02_0005),
+                Box::new(PanicOnDrop {
+                    drops: Arc::clone(&drops),
+                }),
+            );
+
+        // SAFETY: `host` is the live, uniquely owned pointer returned above; destroy
+        // terminally consumes that ownership exactly once, even when root teardown panics.
+        assert!(unsafe { polyplug_runtime_destroy(host) });
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn off_owner_runtime_destroy_preserves_native_resident_for_owner_release() {
+        unsafe extern "C" fn release_resident(context: *mut c_void) {
+            // SAFETY: this callback owns the allocation transferred into the resident.
+            let releases: Box<Arc<AtomicUsize>> =
+                unsafe { Box::from_raw(context.cast::<Arc<AtomicUsize>>()) };
+            releases.fetch_add(1, Ordering::SeqCst);
+        }
+
+        // SAFETY: polyplug_runtime_create has no pointer preconditions.
+        let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
+        assert!(!host.is_null());
+        let releases: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        let context: *mut c_void = Box::into_raw(Box::new(Arc::clone(&releases))).cast();
+        // SAFETY: host is live and points to its runtime for the duration of this test.
+        let runtime: &Runtime = unsafe { &*((*host).runtime as *const Runtime) };
+        runtime.registry.lock_internal_plugin_residents().insert(
+            BundleId::from_u64(0xA173_3A09_4E02_0004),
+            InternalPluginResident::new(context, current_os_thread_id(), release_resident),
+        );
+
+        let host_address: usize = host as usize;
+        let destroyed = thread::spawn(move || {
+            // SAFETY: the off-owner call must leave the valid host handle unconsumed.
+            unsafe { polyplug_runtime_destroy(host_address as *const HostApi) }
+        })
+        .join()
+        .expect("off-owner destroy must return");
+        assert!(
+            !destroyed,
+            "off-owner destruction must report a retryable failure"
+        );
+        assert_eq!(releases.load(Ordering::SeqCst), 0);
+        assert!(
+            runtime
+                .registry
+                .lock_internal_plugin_residents()
+                .contains_key(&BundleId::from_u64(0xA173_3A09_4E02_0004)),
+            "off-owner destruction must leave the resident attached for its owner"
+        );
+
+        // SAFETY: the owner-thread retry consumes the original runtime handle once.
+        assert!(unsafe { polyplug_runtime_destroy(host) });
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -412,7 +653,7 @@ mod tests {
         assert_eq!(result.code, AbiErrorCode::InvalidPointer as u32);
 
         // SAFETY: host was returned by polyplug_runtime_create and is destroyed once.
-        unsafe { polyplug_runtime_destroy(host) };
+        assert!(unsafe { polyplug_runtime_destroy(host) });
     }
 
     #[test]
@@ -426,7 +667,7 @@ mod tests {
         assert!(handle.is_null());
 
         // SAFETY: host was returned by polyplug_runtime_create and is destroyed once.
-        unsafe { polyplug_runtime_destroy(host) };
+        assert!(unsafe { polyplug_runtime_destroy(host) });
     }
 
     #[test]
@@ -440,7 +681,7 @@ mod tests {
         assert_eq!(len, 0);
 
         // SAFETY: host was returned by polyplug_runtime_create and is destroyed once.
-        unsafe { polyplug_runtime_destroy(host) };
+        assert!(unsafe { polyplug_runtime_destroy(host) });
     }
 
     #[test]
@@ -457,7 +698,7 @@ mod tests {
                         if !host.is_null() {
                             success.fetch_add(1, Ordering::SeqCst);
                             // SAFETY: host was returned by create and is destroyed once.
-                            unsafe { polyplug_runtime_destroy(host) };
+                            assert!(unsafe { polyplug_runtime_destroy(host) });
                         }
                     }
                 })
@@ -477,19 +718,19 @@ mod tests {
         let host1: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host1.is_null());
         // SAFETY: host1 was returned by create and is destroyed once.
-        unsafe { polyplug_runtime_destroy(host1) };
+        assert!(unsafe { polyplug_runtime_destroy(host1) });
 
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
         let host2: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host2.is_null());
         // SAFETY: host2 was returned by create and is destroyed once.
-        unsafe { polyplug_runtime_destroy(host2) };
+        assert!(unsafe { polyplug_runtime_destroy(host2) });
 
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
         let host3: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host3.is_null());
         // SAFETY: host3 was returned by create and is destroyed once.
-        unsafe { polyplug_runtime_destroy(host3) };
+        assert!(unsafe { polyplug_runtime_destroy(host3) });
     }
 
     #[test]
@@ -498,13 +739,13 @@ mod tests {
         let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
         assert!(!host.is_null());
         // SAFETY: host was returned by create and is destroyed once.
-        unsafe { polyplug_runtime_destroy(host) };
+        assert!(unsafe { polyplug_runtime_destroy(host) });
     }
 
     #[test]
     fn ffi_runtime_destroy_null_is_safe() {
         // SAFETY: polyplug_runtime_destroy explicitly accepts and ignores a null pointer.
-        unsafe { polyplug_runtime_destroy(ptr::null()) };
+        assert!(unsafe { polyplug_runtime_destroy(ptr::null()) });
     }
 
     #[test]
@@ -535,7 +776,7 @@ mod tests {
                     }
 
                     // SAFETY: host was returned by create and is destroyed once.
-                    unsafe { polyplug_runtime_destroy(host) };
+                    assert!(unsafe { polyplug_runtime_destroy(host) });
                 })
             })
             .collect();
@@ -562,7 +803,7 @@ mod tests {
         assert!(interface.is_null());
 
         // SAFETY: host was returned by create and is destroyed once.
-        unsafe { polyplug_runtime_destroy(host) };
+        assert!(unsafe { polyplug_runtime_destroy(host) });
     }
 
     #[test]
@@ -576,7 +817,7 @@ mod tests {
         assert!(!runtime_ptr.is_null());
 
         // SAFETY: host was returned by create and is destroyed once.
-        unsafe { polyplug_runtime_destroy(host) };
+        assert!(unsafe { polyplug_runtime_destroy(host) });
     }
 
     #[test]
@@ -622,6 +863,6 @@ mod tests {
         assert!(!ptr.is_null());
 
         // SAFETY: host was returned by create and is destroyed once.
-        unsafe { polyplug_runtime_destroy(host) };
+        assert!(unsafe { polyplug_runtime_destroy(host) });
     }
 }

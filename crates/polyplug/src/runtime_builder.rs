@@ -2,7 +2,7 @@ use core::ffi::c_void;
 use core::ptr;
 use core::slice;
 use core::sync::atomic::AtomicUsize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -343,7 +343,8 @@ impl RuntimeBuilder {
             active_init_count: AtomicUsize::new(0),
             reload_serialize: Mutex::new(()),
             instance_counts: Mutex::new(HashMap::new()),
-            in_process_residents: Mutex::new(HashMap::new()),
+            internal_plugin_roots: Mutex::new(HashMap::new()),
+            internal_plugin_lifecycle: Mutex::new(HashSet::new()),
         };
 
         let runtime: Arc<Runtime> = Arc::new(runtime);

@@ -26,9 +26,8 @@ use polyplug::runtime::{host_get_error_len, host_get_last_error, host_load_bundl
 
 #[test]
 fn test_runtime_free_null() {
-    // polyplug_runtime_destroy(null) must be a no-op, not a crash
     // SAFETY: passing null is explicitly part of the null-safety contract being tested.
-    unsafe { polyplug_runtime_destroy(ptr::null()) };
+    assert!(unsafe { polyplug_runtime_destroy(ptr::null()) });
 }
 
 #[test]
@@ -59,7 +58,7 @@ fn test_load_bundle_null_path() {
         "load_bundle(null path) must return InvalidPointer"
     );
     // SAFETY: host is valid and was allocated by polyplug_runtime_create(ptr::null()).
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 #[test]
@@ -76,7 +75,7 @@ fn test_find_all_guest_contracts_empty_registry() {
         "find_all_guest_contracts on empty registry must return empty array"
     );
     // SAFETY: host is valid and was allocated by polyplug_runtime_create(ptr::null()).
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 #[test]
@@ -97,7 +96,7 @@ fn test_resolve_guest_contract_null_handle() {
     let len: usize = unsafe { ((*host).get_error_len)(host) };
     assert_eq!(len, 0, "error_len must be 0 after null handle resolve");
     // SAFETY: host is valid and was allocated by polyplug_runtime_create(ptr::null()).
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 #[test]
@@ -208,7 +207,7 @@ fn register_and_expect_rejection(
         "error message must name the offending field; got: {message}"
     );
     // SAFETY: host is valid and was allocated by polyplug_runtime_create(ptr::null()).
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 #[test]
@@ -288,5 +287,5 @@ fn register_host_contract_rejects_null_create_instance() {
         "error message must name the offending field; got: {message}"
     );
     // SAFETY: host is valid and was allocated by polyplug_runtime_create(ptr::null()).
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }

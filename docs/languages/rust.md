@@ -1,8 +1,8 @@
 # Rust — polyplug
 
 Rust works as both a host and a guest. A Rust guest can be compiled as a native
-`cdylib` for path-based loading or created as an ordinary Rust object and
-registered through the in-process API. Host and guest share the same ABI types.
+`cdylib` for external plugin loading, or generated as an internal plugin from an
+ordinary Rust implementation object. Host and guest share the same ABI types.
 For measured overhead, see [Performance](../PERFORMANCE.md).
 
 ## Install
@@ -43,8 +43,8 @@ polyplug_utils = "0.1"   # bundle_id / contract_id hash utilities
 
 - **[Rust — Host (app)](rust-host.md)** — embed the runtime, load plugins of any
   language, call contracts.
-- **[Rust — Guest (plugin)](rust-guest.md)** — write a path-loaded or in-process
-  Rust guest, then generate its typed glue and registration bundle.
+- **[Rust — Guest (plugin)](rust-guest.md)** — write an external or internal
+  Rust plugin, then generate its typed bindings.
 
 New to polyplug? Start with the [Quick Start](../QUICKSTART.md).
 
@@ -57,3 +57,12 @@ New to polyplug? Start with the [Quick Start](../QUICKSTART.md).
 
 Generated code lives under `examples/hosts/rust/generated/` (host callers) and
 `examples/guests/rust/<plugin>/generated/` (guest glue).
+
+## Internal plugin profile
+
+External plugins use the standard bundle command. An application can instead
+generate one internal profile with
+`polyplugc generate --bundle bundle.toml --internal --lang rust --out ./generated`.
+It supplies ordinary Rust factories to generated guest provider bindings and
+receives generated host caller bindings from the committed handles; registration,
+calls, and unload then follow the same pipeline as an external plugin.

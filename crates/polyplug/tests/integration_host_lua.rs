@@ -33,7 +33,7 @@ fn test_runtime_new_succeeds() {
     let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
     assert!(!host.is_null(), "polyplug_runtime_create returned null");
     // SAFETY: host is non-null, returned by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 #[test]
@@ -56,5 +56,5 @@ fn test_last_error_after_failed_load() {
         "Expected non-empty error string after failed load"
     );
     // SAFETY: host is non-null, returned by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }

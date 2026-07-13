@@ -78,7 +78,7 @@ symbol names, see [Generated names](../generated-names.md).
 Wire in the generated module, implement the generated trait, and export the
 factory and ABI version. Full source: `examples/guests/rust/decoder`.
 
-```rust
+```rust,ignore
 use polyplug_abi::StringView;
 use polyplug_guest::{GuestError, HostContext, to_str};
 
@@ -124,72 +124,46 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
   exports; the generated `init.rs` provides `polyplug_init`. Trait and factory
   names come from [Generated names](../generated-names.md).
 
-## In-process Rust guest
+## Internal Rust plugin
 
-An in-process guest is an ordinary Rust implementation object created by the
-host and registered at runtime. Generate its typed adapters through the public
-code-generation library; the CLI continues to generate the path-loaded guest ABI:
+An internal plugin is an ordinary Rust implementation supplied by its
+application. Generate the profile explicitly from one bundle manifest:
 
-```rust
-use polyplug_codegen::{
-    GenerateConfig, Lang, RustGuestMode, Side, generate_rust_guest, write_output,
+```sh
+polyplugc generate --bundle bundle.toml --internal --lang rust --out ./generated
+```
+
+The bundle-identity-namespaced output contains generated guest provider bindings
+plus generated host caller bindings. Its public registration surface is
+`generated::guest::domain::{InternalProviderFactory, InternalProviders}` and
+`generated::guest::init::register`:
+
+```rust,ignore
+use generated::guest::{
+    domain::{InternalProviderFactory, InternalProviders},
+    init::register,
 };
 
-let output = generate_rust_guest(
-    GenerateConfig {
-        api_toml: "api.toml".into(),
-        lang: Lang::Rust,
-        side: Side::Guest,
-        out_dir: "generated".into(),
-    },
-    RustGuestMode::InProcess {
-        bundle_name: "my_plugin".to_owned(),
+let registration = register(
+    runtime.clone(),
+    InternalProviders {
+        decoder_pipeline_decoder: InternalProviderFactory::new(|| {
+            Box::new(Decoder { prefix: String::from("DECODED") })
+        }),
     },
 )?;
-write_output(&output, std::path::Path::new("generated"))?;
+
+let bundle_id = registration.bundle_id;
+let decoder = registration.decoder_pipeline_decoder;
 ```
 
-The generated module exposes `interfaces::InProcessFactories`,
-`interfaces::InProcessFactory<T>`, and `init::register_in_process_bundle`.
-`InProcessFactory<T>` retains an `Arc<dyn Fn(HostContext) -> Box<T> + Send +
-Sync + 'static>` inside the generated resident. Create each typed field with
-`InProcessFactory::new`: function items remain ergonomic, and closures can
-capture runtime configuration without any global or thread-local handoff.
-
-```rust
-use generated::interfaces::{InProcessFactories, InProcessFactory};
-
-fn create_my_plugin(host: HostContext) -> Box<dyn PipelineDecoderGuestContract> {
-    Box::new(Plugin {
-        host,
-        prefix: String::from("DECODED"),
-    })
-}
-
-// For an unconfigured provider, use `InProcessFactory::new(create_my_plugin)`.
-let fixture_prefix = String::from("FIXTURE-A");
-generated::init::register_in_process_bundle(
-    &runtime,
-    InProcessFactories {
-        my_plugin: InProcessFactory::new(
-            move |host: HostContext| -> Box<dyn PipelineDecoderGuestContract> {
-                Box::new(Plugin {
-                    host,
-                    prefix: fixture_prefix.clone(),
-                })
-            },
-        ),
-    },
-)?;
-```
-
-`InProcessFactories` is moved into the generated registration helper. On
-success, the `Runtime` owns that resident until logical unload; on failed
-registration, the helper returns the error and drops the resident, reclaiming
-the captured factories. Each runtime owns a distinct resident, so the same
-generated module can use different captured configuration in different
-runtimes. Use ordinary `unload_bundle` and re-registration operations for
-lifecycle management.
+`register` consumes the provider input on every attempt. It stages every
+`PluginDescriptor` and `GuestContractInterface`, validates the exact manifest
+provider/function/dependency set, and either atomically publishes the complete
+bundle or leaves no registry state. The returned callers are built from the
+exact committed handles and have the same typed use as callers discovered after
+external plugin loading. The runtime retains provider state until successful
+unload; callers and instances must drain before `Runtime::unload_bundle`.
 
 ## 5. Build
 
@@ -203,7 +177,7 @@ The library lands in `target/release/` (e.g. `libmy_plugin.so` on Linux).
 
 Copy the built library next to the generated `manifest.toml`:
 
-```
+```text
 dist/my_plugin/
 ├── manifest.toml       # from generated/manifest.toml
 └── libmy_plugin.so     # from target/release/

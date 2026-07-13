@@ -67,7 +67,7 @@ fn test_resolve_plugin_null_handle() {
     );
 
     // SAFETY: host is valid and was allocated by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 /// Test `resolve_guest_contract` with stale/invalid handle.
@@ -110,7 +110,7 @@ fn test_resolve_plugin_stale_handle() {
     );
 
     // SAFETY: host is valid and was allocated by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -134,7 +134,7 @@ fn test_find_all_guest_contracts_empty_registry() {
     );
 
     // SAFETY: host is valid and was allocated by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 /// Test `find_all_guest_contracts` with single plugin.
@@ -182,7 +182,7 @@ fn test_find_all_guest_contracts_single_plugin() {
     }
 
     // SAFETY: host is valid and was allocated by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 /// Test `find_all_guest_contracts` with multiple plugins.
@@ -284,5 +284,5 @@ fn test_find_all_guest_contracts_multiple_plugins() {
     }
 
     // SAFETY: host is valid and was allocated by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }

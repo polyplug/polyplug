@@ -54,10 +54,10 @@ flowchart TB
     Host -. "poll before each call" .-> Rev
 ```
 
-The host-side library exports runtime lifecycle plus scoped in-process staging
-functions. Normal operations remain fields on the frozen 184-byte `HostApi`
-function table. See [`ABI_ARCHITECTURE.md`](ABI_ARCHITECTURE.md) for the full
-surface.
+The host-side library exports runtime lifecycle plus scoped internal plugin
+registration functions. Normal operations remain fields on the frozen 184-byte
+`HostApi` function table. See [`ABI_ARCHITECTURE.md`](ABI_ARCHITECTURE.md) for the
+full surface.
 
 ---
 
@@ -98,43 +98,48 @@ sequenceDiagram
 `host->register_guest_contract(host, &descriptor, &interface)` — identical across
 every language generator (a hard rule; see `CLAUDE.md` §10).
 
-## In-process registration contract
+## Internal plugin registration contract
 
-Every maintained host SDK uses the existing bundle lifecycle and
-`register_guest_contract` callback. Core begins a scoped canonical
-`ManifestData` transaction, the host adapter registers each `PluginDescriptor` and
-`GuestContractInterface` through that callback, then core validates and commits the
-whole bundle once. A callback failure aborts the staged transaction without exposing
-metadata, dependencies, or a provider.
+An **external plugin** is acquired from its directory and loader before this
+pipeline begins. An **internal plugin** is acquired from generated guest provider
+bindings and ordinary language implementation factories. From registration
+onward, both use the same canonical `ManifestData` transaction:
 
-Rust, C++, C#, Python, Lua, and JavaScript hosts create implementation objects in
-their own language and retain them in a resident owned by one specific `Runtime`,
-keyed by the committed bundle ID. Core neither accepts implementation-object
-pointers nor understands a language object's layout.
+1. generated guest provider bindings enter the canonical prepared transaction:
+   Rust bindings call `Runtime::register_generated_internal_plugin` directly, while
+   C++, C#, Python, Lua, and JavaScript bindings call the
+   `polyplug_begin_internal_plugin` C export;
+2. every `PluginDescriptor` and `GuestContractInterface` is staged through
+   `register_guest_contract`;
+3. the runtime validates the exact manifest provider, function, and dependency
+   sets; and
+4. one commit atomically publishes metadata, dependencies, and handles.
+
+If any stage fails, the transaction publishes nothing and generated bindings
+release their untransferred roots exactly once. A registration attempt consumes
+its supplied provider input; retry with fresh input.
+
+Rust, C++, C#, Python, Lua, and JavaScript generated provider bindings retain
+their factories, implementation objects, callback roots, and interface backing
+storage only after commit. The registered bundle is keyed by its canonical
+`BundleId`; the registry and generated host caller bindings do not branch on
+whether acquisition was external or internal.
 
 ### SDK implementer handoff
 
-- Construct the existing canonical manifest, including its provider and dependency
-  specifications, and use the scoped registration transaction. Register every
-  interface through `register_guest_contract`; do not introduce a parallel bundle
-  envelope or callback.
-- Keep typed factories, implementation objects, callback roots, and interface-table
-  backing storage in a resident owned by the individual C++, C#, Python, Lua, or
-  JavaScript runtime wrapper. Transfer that resident only after the transaction
-  commits, never through a process-global factory map.
-- Route interface callbacks through the runtime-local resident. The opaque
-  `GuestContractInterface.adapter_context` is copied unchanged and forwarded as the
-  first argument to create, destroy, native-dispatch, and VM-dispatch callbacks.
-  Core never dereferences or interprets it.
-- On unload, first prevent new wrapper calls and drain active calls, guest instances,
-  and language-specific leases. Release a resident only after the canonical unload
-  succeeds; on failure retain the resident and caller state.
-
-Rust's generated adapter follows this contract through `InProcessFactories` and
-the runtime-scoped registration helper. Its runtime refuses logical unload while it
-owns live stateful instances, then invalidates the bundle and releases the resident.
-Logical unload does not promise to unload a host language runtime or resident machine
-code.
+- Generate an internal profile explicitly for one `bundle.toml`:
+  `polyplugc generate --bundle bundle.toml --internal --lang <language> --out ./generated`.
+  It emits bundle-identity-namespaced generated guest provider bindings and
+  generated host caller bindings.
+- Pass ordinary implementation factories to the generated registrar. It builds
+  the canonical manifest transaction privately, returns the committed `BundleId`
+  and named typed callers built from the exact committed handles, and owns
+  language-specific roots until unload.
+- Use the returned typed callers exactly as callers discovered from an external
+  bundle. Do not add a source-specific registry, callback, or caller path.
+- Before `Runtime::unload_bundle`, stop new calls and drain active calls, guest
+  instances, and language-specific leases. Successful unload invalidates callers
+  and releases provider binding state; failed unload leaves both retained.
 
 ---
 

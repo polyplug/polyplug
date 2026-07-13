@@ -11,10 +11,23 @@ use ed25519_dalek::SigningKey;
 use ed25519_dalek::VerifyingKey;
 use polyplug_codegen::GenerateConfig;
 use polyplug_codegen::GenerateOutput;
+use polyplug_codegen::InternalCSharpGenerateConfig;
+use polyplug_codegen::InternalCppGenerateConfig;
+use polyplug_codegen::InternalJavaScriptGenerateConfig;
+use polyplug_codegen::InternalLuaGenerateConfig;
+use polyplug_codegen::InternalPythonGenerateConfig;
+use polyplug_codegen::InternalRustGenerateConfig;
+use polyplug_codegen::Lang;
 use polyplug_codegen::PolyplugcError;
 use polyplug_codegen::Side;
 use polyplug_codegen::WriteSummary;
 use polyplug_codegen::generate;
+use polyplug_codegen::generate_internal_cpp;
+use polyplug_codegen::generate_internal_csharp;
+use polyplug_codegen::generate_internal_javascript;
+use polyplug_codegen::generate_internal_lua;
+use polyplug_codegen::generate_internal_python;
+use polyplug_codegen::generate_internal_rust;
 use polyplug_codegen::parse_lang;
 use polyplug_codegen::parser;
 use polyplug_codegen::write_output;
@@ -48,6 +61,11 @@ enum Command {
         /// Path to bundle.toml (generates guest-side code).
         #[arg(long, conflicts_with = "api")]
         bundle: Option<PathBuf>,
+
+        /// Generate matching guest provider and host caller bindings for one internal
+        /// plugin bundle.
+        #[arg(long, requires = "bundle")]
+        internal: bool,
 
         /// Target language: rust, cpp, csharp, python, lua, js-quickjs.
         #[arg(long, short = 'l')]
@@ -122,27 +140,60 @@ fn run(cli: Cli) -> Result<(), PolyplugcError> {
         Command::Generate {
             api,
             bundle,
+            internal,
             lang,
             out,
         } => {
-            let (manifest, side): (PathBuf, Side) = if let Some(api_path) = api {
-                (api_path, Side::Host)
-            } else if let Some(bundle_path) = bundle {
-                (bundle_path, Side::Guest)
+            let output: GenerateOutput = if internal {
+                let bundle_toml: PathBuf =
+                    bundle.ok_or_else(|| PolyplugcError::ValidationFailed {
+                        message: "--internal requires --bundle".to_owned(),
+                    })?;
+                match parse_lang(&lang)? {
+                    Lang::Rust => generate_internal_rust(InternalRustGenerateConfig {
+                        bundle_toml,
+                        out_dir: out.clone(),
+                    })?,
+                    Lang::Cpp => generate_internal_cpp(InternalCppGenerateConfig {
+                        bundle_toml,
+                        out_dir: out.clone(),
+                    })?,
+                    Lang::CSharp => generate_internal_csharp(InternalCSharpGenerateConfig {
+                        bundle_toml,
+                        out_dir: out.clone(),
+                    })?,
+                    Lang::Python => generate_internal_python(InternalPythonGenerateConfig {
+                        bundle_toml,
+                        out_dir: out.clone(),
+                    })?,
+                    Lang::Lua => generate_internal_lua(InternalLuaGenerateConfig {
+                        bundle_toml,
+                        out_dir: out.clone(),
+                    })?,
+                    Lang::JsQuickJs => {
+                        generate_internal_javascript(InternalJavaScriptGenerateConfig {
+                            bundle_toml,
+                            out_dir: out.clone(),
+                        })?
+                    }
+                }
             } else {
-                return Err(PolyplugcError::ValidationFailed {
-                    message: "Must specify --api or --bundle".to_owned(),
-                });
+                let (manifest, side): (PathBuf, Side) = if let Some(api_path) = api {
+                    (api_path, Side::Host)
+                } else if let Some(bundle_path) = bundle {
+                    (bundle_path, Side::Guest)
+                } else {
+                    return Err(PolyplugcError::ValidationFailed {
+                        message: "Must specify --api or --bundle".to_owned(),
+                    });
+                };
+                generate(GenerateConfig {
+                    api_toml: manifest,
+                    lang: parse_lang(&lang)?,
+                    side,
+                    out_dir: out.clone(),
+                })?
             };
-
-            let config: GenerateConfig = GenerateConfig {
-                api_toml: manifest,
-                lang: parse_lang(&lang)?,
-                side,
-                out_dir: out.clone(),
-            };
-
-            let output: GenerateOutput = generate(config)?;
             write_files(&output, &out)?;
         }
 

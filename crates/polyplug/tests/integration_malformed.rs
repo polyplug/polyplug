@@ -63,7 +63,7 @@ fn test_truncated_so() {
     );
     cleanup(&dir);
     // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 #[test]
@@ -83,7 +83,7 @@ fn test_wrong_magic_bytes() {
     );
     cleanup(&dir);
     // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn test_missing_init_symbol() {
         msg
     );
     // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn test_so_file_missing_from_bundle() {
     );
     cleanup(&dir);
     // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 #[test]
@@ -145,5 +145,5 @@ fn test_unknown_runtime() {
     );
     cleanup(&dir);
     // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }

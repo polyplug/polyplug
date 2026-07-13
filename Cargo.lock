@@ -1708,6 +1708,7 @@ dependencies = [
  "libloading",
  "polyplug_utils",
  "serde",
+ "sha2",
  "tempfile",
  "toml",
 ]

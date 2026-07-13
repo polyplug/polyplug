@@ -14,9 +14,11 @@ terms inline.
   single call and is rewound (retain-and-rewind) between calls, then freed wholesale
   at teardown. It is never a shared cell, so same-VM reentrant dispatch stays correct.
 
-- **bundle** — A loadable plugin package. The host loads a bundle at runtime; each
-  bundle exports one or more guest contracts and must export `polyplug_init`. A bundle
-  is identified by its `bundle_id`.
+- **bundle** — The canonical registered package identity. An **external plugin**
+  is acquired from a bundle directory and loader; an **internal plugin** is
+  acquired from generated guest provider bindings and application factories.
+  Both register the same `ManifestData`, descriptors, interfaces, dependencies,
+  and handles under one `bundle_id`.
 
 - **contract** — A versioned interface definition (authored in a `.toml`) that one
   side implements and the other calls. A guest contract is implemented by plugins; a
@@ -39,6 +41,16 @@ terms inline.
 
 - **GuestContractInterface** — The `#[repr(C)]` interface struct a plugin provides
   for the host to call. It carries the dispatch entry points for one guest contract.
+
+- **generated guest provider bindings** — The language-specific bindings emitted
+  from `bundle.toml`. External plugin bindings expose the guest ABI entry point;
+  explicit `--internal` bindings adapt ordinary implementation factories, stage
+  the canonical transaction, and retain provider state until unload.
+
+- **generated host caller bindings** — The typed application callers emitted from
+  `api.toml` or an explicit internal profile. They discover or receive committed
+  handles, create instances, marshal calls, and become invalid on unload without
+  knowing how the bundle was acquired.
 
 - **host** — The application that owns the `Runtime`, loads bundles, and calls into
   guest contracts. The host provides the `HostApi` to guests.

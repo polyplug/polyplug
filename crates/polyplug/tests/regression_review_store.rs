@@ -248,7 +248,7 @@ fn host_find_all_array_len_matches_live_providers_and_frees() {
     }
 
     // SAFETY: host was produced by polyplug_runtime_create and is destroyed once.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 // =============================================================================

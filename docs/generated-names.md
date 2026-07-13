@@ -49,6 +49,27 @@ name:
 Python, Lua, and JS guests emit **no** id constant — they wire the id through the
 generated class, factory setter, or descriptor instead.
 
+## Explicit internal plugin profile
+
+`polyplugc generate --bundle bundle.toml --internal --lang <language> --out <dir>`
+emits both generated guest provider bindings and generated host caller bindings
+under a bundle-identity namespace. The registrar consumes provider input, returns
+the committed `BundleId`, and exposes named callers constructed from exact
+committed handles:
+
+| Language | Generated registration surface |
+|---|---|
+| Rust | `guest::domain::{InternalProviderFactory, InternalProviders}` + `guest::init::register` |
+| C++ | `internal_plugin::register_internal_plugin` → `InternalPluginRegistration` |
+| C# | `InternalPlugin.Register` + `RegistrationInput` → `Registration` |
+| Python | `internal.py`: `InternalPluginProviders` + `register` → `InternalPluginRegistration` |
+| Lua | `guest/internal.lua`: `providers` + `register` |
+| JavaScript | `internal.ts`: `InternalProviders` + `register` → `Registration` |
+
+These are generated API symbols. The product terms are **internal plugin**,
+**external plugin**, **generated guest provider bindings**, and **generated host
+caller bindings**.
+
 ## Rust (`--lang rust`)
 
 | Piece | Pattern | Example |

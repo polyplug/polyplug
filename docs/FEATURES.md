@@ -37,22 +37,21 @@ near-native dispatch (~2.4 ns/call for native languages).
 
 Key ABI facts (verified in `crates/polyplug_abi/src/host/host_api.rs`):
 
-- **FFI surface** — lifecycle and scoped in-process staging are exported from
-  `crates/polyplug/src/ffi.rs`; normal runtime operations are function-pointer
-  fields on `HostApi`.
+- **FFI surface** — lifecycle and scoped internal plugin registration are
+  exported from `crates/polyplug/src/ffi.rs`; normal runtime operations are
+  function-pointer fields on `HostApi`.
 - **Stable layout**: `HostApi` is `184` bytes on 64-bit targets (one runtime
   pointer, 21 function pointers, and a trailing `reserved: *const c_void`).
   `unload_bundle` is at offset 136, `log` at 144, `create_guest_instance` at
   152, `destroy_guest_instance` at 160, `registry_revision` at 168, and
   `reserved` at 176. Layout is locked by `layout_host_api` in `host_api.rs`.
 - **Plugin entry point is `polyplug_init(const HostApi*, const BundleInitContext*)`**
-  (2 args). Plugins register via the self-passing pattern
-  `host->register_guest_contract(host, &descriptor, &interface)`.
-- **Bundle registration is transactional:** `Runtime::load_bundle` and
-  `Runtime::load_bundle_from_source` stage every guest registration while
-  initialization runs, validate the complete manifest provider and function sets,
-  then publish one registry snapshot. A failed load publishes no contracts,
-  metadata, or dependency declarations and invokes the loader's resident cleanup.
+  (2 args). Generated guest provider bindings register via the self-passing
+  pattern `host->register_guest_contract(host, &descriptor, &interface)`.
+- **One registration transaction:** an external plugin's loader and an internal
+  plugin's generated registrar both stage every guest registration, validate the
+  exact manifest provider and function sets, then atomically publish one registry
+  snapshot. A failure publishes no contract, metadata, or dependency declaration.
 - **ABI freeze policy:** the ABI freezes at v1.0; the project is pre-1.0 today, so
   ABI-visible changes are permitted **only with explicit owner approval**, never
   unilaterally (CLAUDE.md Rule 7; [`TRUST_MODEL.md`](TRUST_MODEL.md) §7).
@@ -63,17 +62,28 @@ See CLAUDE.md (Architecture) for the crate map and loader list.
 
 ## 2. Code generation (`polyplugc`)
 
-`polyplugc` has exactly two verbs (see [`WORKFLOW.md`](./WORKFLOW.md)):
+`polyplugc` has five subcommands; this section covers its generation profiles and
+`validate` (see [`cli.md`](cli.md) for `keygen`, `sign`, and `verify`):
 
-- **`generate`** — emits both sides of the contract glue. `--api api.toml`
-  produces host-side typed callers + registration glue; `--bundle bundle.toml`
-  produces guest-side contract stubs, `polyplug_init`, dispatch shims, and a
-  `manifest.toml` with the precomputed `bundle_id`.
-- **`validate --bundle-dir <dir>`** — drives the runtime loader's own manifest
+- **`generate --api api.toml`** — produces generated host caller bindings.
+- **`generate --bundle bundle.toml --lang <language>`** — produces generated
+  guest provider bindings for an **external plugin**, including `polyplug_init`
+  and its generated `manifest.toml`.
+- **`generate --bundle bundle.toml --internal --lang <language>`** — produces
+  bundle-identity-namespaced generated guest provider bindings and generated host
+  caller bindings for one **internal plugin**. It uses the same bundle schema but
+  has no artifact acquisition step.
+- **`validate --bundle-dir <dir>`** — drives the external loader's own manifest
   machinery so the CLI accepts exactly what the runtime would: manifest parses,
   `id == fnv1a_64(name)` (tamper check), the per-platform `[file]` entry resolves
   and exists, the artifact extension matches the declared `loader`, and `version`
   parses.
+
+The internal profile consumes its provider inputs on every registration attempt,
+validates the exact provider/function/dependency set, atomically commits, and
+returns the canonical `BundleId` with named typed callers constructed from the
+committed handles. External acquisition ends before the same validation,
+registry, caller, instance, dispatch, and lifecycle pipeline begins.
 
 **Two separate codegen pipelines** (they share no language emitters by design,
 per CLAUDE.md):
@@ -81,8 +91,7 @@ per CLAUDE.md):
 | Pipeline | Location | Driven by | Produces |
 |---|---|---|---|
 | ABI-SDK emitters | `crates/polyplug_codegen/src/languages/` | `polyplug_abi`'s build script (`build/generate.rs`) | the `sdks/*/abi` files |
-| Contract generators | `crates/polyplugc/src/generators/` | the `polyplugc` CLI | per-contract host/guest bindings |
-
+| Contract generators | `crates/polyplugc/src/generators/` | the `polyplugc` CLI | generated host caller bindings and generated guest provider bindings |
 JS generation targets QuickJS only (`js_quickjs.rs`); there is no `js_deno.rs`.
 That one generator emits both the QuickJS **guest** glue and the Deno **host
 caller** (`host/callers.ts`, run under Deno against the Deno FFI host SDK). The
@@ -377,10 +386,10 @@ host fully trusted (bundle ID 0), plugins semi-trusted (restricted at init to
 their declared dependencies), runtime the root of trust. Bundle identity is the
 FNV1a-64 hash of the bundle name, and `Manifest::validate` recomputes it and
 rejects a mismatch with `LoaderError::BundleTampered { bundle, expected, found }`,
-so a hand-edited manifest cannot impersonate another bundle. Plugins run
-in-process with full host privileges — a plugin crash takes down the host by
-design, and there is no protection against malicious memory access (use OS-level
-isolation for untrusted code). Full detail: [`TRUST_MODEL.md`](TRUST_MODEL.md).
+so a hand-edited manifest cannot impersonate another bundle. Plugins execute
+with full host privileges — a plugin crash takes down the host by design, and
+there is no protection against malicious memory access (use OS-level isolation
+for untrusted code). Full detail: [`TRUST_MODEL.md`](TRUST_MODEL.md).
 
 ---
 

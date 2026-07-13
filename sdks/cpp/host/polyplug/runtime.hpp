@@ -37,20 +37,28 @@ extern "C" {
     const HostApi* polyplug_runtime_create(const RuntimeConfig* config);
 
     /// Destroy a runtime instance.
-    /// Takes HostApi* returned by polyplug_runtime_create.
-    void polyplug_runtime_destroy(const HostApi* host);
-    void polyplug_begin_in_process_bundle(
+    /// Returns false without consuming `host` when destruction must be retried on
+    /// its owner thread; returns true after consuming it (and for null).
+    bool polyplug_runtime_destroy(const HostApi* host);
+    void polyplug_begin_internal_plugin(
         const HostApi* host,
         const uint8_t* manifest_bytes,
         size_t manifest_len,
         uint32_t language,
         uint64_t* out_bundle_id,
         AbiError* out_error);
-    void polyplug_commit_in_process_bundle(
+    void polyplug_commit_internal_plugin(
         const HostApi* host,
         uint64_t bundle_id,
         AbiError* out_error);
-    void polyplug_abort_in_process_bundle(const HostApi* host, uint64_t bundle_id);
+    void polyplug_commit_internal_plugin_with_handles(
+        const HostApi* host,
+        uint64_t bundle_id,
+        GuestContractHandle* out_handles,
+        size_t handle_capacity,
+        size_t* out_handle_count,
+        AbiError* out_error);
+    void polyplug_abort_internal_plugin(const HostApi* host, uint64_t bundle_id);
 }
 
 namespace polyplug {
@@ -83,15 +91,48 @@ inline void on_reload_trampoline(void* user_data, const ReloadPhase* phase) noex
     }
 }
 
-/// Base of generated in-process bundle residents. A resident owns every
+/// Base of generated internal-plugin residents. A resident owns every
 /// generated callback, interface table, typed factory, and implementation object
 /// that may be reached through a registered ABI table.
-class InProcessResident {
+class InternalPluginResident {
 public:
-    virtual ~InProcessResident() = default;
+    virtual ~InternalPluginResident() = default;
+};
+class InternalPluginAbortGuard {
+public:
+    InternalPluginAbortGuard(const HostApi* host, uint64_t bundle_id) noexcept
+        : host_(host), bundle_id_(bundle_id) {}
+
+    ~InternalPluginAbortGuard() noexcept {
+        if (!armed_) {
+            return;
+        }
+        try {
+            polyplug_abort_internal_plugin(host_, bundle_id_);
+        } catch (...) {
+        }
+    }
+
+    void disarm() noexcept { armed_ = false; }
+
+private:
+    const HostApi* host_;
+    uint64_t bundle_id_;
+    bool armed_ = true;
 };
 
+
 } // namespace detail
+
+/// Result of committing one generated internal plugin.
+///
+/// `handles` is ordered exactly as the generated provider declarations were
+/// staged, allowing generated typed callers to bind the newly committed
+/// providers even when older providers implement the same contract.
+struct InternalPluginCommit {
+    uint64_t bundle_id;
+    std::vector<GuestContractHandle> handles;
+};
 
 class Runtime {
 public:
@@ -260,30 +301,55 @@ public:
         return Builder{};
     }
 
+    /// Destroy this runtime and release its callbacks and internal-plugin residents
+    /// only after native ownership was consumed. A false result means native ownership
+    /// remains live for an owner-thread retry; once native destroy returns true, this
+    /// Runtime is terminal even if native teardown caught a panic.
+    bool destroy() noexcept {
+        if (host_ == nullptr) {
+            return true;
+        }
+        if (!polyplug_runtime_destroy(host_)) {
+            return false;
+        }
+        host_ = nullptr;
+        on_reload_cb_.reset();
+        std::lock_guard<std::mutex> lock(internal_plugin_mutex_);
+        internal_plugin_residents_.clear();
+        return true;
+    }
+
     ~Runtime() noexcept {
-        if (host_ != nullptr) {
-            polyplug_runtime_destroy(host_);
-            host_ = nullptr;
+        if (!destroy()) {
+            on_reload_cb_.release();
+            std::lock_guard<std::mutex> lock(internal_plugin_mutex_);
+            for (ResidentEntry& entry : internal_plugin_residents_) {
+                entry.resident.release();
+            }
         }
     }
 
     Runtime(Runtime&& other) noexcept
         : host_(other.host_), on_reload_cb_(std::move(other.on_reload_cb_)) {
-        std::lock_guard<std::mutex> lock(other.in_process_mutex_);
-        in_process_residents_ = std::move(other.in_process_residents_);
+        std::lock_guard<std::mutex> lock(other.internal_plugin_mutex_);
+        internal_plugin_residents_ = std::move(other.internal_plugin_residents_);
         other.host_ = nullptr;
     }
 
     Runtime& operator=(Runtime&& other) noexcept {
         if (this != &other) {
-            std::scoped_lock lock(in_process_mutex_, other.in_process_mutex_);
+            std::scoped_lock lock(internal_plugin_mutex_, other.internal_plugin_mutex_);
             if (host_ != nullptr) {
-                polyplug_runtime_destroy(host_);
+                if (!polyplug_runtime_destroy(host_)) {
+                    return *this;
+                }
+                host_ = nullptr;
+                on_reload_cb_.reset();
+                internal_plugin_residents_.clear();
             }
-            in_process_residents_.clear();
             host_ = other.host_;
             on_reload_cb_ = std::move(other.on_reload_cb_);
-            in_process_residents_ = std::move(other.in_process_residents_);
+            internal_plugin_residents_ = std::move(other.internal_plugin_residents_);
             other.host_ = nullptr;
         }
         return *this;
@@ -319,47 +385,67 @@ public:
         }
     }
 
-    /// Register a generated, runtime-local in-process bundle through canonical manifest staging.
+
+    /// Register a generated internal plugin and return its exact committed handles.
     ///
-    /// The generated bundle supplies canonical manifest TOML plus existing descriptor/interface
-    /// pairs. Its resident transfers only after the staged transaction commits successfully.
-    template <typename Bundle>
-    uint64_t register_in_process_bundle(Bundle& bundle) {
+    /// The internal plugin reports its provider count before staging. Core commits
+    /// only when that count matches the staged descriptors, then writes handles in
+    /// staging order. This prevents same-contract providers from being rebound through
+    /// a post-commit registry lookup.
+    template <typename InternalPlugin>
+    InternalPluginCommit register_internal_plugin_with_handles(InternalPlugin& internal_plugin) {
         ensure_host();
-        if (bundle.in_process_resident() == nullptr) {
-            throw std::runtime_error("register_in_process_bundle: bundle has no resident");
+        if (internal_plugin.internal_plugin_resident() == nullptr) {
+            throw std::runtime_error(
+                "register_internal_plugin_with_handles: internal plugin has no resident");
         }
-        const std::string_view manifest = bundle.in_process_manifest();
-        std::lock_guard<std::mutex> lock(in_process_mutex_);
-        in_process_residents_.reserve(in_process_residents_.size() + 1U);
+        const std::string_view manifest = internal_plugin.internal_plugin_manifest();
+        std::lock_guard<std::mutex> lock(internal_plugin_mutex_);
+        internal_plugin_residents_.reserve(internal_plugin_residents_.size() + 1U);
 
         AbiError result{};
         uint64_t bundle_id = 0;
-        polyplug_begin_in_process_bundle(
+        polyplug_begin_internal_plugin(
             host_,
             reinterpret_cast<const uint8_t*>(manifest.data()),
             manifest.size(),
-            static_cast<uint32_t>(bundle.in_process_language()),
+            static_cast<uint32_t>(internal_plugin.internal_plugin_language()),
             &bundle_id,
             &result);
         if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
-            throw std::runtime_error("register_in_process_bundle failed: " + get_last_error());
+            throw std::runtime_error(
+                "register_internal_plugin_with_handles failed: " + get_last_error());
         }
-        result = bundle.register_guest_contracts(host_);
+        detail::InternalPluginAbortGuard abort_guard{host_, bundle_id};
+        result = internal_plugin.register_guest_contracts(host_);
         if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
-            polyplug_abort_in_process_bundle(host_, bundle_id);
-            throw std::runtime_error("register_in_process_bundle failed: " + get_last_error());
+            throw std::runtime_error(
+                "register_internal_plugin_with_handles failed: " + get_last_error());
         }
-        polyplug_commit_in_process_bundle(host_, bundle_id, &result);
-        if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
-            throw std::runtime_error("register_in_process_bundle failed: " + get_last_error());
+
+        std::vector<GuestContractHandle> handles(internal_plugin.internal_plugin_provider_count());
+        size_t handle_count = 0;
+        abort_guard.disarm();
+        polyplug_commit_internal_plugin_with_handles(
+            host_,
+            bundle_id,
+            handles.data(),
+            handles.size(),
+            &handle_count,
+            &result);
+        if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)
+            || handle_count != handles.size()) {
+            throw std::runtime_error(
+                "register_internal_plugin_with_handles failed: " + get_last_error());
         }
-        std::unique_ptr<detail::InProcessResident> resident = bundle.take_in_process_resident();
+        std::unique_ptr<detail::InternalPluginResident> resident =
+            internal_plugin.take_internal_plugin_resident();
         if (resident == nullptr) {
-            throw std::logic_error("in-process bundle resident disappeared during registration");
+            throw std::logic_error(
+                "internal plugin resident disappeared during registration");
         }
-        in_process_residents_.push_back(ResidentEntry{bundle_id, std::move(resident)});
-        return bundle_id;
+        internal_plugin_residents_.push_back(ResidentEntry{bundle_id, std::move(resident)});
+        return InternalPluginCommit{bundle_id, std::move(handles)};
     }
 
     /// Unload a plugin bundle by bundle ID.
@@ -369,15 +455,15 @@ public:
     /// then is the backing C++ resident released.
     void unload_bundle(uint64_t bundle_id) {
         ensure_host();
-        std::lock_guard<std::mutex> lock(in_process_mutex_);
+        std::lock_guard<std::mutex> lock(internal_plugin_mutex_);
         AbiError result{};
         host_->unload_bundle(host_, bundle_id, &result);
         if (result.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             throw std::runtime_error("unload_bundle failed: " + get_last_error());
         }
-        for (auto it = in_process_residents_.begin(); it != in_process_residents_.end(); ++it) {
+        for (auto it = internal_plugin_residents_.begin(); it != internal_plugin_residents_.end(); ++it) {
             if (it->bundle_id == bundle_id) {
-                in_process_residents_.erase(it);
+                internal_plugin_residents_.erase(it);
                 break;
             }
         }
@@ -460,7 +546,7 @@ public:
 private:
     struct ResidentEntry {
         uint64_t bundle_id;
-        std::unique_ptr<detail::InProcessResident> resident;
+        std::unique_ptr<detail::InternalPluginResident> resident;
     };
 
     Runtime(const HostApi* h, std::unique_ptr<detail::OnReloadFn> cb) noexcept
@@ -476,8 +562,8 @@ private:
     // Owns the on_reload functor referenced by RuntimeConfig.on_reload_user_data.
     // Must outlive the runtime so the trampoline's user_data stays valid.
     std::unique_ptr<detail::OnReloadFn> on_reload_cb_{};
-    std::mutex in_process_mutex_{};
-    std::vector<ResidentEntry> in_process_residents_{};
+    std::mutex internal_plugin_mutex_{};
+    std::vector<ResidentEntry> internal_plugin_residents_{};
 };
 
 } // namespace polyplug

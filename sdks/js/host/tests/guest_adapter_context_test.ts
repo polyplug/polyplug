@@ -1,11 +1,11 @@
-import { buildInProcessGuestContract } from "../polyplug/mod.js";
+import { InternalPluginBundle, buildInternalPluginGuestContract } from "../polyplug/mod.js";
 import { GUEST_CONTRACT_INTERFACE_ADAPTER_CONTEXT_OFFSET } from "../../abi/abi.ts";
 import { getBackend } from "@polyplug/abi";
 import { assertEquals, test } from "../../testing/harness.ts";
 import { bridgeLibrary } from "../../loaders/js/mod.ts";
 
 test("generated bridge owns the opaque context used by canonical lifecycle callbacks", () => {
-    const adapter = buildInProcessGuestContract({
+    const adapter = buildInternalPluginGuestContract({
         contractId: 0xABCDn,
         version: { major: 1, minor: 0, patch: 0 },
         implementation: {},
@@ -26,7 +26,7 @@ test("generated bridge owns the opaque context used by canonical lifecycle callb
 
 test("generated adapter factories isolate stateful JavaScript implementations", () => {
     const built: { count: number }[] = [];
-    const adapter = buildInProcessGuestContract({
+    const adapter = buildInternalPluginGuestContract({
         contractId: 0xA11CE42n,
         version: { major: 1, minor: 0, patch: 0 },
         implementation: () => {
@@ -61,8 +61,44 @@ test("generated adapter factories isolate stateful JavaScript implementations", 
     }
 });
 
+test("generated adapter forwards the call arena to internal marshalling callbacks", () => {
+    let observed: unknown = undefined;
+    const adapter = buildInternalPluginGuestContract({
+        contractId: 0xA11CE43n,
+        version: { major: 1, minor: 0, patch: 0 },
+        implementation: {},
+        methods: [
+            (_implementation: object, _args: unknown, _out: unknown, arena: unknown) => {
+                observed = arena;
+                return 0;
+            },
+        ],
+    }, bridgeLibrary());
+    const arena = getBackend().pointerCreate(0xA11CE44n);
+
+    try {
+        assertEquals(adapter._dispatchForTest(null, 0, null, null, arena), 0);
+        assertEquals(observed, arena);
+    } finally {
+        adapter.resident.release();
+    }
+});
+
+test("disposed internal bundle releases its untransferred resident exactly once", () => {
+    let releases = 0;
+    const bundle = new InternalPluginBundle("name = \"dispose\"\n", {
+        release(): void {
+            releases += 1;
+        },
+    }, () => {});
+
+    bundle.dispose();
+    bundle.dispose();
+    assertEquals(releases, 1);
+});
+
 test("generated adapter translates thrown JavaScript errors to AbiErrorCode.Panic", () => {
-    const adapter = buildInProcessGuestContract({
+    const adapter = buildInternalPluginGuestContract({
         contractId: 0xBADF00Dn,
         version: { major: 1, minor: 0, patch: 0 },
         implementation: {},

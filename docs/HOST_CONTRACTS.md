@@ -90,7 +90,7 @@ against what the host registered:
 3. The major version must match exactly.
 4. On any incompatibility the guest receives `null` and must handle it gracefully.
 
-```rust
+```rust,ignore
 // Guest side — request with minimum minor version 2.
 let logger = unsafe { HostLoggerCaller::from_host(host, 2) };
 
@@ -103,7 +103,7 @@ Because the host may not implement a requested contract at all, a host-contract
 caller is **always** optional on the guest side. Treat a missing or invalid caller
 as a normal path, not an error:
 
-```rust
+```rust,ignore
 let logger = unsafe { HostLoggerCaller::from_host(host, 1) };
 if let Some(logger) = logger {
     if logger.is_valid() {

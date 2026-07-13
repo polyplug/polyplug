@@ -46,8 +46,7 @@ const HostApi* polyplug_runtime_create(const RuntimeConfig* config) {
     // Builder treats a non-null return as success; the fake host is never called.
     return &g_fake_host;
 }
-
-void polyplug_runtime_destroy(const HostApi*) {}
+bool polyplug_runtime_destroy(const HostApi*) { return true; }
 }
 
 static int g_failures = 0;

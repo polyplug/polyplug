@@ -8,17 +8,21 @@ const JS_SYMBOLS = {
         parameters: [] as const,
         result: "pointer" as const,
     },
-    polyplug_js_in_process_bridge_create: {
+    polyplug_js_internal_plugin_bridge_create: {
         parameters: ["pointer", "pointer", "pointer", "u64", "u32", "u32", "u32"] as const,
         result: "pointer" as const,
     },
-    polyplug_js_in_process_bridge_interface: {
+    polyplug_js_internal_plugin_bridge_interface: {
         parameters: ["pointer"] as const,
         result: "pointer" as const,
     },
-    polyplug_js_in_process_bridge_free: {
+    polyplug_js_internal_plugin_bridge_free: {
         parameters: ["pointer"] as const,
         result: "void" as const,
+    },
+    polyplug_js_internal_plugin_arena_alloc: {
+        parameters: ["pointer", "usize"] as const,
+        result: "pointer" as const,
     },
 } satisfies FfiSymbolTable;
 
@@ -31,7 +35,7 @@ function getLib(): FfiLibrary<typeof JS_SYMBOLS> {
 }
 
 /**
- * Returns the explicit Rust bridge library required by JavaScript in-process
+ * Returns the explicit Rust bridge library required by JavaScript internal-plugin
  * adapters. Bundle residents retain this object through logical unload.
  */
 export function bridgeLibrary(): FfiLibrary<typeof JS_SYMBOLS> {

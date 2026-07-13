@@ -672,7 +672,7 @@ fn bundle_version_overflow_rejected() {
 #[test]
 fn bundle_with_no_plugins_accepted() {
     // plugins are optional.
-    let toml: &str = "[bundle]\nname = \"empty-bundle\"\nversion = \"1.0\"\nfile = \"test.so\"";
+    let toml: &str = "[bundle]\nname = \"empty-bundle\"\nversion = \"1.0\"\nloader = \"python\"\nfile = \"test.py\"";
     let result: Result<ValidatedIr, PolyplugcError> = parse_bundle_str(toml);
     assert!(
         result.is_ok(),
@@ -687,7 +687,7 @@ fn bundle_plugin_without_version_succeeds() {
     // the bundle, so a per-plugin version would be redundant. A plugin entry with
     // only `name` + `implements` must parse cleanly.
     let result: Result<ValidatedIr, PolyplugcError> = parse_bundle_str(concat!(
-        "[bundle]\nname = \"b\"\nversion = \"1.0\"\nfile = \"x.so\"\n\n",
+        "[bundle]\nname = \"b\"\nversion = \"1.0\"\nloader = \"python\"\nfile = \"x.py\"\n\n",
         "[[plugin]]\nname = \"my-plugin\"\nimplements = [\"image.encode@1.0\"]\n",
     ));
     assert!(
@@ -699,7 +699,7 @@ fn bundle_plugin_without_version_succeeds() {
 #[test]
 fn bundle_well_formed_succeeds() {
     let toml: &str = concat!(
-        "[bundle]\nname = \"codec-bundle\"\nversion = \"2.0.1\"\nfile = \"test.so\"\n\n",
+        "[bundle]\nname = \"codec-bundle\"\nversion = \"2.0.1\"\nloader = \"python\"\nfile = \"test.py\"\n\n",
         "[[plugin]]\nname = \"jpeg-encoder\"\n",
         "implements = [\"image.encode@1.0\"]\n\n",
         "[[dependency]]\nkind = \"contract\"\ncontract = \"image.encode\"\nmin_version = \"1.0\"\n",

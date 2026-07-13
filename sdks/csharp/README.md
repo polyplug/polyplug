@@ -32,38 +32,43 @@ polyplugc generate --bundle bundle.toml --lang csharp --out ./generated
 ## Host application
 
 ```csharp
-using Polyplug;
+using Polyplug.Host;
 
 var runtime = new RuntimeBuilder().PluginDir("./plugins").Build();
 
-var decoder = PipelineDecoder.Create(runtime);
+var decoder = PipelineDecoderCaller.Create(runtime);
 if (decoder.HasValue)
 {
     var result = decoder.Value.Decode(input);
 }
 ```
 
-## In-process host registration
+## Internal plugins
 
-Generated guest bindings expose a typed `InProcessBundleFactory`. Pass ordinary
-C# factories; the generated adapter owns canonical manifest bytes, keeps its
-descriptor/interface pairs and callback targets resident, and registers each
-pair through `HostApi.RegisterGuestContract`:
+The default command emits external plugin bindings. Generate the separate
+internal profile for one bundle when the application supplies its providers:
 
-```csharp
-var bundle = transformer.InProcessBundleFactory.CreateInProcessBundle(
-    host => new TransformerImpl(host));
-ulong bundleId = runtime.RegisterInProcessBundle(bundle);
+```bash
+polyplugc generate --bundle bundle.toml --internal --lang csharp --out ./generated
 ```
 
-Registration begins an internal manifest staging transaction, registers every
-contract, and commits atomically. Any registration or commit failure aborts the
-transaction. The runtime roots the resident only after a successful commit.
-Successful registration transfers the bundle exactly once; the same bundle
-object cannot be registered with another runtime. A rejected registration
-leaves it reusable. `UnloadBundle(bundleId)` releases the resident only after
-logical unload succeeds; a failed unload leaves the bundle and its managed
-state available to existing callers.
+The generated bundle-identity namespace exposes `RegistrationInput`,
+`Registration`, and `InternalPlugin.Register`. Pass ordinary C# factories in the
+generated input and retain the returned registration:
+
+```csharp
+Registration registration = InternalPlugin.Register(runtime, input);
+ulong bundleId = registration.BundleId;
+```
+
+`Register` consumes `input` on every attempt, stages all generated guest
+provider bindings, validates the exact manifest set, and atomically commits.
+The `Registration` contains named generated host caller bindings made from the
+committed handles. Call them exactly as callers found after external plugin loading.
+Before `UnloadBundle(bundleId)`, the application must quiesce every caller and
+destroy all guest instances for the bundle. A successful unload invalidates
+those callers and releases the managed provider roots; callers must not be used
+afterward.
 
 ## Plugin author
 

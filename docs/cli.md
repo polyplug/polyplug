@@ -5,7 +5,7 @@ signs, and verifies the bundles you ship. It has five subcommands.
 
 | Command | Purpose |
 |---|---|
-| `generate` | Generate host- or guest-side code from an `api.toml` or `bundle.toml`. |
+| `generate` | Generate generated host caller bindings, external plugin guest provider bindings, or an explicit internal plugin profile. |
 | `validate` | Validate an `api.toml` / `bundle.toml`, or an assembled bundle directory. |
 | `keygen` | Generate an Ed25519 keypair for bundle signing. |
 | `sign` | Sign a bundle directory, writing a `bundle.sig`. |
@@ -15,14 +15,15 @@ Run `polyplugc <command> --help` for the same detail at the terminal.
 
 ## generate
 
-```
+```bash
 polyplugc generate [OPTIONS] --lang <LANG> --out <OUT>
 ```
 
 | Flag | Required | Description |
 |---|---|---|
-| `--api <API>` | one of `--api` / `--bundle` | Path to `api.toml`. Generates host-side code (typed callers + registration glue). |
-| `--bundle <BUNDLE>` | one of `--api` / `--bundle` | Path to `bundle.toml`. Generates guest-side code (contract stubs, `polyplug_init`, dispatch shims, and a `manifest.toml`). |
+| `--api <API>` | one of `--api` / `--bundle` | Path to `api.toml`. Generates generated host caller bindings. |
+| `--bundle <BUNDLE>` | one of `--api` / `--bundle` | Path to `bundle.toml`. Without `--internal`, generates external plugin guest provider bindings, `polyplug_init`, dispatch shims, and `manifest.toml`. |
+| `--internal` | only with `--bundle` | Generates the explicit internal plugin profile: bundle-identity-namespaced generated guest provider bindings and generated host caller bindings. No bundle artifact is acquired or synthesized. |
 | `-l`, `--lang <LANG>` | yes | Target language: `rust`, `cpp`, `csharp`, `python`, `lua`, `js-quickjs`. |
 | `-o`, `--out <OUT>` | yes | Output directory for the generated files. |
 
@@ -30,7 +31,7 @@ The symbols each language emits are listed in [Generated names](generated-names.
 
 ## validate
 
-```
+```bash
 polyplugc validate [OPTIONS]
 ```
 
@@ -42,7 +43,7 @@ polyplugc validate [OPTIONS]
 
 ## keygen
 
-```
+```bash
 polyplugc keygen --out <OUT>
 ```
 
@@ -52,7 +53,7 @@ polyplugc keygen --out <OUT>
 
 ## sign
 
-```
+```bash
 polyplugc sign --bundle-dir <BUNDLE_DIR> --key <KEY>
 ```
 
@@ -66,7 +67,7 @@ bundle digest and writes a detached `bundle.sig`.
 
 ## verify
 
-```
+```bash
 polyplugc verify --bundle-dir <BUNDLE_DIR>
 ```
 

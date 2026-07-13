@@ -15,7 +15,7 @@ For ABI terms (`HostApi`, `GuestContractInterface`, `StringView`), see the
 
 ## Memory Layout (x86_64, all languages)
 
-```
+```text
 DataRecord — total: 40 bytes, align: 8
 ┌─────────────────────────────────────────┐
 │ name    : StringView  [offset  0, 16B]  │
@@ -38,7 +38,7 @@ DataRecord — total: 40 bytes, align: 8
 `StringView` is a **non-owning, borrowed** UTF-8 string reference. Never freed by the
 receiver. Valid only for the duration of the call.
 
-```
+```text
 StringView — total: 16 bytes, align: 8
 ┌─────────────────────────────────────────┐
 │ ptr : *const u8   [offset 0, 8B]        │  ← UTF-8 bytes, NOT null-terminated
@@ -188,7 +188,7 @@ entry point, not an `HostApi`/interface function pointer). The 24-byte layout
 below is unchanged either way. Defined in
 `crates/polyplug_abi/src/types/abi_error.rs`. Mirror inline in all plugins.
 
-```
+```text
 AbiError — total: 24 bytes, align: 8
 ┌─────────────────────────────────────────┐
 │ code    : u32         [offset  0,  4B]  │  ← 0 = success
@@ -198,6 +198,13 @@ AbiError — total: 24 bytes, align: 8
 ```
 
 ```rust
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct StringView {
+    pub ptr: *const u8,
+    pub len: usize,
+}
+
 /// ABI error — mirrors polyplug_abi::types::AbiError.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

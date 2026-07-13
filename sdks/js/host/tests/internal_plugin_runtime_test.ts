@@ -1,4 +1,4 @@
-import { Runtime, InProcessBundle } from "../polyplug/mod.js";
+import { Runtime, InternalPluginBundle } from "../polyplug/mod.js";
 import {
     HOST_API_GET_ERROR_LEN_OFFSET,
     HOST_API_SIZE,
@@ -15,7 +15,7 @@ function writeError(pointer: unknown, code: number): void {
     new DataView(bytes).setUint32(0, code, true);
 }
 
-test("runtime aborts only pre-commit staging failures and retains residents until unload", () => {
+test("runtime commits internal-plugin registrations and retains residents until unload", () => {
     const backend = getBackend();
     const hostTable = new Uint8Array(HOST_API_SIZE);
     const hostView = new DataView(hostTable.buffer);
@@ -24,6 +24,8 @@ test("runtime aborts only pre-commit staging failures and retains residents unti
     let failCommit = false;
     let aborts = 0;
     let releases = 0;
+    let allowDestroy = false;
+    let destroyAttempts = 0;
 
     const unload = backend.makeCallback(
         { parameters: ["pointer", "u64", "pointer"], result: "void" },
@@ -43,8 +45,11 @@ test("runtime aborts only pre-commit staging failures and retains residents unti
     );
     const fakeLibrary = {
         symbols: {
-            polyplug_runtime_destroy: () => {},
-            polyplug_begin_in_process_bundle: (
+            polyplug_runtime_destroy: () => {
+                destroyAttempts += 1;
+                return allowDestroy;
+            },
+            polyplug_begin_internal_plugin: (
                 _host: unknown,
                 _manifest: unknown,
                 _length: bigint,
@@ -55,10 +60,10 @@ test("runtime aborts only pre-commit staging failures and retains residents unti
                 new DataView(backend.pointerView(outBundleId).getArrayBuffer(8)).setBigUint64(0, 71n, true);
                 writeError(outError, 0);
             },
-            polyplug_commit_in_process_bundle: (_host: unknown, _bundleId: bigint, outError: unknown) => {
+            polyplug_commit_internal_plugin: (_host: unknown, _bundleId: bigint, outError: unknown) => {
                 writeError(outError, failCommit ? 1 : 0);
             },
-            polyplug_abort_in_process_bundle: () => {
+            polyplug_abort_internal_plugin: () => {
                 aborts += 1;
             },
         },
@@ -66,7 +71,10 @@ test("runtime aborts only pre-commit staging failures and retains residents unti
         _roots: [hostTable],
     };
     const runtime = new Runtime(fakeLibrary as never, backend.pointerOf(hostTable));
-    const bundle = new InProcessBundle(MANIFEST, {
+    assertEquals(typeof runtime.registerInternalPlugin, "function");
+    assertEquals(typeof runtime.registerInternalPluginWithHandles, "function");
+    assertEquals(Object.keys(runtime).length, 0);
+    const bundle = new InternalPluginBundle(MANIFEST, {
         release(): void {
             releases += 1;
         },
@@ -79,7 +87,7 @@ test("runtime aborts only pre-commit staging failures and retains residents unti
     try {
         let registrationFailed = false;
         try {
-            runtime.registerInProcessBundle(bundle);
+            runtime.registerInternalPlugin(bundle);
         } catch {
             registrationFailed = true;
         }
@@ -91,7 +99,7 @@ test("runtime aborts only pre-commit staging failures and retains residents unti
         failCommit = true;
         let commitFailed = false;
         try {
-            runtime.registerInProcessBundle(bundle);
+            runtime.registerInternalPlugin(bundle);
         } catch {
             commitFailed = true;
         }
@@ -100,7 +108,7 @@ test("runtime aborts only pre-commit staging failures and retains residents unti
         assertEquals(releases, 0, "failed commit must not transfer the resident");
 
         failCommit = false;
-        const bundleId = runtime.registerInProcessBundle(bundle);
+        const bundleId = runtime.registerInternalPlugin(bundle);
         assertEquals(bundleId, 71n);
         assertEquals(
             hostView.getBigUint64(HOST_API_UNLOAD_BUNDLE_OFFSET, true) !== 0n,
@@ -125,7 +133,14 @@ test("runtime aborts only pre-commit staging failures and retains residents unti
         allowUnload = true;
         runtime.unloadBundle(bundleId);
         assertEquals(releases, 1, "successful logical unload must release the resident");
+
+        assertEquals(runtime.destroy(), false, "wrong-thread rejection must keep destroy retryable");
+        assertEquals(destroyAttempts, 1);
+        allowDestroy = true;
+        assertEquals(runtime.destroy(), true, "owner retry must consume the runtime");
+        assertEquals(destroyAttempts, 2);
     } finally {
+        allowDestroy = true;
         runtime.destroy();
         unload.close();
         errorLen.close();

@@ -21,7 +21,7 @@ cross-compilation guide](CROSS_COMPILATION.md).
 
 ## Pipeline 1 — App developer (adding plugin support to an app)
 
-```
+```text
 ┌─ 1. DESIGN ────────────────────────────────────────────────────────┐
 │  Write api.toml — the app's plugin API:                            │
 │    [[plugin_contract]]  what plugins must implement                │
@@ -65,7 +65,7 @@ Working reference hosts for all six languages live in `examples/hosts/`.
 
 ## Pipeline 2 — Plugin developer (writing a plugin for that app)
 
-```
+```text
 ┌─ 1. RECEIVE ──────────────────────────────────────────────────────┐
 │  Get api.toml from the app developer.                             │
 └───────────────────────────────────────────────────────────────────┘
@@ -138,6 +138,23 @@ Working reference hosts for all six languages live in `examples/hosts/`.
 Working reference guests for all six languages live in `examples/guests/`,
 and `examples/build_all.sh` shows real build + assemble commands for each.
 
+### Optional internal plugin profile
+
+The pipeline above is for an external plugin: it produces an artifact that an
+application later acquires from a bundle directory. An application that supplies
+an implementation itself runs one explicit profile instead:
+
+```sh
+polyplugc generate --bundle bundle.toml --internal --lang rust --out generated
+```
+
+Use `cpp`, `csharp`, `python`, `lua`, or `js-quickjs` for the other targets. The
+bundle-identity-namespaced output contains generated guest provider bindings and
+generated host caller bindings. The generated registrar consumes factories,
+validates the exact manifest set, atomically commits, and returns the committed
+`BundleId` plus callers from its committed handles. There is no artifact
+assembly, signing, or external acquisition path for an internal plugin.
+
 ---
 
 ## Bundle layout
@@ -145,7 +162,7 @@ and `examples/build_all.sh` shows real build + assemble commands for each.
 A bundle is a directory: `manifest.toml` + the entry artifact named by its
 `[file]` field, plus any extra files the plugin needs.
 
-```
+```text
 dist/decoder/
 ├── manifest.toml          required, generated — never hand-edited
 ├── libdecoder.so          entry artifact (manifest [file])

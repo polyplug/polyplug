@@ -126,6 +126,7 @@ pub(crate) fn emit_manifest_dependencies(dependencies: &[ResolvedDependency]) ->
 /// Format the manifest file field based on ResolvedBundleFile.
 pub(crate) fn format_manifest_file_field(file: &ResolvedBundleFile) -> String {
     match file {
+        ResolvedBundleFile::Absent => String::new(),
         ResolvedBundleFile::Single(path) => format!("file = \"{path}\""),
         ResolvedBundleFile::PlatformMap(map) => {
             let mut lines: Vec<String> = Vec::with_capacity(map.len() + 1);

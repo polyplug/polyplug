@@ -23,7 +23,8 @@ use polyplug::loader::BundleLoader;
 
 use crate::JsLoader;
 
-type JsDispatchCallback = unsafe extern "C" fn(*mut c_void, u32, *const c_void, *mut c_void) -> u32;
+type JsDispatchCallback =
+    unsafe extern "C" fn(*mut c_void, u32, *const c_void, *mut c_void, *mut CallArena) -> u32;
 type JsDestroyCallback = unsafe extern "C" fn(*mut c_void);
 type JsCreateCallback = unsafe extern "C" fn(*const HostApi, *const c_void) -> u64;
 
@@ -33,15 +34,15 @@ type JsCreateCallback = unsafe extern "C" fn(*const HostApi, *const c_void) -> u
 /// therefore receive only pointers and scalar values, a shape supported by Deno,
 /// Node, and Bun FFI backends.
 #[repr(C)]
-pub struct PolyplugJsInProcessBridge {
+pub struct PolyplugJsInternalPluginBridge {
     dispatch: JsDispatchCallback,
     destroy: JsDestroyCallback,
     create: JsCreateCallback,
     contract_id: u64,
 }
 
-struct JsInProcessResident {
-    bridge: Box<PolyplugJsInProcessBridge>,
+struct JsInternalPluginResident {
+    bridge: Box<PolyplugJsInternalPluginBridge>,
     interface: Box<GuestContractInterface>,
 }
 
@@ -51,34 +52,35 @@ struct JsInProcessResident {
 /// Every non-null pointer must satisfy the canonical VM dispatch ABI. `adapter_context`
 /// must identify a live bridge resident for the duration of the call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_js_in_process_vm_dispatch(
+pub unsafe extern "C" fn polyplug_js_internal_plugin_vm_dispatch(
     adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     instance: GuestContractInstance,
     fn_id: u32,
     args: *const (),
     out: *mut (),
-    _arena: *mut CallArena,
+    arena: *mut CallArena,
     out_err: *mut AbiError,
 ) {
     let result: AbiError = if adapter_context.is_null() {
         AbiError {
             code: AbiErrorCode::InvalidPointer as u32,
-            message: StringView::from_static(b"javascript in-process bridge is null"),
+            message: StringView::from_static(b"javascript internal-plugin bridge is null"),
         }
     } else {
         // SAFETY: adapter_context comes from the resident-owned interface created below.
-        let bridge: &PolyplugJsInProcessBridge =
-            unsafe { &*(adapter_context as *const PolyplugJsInProcessBridge) };
+        let bridge: &PolyplugJsInternalPluginBridge =
+            unsafe { &*(adapter_context as *const PolyplugJsInternalPluginBridge) };
         // SAFETY: the JavaScript resident retains the callback handle until logical unload.
-        let code: u32 = unsafe { (bridge.dispatch)(instance.data, fn_id, args.cast(), out.cast()) };
+        let code: u32 =
+            unsafe { (bridge.dispatch)(instance.data, fn_id, args.cast(), out.cast(), arena) };
         if code == AbiErrorCode::Ok as u32 {
             AbiError::ok()
         } else {
             AbiError {
                 code,
                 message: StringView::from_static(
-                    b"javascript in-process implementation returned an error",
+                    b"javascript internal-plugin implementation returned an error",
                 ),
             }
         }
@@ -89,13 +91,34 @@ pub unsafe extern "C" fn polyplug_js_in_process_vm_dispatch(
     }
 }
 
+/// Allocate return storage from the dispatch call's arena.
+///
+/// JavaScript receives only scalar/pointer values through its FFI backends, so
+/// the generated internal bindings invoke this narrow helper when a guest
+/// return contains a string or recursively variable value.
+///
+/// # Safety
+/// `arena` must be the `CallArena` currently threaded through the matching VM
+/// dispatch callback. The returned memory is valid until that arena resets.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_js_internal_plugin_arena_alloc(
+    arena: *mut CallArena,
+    size: usize,
+) -> *mut c_void {
+    if arena.is_null() || size == 0 {
+        return ptr::null_mut();
+    }
+    // SAFETY: caller supplies the live call-local arena from the active dispatch.
+    unsafe { (*arena).alloc(size, 1).cast() }
+}
+
 /// Translate the canonical create-instance ABI into JavaScript's scalar factory.
 ///
 /// # Safety
 /// `adapter_context` must identify a live bridge resident, and non-null host, argument,
 /// and output pointers must satisfy the canonical create-instance ABI.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_js_in_process_create_instance(
+pub unsafe extern "C" fn polyplug_js_internal_plugin_create_instance(
     adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     host: *const HostApi,
@@ -111,8 +134,8 @@ pub unsafe extern "C" fn polyplug_js_in_process_create_instance(
         return;
     }
     // SAFETY: adapter_context comes from the resident-owned interface created below.
-    let bridge: &PolyplugJsInProcessBridge =
-        unsafe { &*(adapter_context as *const PolyplugJsInProcessBridge) };
+    let bridge: &PolyplugJsInternalPluginBridge =
+        unsafe { &*(adapter_context as *const PolyplugJsInternalPluginBridge) };
     // SAFETY: the JavaScript resident retains the callback handle until logical unload.
     let instance_id: u64 = unsafe { (bridge.create)(host, args.cast()) };
     let Ok(instance_id) = usize::try_from(instance_id) else {
@@ -134,7 +157,7 @@ pub unsafe extern "C" fn polyplug_js_in_process_create_instance(
 /// `adapter_context` must identify a live bridge resident. A non-null instance must
 /// have been created by that resident and must not have been destroyed already.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_js_in_process_destroy_instance(
+pub unsafe extern "C" fn polyplug_js_internal_plugin_destroy_instance(
     adapter_context: *mut c_void,
     _loader_data: VmLoaderData,
     _host: *const HostApi,
@@ -144,8 +167,8 @@ pub unsafe extern "C" fn polyplug_js_in_process_destroy_instance(
         return;
     }
     // SAFETY: adapter_context comes from the resident-owned interface created below.
-    let bridge: &PolyplugJsInProcessBridge =
-        unsafe { &*(adapter_context as *const PolyplugJsInProcessBridge) };
+    let bridge: &PolyplugJsInternalPluginBridge =
+        unsafe { &*(adapter_context as *const PolyplugJsInternalPluginBridge) };
     // SAFETY: instance data is the opaque numeric identifier issued by this bridge.
     unsafe { (bridge.destroy)(instance.data) };
 }
@@ -153,13 +176,13 @@ pub unsafe extern "C" fn polyplug_js_in_process_destroy_instance(
 /// Allocate a runtime-local JavaScript bridge and its canonical interface.
 ///
 /// Returns an opaque resident which must be released by
-/// [`polyplug_js_in_process_bridge_free`] after logical unload.
+/// [`polyplug_js_internal_plugin_bridge_free`] after logical unload.
 ///
 /// # Safety
 /// The callback pointers must be non-null functions with the scalar callback signatures
-/// represented by [`PolyplugJsInProcessBridge`] and must remain callable until unload.
+/// represented by [`PolyplugJsInternalPluginBridge`] and must remain callable until unload.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_js_in_process_bridge_create(
+pub unsafe extern "C" fn polyplug_js_internal_plugin_bridge_create(
     dispatch: *const c_void,
     destroy: *const c_void,
     create: *const c_void,
@@ -180,13 +203,13 @@ pub unsafe extern "C" fn polyplug_js_in_process_bridge_create(
     // SAFETY: null has been rejected. The constructor requires this exact callback signature.
     let create: JsCreateCallback =
         unsafe { mem::transmute::<*const c_void, JsCreateCallback>(create) };
-    let bridge: Box<PolyplugJsInProcessBridge> = Box::new(PolyplugJsInProcessBridge {
+    let bridge: Box<PolyplugJsInternalPluginBridge> = Box::new(PolyplugJsInternalPluginBridge {
         dispatch,
         destroy,
         create,
         contract_id,
     });
-    let adapter_context: *mut c_void = (&*bridge as *const PolyplugJsInProcessBridge)
+    let adapter_context: *mut c_void = (&*bridge as *const PolyplugJsInternalPluginBridge)
         .cast_mut()
         .cast();
     let interface: Box<GuestContractInterface> = Box::new(GuestContractInterface {
@@ -198,32 +221,32 @@ pub unsafe extern "C" fn polyplug_js_in_process_bridge_create(
         },
         dispatch_type: DispatchType::VirtualMachine,
         adapter_context,
-        create_instance: polyplug_js_in_process_create_instance,
-        destroy_instance: polyplug_js_in_process_destroy_instance,
+        create_instance: polyplug_js_internal_plugin_create_instance,
+        destroy_instance: polyplug_js_internal_plugin_destroy_instance,
         dispatch: DispatchMechanisms {
             vm: VmDispatch {
-                call: polyplug_js_in_process_vm_dispatch,
+                call: polyplug_js_internal_plugin_vm_dispatch,
                 loader_data: VmLoaderData::null(),
             },
         },
     });
-    Box::into_raw(Box::new(JsInProcessResident { bridge, interface })).cast()
+    Box::into_raw(Box::new(JsInternalPluginResident { bridge, interface })).cast()
 }
 
 /// Return the canonical interface owned by a JavaScript bridge resident.
 ///
 /// # Safety
 /// `resident` must be a non-freed result of
-/// [`polyplug_js_in_process_bridge_create`].
+/// [`polyplug_js_internal_plugin_bridge_create`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_js_in_process_bridge_interface(
+pub unsafe extern "C" fn polyplug_js_internal_plugin_bridge_interface(
     resident: *const c_void,
 ) -> *const GuestContractInterface {
     if resident.is_null() {
         return ptr::null();
     }
     // SAFETY: caller guarantees the opaque resident was allocated by this module.
-    unsafe { &*(resident as *const JsInProcessResident) }
+    unsafe { &*(resident as *const JsInternalPluginResident) }
         .interface
         .as_ref()
 }
@@ -232,17 +255,18 @@ pub unsafe extern "C" fn polyplug_js_in_process_bridge_interface(
 ///
 /// # Safety
 /// `resident` must be a non-freed result of
-/// [`polyplug_js_in_process_bridge_create`].
+/// [`polyplug_js_internal_plugin_bridge_create`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_js_in_process_bridge_context(
+pub unsafe extern "C" fn polyplug_js_internal_plugin_bridge_context(
     resident: *const c_void,
 ) -> *mut c_void {
     if resident.is_null() {
         return ptr::null_mut();
     }
     // SAFETY: caller guarantees the opaque resident was allocated by this module.
-    let resident: &JsInProcessResident = unsafe { &*(resident as *const JsInProcessResident) };
-    (&*resident.bridge as *const PolyplugJsInProcessBridge)
+    let resident: &JsInternalPluginResident =
+        unsafe { &*(resident as *const JsInternalPluginResident) };
+    (&*resident.bridge as *const PolyplugJsInternalPluginBridge)
         .cast_mut()
         .cast()
 }
@@ -251,14 +275,14 @@ pub unsafe extern "C" fn polyplug_js_in_process_bridge_context(
 ///
 /// # Safety
 /// `resident` must be a non-freed result of
-/// [`polyplug_js_in_process_bridge_create`], or null.
+/// [`polyplug_js_internal_plugin_bridge_create`], or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_js_in_process_bridge_free(resident: *mut c_void) {
+pub unsafe extern "C" fn polyplug_js_internal_plugin_bridge_free(resident: *mut c_void) {
     if resident.is_null() {
         return;
     }
     // SAFETY: caller guarantees this opaque allocation is freed at most once.
-    unsafe { drop(Box::from_raw(resident as *mut JsInProcessResident)) };
+    unsafe { drop(Box::from_raw(resident as *mut JsInternalPluginResident)) };
 }
 
 /// Returns a pointer that must be freed with `polyplug_js_loader_free`.
@@ -297,14 +321,15 @@ mod tests {
 
     use polyplug_abi::AbiError;
     use polyplug_abi::AbiErrorCode;
+    use polyplug_abi::CallArena;
     use polyplug_abi::GuestContractInstance;
     use polyplug_abi::HostApi;
     use polyplug_abi::VmLoaderData;
 
-    use super::polyplug_js_in_process_bridge_context;
-    use super::polyplug_js_in_process_bridge_create;
-    use super::polyplug_js_in_process_bridge_free;
-    use super::polyplug_js_in_process_bridge_interface;
+    use super::polyplug_js_internal_plugin_bridge_context;
+    use super::polyplug_js_internal_plugin_bridge_create;
+    use super::polyplug_js_internal_plugin_bridge_free;
+    use super::polyplug_js_internal_plugin_bridge_interface;
     use super::polyplug_js_loader_create;
     use super::polyplug_js_loader_free;
 
@@ -328,6 +353,7 @@ mod tests {
         function_id: u32,
         _args: *const c_void,
         out: *mut c_void,
+        _arena: *mut CallArena,
     ) -> u32 {
         if instance as usize != 41 || function_id != 3 || out.is_null() {
             return AbiErrorCode::Generic as u32;
@@ -347,7 +373,7 @@ mod tests {
         // SAFETY: all callback pointers use the constructor's fixed scalar ABI and
         // the returned resident remains live through each callback invocation.
         let resident: *mut c_void = unsafe {
-            polyplug_js_in_process_bridge_create(
+            polyplug_js_internal_plugin_bridge_create(
                 bridge_dispatch as *const () as *const c_void,
                 bridge_destroy as *const () as *const c_void,
                 bridge_create as *const () as *const c_void,
@@ -359,9 +385,9 @@ mod tests {
         };
         assert!(!resident.is_null());
         // SAFETY: resident was created above and has not been freed.
-        let interface = unsafe { polyplug_js_in_process_bridge_interface(resident) };
+        let interface = unsafe { polyplug_js_internal_plugin_bridge_interface(resident) };
         // SAFETY: resident was created above and has not been freed.
-        let context = unsafe { polyplug_js_in_process_bridge_context(resident) };
+        let context = unsafe { polyplug_js_internal_plugin_bridge_context(resident) };
         assert!(!interface.is_null());
         assert!(!context.is_null());
 
@@ -400,7 +426,7 @@ mod tests {
         // SAFETY: instance was created by this bridge and remains live.
         unsafe {
             ((*interface).destroy_instance)(context, VmLoaderData::null(), ptr::null(), instance);
-            polyplug_js_in_process_bridge_free(resident);
+            polyplug_js_internal_plugin_bridge_free(resident);
         }
         assert_eq!(DESTROYED_INSTANCE.load(Ordering::SeqCst), 41);
     }

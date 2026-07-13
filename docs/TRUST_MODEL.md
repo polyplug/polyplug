@@ -20,7 +20,7 @@ Every plugin bundle is uniquely identified by a `bundle_id`. This 64-bit identif
 
 ### ID Computation
 The hash is computed using the FNV-1a algorithm, implemented in `crates/polyplug_utils/src/`.
-```rust
+```rust,ignore
 // crates/polyplug_utils/src/lib.rs
 pub fn bundle_id(name: &str) -> u64 {
     BundleId::new(name).id() // BundleId::new => fnv1a_64(name.as_bytes())
@@ -97,7 +97,7 @@ The runtime distinguishes between the **Initialization Phase (Phase 1)** and the
 
 ### Diagram: Enforcement Flow
 
-```
+```text
 ------------------------------|----------------------------
 INIT_BUNDLE_ID != 0           |  INIT_BUNDLE_ID == 0
 Strict Enforcement            |  Zero Overhead
@@ -294,7 +294,7 @@ polyplug's position: the hot path must be a single indirect call. Plugin crash i
 
 Detecting that a *specific* call exceeded a deadline requires recording when that call started, in a place a monitor thread can read. That recording lives on the dispatch hot path and is not free: a monotonic clock read is ~15–30 ns, and even the cheapest design (no clock read on the hot path, just an atomic "in-flight" flag set at call start and cleared at call end, with the watchdog stamping its own observation time) still costs two atomic stores per call plus cache-coherence traffic. polyplug's safe dispatch is ~0.5 ns over raw FFI; any of these would multiply that by 2–60×. The zero-overhead invariant is non-negotiable, so the watchdog is not built.
 
-There is also no safe way to *interrupt* a running native call: in-process native code is not asynchronously cancellable (it may hold a lock or be mid-allocation), so even a watchdog that detected an overrun could not stop it without risking corruption.
+There is also no safe way to *interrupt* a running native call: host-process native code is not asynchronously cancellable (it may hold a lock or be mid-allocation), so even a watchdog that detected an overrun could not stop it without risking corruption.
 
 polyplug's position: **per-call timeouts are an application/host concern.** A host that needs to bound a call's duration runs it on a worker thread it controls and enforces its own deadline *around* the polyplug call, leaving dispatch zero-overhead — the same pattern by which tracing is implemented as a `host.logger`-style host contract rather than baked into the runtime.
 
@@ -304,7 +304,7 @@ Who is responsible for turning a failure into an `AbiError` is fixed by contract
 
 - **Each language converts its own failures.** A plugin's generated glue is responsible for catching *its own* language's failures (Rust `panic!` → `catch_unwind`; C++ `throw` → `catch(...)`; C# exception → `try/catch`; Lua/JS error → `pcall`/`try`) and returning `AbiError { code: Panic, … }`. This conversion happens *inside* the plugin, before control returns across the C ABI. It is zero happy-path cost — table-driven exception handling adds nothing to the ~2.4 ns native dispatch when no failure occurs.
 - **The runtime never absorbs foreign failures.** polyplug does **not** wrap calls *into* a plugin (`polyplug_init`, native dispatch) in `catch_unwind`. Such a guard would be a false promise: it cannot catch a C/C++ exception (only Rust panics), and a modern Rust plugin's own `extern "C"` boundary aborts on a panic that escapes its glue — that abort fires first. An unwind or exception that *leaks across* the ABI is therefore a plugin defect with a defined outcome — **process abort** — identical to the SIGSEGV case above. The native loader pushes/pops its init-window bundle id around the `polyplug_init` call for dependency enforcement; it does not, and cannot meaningfully, contain a foreign unwind.
-- **The two runtime exports are the only runtime-side guards.** `polyplug_runtime_create` and `polyplug_runtime_destroy` each wrap their body in `catch_unwind`. These guards exist solely for the **embedder guarantee**: a bug in polyplug's *own* create/destroy code surfaces as a null/no-op result (plus a recorded `last_error`), never as a panic that aborts the embedding host process. They do not — and are not meant to — catch plugin failures. The `HostApi` field operations are intentionally unguarded: a bug in the runtime there fails fast.
+- **The two runtime exports are the only runtime-side guards.** `polyplug_runtime_create` and `polyplug_runtime_destroy` each wrap their body in `catch_unwind`. These guards exist solely for the **embedder guarantee**: a bug in polyplug's own create/destroy code surfaces as a null or `false` result, never as a panic that aborts the embedding host process. An affinity-rejected destroy returns `false` before consuming the runtime's Arc, leaving the handle valid for its owner-thread retry. They do not — and are not meant to — catch plugin failures. The `HostApi` field operations are intentionally unguarded: a bug in the runtime there fails fast.
 
 ### Input validation at the host boundary
 
@@ -324,7 +324,7 @@ Even with trusted plugins, malformed or corrupted plugin binaries are a real sce
 
 ### `GuestContractInterface` immutability
 
-`GuestContractInterface` pointers are treated as read-only after registration. Casting a `*const GuestContractInterface` to `*mut` and writing to it is undefined behavior. polyplug does not enforce this at runtime — enforcement is bypassable in-process. It is a contract that trusted plugins must uphold.
+`GuestContractInterface` pointers are treated as read-only after registration. Casting a `*const GuestContractInterface` to `*mut` and writing to it is undefined behavior. polyplug does not enforce this at runtime — enforcement is bypassable by code with host-process access. It is a contract that trusted plugins must uphold.
 
 ## 7. ABI Freeze Notice
 

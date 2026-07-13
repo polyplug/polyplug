@@ -42,7 +42,7 @@ The host-side Rust library (`libpolyplug`) exposes exactly **two** `#[no_mangle]
 
 ```c
 void* polyplug_runtime_create(const void* config);   // returns HostApi pointer
-void  polyplug_runtime_destroy(void* host);
+bool  polyplug_runtime_destroy(void* host);          // false retains ownership for retry
 ```
 
 All other operations go through **`HostApi` struct fields** (function pointers). `HostApi` is `184 bytes` (1 opaque runtime pointer + 21 function pointer fields + 1 trailing `reserved` data pointer: `unload_bundle` at offset 136, `log` at offset 144, `create_guest_instance` at offset 152, `destroy_guest_instance` at offset 160, `registry_revision` at offset 168, and `reserved` at offset 176), `align = 8`. `create_guest_instance` / `destroy_guest_instance` are host-mediated so the runtime can pin the epoch across construction/destruction and attribute each live instance to its contract. `registry_revision` returns the runtime's acquire-synchronized registry revision value; generated host/peer callers cache the resolved interface and compare that value before each dispatch, re-resolving after every load, reload, or unload without accessing runtime-owned atomic storage. The `reserved` pointer carries no meaning — producers set it to null, consumers must not read it; it exists only to keep the frozen struct size expandable later. Cross-boundary allocation flows through the `alloc` / `free` fields on `HostApi` — there are no separate `polyplug_host_alloc` / `polyplug_host_free` exports.

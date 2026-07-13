@@ -10,18 +10,38 @@ You build both sides of an extensible application — the host app and its plugi
 
 ## No sandbox, by design — vet the author, not the runtime
 
-polyplug runs plugins **in-process, with no isolation boundary — a deliberate trade.** That single choice is what turns a plugin call into a direct function-pointer dispatch with zero-copy data sharing, instead of a marshalled hop across a sandbox — and it is where the speed comes from. So trust is established when you *load* a bundle (you vetted the author; a signature proves the bytes weren't tampered with), not re-checked on every call. It is the same model the most successful native-extension ecosystems use — e.g. VS Code extensions: vet the author, not the sandbox.
+polyplug executes plugins with **the host's privileges and no isolation boundary — a deliberate trade.** That choice turns a plugin call into a direct function-pointer dispatch with zero-copy data sharing, instead of a marshalled hop across a sandbox — and it is where the speed comes from. Trust is established when an application acquires a bundle (you vetted the author; a signature proves the bytes were not tampered with), not re-checked on every call. It is the same model the most successful native-extension ecosystems use — e.g. VS Code extensions: vet the author, not the sandbox.
 
 Today, if you need to run arbitrary untrusted code, reach for a WebAssembly runtime (Extism, Wasmtime) — and we'll say so plainly. The full threat model is in the [Trust Model](docs/TRUST_MODEL.md).
 
 ## What polyplug guarantees
 
-Within the trusted, in-process boundary, polyplug still makes hard guarantees:
+Within the trusted host-process boundary, polyplug still makes hard guarantees:
 
 - **ABI compatibility is checked at load** — a bundle whose contract version doesn't match is rejected with a clear error, never silent UB.
-- **The runtime's create/destroy path is crash-isolated** — a bug in polyplug's two C ABI exports surfaces as a null/no-op plus a recorded error, never a host abort.
+- **The runtime's create/destroy path is crash-isolated** — a bug in polyplug's two C ABI exports surfaces as a null or `false` result, never a host abort.
 - **Lock-free reads and safe true-unload** — contract resolution serves from an epoch-published snapshot; unloading reclaims the interface and the backing library/VM once no reader is still pinned (model-checked with [loom](https://docs.rs/loom)).
 - **Bundle identity and integrity** — a bundle can carry a detached Ed25519 signature over a canonical digest of every file it contains, with a host-chosen `SignaturePolicy` from TOFU integrity up to pinned-key authenticity. This proves *who* authored a bundle and that it wasn't tampered with — it is identity, not isolation.
+
+## One plugin pipeline, two acquisition paths
+
+An application may acquire an **external plugin** from a bundle directory, or
+explicitly generate and register an **internal plugin** from ordinary
+implementations. Both paths use the same canonical registration transaction:
+generated guest provider bindings stage `PluginDescriptor` and
+`GuestContractInterface` pairs, exact-set validation either atomically publishes
+the complete bundle or rolls it back, and generated host caller bindings build
+typed callers from the committed handles. Registry lookup, instance creation,
+dispatch, reload where supported, and unload are source-neutral.
+
+Generate an internal plugin only when the application needs it:
+
+```sh
+polyplugc generate --bundle bundle.toml --internal --lang rust --out ./generated
+```
+
+See [How polyplug works](docs/how-it-works/overview.md) for the maintained
+pipeline and [generated names](docs/generated-names.md) for language surfaces.
 
 ## Six languages, host and guest
 

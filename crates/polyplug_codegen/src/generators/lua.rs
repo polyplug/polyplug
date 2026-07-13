@@ -32,6 +32,57 @@ use langprint::{ImportEntry, ImportSet, TargetLanguage};
 use std::io;
 
 pub struct LuaGenerator;
+impl LuaGenerator {
+    /// Generate the opt-in internal Lua profile without changing either default
+    /// host or external guest output.
+    pub(crate) fn generate_internal_bundle(
+        &self,
+        ir: &ValidatedIr,
+        bundle_name: &str,
+        files: &mut GeneratedFiles,
+    ) -> Result<(), PolyplugcError> {
+        let bundle: &ResolvedBundle =
+            ir.bundle
+                .as_ref()
+                .ok_or_else(|| PolyplugcError::ValidationFailed {
+                    message: "internal Lua generation requires a bundle manifest".to_owned(),
+                })?;
+        let host_types: String = generate_lua_types_file(ir)?;
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("host/types.lua"),
+            content: host_types,
+            force_regenerate: false,
+        });
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("host/callers.lua"),
+            content: generate_lua_internal_host_callers_file(ir),
+            force_regenerate: false,
+        });
+        let types: String = generate_lua_types_file(ir)?;
+        let profile: String = generate_lua_internal_profile_file(ir, bundle, bundle_name)?;
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("guest/types.lua"),
+            content: types,
+            force_regenerate: false,
+        });
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("guest/internal.lua"),
+            content: profile,
+            force_regenerate: false,
+        });
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("init.lua"),
+            content: format!(
+                "{}local source = debug.getinfo(1, \"S\").source\n\
+                 local root = assert(source:match(\"^@(.+)/init%.lua$\"), \"generated internal Lua bindings need a file path\")\n\
+                 return {{ guest = dofile(root .. \"/guest/internal.lua\"), host = dofile(root .. \"/host/callers.lua\") }}\n",
+                file_header()
+            ),
+            force_regenerate: true,
+        });
+        Ok(())
+    }
+}
 
 /// Render grouped Lua `local m = require("m")` blocks through langprint's
 /// [`ImportSet`] so the `require` syntax lives in one place rather than in
@@ -147,6 +198,433 @@ impl CodeGenerator for LuaGenerator {
 
         Ok(())
     }
+}
+fn generate_lua_internal_profile_file(
+    ir: &ValidatedIr,
+    bundle: &ResolvedBundle,
+    bundle_name: &str,
+) -> Result<String, PolyplugcError> {
+    let providers: Vec<(&ResolvedPlugin, &ResolvedContract)> = lua_internal_providers(ir, bundle)?;
+    let manifest: String = generate_lua_internal_profile_manifest(ir, bundle);
+    let mut out: String = String::new();
+    out.push_str(file_header());
+    out.push_str(&lua_require_block(&[
+        &[("ffi", "ffi")],
+        &[("lua_loader", "polyplug.loaders.lua")],
+    ]));
+    out.push_str("\nlocal source = debug.getinfo(1, \"S\").source\n");
+    out.push_str("local root = assert(source:match(\"^@(.+)/guest/internal%.lua$\"), \"generated internal Lua bindings need a file path\")\n");
+    out.push_str("local types = dofile(root .. \"/guest/types.lua\")\n");
+    out.push_str("local native_bridge = lua_loader.internal_plugin_bridge()\n");
+    out.push_str("local string_view_ptr_t = ffi.typeof(\"StringView*\")\n");
+    out.push_str("local buffer_ptr_t = ffi.typeof(\"Buffer*\")\n");
+    out.push_str("local const_uint8_ptr_t = ffi.typeof(\"const uint8_t*\")\n");
+    out.push_str("local void_ptr_t = ffi.typeof(\"void*\")\n");
+    out.push_str("local uint64_ptr_t = ffi.typeof(\"uint64_t*\")\n");
+    out.push_str("local uint32_ptr_t = ffi.typeof(\"uint32_t*\")\n");
+    out.push_str("local uint16_ptr_t = ffi.typeof(\"uint16_t*\")\n");
+    out.push_str("local uint8_ptr_t = ffi.typeof(\"uint8_t*\")\n");
+    out.push_str("local int64_ptr_t = ffi.typeof(\"int64_t*\")\n");
+    out.push_str("local int32_ptr_t = ffi.typeof(\"int32_t*\")\n");
+    out.push_str("local int16_ptr_t = ffi.typeof(\"int16_t*\")\n");
+    out.push_str("local int8_ptr_t = ffi.typeof(\"int8_t*\")\n");
+    out.push_str("local float_ptr_t = ffi.typeof(\"float*\")\n");
+    out.push_str("local double_ptr_t = ffi.typeof(\"double*\")\n");
+    out.push_str("local bool_ptr_t = ffi.typeof(\"bool*\")\n");
+    out.push_str("local void_ptr_ptr_t = ffi.typeof(\"void**\")\n");
+    out.push_str("local callers = dofile(root .. \"/host/callers.lua\")\n");
+    out.push_str("local AbiErrorCode = { Ok = 0, Generic = 1 }\nlocal M = {}\n");
+    out.push_str(&format!(
+        "M.INTERNAL_BUNDLE_NAME = {bundle_name:?}\nM.INTERNAL_BUNDLE_ID = 0x{:016X}ULL\n",
+        bundle.bundle_id
+    ));
+    out.push_str(&format!("local INTERNAL_MANIFEST = {manifest:?}\n\n"));
+    out.push_str("local function provider_factory(provider, name)\n");
+    out.push_str("    if type(provider) == \"function\" then return provider end\n");
+    out.push_str(
+        "    error(\"internal provider \" .. name .. \" must be a factory function\", 3)\nend\n\n",
+    );
+    out.push_str("function M.providers(values)\n");
+    out.push_str(
+        "    if type(values) ~= \"table\" then error(\"providers must be a table\", 2) end\n",
+    );
+    out.push_str("    return { _values = values, _consumed = false }\nend\n\n");
+    out.push_str("function M.register(runtime, providers)\n");
+    out.push_str("    if type(providers) ~= \"table\" then error(\"register requires providers created by guest.internal.providers\", 2) end\n");
+    out.push_str("    if providers._consumed then error(\"providers were consumed by a previous registration attempt; create fresh providers\", 2) end\n");
+    out.push_str("    if providers._values == nil then error(\"register requires providers created by guest.internal.providers\", 2) end\n");
+    out.push_str("    providers._consumed = true\n");
+    out.push_str("    local values = providers._values\n    providers._values = nil\n");
+    out.push_str("    local provider_host = runtime:host()\n");
+    out.push_str("    local factories = {}\n");
+    for (plugin, contract) in &providers {
+        let field: String = lua_internal_provider_field(plugin, contract);
+        out.push_str(&format!(
+            "    factories[{field:?}] = provider_factory(values[{field:?}], {field:?})\n",
+        ));
+    }
+    out.push_str("    local resident = native_bridge.create_resident(INTERNAL_MANIFEST)\n");
+    for (plugin, contract) in &providers {
+        generate_lua_internal_profile_provider(&mut out, plugin, contract, &ir.enums, &ir.types);
+    }
+    out.push_str("    local registration = runtime:register_internal_plugin(resident)\n");
+    out.push_str("    local bundle_id = registration.bundle_id\n");
+    out.push_str("    local handles = registration.handles\n");
+    out.push_str("    local result = { bundle_id = bundle_id }\n");
+    out.push_str("    local constructed_callers = {}\n");
+    for (index, (plugin, contract)) in providers.iter().enumerate() {
+        let field: String = lua_internal_provider_field(plugin, contract);
+        let caller: String = contract_name_to_struct(&contract.name);
+        out.push_str(&format!(
+            "    local {field}_ok, {field}_caller = pcall(callers.{caller}_create_from_handle, runtime, provider_host, handles[{}])\n\
+             \x20   if not {field}_ok or {field}_caller == nil then\n\
+             \x20       local construction_error = {field}_ok and \"generated caller construction failed for {field}\" or {field}_caller\n\
+             \x20       for _, previous in ipairs(constructed_callers) do pcall(function() previous:destroy() end) end\n\
+             \x20       pcall(function() runtime:unload_bundle(bundle_id) end)\n\
+             \x20       error(construction_error, 0)\n\
+             \x20   end\n\
+             \x20   result[{field:?}] = {field}_caller\n\
+             \x20   constructed_callers[#constructed_callers + 1] = {field}_caller\n",
+            index + 1
+        ));
+    }
+    out.push_str("    return result\nend\n\nreturn M\n");
+    Ok(out)
+}
+
+fn lua_internal_providers<'a>(
+    ir: &'a ValidatedIr,
+    bundle: &'a ResolvedBundle,
+) -> Result<Vec<(&'a ResolvedPlugin, &'a ResolvedContract)>, PolyplugcError> {
+    let mut providers: Vec<(&ResolvedPlugin, &ResolvedContract)> = Vec::new();
+    for plugin in &bundle.plugins {
+        for implementation in &plugin.implements {
+            let contract: Option<&ResolvedContract> = ir.contracts.iter().find(|candidate| {
+                implementation
+                    == &format!(
+                        "{}@{}.{}",
+                        candidate.name, candidate.version.major, candidate.version.minor
+                    )
+            });
+            let Some(contract) = contract else {
+                return Err(PolyplugcError::ValidationFailed {
+                    message: format!(
+                        "internal Lua generation could not resolve {} for plugin {}",
+                        implementation, plugin.name
+                    ),
+                });
+            };
+            providers.push((plugin, contract));
+        }
+    }
+    Ok(providers)
+}
+
+fn lua_internal_provider_field(plugin: &ResolvedPlugin, contract: &ResolvedContract) -> String {
+    format!(
+        "{}_{}",
+        plugin.name.replace(['.', '-'], "_"),
+        contract.name.replace(['.', '-'], "_")
+    )
+}
+
+fn generate_lua_internal_profile_manifest(ir: &ValidatedIr, bundle: &ResolvedBundle) -> String {
+    let mut provides: Vec<String> = bundle
+        .plugins
+        .iter()
+        .flat_map(|plugin| plugin.implements.iter())
+        .map(|provider| {
+            let (contract, version) = provider.split_once('@').unwrap_or((provider, "0"));
+            let major: &str = version.split('.').next().unwrap_or(version);
+            format!("{contract}@{major}")
+        })
+        .collect();
+    provides.sort();
+    provides.dedup();
+    let provides_toml: String = provides
+        .iter()
+        .map(|provider| format!("{provider:?}"))
+        .collect::<Vec<String>>()
+        .join(", ");
+    let function_counts: String = ir
+        .contracts
+        .iter()
+        .filter(|contract| {
+            provides.contains(&format!("{}@{}", contract.name, contract.version.major))
+        })
+        .map(|contract| {
+            format!(
+                "{:?} = {}",
+                format!("{}@{}", contract.name, contract.version.major),
+                contract.functions.len()
+            )
+        })
+        .collect::<Vec<String>>()
+        .join(", ");
+    let dependencies: String = super::emit_manifest_dependencies(&bundle.dependencies);
+    format!(
+        "name = {:?}\n\
+         id = {}\n\
+         version = \"{}.{}.{}\"\n\
+         provides = [{provides_toml}]\n\
+         function_count = {{ {function_counts} }}\n\
+         needs_reinit_on_dep_reload = {}\n\
+         {dependencies}",
+        bundle.name,
+        bundle.bundle_id,
+        bundle.version.major,
+        bundle.version.minor,
+        bundle.version.patch,
+        bundle.needs_reinit_on_dep_reload,
+    )
+}
+
+fn generate_lua_internal_profile_provider(
+    out: &mut String,
+    plugin: &ResolvedPlugin,
+    contract: &ResolvedContract,
+    enums: &[EnumDef],
+    types: &[ResolvedType],
+) {
+    let field: String = lua_internal_provider_field(plugin, contract);
+    let contract_struct: String = contract_name_to_struct(&contract.name);
+    out.push_str(&format!("    do -- {field}\n"));
+    out.push_str(&format!("        local factory = factories[{field:?}]\n"));
+    out.push_str("        local function dispatch(impl, fn_id, args, out_ptr, return_roots)\n");
+    for (function_index, function) in contract.functions.iter().enumerate() {
+        out.push_str(&format!("            if fn_id == {function_index} then\n"));
+        if function
+            .returns
+            .as_ref()
+            .is_some_and(|return_type| !lua_return_is_scalar(return_type))
+        {
+            out.push_str("                return_roots.strings = {}\n                return_roots.buffers = {}\n                return_roots.values = {}\n");
+        }
+        generate_lua_host_dispatch_args(out, &contract_struct, function, enums);
+        generate_lua_internal_profile_dispatch_call(out, function, enums, types);
+        out.push_str("                return AbiErrorCode.Ok\n            end\n");
+    }
+    out.push_str("            return AbiErrorCode.Generic\n        end\n");
+    out.push_str(&format!(
+        "        if native_bridge.add_provider(resident, factory, dispatch, {:?}, {:?}, {}, {}, {}, {}, {}) == 0 then\n\
+         \x20           native_bridge.release_resident(resident)\n\
+         \x20           error(\"native provider registration failed for {field}\", 2)\n\
+         \x20       end\n",
+        plugin.name,
+        contract.name,
+        contract.contract_id as u32,
+        (contract.contract_id >> 32) as u32,
+        contract.version.major,
+        contract.version.minor,
+        contract.version.patch,
+    ));
+    out.push_str("    end\n");
+}
+
+fn generate_lua_internal_profile_dispatch_call(
+    out: &mut String,
+    func: &ResolvedFunction,
+    enums: &[EnumDef],
+    types: &[ResolvedType],
+) {
+    let call_args: String = func
+        .params
+        .iter()
+        .map(|param| param.name.clone())
+        .collect::<Vec<String>>()
+        .join(", ");
+    if !has_return_value(&func.returns) {
+        out.push_str(&format!(
+            "                impl:{}({call_args})\n",
+            func.name
+        ));
+        out.push_str("                local _ = out_ptr\n");
+        return;
+    }
+    out.push_str(&format!(
+        "                local result = impl:{}({call_args})\n",
+        func.name
+    ));
+    match func.returns.as_ref() {
+        Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) => {
+            out.push_str("                if type(result) ~= \"string\" then error(\"internal provider must return a Lua string\") end\n");
+            out.push_str(
+                "                return_roots.strings[#return_roots.strings + 1] = result\n",
+            );
+            out.push_str(
+                "                local output = ffi.cast(string_view_ptr_t, out_ptr)[0]\n",
+            );
+            out.push_str("                output.ptr = ffi.cast(const_uint8_ptr_t, result)\n                output.len = #result\n");
+        }
+        Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)) => {
+            out.push_str("                if type(result) == \"string\" then\n");
+            out.push_str(
+                "                    return_roots.buffers[#return_roots.buffers + 1] = result\n",
+            );
+            out.push_str("                    local output = ffi.cast(buffer_ptr_t, out_ptr)[0]\n");
+            out.push_str("                    output.ptr = ffi.cast(void_ptr_t, result)\n                    output.len = #result\n");
+            out.push_str("                else\n                    ffi.cast(buffer_ptr_t, out_ptr)[0] = result\n                end\n");
+        }
+        Some(return_type)
+            if lua_enum_repr_c_type(return_type, enums).is_some()
+                || lua_return_is_scalar(return_type) =>
+        {
+            let return_c_type: String = lua_c_type_name(return_type, enums);
+            let pointer_type: &str = lua_internal_scalar_pointer_type(&return_c_type);
+            out.push_str(&format!(
+                "                ffi.cast({pointer_type}, out_ptr)[0] = result\n"
+            ));
+        }
+        Some(return_type) => {
+            generate_lua_internal_profile_composite_return(out, return_type, types, enums);
+        }
+        None => {}
+    }
+}
+
+fn lua_internal_scalar_pointer_type(c_type: &str) -> &str {
+    match c_type {
+        "uint64_t" => "uint64_ptr_t",
+        "uint32_t" => "uint32_ptr_t",
+        "uint16_t" => "uint16_ptr_t",
+        "uint8_t" => "uint8_ptr_t",
+        "int64_t" => "int64_ptr_t",
+        "int32_t" => "int32_ptr_t",
+        "int16_t" => "int16_ptr_t",
+        "int8_t" => "int8_ptr_t",
+        "float" => "float_ptr_t",
+        "double" => "double_ptr_t",
+        "bool" => "bool_ptr_t",
+        "void*" => "void_ptr_ptr_t",
+        _ => unreachable!("unknown ABI scalar C type: {c_type}"),
+    }
+}
+
+struct LuaInternalMarshalContext<'a> {
+    types: &'a [ResolvedType],
+    enums: &'a [EnumDef],
+    uid: usize,
+}
+
+fn generate_lua_internal_profile_composite_return(
+    out: &mut String,
+    return_type: &ResolvedTypeRef,
+    types: &[ResolvedType],
+    enums: &[EnumDef],
+) {
+    let c_type: String = lua_c_type_name(return_type, enums);
+    out.push_str(
+        "                if result == nil then error(\"internal provider returned nil\") end\n",
+    );
+    out.push_str(&format!(
+        "                local output = ffi.cast(\"{c_type}*\", out_ptr)\n"
+    ));
+    out.push_str("                if type(result) == \"cdata\" then\n");
+    out.push_str("                    output[0] = result\n");
+    out.push_str("                else\n");
+    let mut context = LuaInternalMarshalContext {
+        types,
+        enums,
+        uid: 0,
+    };
+    emit_lua_internal_profile_marshal_into(
+        out,
+        "output[0]",
+        "result",
+        &c_type,
+        "                    ",
+        &mut context,
+    );
+    out.push_str("                end\n");
+}
+
+fn emit_lua_internal_profile_marshal_into(
+    out: &mut String,
+    destination: &str,
+    source: &str,
+    c_type: &str,
+    indent: &str,
+    context: &mut LuaInternalMarshalContext<'_>,
+) {
+    if let Some(element) = array_element_name(c_type) {
+        emit_lua_internal_profile_marshal_array(out, destination, source, element, indent, context);
+        return;
+    }
+    if c_type == "StringView" {
+        let id: usize = context.uid;
+        out.push_str(&format!(
+            "{indent}local string_value_{id} = tostring({source})\n\
+             {indent}return_roots.strings[#return_roots.strings + 1] = string_value_{id}\n\
+             {indent}{destination}.ptr = ffi.cast(const_uint8_ptr_t, string_value_{id})\n\
+             {indent}{destination}.len = #string_value_{id}\n"
+        ));
+        context.uid += 1;
+        return;
+    }
+    if c_type == "Buffer" {
+        out.push_str(&format!("{indent}if type({source}) == \"string\" then\n"));
+        out.push_str(&format!(
+            "{indent}    return_roots.buffers[#return_roots.buffers + 1] = {source}\n\
+             {indent}    {destination}.ptr = ffi.cast(void_ptr_t, {source})\n\
+             {indent}    {destination}.len = #{source}\n\
+             {indent}else\n\
+             {indent}    {destination} = {source}\n\
+             {indent}end\n"
+        ));
+        return;
+    }
+    if let Some(ty) = context.types.iter().find(|ty| ty.name == c_type) {
+        for field in &ty.fields {
+            let field_type: String = lua_c_type_name(&field.ty, context.enums);
+            emit_lua_internal_profile_marshal_into(
+                out,
+                &format!("{destination}.{}", field.name),
+                &format!("{source}.{}", field.name),
+                &field_type,
+                indent,
+                context,
+            );
+        }
+        return;
+    }
+    out.push_str(&format!("{indent}{destination} = {source}\n"));
+}
+
+fn emit_lua_internal_profile_marshal_array(
+    out: &mut String,
+    destination: &str,
+    source: &str,
+    element: &str,
+    indent: &str,
+    context: &mut LuaInternalMarshalContext<'_>,
+) {
+    let id: usize = context.uid;
+    context.uid += 1;
+    let c_type: String = lua_c_type_name(&lua_element_type_ref(element), context.enums);
+    out.push_str(&format!("{indent}local count_{id} = #{source}\n"));
+    out.push_str(&format!("{indent}if count_{id} == 0 then\n"));
+    out.push_str(&format!("{indent}    {destination}.items = 0\n"));
+    out.push_str(&format!("{indent}    {destination}.len = 0\n"));
+    out.push_str(&format!("{indent}else\n"));
+    out.push_str(&format!(
+        "{indent}    local values_{id} = ffi.new(\"{c_type}[?]\", count_{id})\n\
+         {indent}    return_roots.values[#return_roots.values + 1] = values_{id}\n\
+         {indent}    for index_{id} = 0, count_{id} - 1 do\n"
+    ));
+    emit_lua_internal_profile_marshal_into(
+        out,
+        &format!("values_{id}[index_{id}]"),
+        &format!("{source}[index_{id} + 1]"),
+        element,
+        &format!("{indent}        "),
+        context,
+    );
+    out.push_str(&format!(
+        "{indent}    end\n\
+         {indent}    {destination}.items = ffi.cast(\"uint64_t\", ffi.cast(\"uintptr_t\", values_{id}))\n\
+         {indent}    {destination}.len = count_{id}\n\
+         {indent}end\n"
+    ));
 }
 
 fn generate_bundle_manifest_lua(ir: &ValidatedIr) -> String {
@@ -302,6 +780,14 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str(file_header());
     out.push_str(&lua_require_block(&[&[("ffi", "ffi")]]));
     out.push('\n');
+    out.push_str("local CTypeCache = {}\n");
+    out.push_str("local function ctype(name)\n");
+    out.push_str("    local cached = CTypeCache[name]\n");
+    out.push_str("    if cached == nil then\n");
+    out.push_str("        cached = ffi.typeof(name)\n");
+    out.push_str("        CTypeCache[name] = cached\n");
+    out.push_str("    end\n");
+    out.push_str("    return cached\nend\n\n");
 
     // ABI constants for host
     out.push_str("-- ABI error codes (match polyplug_abi.AbiErrorCode)\n");
@@ -353,201 +839,104 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
         generate_host_contract_caller(&mut out, contract, &ir.enums);
         out.push('\n');
     }
-    if !ir.contracts.is_empty() {
-        generate_lua_in_process_adapters(&mut out, &ir.contracts, &ir.enums);
-        out.push('\n');
-    }
 
     out.push_str("return M\n");
     out
 }
 
-/// Emit Runtime-local LuaJIT adapters for in-process guest implementations.
-fn generate_lua_in_process_adapters(
-    out: &mut String,
-    contracts: &[ResolvedContract],
-    enums: &[EnumDef],
-) {
-    out.push_str("-- In-process Lua guest adapters.\n");
-    out.push_str(cdef_guarded_block());
-    out.push_str("cdef_guarded([[\n");
-    out.push_str("typedef uint32_t (*PolyplugLuaInProcessDispatchCallback)(void*, uint32_t, const void*, void*);\n");
-    out.push_str("typedef void (*PolyplugLuaInProcessDestroyCallback)(void*);\n");
-    out.push_str(
-        "typedef uint64_t (*PolyplugLuaInProcessCreateCallback)(const HostApi*, const void*);\n",
+fn generate_lua_internal_host_callers_file(ir: &ValidatedIr) -> String {
+    let mut out: String = generate_host_callers_file(ir).replacen(
+        "local ffi = require(\"ffi\")\n",
+        "local ffi = require(\"ffi\")\n\
+         local native_bridge = require(\"polyplug.loaders.lua\").internal_plugin_bridge()\n\
+         local uintptr_t = ffi.typeof(\"uintptr_t\")\n\
+         local function native_pointer(value)\n\
+             if value == nil then return 0 end\n\
+             if type(value) == \"number\" then return value end\n\
+             return tonumber(ffi.cast(uintptr_t, ffi.cast(\"void *\", value)))\n\
+         end\n",
+        1,
     );
-    out.push_str("typedef struct PolyplugLuaInProcessBridge {\n");
-    out.push_str("    PolyplugLuaInProcessDispatchCallback callback;\n");
-    out.push_str("    PolyplugLuaInProcessDestroyCallback destroy_callback;\n");
-    out.push_str("    PolyplugLuaInProcessCreateCallback create_callback;\n");
-    out.push_str("    uint64_t contract_id;\n");
-    out.push_str("} PolyplugLuaInProcessBridge;\n");
-    out.push_str("void polyplug_lua_in_process_vm_dispatch(void*, VmLoaderData, GuestContractInstance, uint32_t, const void*, void*, CallArena*, AbiError*);\n");
-    out.push_str("void polyplug_lua_in_process_create_instance(void*, VmLoaderData, const HostApi*, const void*, GuestContractInstance*);\n");
-    out.push_str("void polyplug_lua_in_process_destroy_instance(void*, VmLoaderData, const HostApi*, GuestContractInstance);\n");
-    out.push_str("]])\n\n");
-    out.push_str("local function in_process_factory(provider, contract_name)\n");
-    out.push_str("    if type(provider) == \"function\" then return provider end\n");
-    out.push_str(
-        "    if type(provider) == \"table\" then return function() return provider end end\n",
+    let suffix: &str = "return M\n";
+    assert!(
+        out.ends_with(suffix),
+        "Lua host caller module must return its exports"
     );
-    out.push_str(
-        "    error(\"in_process_bundle: \" .. contract_name .. \" needs a table or factory\", 3)\n",
-    );
-    out.push_str("end\n\n");
-    out.push_str("function M.in_process_bundle(spec, lua_bridge_lib)\n");
-    out.push_str("    if type(spec) ~= \"table\" then error(\"in_process_bundle: spec must be a table\", 2) end\n");
-    out.push_str("    if type(spec.manifest) ~= \"string\" or spec.manifest == \"\" then error(\"in_process_bundle: spec.manifest must be canonical manifest TOML\", 2) end\n");
-    out.push_str("    local implementations = spec.implementations\n");
-    out.push_str("    if type(implementations) ~= \"table\" then error(\"in_process_bundle: spec.implementations must be a table\", 2) end\n");
-    out.push_str("    if lua_bridge_lib == nil then error(\"in_process_bundle: lua_bridge_lib is nil (pass require('polyplug.loaders.lua').bridge_lib())\", 2) end\n");
-    out.push_str("    local resident = { callbacks = {}, bridges = {}, descriptors = {}, interfaces = {}, instances = {}, factories = {}, strings = {}, output_strings = {}, manifest = spec.manifest, next_id = 1 }\n");
-    out.push_str("    local contracts = {}\n");
-    for (index, contract) in contracts.iter().enumerate() {
-        generate_lua_in_process_contract_adapter(out, contract, enums, index);
+    out.truncate(out.len() - suffix.len());
+    for contract in &ir.contracts {
+        generate_lua_exact_handle_caller(&mut out, contract);
+        out.push('\n');
     }
-    out.push_str(
-        "    return { manifest = resident.manifest, contracts = contracts, resident = resident }\n",
-    );
-    out.push_str("end\n");
+    out.push_str(suffix);
+    out
 }
 
-fn generate_lua_in_process_contract_adapter(
-    out: &mut String,
-    contract: &ResolvedContract,
-    enums: &[EnumDef],
-    index: usize,
-) {
-    let contract_key: &str = &contract.name;
-    let contract_struct: String = contract_name_to_struct(contract_key);
-    let plugin_default: String = format!("{}_plugin", contract_key.replace('.', "_"));
-    out.push_str(&format!("    do -- {contract_key}\n"));
-    out.push_str(&format!("        local provider = implementations[{contract_key:?}]\n        local factory = in_process_factory(provider, {contract_key:?})\n"));
-    out.push_str(&format!("        resident.factories[{contract_key:?}] = factory\n        resident.instances[{contract_key:?}] = {{}}\n"));
-    out.push_str(&format!("        resident.strings[{contract_key:?}] = {{ plugin_name = spec.plugin_names and spec.plugin_names[{contract_key:?}] or {plugin_default:?}, contract_name = {contract_key:?} }}\n"));
-    out.push_str("        local bridge = ffi.new(\"PolyplugLuaInProcessBridge\")\n");
+fn generate_lua_exact_handle_caller(out: &mut String, contract: &ResolvedContract) {
+    let contract_struct = contract_name_to_struct(&contract.name);
     out.push_str(&format!(
-        "        bridge.contract_id = 0x{:016X}ULL\n",
-        contract.contract_id
+        "function M.{contract_struct}_create_from_handle(runtime, host, handle)\n"
     ));
-    out.push_str("        local function create(host, _args)\n");
-    out.push_str("            local ok, implementation = pcall(factory, host)\n            if not ok or type(implementation) ~= \"table\" then return 0ULL end\n");
+    out.push_str("    local _ = runtime\n");
     out.push_str(
-        "            local id = resident.next_id\n            resident.next_id = id + 1\n",
+        "    local valid, handle_index, handle_generation, interface, cached_revision, factory = native_bridge.caller_resolve_from_handle(native_pointer(host), tonumber(handle.index), tonumber(handle.generation))\n",
     );
-    out.push_str(&format!("            resident.instances[{contract_key:?}][id] = implementation\n            return id\n        end\n"));
-    out.push_str("        local function destroy(instance_data)\n            local id = tonumber(ffi.cast(\"uintptr_t\", instance_data))\n");
-    out.push_str(&format!("            if id ~= 0 then resident.instances[{contract_key:?}][id] = nil end\n        end\n"));
-    out.push_str("        local function dispatch(instance_data, fn_id, args, out_ptr)\n            local ok, code = pcall(function()\n");
-    out.push_str("                local id = tonumber(ffi.cast(\"uintptr_t\", instance_data))\n");
-    out.push_str(&format!(
-        "                local impl = resident.instances[{contract_key:?}][id]\n"
-    ));
-    for (function_index, function) in contract.functions.iter().enumerate() {
-        out.push_str(&format!(
-            "                if fn_id == {function_index} then\n"
-        ));
-        generate_lua_host_dispatch_args(out, &contract_struct, function, enums);
-        generate_lua_in_process_dispatch_call(out, function, enums);
-        out.push_str("                    return AbiErrorCode.Ok\n                end\n");
-    }
-    out.push_str("                return AbiErrorCode.Generic\n            end)\n            return ok and code or AbiErrorCode.Generic\n        end\n");
-    out.push_str("        local dispatch_cb = ffi.cast(\"PolyplugLuaInProcessDispatchCallback\", dispatch)\n");
+    out.push_str("    if valid == 0 then return nil end\n");
+    out.push_str("    local factory_ok, implementation = pcall(factory, host)\n");
     out.push_str(
-        "        local create_cb = ffi.cast(\"PolyplugLuaInProcessCreateCallback\", create)\n",
+        "    if not factory_ok or type(implementation) ~= \"table\" then return nil end\n",
     );
+    out.push_str("    local instance = native_bridge.caller_create_with_implementation(native_pointer(host), interface, implementation)\n");
+    out.push_str("    if instance == 0 then return nil end\n");
+    out.push_str("    local interface_ptr = ffi.cast(\"GuestContractInterface*\", ffi.cast(uintptr_t, interface))\n");
+    out.push_str("    local instance_value = ffi.new(\"GuestContractInstance\")\n");
+    out.push_str("    instance_value.data = ffi.cast(\"void*\", ffi.cast(uintptr_t, instance))\n");
+    out.push_str("    instance_value.contract_id = interface_ptr.contract_id\n");
+    out.push_str("    local retained_handle = ffi.new(\"GuestContractHandle\")\n");
+    out.push_str("    retained_handle.index = handle_index\n");
+    out.push_str("    retained_handle.generation = handle_generation\n");
+    out.push_str("    local wrapper = {\n");
+    out.push_str("        _interface = interface_ptr,\n");
+    out.push_str("        _instance = instance_value,\n");
+    out.push_str("        _host = host,\n");
+    out.push_str("        _handle = retained_handle,\n");
+    out.push_str("        _handle_index = handle_index,\n");
+    out.push_str("        _handle_generation = handle_generation,\n");
+    out.push_str("        _cached_revision = cached_revision,\n");
+    out.push_str("        _destroyed = false\n");
+    out.push_str("    }\n");
     out.push_str(
-        "        local destroy_cb = ffi.cast(\"PolyplugLuaInProcessDestroyCallback\", destroy)\n",
+        "    function wrapper:is_valid()\n\
+         \x20   return self._interface ~= nil and not self._destroyed\n\
+         end\n\
+         \n\
+         \x20   function wrapper:destroy()\n\
+         \x20       if self._interface ~= nil and not self._destroyed then\n\
+         \x20           native_bridge.caller_destroy(native_pointer(self._host), self._handle_index, self._handle_generation, self._cached_revision, native_pointer(self._interface), native_pointer(self._instance.data))\n\
+         \x20           self._destroyed = true\n\
+         \x20       end\n\
+         \x20   end\n\
+         \n\
+         \x20   function wrapper:reset()\n\
+         \x20       local valid, raw_interface, raw_instance, revision = native_bridge.caller_reset(native_pointer(self._host), self._handle_index, self._handle_generation, self._cached_revision, native_pointer(self._interface), native_pointer(self._instance.data))\n\
+         \x20       if valid == 0 then\n\
+         \x20           self._interface = nil\n\
+         \x20           self._destroyed = true\n\
+         \x20           return\n\
+         \x20       end\n\
+         \x20       local interface = ffi.cast(\"GuestContractInterface*\", ffi.cast(uintptr_t, raw_interface))\n\
+         \x20       local instance = ffi.new(\"GuestContractInstance\")\n\
+         \x20       instance.data = ffi.cast(\"void*\", ffi.cast(uintptr_t, raw_instance))\n\
+         \x20       instance.contract_id = interface.contract_id\n\
+         \x20       self._interface = interface\n\
+         \x20       self._instance = instance\n\
+         \x20       self._cached_revision = revision\n\
+         \x20       self._destroyed = false\n\
+         \x20   end\n",
     );
-    out.push_str("        bridge.callback = dispatch_cb\n        bridge.create_callback = create_cb\n        bridge.destroy_callback = destroy_cb\n");
-    out.push_str("        local interface = ffi.new(\"GuestContractInterface\")\n");
     out.push_str(&format!(
-        "        interface.contract_id = 0x{:016X}ULL\n",
-        contract.contract_id
+        "    setmetatable(wrapper, {contract_struct}_mt)\n"
     ));
-    out.push_str(&format!(
-        "        interface.contract_version.major = {}\n",
-        contract.version.major
-    ));
-    out.push_str(&format!(
-        "        interface.contract_version.minor = {}\n",
-        contract.version.minor
-    ));
-    out.push_str(&format!(
-        "        interface.contract_version.patch = {}\n",
-        contract.version.patch
-    ));
-    out.push_str("        interface.dispatch_type = ffi.C.DispatchType_VirtualMachine\n");
-    out.push_str("        interface.adapter_context = ffi.cast(\"void*\", bridge)\n");
-    out.push_str("        interface.create_instance = lua_bridge_lib.polyplug_lua_in_process_create_instance\n");
-    out.push_str("        interface.destroy_instance = lua_bridge_lib.polyplug_lua_in_process_destroy_instance\n");
-    out.push_str(
-        "        interface.dispatch.vm.call = lua_bridge_lib.polyplug_lua_in_process_vm_dispatch\n",
-    );
-    out.push_str("        interface.dispatch.vm.loader_data.data = nil\n");
-    out.push_str("        local descriptor = ffi.new(\"PluginDescriptor\")\n");
-    out.push_str(&format!("        descriptor.name.ptr = ffi.cast(\"const uint8_t*\", resident.strings[{contract_key:?}].plugin_name)\n        descriptor.name.len = #resident.strings[{contract_key:?}].plugin_name\n"));
-    out.push_str(&format!("        descriptor.contract_name.ptr = ffi.cast(\"const uint8_t*\", resident.strings[{contract_key:?}].contract_name)\n        descriptor.contract_name.len = #resident.strings[{contract_key:?}].contract_name\n"));
-    out.push_str(&format!(
-        "        descriptor.version.major = {}\n",
-        contract.version.major
-    ));
-    out.push_str(&format!(
-        "        descriptor.version.minor = {}\n",
-        contract.version.minor
-    ));
-    out.push_str(&format!(
-        "        descriptor.version.patch = {}\n",
-        contract.version.patch
-    ));
-    out.push_str(&format!("        resident.bridges[{contract_key:?}] = bridge\n        resident.descriptors[{contract_key:?}] = descriptor\n        resident.interfaces[{contract_key:?}] = interface\n        resident.callbacks[{contract_key:?}] = {{ dispatch_cb, create_cb, destroy_cb }}\n        contracts[{}] = {{ descriptor = descriptor, interface = interface }}\n", index + 1));
-    out.push_str("    end\n");
-}
-
-/// Marshal ergonomic Lua scalar and string results for an in-process adapter.
-fn generate_lua_in_process_dispatch_call(
-    out: &mut String,
-    func: &ResolvedFunction,
-    enums: &[EnumDef],
-) {
-    let call_args: String = func
-        .params
-        .iter()
-        .map(|param| param.name.clone())
-        .collect::<Vec<String>>()
-        .join(", ");
-    if !has_return_value(&func.returns) {
-        out.push_str(&format!(
-            "                impl:{}({call_args})\n",
-            func.name
-        ));
-        out.push_str("                local _ = out_ptr\n");
-        return;
-    }
-    out.push_str(&format!(
-        "                local result = impl:{}({call_args})\n",
-        func.name
-    ));
-    if matches!(
-        func.returns,
-        Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView))
-    ) {
-        out.push_str("                if type(result) ~= \"string\" then error(\"in-process implementation must return a Lua string\") end\n");
-        out.push_str(
-            "                resident.output_strings[#resident.output_strings + 1] = result\n",
-        );
-        out.push_str("                local output = ffi.cast(\"StringView*\", out_ptr)[0]\n");
-        out.push_str("                output.ptr = ffi.cast(\"const uint8_t*\", result)\n");
-        out.push_str("                output.len = #result\n");
-        return;
-    }
-    let ret_type: String = match func.returns.as_ref() {
-        Some(return_type) => lua_c_type_name(return_type, enums),
-        None => "void".to_owned(),
-    };
-    out.push_str(&format!(
-        "                ffi.cast(\"{ret_type}*\", out_ptr)[0] = result\n"
-    ));
+    out.push_str("    return wrapper\nend\n");
 }
 
 fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
@@ -695,19 +1084,29 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract, 
     out.push_str("        return self._host.registry_revision(self._host)\n");
     out.push_str("    end,\n\n");
 
-    // revalidate - the registry changed under us (a reload/unload reclaimed the
-    // cached interface/instance). Re-resolve via the retained handle: a hot-reload
-    // swapped a new interface into the same slot (handle resolves to it); an unload
-    // vacated the slot (resolves to nil → return false, contract gone). The old
-    // instance is ABANDONED, never destroyed — its interface is already
-    // epoch-reclaimed, so destroy through it would be UB; the runtime reclaimed it
-    // as part of the reload. A fresh instance is created on the new interface.
+    // revalidate - the registry changed under us. Re-resolve via the retained handle:
+    // a hot-reload swaps a new interface into the same slot, an unload vacates it, and
+    // an unrelated registry revision leaves the exact interface unchanged. Retain the
+    // current instance for the unchanged-interface case; replacing it would leak the
+    // live instance and discard state. When the interface changed, the runtime already
+    // reclaimed the old instance, so construct a fresh one without destroying it.
     out.push_str("    revalidate = function(self)\n");
+    out.push_str("        if self._destroyed or self._interface == nil then\n");
+    out.push_str("            return false\n");
+    out.push_str("        end\n");
     out.push_str(
         "        local interface = self._host.resolve_guest_contract(self._host, self._handle)\n",
     );
     out.push_str("        if interface == nil then\n");
+    out.push_str("            self._interface = nil\n");
+    out.push_str("            self._instance = ffi.new(\"GuestContractInstance\")\n");
+    out.push_str("            self._cached_revision = self:live_revision()\n");
+    out.push_str("            self._destroyed = true\n");
     out.push_str("            return false\n");
+    out.push_str("        end\n");
+    out.push_str("        if interface == self._interface then\n");
+    out.push_str("            self._cached_revision = self:live_revision()\n");
+    out.push_str("            return true\n");
     out.push_str("        end\n");
     out.push_str("        local new_instance = ffi.new(\"GuestContractInstance\")\n");
     out.push_str(
@@ -722,37 +1121,59 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract, 
 
     // destroy method - routes destruction through the host so the runtime drops the
     // instance from its live-instance accounting, then marks the wrapper destroyed.
-    // If the registry changed since we resolved, the cached interface/instance are
-    // stale — a reload/unload already reclaimed their backing — so destroy through
-    // the dead interface would be UB; skip it and just mark the wrapper destroyed.
     out.push_str("    destroy = function(self)\n");
-    out.push_str("        if self._interface ~= nil and not self._destroyed then\n");
-    out.push_str("            if self:live_revision() ~= self._cached_revision then\n");
+    out.push_str("        if self._interface == nil or self._destroyed then\n");
+    out.push_str("            return\n");
+    out.push_str("        end\n");
+    out.push_str("        if self:live_revision() ~= self._cached_revision then\n");
+    out.push_str("            local interface = self._host.resolve_guest_contract(self._host, self._handle)\n");
+    out.push_str("            if interface == nil or interface ~= self._interface then\n");
+    out.push_str("                self._interface = nil\n");
+    out.push_str("                self._instance = ffi.new(\"GuestContractInstance\")\n");
     out.push_str("                self._destroyed = true\n");
     out.push_str("                return\n");
     out.push_str("            end\n");
-    out.push_str("            self._host.destroy_guest_instance(self._host, self._interface, self._instance)\n");
-    out.push_str("            self._destroyed = true\n");
     out.push_str("        end\n");
+    out.push_str("        local interface = self._interface\n");
+    out.push_str("        local instance = self._instance\n");
+    out.push_str("        self._interface = nil\n");
+    out.push_str("        self._instance = ffi.new(\"GuestContractInstance\")\n");
+    out.push_str("        self._destroyed = true\n");
+    out.push_str("        self._host.destroy_guest_instance(self._host, interface, instance)\n");
     out.push_str("    end,\n\n");
 
-    // reset method - destroy current instance, create a fresh one from the
-    // still-resolved interface. A null instance.data is valid for stateless
-    // contracts and is preserved as the opaque dispatch token. If the registry
-    // changed under us, defer to revalidate(): it builds the fresh instance reset()
-    // promises on the current interface and skips the unsafe destroy of the dead one.
+    // reset method is destructive even when a registry revision belongs to an
+    // unrelated bundle. Re-resolve once to avoid destroying an epoch-reclaimed
+    // instance after a replacement or unload.
     out.push_str("    reset = function(self)\n");
-    out.push_str("        if self:live_revision() ~= self._cached_revision then\n");
-    out.push_str("            self:revalidate()\n");
-    out.push_str("            return\n");
+    out.push_str("        if self._interface == nil or self._destroyed then return end\n");
+    out.push_str("        local revision = self:live_revision()\n");
+    out.push_str("        local interface = self._interface\n");
+    out.push_str("        if revision ~= self._cached_revision then\n");
+    out.push_str(
+        "            interface = self._host.resolve_guest_contract(self._host, self._handle)\n",
+    );
+    out.push_str("            if interface == nil then\n");
+    out.push_str("                self._interface = nil\n");
+    out.push_str("                self._instance = ffi.new(\"GuestContractInstance\")\n");
+    out.push_str("                self._cached_revision = revision\n");
+    out.push_str("                self._destroyed = true\n");
+    out.push_str("                return\n");
+    out.push_str("            end\n");
     out.push_str("        end\n");
-    out.push_str("        self:destroy()\n");
-    out.push_str("        if self._interface ~= nil then\n");
-    out.push_str("            local new_instance = ffi.new(\"GuestContractInstance\")\n");
-    out.push_str("            self._host.create_guest_instance(self._host, self._interface, nil, new_instance)\n");
-    out.push_str("            self._instance = new_instance\n");
-    out.push_str("            self._destroyed = false\n");
+    out.push_str(
+        "        if revision == self._cached_revision or interface == self._interface then\n",
+    );
+    out.push_str("            self._host.destroy_guest_instance(self._host, self._interface, self._instance)\n");
     out.push_str("        end\n");
+    out.push_str("        local new_instance = ffi.new(\"GuestContractInstance\")\n");
+    out.push_str(
+        "        self._host.create_guest_instance(self._host, interface, nil, new_instance)\n",
+    );
+    out.push_str("        self._interface = interface\n");
+    out.push_str("        self._instance = new_instance\n");
+    out.push_str("        self._cached_revision = self:live_revision()\n");
+    out.push_str("        self._destroyed = false\n");
     out.push_str("    end,\n\n");
 
     // Contract function methods - pass instance as first argument
@@ -900,7 +1321,7 @@ fn generate_host_caller_method(
     out.push_str(
         "        -- Out-param ABI: dispatch writes the AbiError through a trailing pointer.\n",
     );
-    out.push_str("        local err = ffi.new(\"AbiError\")\n");
+    out.push_str("        local err = ffi.new(ctype(\"AbiError\"))\n");
     out.push_str("        if self._interface.dispatch_type == 0 then\n");
     // Function-id bounds check inside the Native arm only: on a VM interface
     // dispatch.native.function_count aliases bits of dispatch.vm.call through
@@ -1650,8 +2071,10 @@ fn emit_lua_host_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>, 
         None => None,
     };
     if let Some(repr) = enum_repr {
-        out.push_str(&format!("    local out_val = ffi.new(\"{repr}[1]\")\n"));
-        out.push_str("    local out_ptr = ffi.cast(\"void*\", out_val)\n");
+        out.push_str(&format!(
+            "    local out_val = ffi.new(ctype(\"{repr}[1]\"))\n"
+        ));
+        out.push_str("    local out_ptr = ffi.cast(ctype(\"void*\"), out_val)\n");
         return;
     }
     let ret_ty: String = match returns {
@@ -1660,11 +2083,15 @@ fn emit_lua_host_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>, 
     };
     let is_scalar: bool = matches!(returns, Some(ret) if lua_return_is_scalar(ret));
     if is_scalar {
-        out.push_str(&format!("    local out_val = ffi.new(\"{ret_ty}[1]\")\n"));
+        out.push_str(&format!(
+            "    local out_val = ffi.new(ctype(\"{ret_ty}[1]\"))\n"
+        ));
     } else {
-        out.push_str(&format!("    local out_val = ffi.new(\"{ret_ty}\")\n"));
+        out.push_str(&format!(
+            "    local out_val = ffi.new(ctype(\"{ret_ty}\"))\n"
+        ));
     }
-    out.push_str("    local out_ptr = ffi.cast(\"void*\", out_val)\n");
+    out.push_str("    local out_ptr = ffi.cast(ctype(\"void*\"), out_val)\n");
 }
 
 fn lua_type_name(ty: &ResolvedTypeRef) -> String {
@@ -1819,8 +2246,7 @@ fn file_header() -> &'static str {
 fn cdef_guarded_block() -> &'static str {
     "local function cdef_guarded(decl)\n\
     \tlocal ok, err = pcall(ffi.cdef, decl)\n\
-    \tlocal in_process_redefinition = string.find(err or \"\", \"attempt to redefine 'PolyplugLuaInProcess\", 1, true)\n\
-    \tif not ok and not string.find(err, \"already defined\", 1, true) and not in_process_redefinition then\n\
+    \tif not ok and not string.find(err, \"already defined\", 1, true) then\n\
     \t\terror(err, 2)\n\
     \tend\n\
      end\n\n"
@@ -2767,6 +3193,9 @@ fn generate_lua_guest_peer_caller(
         "    local interface = self._host.resolve_guest_contract(self._host, self._handle)\n",
     );
     out.push_str("    if interface == nil then\n");
+    out.push_str("        self._interface = nil\n");
+    out.push_str("        self._instance = ffi.new(\"GuestContractInstance\")\n");
+    out.push_str("        self._cached_revision = self:live_revision()\n");
     out.push_str("        return false\n");
     out.push_str("    end\n");
     out.push_str("    local new_instance = ffi.new(\"GuestContractInstance\")\n");
@@ -4107,7 +4536,7 @@ mod tests {
         };
         let out: String = generate_host_callers_file(&ir);
         assert!(
-            out.contains("ffi.new(\"uint32_t[1]\")"),
+            out.contains("ffi.new(ctype(\"uint32_t[1]\"))"),
             "scalar u32 return must use a 1-element array slot: {out}"
         );
         assert!(
@@ -4115,7 +4544,7 @@ mod tests {
             "scalar u32 return must read result with out_val[0]: {out}"
         );
         assert!(
-            !out.contains("ffi.new(\"uint32_t\")"),
+            !out.contains("ffi.new(ctype(\"uint32_t\"))"),
             "scalar u32 must NOT use a bare value slot (would yield NULL out_ptr): {out}"
         );
     }
@@ -4153,11 +4582,11 @@ mod tests {
         };
         let out: String = generate_host_callers_file(&ir);
         assert!(
-            out.contains("ffi.new(\"StringView\")"),
+            out.contains("ffi.new(ctype(\"StringView\"))"),
             "StringView return must use a bare struct slot: {out}"
         );
         assert!(
-            !out.contains("ffi.new(\"StringView[1]\")"),
+            !out.contains("ffi.new(ctype(\"StringView[1]\"))"),
             "StringView must NOT use an array slot: {out}"
         );
         // "return out_val" is the expected form; "return out_val[0]" must NOT appear.
@@ -4172,92 +4601,217 @@ mod tests {
     }
 
     #[test]
-    fn in_process_adapter_keeps_typed_resident_and_context_local() {
-        let counter = ResolvedContract {
-            name: "state.counter".to_owned(),
-            contract_id: 0xA1,
+    fn internal_profile_emits_consuming_namespaced_typed_lua_facade() {
+        let contract = ResolvedContract {
+            name: "shape.Plugin".to_owned(),
+            contract_id: 0xD0A1,
             version: Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
             },
-            functions: vec![ResolvedFunction {
-                name: "increment".to_owned(),
-                function_id: 0,
-                params: vec![],
-                returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
-                docs: None,
-                return_docs: None,
-            }],
-            docs: None,
-        };
-        let value = ResolvedContract {
-            name: "state.value".to_owned(),
-            contract_id: 0xB2,
-            version: Version {
-                major: 1,
-                minor: 0,
-                patch: 0,
-            },
-            functions: vec![ResolvedFunction {
-                name: "value".to_owned(),
-                function_id: 0,
-                params: vec![],
-                returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
-                docs: None,
-                return_docs: None,
-            }],
+            functions: vec![
+                ResolvedFunction {
+                    name: "write".to_owned(),
+                    function_id: 0,
+                    params: vec![
+                        ResolvedParam {
+                            name: "label".to_owned(),
+                            ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                            docs: None,
+                        },
+                        ResolvedParam {
+                            name: "mode".to_owned(),
+                            ty: ResolvedTypeRef::UserDefined("Mode".to_owned()),
+                            docs: None,
+                        },
+                    ],
+                    returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+                    docs: None,
+                    return_docs: None,
+                },
+                ResolvedFunction {
+                    name: "inspect".to_owned(),
+                    function_id: 1,
+                    params: vec![ResolvedParam {
+                        name: "envelope".to_owned(),
+                        ty: ResolvedTypeRef::UserDefined("Envelope".to_owned()),
+                        docs: None,
+                    }],
+                    returns: Some(ResolvedTypeRef::UserDefined("Envelope".to_owned())),
+                    docs: None,
+                    return_docs: None,
+                },
+            ],
             docs: None,
         };
         let ir = ValidatedIr {
-            types: vec![],
-            enums: vec![],
-            contracts: vec![counter, value],
+            types: vec![ResolvedType {
+                name: "Envelope".to_owned(),
+                fields: vec![ResolvedField {
+                    name: "payload".to_owned(),
+                    ty: ResolvedTypeRef::AbiType(AbiBuiltin::Buffer),
+                    docs: None,
+                }],
+                docs: None,
+            }],
+            enums: vec![EnumDef {
+                name: "Mode".to_owned(),
+                repr: ReprType::U32,
+                bitflag: false,
+                variants: vec![EnumVariant {
+                    name: "Ready".to_owned(),
+                    value: "0".to_owned(),
+                    docs: None,
+                }],
+                docs: None,
+            }],
+            contracts: vec![contract],
             host_contracts: vec![],
-            bundle: None,
+            bundle: Some(ResolvedBundle {
+                name: "lua-internal-profile".to_owned(),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                loader: String::new(),
+                file: ResolvedBundleFile::Single(String::new()),
+                plugins: vec![ResolvedPlugin {
+                    name: "shape_provider".to_owned(),
+                    implements: vec!["shape.Plugin@1.0".to_owned()],
+                    optional: vec![],
+                }],
+                bundle_id: 0xD0A1_D0A1_D0A1_D0A1_u64,
+                dependencies: vec![],
+                needs_reinit_on_dep_reload: false,
+            }),
         };
+        let mut files = GeneratedFiles::default();
+        LuaGenerator
+            .generate_internal_bundle(&ir, "lua-internal-profile", &mut files)
+            .expect("generate Lua internal profile");
+        let profile = files
+            .files
+            .iter()
+            .find(|file| file.path == *"guest/internal.lua")
+            .expect("internal facade")
+            .content
+            .as_str();
+        assert!(
+            profile.contains("providers were consumed by a previous registration attempt")
+                && profile.contains("must be a factory function")
+                && profile.contains("runtime:register_internal_plugin(resident)")
+                && profile.contains("result[\"shape_provider_shape_Plugin\"]"),
+            "profile must consume factory-only providers, use canonical registration, and return named callers: {profile}"
+        );
+        assert!(
+            profile.contains(
+                "local packed = ffi.cast(\"const ShapePluginContractWriteArgs*\", args)[0]"
+            ) && profile.contains("ffi.cast(buffer_ptr_t, out_ptr)[0] = result")
+                && profile.contains("local output = ffi.cast(\"Envelope*\", out_ptr)")
+                && profile.contains("return_roots.buffers[#return_roots.buffers + 1]")
+                && profile.contains("return_roots.strings = {}"),
+            "profile must preserve multi-arg, buffer, nested-struct, and bounded variable-return shapes: {profile}"
+        );
+        let callers = files
+            .files
+            .iter()
+            .find(|file| file.path == *"host/callers.lua")
+            .expect("internal callers")
+            .content
+            .as_str();
+        assert!(
+            callers.contains(
+                "local native_bridge = require(\"polyplug.loaders.lua\").internal_plugin_bridge()"
+            ),
+            "internal callers must load the native lifecycle gateway: {callers}"
+        );
+        assert!(
+            callers.contains(
+                "local handle = runtime:find_guest_contract(SHAPE_PLUGIN_CONTRACT_ID, 0)"
+            ) && callers.contains("host.create_guest_instance(host, interface, nil, instance)")
+                && callers.contains("native_bridge.caller_create_with_implementation")
+                && callers.contains("native_bridge.caller_destroy"),
+            "ordinary lookup callers must preserve generic ABI dispatch while exact internal callers use validated lifecycle gateways: {callers}"
+        );
+        assert!(
+            !files.files.iter().any(|file| file.path == *"manifest.toml"),
+            "internal profile must not synthesize an external artifact manifest"
+        );
+    }
 
-        let out = generate_host_callers_file(&ir);
-        assert!(
-            out.contains("function M.in_process_bundle(spec, lua_bridge_lib)"),
-            "in-process bundles must take the Lua bridge library explicitly: {out}"
+    #[test]
+    fn internal_profile_scalar_return_slots_match_the_abi() {
+        for (c_type, pointer_type) in [
+            ("uint64_t", "uint64_ptr_t"),
+            ("uint32_t", "uint32_ptr_t"),
+            ("uint16_t", "uint16_ptr_t"),
+            ("uint8_t", "uint8_ptr_t"),
+            ("int64_t", "int64_ptr_t"),
+            ("int32_t", "int32_ptr_t"),
+            ("int16_t", "int16_ptr_t"),
+            ("int8_t", "int8_ptr_t"),
+            ("float", "float_ptr_t"),
+            ("double", "double_ptr_t"),
+            ("bool", "bool_ptr_t"),
+            ("void*", "void_ptr_ptr_t"),
+        ] {
+            assert_eq!(lua_internal_scalar_pointer_type(c_type), pointer_type);
+        }
+    }
+
+    #[test]
+    fn internal_profile_array_returns_store_integer_addresses() {
+        let mut primitives = String::new();
+        let mut primitive_context = LuaInternalMarshalContext {
+            types: &[],
+            enums: &[],
+            uid: 0,
+        };
+        emit_lua_internal_profile_marshal_array(
+            &mut primitives,
+            "output",
+            "result",
+            "u32",
+            "",
+            &mut primitive_context,
         );
         assert!(
-            out.contains("spec.manifest must be canonical manifest TOML")
-                && out.contains("local contracts = {}")
-                && out.contains("return { manifest = resident.manifest, contracts = contracts, resident = resident }"),
-            "generated bundles must own canonical manifest bytes and descriptor/interface pairs: {out}"
+            primitives.contains(
+                "output.items = ffi.cast(\"uint64_t\", ffi.cast(\"uintptr_t\", values_0))"
+            ),
+            "primitive arrays must store a uint64 ABI address: {primitives}"
+        );
+
+        let pair = ResolvedType {
+            name: "Pair".to_owned(),
+            fields: vec![ResolvedField {
+                name: "value".to_owned(),
+                ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                docs: None,
+            }],
+            docs: None,
+        };
+        let mut structs = String::new();
+        let mut struct_context = LuaInternalMarshalContext {
+            types: &[pair],
+            enums: &[],
+            uid: 0,
+        };
+        emit_lua_internal_profile_marshal_array(
+            &mut structs,
+            "output",
+            "result",
+            "Pair",
+            "",
+            &mut struct_context,
         );
         assert!(
-            out.contains("resident.instances[\"state.counter\"]")
-                && out.contains("resident.instances[\"state.value\"]"),
-            "each contract needs a resident-local instance table: {out}"
-        );
-        assert!(
-            out.contains("interface.adapter_context = ffi.cast(\"void*\", bridge)")
-                && out.contains("resident.descriptors[\"state.counter\"]")
-                && out.contains("resident.descriptors[\"state.value\"]")
-                && out
-                    .contains("contracts[1] = { descriptor = descriptor, interface = interface }")
-                && out
-                    .contains("contracts[2] = { descriptor = descriptor, interface = interface }"),
-            "adapter context must stay inside canonical interfaces with staged descriptor/interface pairs: {out}"
-        );
-        assert!(
-            out.contains("lua_bridge_lib.polyplug_lua_in_process_vm_dispatch")
-                && out.contains("lua_bridge_lib.polyplug_lua_in_process_create_instance")
-                && out.contains("lua_bridge_lib.polyplug_lua_in_process_destroy_instance"),
-            "all ABI callbacks must use the explicit native bridge: {out}"
-        );
-        assert!(
-            out.contains("resident.callbacks[\"state.counter\"]")
-                && out.contains("resident.callbacks[\"state.value\"]")
-                && !out.contains("ffi.C.polyplug_lua_in_process"),
-            "callback lifetime must be resident-local without global symbol lookup: {out}"
-        );
-        assert!(
-            out.contains("attempt to redefine"),
-            "multiple generated modules in one LuaJIT VM must tolerate canonical duplicate cdefs: {out}"
+            structs.contains(
+                "output.items = ffi.cast(\"uint64_t\", ffi.cast(\"uintptr_t\", values_0))"
+            ),
+            "struct arrays must store a uint64 ABI address: {structs}"
         );
     }
 
@@ -4604,7 +5158,7 @@ mod tests {
         }
     }
 
-    fn assert_enum_caller_marshalling(out: &str) {
+    fn assert_enum_caller_marshalling(out: &str, out_slot: &str) {
         // (i) single-enum param: repr-integer slot + address pass.
         assert!(
             out.contains("local fmt_val = ffi.new(\"uint32_t[1]\", fmt)"),
@@ -4621,7 +5175,7 @@ mod tests {
         );
         // (ii) enum return: repr-integer out slot + tonumber() read-back.
         assert!(
-            out.contains("local out_val = ffi.new(\"uint32_t[1]\")"),
+            out.contains(&format!("local out_val = {out_slot}")),
             "enum return must allocate a repr-integer out slot: {out}"
         );
         assert!(
@@ -4638,14 +5192,14 @@ mod tests {
     fn lua_host_caller_enum_param_and_return_use_repr_slots() {
         let mut out: String = String::new();
         generate_host_contract_caller(&mut out, &enum_codec_contract(), &pixel_format_enums());
-        assert_enum_caller_marshalling(&out);
+        assert_enum_caller_marshalling(&out, "ffi.new(ctype(\"uint32_t[1]\"))");
     }
 
     #[test]
     fn lua_peer_caller_enum_param_and_return_use_repr_slots() {
         let mut out: String = String::new();
         generate_lua_guest_peer_caller(&mut out, &enum_codec_contract(), 1, &pixel_format_enums());
-        assert_enum_caller_marshalling(&out);
+        assert_enum_caller_marshalling(&out, "ffi.new(\"uint32_t[1]\")");
     }
 
     #[test]
@@ -4686,7 +5240,7 @@ mod tests {
         let mut out: String = String::new();
         generate_lua_guest_host_contract_caller(&mut out, &contract, &pixel_format_enums())
             .expect("caller generation must succeed");
-        assert_enum_caller_marshalling(&out);
+        assert_enum_caller_marshalling(&out, "ffi.new(\"uint32_t[1]\")");
     }
 
     /// Scalar single params share the same LuaJIT pitfall: a scalar value cdata

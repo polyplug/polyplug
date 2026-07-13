@@ -105,7 +105,7 @@ There is no build step. Place the entry `.py`, the generated glue, and the
 generated `manifest.toml` together, and vendor the SDK packages under
 `site-packages/`:
 
-```
+```text
 dist/python_decoder/
 ├── manifest.toml          # from generated/manifest.toml
 ├── decoder.py             # your implementation

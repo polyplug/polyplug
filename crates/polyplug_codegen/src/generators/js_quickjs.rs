@@ -85,6 +85,44 @@ use std::string::FromUtf8Error;
 /// (QuickJS uses f64 internally, so bigint is not available).
 pub struct JsQuickjsGenerator;
 
+impl JsQuickjsGenerator {
+    /// Generate the opt-in JavaScript internal-plugin profile without changing
+    /// the ordinary host or external guest output.
+    pub(crate) fn generate_internal_bundle(
+        &self,
+        ir: &ValidatedIr,
+        _bundle_name: &str,
+        files: &mut GeneratedFiles,
+    ) -> Result<(), PolyplugcError> {
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("host/types.ts"),
+            content: generate_types_ts(ir)?,
+            force_regenerate: false,
+        });
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("host/callers.ts"),
+            content: generate_internal_callers_ts(ir)?,
+            force_regenerate: false,
+        });
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("guest/types.ts"),
+            content: generate_types_ts(ir)?,
+            force_regenerate: false,
+        });
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("guest/contracts.ts"),
+            content: generate_internal_contracts_ts(ir)?.replace("\"./types\"", "\"./types.ts\""),
+            force_regenerate: false,
+        });
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("internal.ts"),
+            content: generate_internal_profile_ts(ir)?,
+            force_regenerate: false,
+        });
+        Ok(())
+    }
+}
+
 impl CodeGenerator for JsQuickjsGenerator {
     fn generate_host(
         &self,
@@ -432,7 +470,17 @@ fn generate_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
-                    render_plugin_interface_quickjs(&mut out, &plugin.name, contract, ir)?;
+                    let plugin_var: String = plugin.name.to_uppercase().replace(['.', '-'], "_");
+                    let set_factory_name: String = js_factory_setter_name(&plugin.name);
+                    render_plugin_interface_quickjs(
+                        &mut out,
+                        &plugin.name,
+                        contract,
+                        ir,
+                        &plugin_var,
+                        &set_factory_name,
+                        false,
+                    )?;
                 }
             }
         }
@@ -441,13 +489,312 @@ fn generate_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     Ok(out)
 }
 
+fn js_factory_setter_name(plugin_name: &str) -> String {
+    format!(
+        "set{}Factory",
+        plugin_name
+            .replace(['.', '-'], "_")
+            .split('_')
+            .map(|segment| {
+                let mut chars = segment.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                }
+            })
+            .collect::<String>()
+    )
+}
+
+fn js_internal_provider_symbol(plugin_name: &str, contract_name: &str) -> String {
+    format!(
+        "{}_{}",
+        plugin_name.to_uppercase().replace(['.', '-'], "_"),
+        contract_name.to_uppercase().replace(['.', '-'], "_")
+    )
+}
+
+fn js_internal_provider_field(plugin_name: &str, contract_name: &str) -> String {
+    format!(
+        "{}_{}",
+        plugin_name.to_lowercase().replace(['.', '-'], "_"),
+        contract_name.to_lowercase().replace(['.', '-'], "_")
+    )
+}
+
+fn js_internal_provider_entries(
+    ir: &ValidatedIr,
+) -> Result<Vec<(&ResolvedPlugin, &ResolvedContract)>, PolyplugcError> {
+    let bundle: &ResolvedBundle =
+        ir.bundle
+            .as_ref()
+            .ok_or_else(|| PolyplugcError::ValidationFailed {
+                message: "JavaScript internal generation requires a bundle manifest".to_owned(),
+            })?;
+    let mut entries: Vec<(&ResolvedPlugin, &ResolvedContract)> = Vec::new();
+    for plugin in &bundle.plugins {
+        for implemented in &plugin.implements {
+            let contract: &ResolvedContract = ir
+                .contracts
+                .iter()
+                .find(|candidate| {
+                    implemented
+                        == &format!(
+                            "{}@{}.{}",
+                            candidate.name, candidate.version.major, candidate.version.minor
+                        )
+                })
+                .ok_or_else(|| PolyplugcError::ValidationFailed {
+                    message: format!(
+                        "JavaScript internal generation could not resolve `{implemented}`"
+                    ),
+                })?;
+            entries.push((plugin, contract));
+        }
+    }
+    Ok(entries)
+}
+
+fn js_internal_type_entries(
+    entries: &[(&ResolvedPlugin, &ResolvedContract)],
+    source: &str,
+) -> Vec<ImportEntry> {
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    for (_, contract) in entries {
+        for function in &contract.functions {
+            for parameter in &function.params {
+                if let ResolvedTypeRef::UserDefined(name) = &parameter.ty {
+                    names.insert(name.clone());
+                }
+            }
+            if let Some(ResolvedTypeRef::UserDefined(name)) = &function.returns {
+                names.insert(name.clone());
+            }
+        }
+    }
+    names
+        .into_iter()
+        .map(|name| ImportEntry::JsTypeNamed {
+            name,
+            source: source.to_owned(),
+        })
+        .collect()
+}
+
+fn generate_internal_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
+    let entries: Vec<(&ResolvedPlugin, &ResolvedContract)> = js_internal_provider_entries(ir)?;
+    let mut out: String = String::from(
+        "// THIS FILE IS AUTO-GENERATED BY polyplugc\n\
+         // DO NOT EDIT BY HAND\n\
+         // Runtime: js-quickjs internal provider bindings\n\n",
+    );
+    let imports: String = js_import_block(&[&js_internal_type_entries(&entries, "./types")]);
+    out.push_str(&imports);
+    if !imports.is_empty() {
+        out.push('\n');
+    }
+    out.push_str("const DispatchType = Object.freeze({ VirtualMachine: 1 } as const);\n\n");
+    emit_ts_utf8_encoder_helper(&mut out)?;
+    for (plugin, contract) in entries {
+        let symbol: String = js_internal_provider_symbol(&plugin.name, &contract.name);
+        let setter: String = format!("set{}Factory", symbol);
+        render_plugin_interface_quickjs(
+            &mut out,
+            &plugin.name,
+            contract,
+            ir,
+            &symbol,
+            &setter,
+            true,
+        )?;
+    }
+    Ok(out)
+}
+
+fn js_internal_author_type(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
+        _ => ts_type_ref(ty),
+    }
+}
+
+fn generate_internal_profile_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
+    let entries: Vec<(&ResolvedPlugin, &ResolvedContract)> = js_internal_provider_entries(ir)?;
+    let mut out: String = String::from(
+        "// THIS FILE IS AUTO-GENERATED BY polyplugc\n\
+         // DO NOT EDIT BY HAND\n\
+         // Explicit JavaScript internal-plugin registration profile.\n\n",
+    );
+    out.push_str(
+        r#"import { buildInternalPluginBundle, buildInternalPluginGuestContract, createInternalPluginGuestBridge } from "@polyplug/host";
+import { bridgeLibrary } from "@polyplug/loaders/js";
+"#,
+    );
+    let imports: String =
+        js_import_block(&[&js_internal_type_entries(&entries, "./guest/types.ts")]);
+    out.push_str(&imports);
+    let caller_classes: BTreeSet<String> = entries
+        .iter()
+        .map(|(_, contract)| contract_to_class_name(&contract.name))
+        .collect();
+    for class in caller_classes {
+        out.push_str(&format!(
+            "import {{ {class}Contract }} from \"./host/callers.ts\";\n"
+        ));
+    }
+    let wrapper_imports: Vec<String> = entries
+        .iter()
+        .flat_map(|(plugin, contract)| {
+            let symbol: String = js_internal_provider_symbol(&plugin.name, &contract.name);
+            (0..contract.functions.len())
+                .map(|index| format!("{}_fn{index}_abi_wrapper", symbol.to_lowercase()))
+                .collect::<Vec<String>>()
+        })
+        .collect();
+    if !wrapper_imports.is_empty() {
+        out.push_str(&format!(
+            "import {{ {} }} from \"./guest/contracts.ts\";\n",
+            wrapper_imports.join(", ")
+        ));
+    }
+    out.push_str("\nexport interface InternalRuntime {\n    registerInternalPluginWithHandles(bundle: { dispose(): void }, handleCount: number): { bundleId: bigint; handles: unknown[] };\n    unloadBundle(bundleId: bigint): void;\n}\n\n");
+    for (plugin, contract) in &entries {
+        let field: String = js_internal_provider_field(&plugin.name, &contract.name);
+        out.push_str(&format!("export interface {field}Implementation {{\n"));
+        for function in &contract.functions {
+            let parameters: String = function
+                .params
+                .iter()
+                .map(|parameter| {
+                    format!(
+                        "{}: {}",
+                        parameter.name,
+                        js_internal_author_type(&parameter.ty)
+                    )
+                })
+                .collect::<Vec<String>>()
+                .join(", ");
+            let returns: String = function
+                .returns
+                .as_ref()
+                .map_or_else(|| "void".to_owned(), js_internal_author_type);
+            out.push_str(&format!(
+                "    {}({parameters}): {returns};\n",
+                function.name
+            ));
+        }
+        out.push_str("}\n\n");
+    }
+    out.push_str("type ProviderFactories = {\n");
+    for (plugin, contract) in &entries {
+        let field: String = js_internal_provider_field(&plugin.name, &contract.name);
+        out.push_str(&format!("    {field}: () => {field}Implementation;\n"));
+    }
+    out.push_str("};\n\nexport class InternalProviders {\n    #factories: ProviderFactories | null;\n    constructor(factories: ProviderFactories) { this.#factories = factories; }\n    consume(): ProviderFactories {\n        if (this.#factories === null) throw new Error(\"internal provider input has already been consumed; create fresh providers\");\n        const factories = this.#factories;\n        this.#factories = null;\n        return factories;\n    }\n}\n\n");
+    for (plugin, contract) in &entries {
+        let field: String = js_internal_provider_field(&plugin.name, &contract.name);
+        out.push_str(&format!(
+            "function _adapt_{field}(factory: () => {field}Implementation): Record<string, (...args: any[]) => any> {{\n    const implementation = factory();\n    return {{\n"
+        ));
+        for (index, function) in contract.functions.iter().enumerate() {
+            let arguments: String = function
+                .params
+                .iter()
+                .enumerate()
+                .map(|(parameter_index, _)| format!("arg{parameter_index}"))
+                .collect::<Vec<String>>()
+                .join(", ");
+            let parameters: String = function
+                .params
+                .iter()
+                .enumerate()
+                .map(|(parameter_index, _)| format!("arg{parameter_index}: any"))
+                .collect::<Vec<String>>()
+                .join(", ");
+            out.push_str(&format!(
+                "        fn{index}: ({parameters}) => implementation.{}({arguments}),\n",
+                function.name
+            ));
+        }
+        out.push_str("    };\n}\n\n");
+    }
+    out.push_str("export interface Registration {\n    bundleId: bigint;\n");
+    for (plugin, contract) in &entries {
+        let field: String = js_internal_provider_field(&plugin.name, &contract.name);
+        out.push_str(&format!(
+            "    {field}: {}Contract;\n",
+            contract_to_class_name(&contract.name)
+        ));
+    }
+    out.push_str("}\n\nexport function register(runtime: InternalRuntime, providers: InternalProviders): Registration {\n    const factories = providers.consume();\n    const nativeBridge = bridgeLibrary();\n    const memory = createInternalPluginGuestBridge(nativeBridge);\n    const bundle = buildInternalPluginBundle({\n");
+    out.push_str(&format!(
+        "        manifest: {:?},\n        contracts: [\n",
+        generate_manifest_toml(ir)
+    ));
+    for (plugin, contract) in &entries {
+        let field: String = js_internal_provider_field(&plugin.name, &contract.name);
+        let symbol: String = js_internal_provider_symbol(&plugin.name, &contract.name);
+        out.push_str(&format!(
+            "            {{ provider: {:?}, contractName: {:?}, version: {{ major: {}, minor: {}, patch: {} }},\n                adapter: buildInternalPluginGuestContract({{ contractId: 0x{:016X}n, version: {{ major: {}, minor: {}, patch: {} }}, implementation: host => {{ memory.setHost(host); return _adapt_{field}(factories.{field}); }}, methods: [\n",
+            plugin.name,
+            contract.name,
+            contract.version.major,
+            contract.version.minor,
+            contract.version.patch,
+            contract.contract_id,
+            contract.version.major,
+            contract.version.minor,
+            contract.version.patch
+        ));
+        for index in 0..contract.functions.len() {
+            out.push_str(&format!(
+                "                    (implementation, args, out, arena) => {symbol_lower}_fn{index}_abi_wrapper(implementation, memory.addressOf(args), memory.addressOf(out), memory.addressOf(arena), memory),\n",
+                symbol_lower = symbol.to_lowercase()
+            ));
+        }
+        out.push_str("                ] }, nativeBridge) },\n");
+    }
+    out.push_str(&format!(
+        "        ],\n    }});\n    let published: {{ bundleId: bigint; handles: unknown[] }};\n    try {{ published = runtime.registerInternalPluginWithHandles(bundle, {}); }} catch (error) {{ bundle.dispose(); throw error; }}\n    const bundleId = published.bundleId;\n",
+        entries.len()
+    ));
+    for (plugin, contract) in &entries {
+        let field: String = js_internal_provider_field(&plugin.name, &contract.name);
+        let class: String = contract_to_class_name(&contract.name);
+        out.push_str(&format!(
+            "    const {field} = {class}Contract.createFromHandle(runtime as never, published.handles[{index}] as never);\n",
+            index = entries
+                .iter()
+                .position(|(candidate_plugin, candidate_contract)| {
+                    candidate_plugin.name == plugin.name && candidate_contract.name == contract.name
+                })
+                .unwrap_or(0)
+        ));
+        out.push_str(&format!(
+            "    if ({field} === null) {{ runtime.unloadBundle(bundleId); throw new Error(\"registered contract caller was not discoverable\"); }}\n"
+        ));
+    }
+    out.push_str("    return { bundleId");
+    for (plugin, contract) in &entries {
+        out.push_str(&format!(
+            ", {}",
+            js_internal_provider_field(&plugin.name, &contract.name)
+        ));
+    }
+    out.push_str(" };\n}\n");
+    Ok(out)
+}
+
 fn render_plugin_interface_quickjs(
     out: &mut String,
     plugin_name: &str,
     contract: &ResolvedContract,
     ir: &ValidatedIr,
+    interface_var: &str,
+    set_factory_name: &str,
+    export_wrappers: bool,
 ) -> Result<(), PolyplugcError> {
-    let plugin_var: String = plugin_name.to_uppercase().replace(['.', '-'], "_");
+    let plugin_var: String = interface_var.to_owned();
     let contract_name_full: String = format!("{}@{}", contract.name, contract.version.major);
     let contract_id: u64 = guest_contract_id(&contract.name, contract.version.major);
     let contract_lo: u32 = (contract_id & 0xFFFFFFFF) as u32;
@@ -523,20 +870,7 @@ fn render_plugin_interface_quickjs(
     out.push_str(&format!("    version: {{ major: {version_major}, minor: {version_minor}, patch: {version_patch} }}\n"));
     out.push_str("};\n");
 
-    let set_factory_name: String = format!(
-        "set{}Factory",
-        plugin_name
-            .replace(['.', '-'], "_")
-            .split('_')
-            .map(|s| {
-                let mut chars = s.chars();
-                match chars.next() {
-                    None => String::new(),
-                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                }
-            })
-            .collect::<String>()
-    );
+    let set_factory_name: String = set_factory_name.to_owned();
 
     // Generate ABI wrapper functions for each contract function
     // These wrappers handle the raw pointer conversion between the loader and user code
@@ -637,7 +971,7 @@ fn render_plugin_interface_quickjs(
             ]),
             Some("number".to_owned()),
             body,
-            false,
+            export_wrappers,
         )?);
 
         abi_wrappers.push(wrapper_name);
@@ -899,10 +1233,7 @@ fn generate_index_ts(ir: &ValidatedIr) -> String {
     // Barrel re-exports: the bundle entry point (polyplug_init), each plugin's
     // interface + factory from ./contracts, and any peer caller classes.
     // ImportSet merges same-source entries onto one `export { … } from '…'` line.
-    let mut reexports: Vec<ImportEntry> = vec![
-        js_reexport("POLYPLUG_MANIFEST", "./init"),
-        js_reexport("polyplug_init", "./init"),
-    ];
+    let mut reexports: Vec<ImportEntry> = vec![js_reexport("polyplug_init", "./init")];
     if let Some(bundle) = bundle {
         for plugin in &bundle.plugins {
             let plugin_var: String = plugin.name.to_uppercase().replace(['.', '-'], "_");
@@ -967,18 +1298,6 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
         .collect();
     out.push_str(&js_import_block(&[&contract_imports]));
 
-    let manifest_bytes: String = generate_manifest_toml(ir)
-        .bytes()
-        .map(|byte: u8| byte.to_string())
-        .collect::<Vec<String>>()
-        .join(", ");
-    out.push_str(
-        "// Canonical manifest bytes for in-process staging; generated bundles retain this data.\n",
-    );
-    out.push_str(&format!(
-        "export const POLYPLUG_MANIFEST = new Uint8Array([{manifest_bytes}]);\n\n"
-    ));
-    out.push('\n');
     out.push_str("// ABI error codes (match polyplug_abi.AbiErrorCode)\n");
     out.push_str("const AbiErrorCode = {\n");
     out.push_str("    Ok: 0,\n");
@@ -1177,6 +1496,17 @@ fn generate_readme_quickjs(ir: &ValidatedIr) -> String {
 }
 
 fn generate_callers_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
+    generate_callers_ts_with_direct_handles(ir, false)
+}
+
+fn generate_internal_callers_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
+    generate_callers_ts_with_direct_handles(ir, true)
+}
+
+fn generate_callers_ts_with_direct_handles(
+    ir: &ValidatedIr,
+    direct_handles: bool,
+) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(
         "// THIS FILE IS AUTO-GENERATED BY polyplugc\n\
@@ -1195,6 +1525,7 @@ fn generate_callers_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     // runtime the caller is constructed with the real SDK `Runtime` instance.
     out.push_str("// Structural SDK types (see sdks/js/host/polyplug/mod.js).\n");
     out.push_str("interface GuestContractInterfaceView {\n");
+    out.push_str("    interfacePtr(): Deno.PointerValue;\n");
     out.push_str("    isValid(): boolean;\n");
     out.push_str("    functionCount(): number;\n");
     out.push_str("    createInstance(): Uint8Array;\n");
@@ -1243,7 +1574,7 @@ fn generate_callers_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push('\n');
 
     for contract in &ir.contracts {
-        generate_host_caller_class_quickjs(&mut out, ir, contract)?;
+        generate_host_caller_class_quickjs(&mut out, ir, contract, direct_handles)?;
     }
 
     Ok(out)
@@ -1253,6 +1584,7 @@ fn generate_host_caller_class_quickjs(
     out: &mut String,
     ir: &ValidatedIr,
     contract: &ResolvedContract,
+    direct_handles: bool,
 ) -> Result<(), PolyplugcError> {
     let class_name: String = contract_to_class_name(&contract.name);
     let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
@@ -1272,7 +1604,7 @@ fn generate_host_caller_class_quickjs(
     }
     out.push_str(&format!("export class {}Contract {{\n", class_name));
     out.push_str("    #rt: Runtime;\n");
-    out.push_str("    #view: GuestContractInterfaceView;\n");
+    out.push_str("    #view: GuestContractInterfaceView | null;\n");
     out.push_str("    #instance: Uint8Array;\n");
     // Retained so the cache can re-resolve after a hot-reload (which swaps a new
     // interface into the same slot) or report a gone contract after an unload.
@@ -1281,6 +1613,7 @@ fn generate_host_caller_class_quickjs(
     // dispatch against the live counter to detect a reload/unload and re-resolve,
     // so the cached interface pointer and instance never dangle.
     out.push_str("    #cachedRevision: bigint;\n\n");
+    out.push_str("    #destroyed: boolean;\n\n");
 
     out.push_str(
         "    private constructor(rt: Runtime, view: GuestContractInterfaceView, instance: Uint8Array, handle: number, cachedRevision: bigint) {\n",
@@ -1290,6 +1623,7 @@ fn generate_host_caller_class_quickjs(
     out.push_str("        this.#instance = instance;\n");
     out.push_str("        this.#handle = handle;\n");
     out.push_str("        this.#cachedRevision = cachedRevision;\n");
+    out.push_str("        this.#destroyed = false;\n");
     out.push_str("    }\n\n");
 
     out.push_str(
@@ -1319,6 +1653,23 @@ fn generate_host_caller_class_quickjs(
         class_name
     ));
     out.push_str("    }\n\n");
+    if direct_handles {
+        out.push_str(&format!(
+            "    /** Construct from this registration's exact committed handle. */\n    static createFromHandle(rt: Runtime, handle: number): {}Contract | null {{\n",
+            class_name
+        ));
+        out.push_str("        const view = rt.resolveGuestContractInterface(handle);\n");
+        out.push_str("        if (view === null || !view.isValid()) {\n");
+        out.push_str("            return null;\n");
+        out.push_str("        }\n");
+        out.push_str("        const instance = view.createInstance();\n");
+        out.push_str("        const cachedRevision = rt.registryRevision();\n");
+        out.push_str(&format!(
+            "        return new {}Contract(rt, view, instance, handle, cachedRevision);\n",
+            class_name
+        ));
+        out.push_str("    }\n\n");
+    }
 
     // Read the registry revision through the cached pointer — one atomic load, no call
     // into the runtime. Returns the cached value ("unchanged") when there is no counter.
@@ -1326,16 +1677,27 @@ fn generate_host_caller_class_quickjs(
     out.push_str("        return this.#rt.registryRevision();\n");
     out.push_str("    }\n\n");
 
-    // Re-resolve the cached interface after the registry changed under us. A hot-reload
-    // swapped a new interface into the same slot, so the retained handle still resolves
-    // (to the new interface); an unload vacated the slot, so it resolves to null and
-    // `false` is returned (the contract is gone). The old instance is ABANDONED, never
-    // destroyed: a reload epoch-reclaimed its interface, so calling the dead interface's
-    // destroyInstance would be undefined behaviour.
+    out.push_str("    #invalidate(): void {\n");
+    out.push_str("        this.#view = null;\n");
+    out.push_str("        this.#instance = new Uint8Array(0);\n");
+    out.push_str("        this.#destroyed = true;\n");
+    out.push_str("    }\n\n");
+    // Re-resolve the cached interface after the registry changed under us. An unrelated
+    // change can retain the same interface; in that case preserve the stateful instance
+    // and only refresh the revision. A hot-reload instead resolves a new interface, whose
+    // old instance was epoch-reclaimed and must be abandoned before replacement.
     out.push_str("    #revalidate(): boolean {\n");
+    out.push_str("        if (this.#destroyed || this.#view === null) {\n");
+    out.push_str("            return false;\n");
+    out.push_str("        }\n");
     out.push_str("        const view = this.#rt.resolveGuestContractInterface(this.#handle);\n");
     out.push_str("        if (view === null || !view.isValid()) {\n");
+    out.push_str("            this.#invalidate();\n");
     out.push_str("            return false;\n");
+    out.push_str("        }\n");
+    out.push_str("        if (view.interfacePtr() === this.#view.interfacePtr()) {\n");
+    out.push_str("            this.#cachedRevision = this.#liveRevision();\n");
+    out.push_str("            return true;\n");
     out.push_str("        }\n");
     out.push_str("        this.#view = view;\n");
     out.push_str("        this.#instance = view.createInstance();\n");
@@ -1343,20 +1705,40 @@ fn generate_host_caller_class_quickjs(
     out.push_str("        return true;\n");
     out.push_str("    }\n\n");
 
-    out.push_str("    /** True while the resolved interface pointer is valid. */\n");
+    out.push_str("    /** True while this caller retains a live resolved interface. */\n");
     out.push_str("    isValid(): boolean {\n");
-    out.push_str("        return this.#view.isValid();\n");
+    out.push_str("        if (this.#destroyed || this.#view === null) {\n");
+    out.push_str("            return false;\n");
+    out.push_str("        }\n");
+    out.push_str(
+        "        if (this.#liveRevision() !== this.#cachedRevision && !this.#revalidate()) {\n",
+    );
+    out.push_str("            return false;\n");
+    out.push_str("        }\n");
+    out.push_str("        return this.#view !== null && this.#view.isValid();\n");
     out.push_str("    }\n\n");
 
-    out.push_str("    /** Destroy the instance via the interface `destroy_instance`. */\n");
+    out.push_str("    /** Destroy this instance exactly once. */\n");
     out.push_str("    destroy(): void {\n");
-    // If the registry changed since we resolved, the cached interface and instance are
-    // stale — a reload/unload reclaimed their backing — so calling the dead interface's
-    // destroy would be UB; the reload/unload already reclaimed the instance, so skip it.
-    out.push_str("        if (this.#liveRevision() !== this.#cachedRevision) {\n");
-    out.push_str("            return;\n");
+    out.push_str("        if (this.#destroyed || this.#view === null) {\n");
+    out.push_str("            throw new Error('caller has already been destroyed');\n");
     out.push_str("        }\n");
-    out.push_str("        this.#view.destroyInstance(this.#instance);\n");
+    out.push_str("        const cachedView = this.#view;\n");
+    out.push_str("        if (cachedView === null) {\n");
+    out.push_str("            throw new Error('caller has already been destroyed');\n");
+    out.push_str("        }\n");
+    out.push_str("        if (this.#liveRevision() !== this.#cachedRevision) {\n");
+    out.push_str(
+        "            const resolved = this.#rt.resolveGuestContractInterface(this.#handle);\n",
+    );
+    out.push_str("            if (resolved === null || !resolved.isValid() || resolved.interfacePtr() !== cachedView.interfacePtr()) {\n");
+    out.push_str("                this.#invalidate();\n");
+    out.push_str("                throw new Error('caller cannot be destroyed after contract reload/unload');\n");
+    out.push_str("            }\n");
+    out.push_str("        }\n");
+    out.push_str("        const instance = this.#instance;\n");
+    out.push_str("        this.#invalidate();\n");
+    out.push_str("        cachedView.destroyInstance(instance);\n");
     out.push_str("    }\n\n");
 
     for func in &contract.functions {
@@ -1426,10 +1808,17 @@ fn generate_host_caller_method_deno(
     // or unload) we re-resolve first, so the cached pointer is never used once it
     // dangles. A failed re-resolve means the contract is gone — throw NotFound.
     out.push_str(
-        "        if (this.#liveRevision() !== this.#cachedRevision && !this.#revalidate()) {\n",
+        "        if (this.#destroyed || this.#view === null || (this.#liveRevision() !== this.#cachedRevision && !this.#revalidate())) {\n",
     );
     out.push_str(&format!(
         "            throw new Error('call `{}` failed: contract gone after reload/unload');\n",
+        func.name
+    ));
+    out.push_str("        }\n");
+    out.push_str("        const view = this.#view;\n");
+    out.push_str("        if (view === null) {\n");
+    out.push_str(&format!(
+        "            throw new Error('call `{}` failed: caller has been destroyed');\n",
         func.name
     ));
     out.push_str("        }\n");
@@ -1438,7 +1827,7 @@ fn generate_host_caller_method_deno(
     // VM-dispatch interfaces report a count of 0 (the VM routes by fn_id itself),
     // so only enforce the bound for native interfaces that report a real count.
     out.push_str(&format!(
-        "        if (this.#view.functionCount() > 0 && {fn_id} >= this.#view.functionCount()) {{\n"
+        "        if (view.functionCount() > 0 && {fn_id} >= view.functionCount()) {{\n"
     ));
     out.push_str(&format!(
         "            throw new Error('function `{}` not available in interface');\n",
@@ -1490,7 +1879,7 @@ fn generate_host_caller_method_deno(
 
     // Dispatch through the resolved interface (native or VM).
     out.push_str(&format!(
-        "        const code = this.#view.dispatch({fn_id}, this.#instance, argsPtr, outPtr);\n"
+        "        const code = view.dispatch({fn_id}, this.#instance, argsPtr, outPtr);\n"
     ));
     // Release argument payloads regardless of outcome.
     out.push_str("        for (const [_p, _s] of _allocs) { rt.free(_p, _s, 1); }\n");
@@ -5261,8 +5650,16 @@ mod tests {
 
     fn render_wrapper(contract: &ResolvedContract, ir: &ValidatedIr) -> String {
         let mut out: String = String::new();
-        render_plugin_interface_quickjs(&mut out, "shapes_plugin", contract, ir)
-            .expect("render_plugin_interface_quickjs");
+        render_plugin_interface_quickjs(
+            &mut out,
+            "shapes_plugin",
+            contract,
+            ir,
+            "SHAPES_PLUGIN",
+            "setShapesPluginFactory",
+            false,
+        )
+        .expect("render_plugin_interface_quickjs");
         out
     }
 
@@ -6350,14 +6747,14 @@ mod tests {
         );
     }
     #[test]
-    fn in_process_bundle_exports_canonical_manifest_bytes() {
+    fn external_guest_omits_legacy_manifest_helper() {
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
             enums: vec![],
             contracts: vec![],
             host_contracts: vec![],
             bundle: Some(ResolvedBundle {
-                name: "js.in_process".to_owned(),
+                name: "js.external".to_owned(),
                 version: Version {
                     major: 1,
                     minor: 2,
@@ -6371,27 +6768,16 @@ mod tests {
                 needs_reinit_on_dep_reload: false,
             }),
         };
-        let manifest_bytes: String = generate_manifest_toml(&ir)
-            .bytes()
-            .map(|byte: u8| byte.to_string())
-            .collect::<Vec<String>>()
-            .join(", ");
         let init: String = generate_init_ts(&ir);
         let index: String = generate_index_ts(&ir);
 
         assert!(
-            init.contains(&format!(
-                "export const POLYPLUG_MANIFEST = new Uint8Array([{manifest_bytes}]);"
-            )),
-            "init must own the canonical manifest bytes: {init}"
+            !init.contains("POLYPLUG_MANIFEST"),
+            "external guest init must not emit internal-plugin manifest helpers: {init}"
         );
         assert!(
-            index.contains("POLYPLUG_MANIFEST"),
-            "bundle index must re-export canonical manifest bytes: {index}"
+            !index.contains("POLYPLUG_MANIFEST"),
+            "external guest index must not re-export internal-plugin manifest helpers: {index}"
         );
-        let forbidden_bundle: String = ["InProcess", "BundleRegistration"].concat();
-        let forbidden_contract: String = ["InProcess", "ContractRegistration"].concat();
-        assert!(!init.contains(&forbidden_bundle));
-        assert!(!init.contains(&forbidden_contract));
     }
 }

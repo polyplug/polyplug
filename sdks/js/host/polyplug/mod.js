@@ -194,16 +194,20 @@ export const SignaturePolicy = Object.freeze({
 // All operations are accessed through HostApi struct fields.
 const SYMBOLS = {
   polyplug_runtime_create: { parameters: ["pointer"], result: "pointer" },
-  polyplug_runtime_destroy: { parameters: ["pointer"], result: "void" },
-  polyplug_begin_in_process_bundle: {
+  polyplug_runtime_destroy: { parameters: ["pointer"], result: "bool" },
+  polyplug_begin_internal_plugin: {
     parameters: ["pointer", "pointer", "usize", "u32", "pointer", "pointer"],
     result: "void",
   },
-  polyplug_commit_in_process_bundle: {
+  polyplug_commit_internal_plugin: {
     parameters: ["pointer", "u64", "pointer"],
     result: "void",
   },
-  polyplug_abort_in_process_bundle: {
+  polyplug_commit_internal_plugin_with_handles: {
+    parameters: ["pointer", "u64", "pointer", "usize", "pointer", "pointer"],
+    result: "void",
+  },
+  polyplug_abort_internal_plugin: {
     parameters: ["pointer", "u64"],
     result: "void",
   },
@@ -476,10 +480,10 @@ export function buildHostContractInterface(spec) {
 
 /**
  * Canonical manifest bytes, staged contract registrar, and rooted JavaScript
- * state for one in-process bundle. The resident remains with its creator until
+ * state for one internal plugin. The resident remains with its creator until
  * every descriptor/interface pair has staged and core commits the transaction.
  */
-export class InProcessBundle {
+export class InternalPluginBundle {
   #manifest;
   #resident;
   #registerContracts;
@@ -492,17 +496,17 @@ export class InProcessBundle {
    */
   constructor(manifest, resident, registerContracts) {
     if (typeof manifest !== "string" && !(manifest instanceof Uint8Array)) {
-      throw new TypeError("InProcessBundle manifest must be TOML text or UTF-8 bytes");
+      throw new TypeError("InternalPluginBundle manifest must be TOML text or UTF-8 bytes");
     }
     const manifestBytes = typeof manifest === "string" ? _encoder.encode(manifest) : manifest.slice();
     if (manifestBytes.byteLength === 0) {
-      throw new TypeError("InProcessBundle manifest must not be empty");
+      throw new TypeError("InternalPluginBundle manifest must not be empty");
     }
     if (resident === null || typeof resident !== "object" || typeof resident.release !== "function") {
-      throw new TypeError("InProcessBundle resident must release rooted state");
+      throw new TypeError("InternalPluginBundle resident must release rooted state");
     }
     if (typeof registerContracts !== "function") {
-      throw new TypeError("InProcessBundle must register descriptor/interface pairs");
+      throw new TypeError("InternalPluginBundle must register descriptor/interface pairs");
     }
     this.#manifest = manifestBytes;
     this.#resident = resident;
@@ -510,38 +514,47 @@ export class InProcessBundle {
     this.#transferReserved = false;
   }
 
-  _reserveInProcessTransfer() {
+  _reserveInternalPluginTransfer() {
     if (this.#resident === null || this.#transferReserved) {
-      throw new Error("InProcessBundle is already being registered or has been registered");
+      throw new Error("InternalPluginBundle is already being registered or has been registered");
     }
     this.#transferReserved = true;
   }
 
-  _cancelInProcessTransfer() {
+  _cancelInternalPluginTransfer() {
     if (this.#resident !== null) {
       this.#transferReserved = false;
     }
   }
 
+  /** Release an untransferred resident after a consumed registration attempt. */
+  dispose() {
+    if (this.#resident !== null) {
+      this.#resident.release();
+      this.#resident = null;
+    }
+    this.#transferReserved = false;
+  }
+
   /** @returns {Uint8Array} Canonical manifest bytes held by this generated bundle. */
-  _inProcessManifest() {
+  _internalPluginManifest() {
     if (this.#resident === null) {
-      throw new Error("InProcessBundle has already been registered");
+      throw new Error("InternalPluginBundle has already been registered");
     }
     return this.#manifest;
   }
 
   _registerGuestContracts(host) {
     if (!this.#transferReserved || this.#resident === null) {
-      throw new Error("InProcessBundle registration is not active");
+      throw new Error("InternalPluginBundle registration is not active");
     }
     this.#registerContracts(host);
   }
 
   /** @returns {{ release: () => void }} The resident transferred to the Runtime. */
-  _takeInProcessResident() {
+  _takeInternalPluginResident() {
     if (!this.#transferReserved || this.#resident === null) {
-      throw new Error("InProcessBundle resident is not available for transfer");
+      throw new Error("InternalPluginBundle resident is not available for transfer");
     }
     const resident = this.#resident;
     this.#resident = null;
@@ -572,23 +585,23 @@ function writeStringView(view, offset, value, roots) {
  *   contractId: bigint,
  *   version: { major: number, minor: number, patch: number },
  *   implementation: object | (() => object),
- *   methods: Array<(implementation: object, args: PolyPtr, out: PolyPtr) => number | void>,
+ *   methods: Array<(implementation: object, args: PolyPtr, out: PolyPtr, arena: PolyPtr) => number | void>,
  * }} spec
  */
-export function buildInProcessGuestContract(spec, bridgeLibrary) {
+export function buildInternalPluginGuestContract(spec, bridgeLibrary) {
   if (spec === null || typeof spec !== "object" || typeof spec.contractId !== "bigint"
     || !Array.isArray(spec.methods)) {
-    throw new TypeError("buildInProcessGuestContract requires a contract id and method adapters");
+    throw new TypeError("buildInternalPluginGuestContract requires a contract id and method adapters");
   }
   if (bridgeLibrary === null || typeof bridgeLibrary !== "object"
     || bridgeLibrary.symbols === null || typeof bridgeLibrary.symbols !== "object") {
-    throw new TypeError("buildInProcessGuestContract requires an explicit polyplug_js bridge library");
+    throw new TypeError("buildInternalPluginGuestContract requires an explicit polyplug_js bridge library");
   }
   const symbols = bridgeLibrary.symbols;
   for (const name of [
-    "polyplug_js_in_process_bridge_create",
-    "polyplug_js_in_process_bridge_interface",
-    "polyplug_js_in_process_bridge_free",
+    "polyplug_js_internal_plugin_bridge_create",
+    "polyplug_js_internal_plugin_bridge_interface",
+    "polyplug_js_internal_plugin_bridge_free",
   ]) {
     if (typeof symbols[name] !== "function") {
       throw new TypeError(`polyplug_js bridge library is missing ${name}`);
@@ -608,14 +621,14 @@ export function buildInProcessGuestContract(spec, bridgeLibrary) {
       instances.set(id, factory(host));
       return id;
     } catch (error) {
-      console.error(`polyplug: in-process create_instance threw: ${error}`);
+      console.error(`polyplug: internal-plugin create_instance threw: ${error}`);
       return 0n;
     }
   };
   const destroyImplementation = (instanceData) => {
     instances.delete(_ffi.pointerValue(instanceData));
   };
-  const dispatchImplementation = (instanceData, functionId, args, out) => {
+  const dispatchImplementation = (instanceData, functionId, args, out, arena) => {
     try {
       const implementation = _ffi.pointerValue(instanceData) === 0n
         ? defaultImplementation
@@ -624,10 +637,10 @@ export function buildInProcessGuestContract(spec, bridgeLibrary) {
       if (implementation === undefined || typeof invoke !== "function") {
         return AbiErrorCode.FunctionNotAvailable;
       }
-      const code = invoke(implementation, args, out);
+      const code = invoke(implementation, args, out, arena);
       return typeof code === "number" ? code : AbiErrorCode.Ok;
     } catch (error) {
-      console.error(`polyplug: in-process dispatch threw: ${error}`);
+      console.error(`polyplug: internal-plugin dispatch threw: ${error}`);
       return AbiErrorCode.Panic;
     }
   };
@@ -641,10 +654,10 @@ export function buildInProcessGuestContract(spec, bridgeLibrary) {
     (instanceData) => destroyImplementation(instanceData),
   );
   const dispatch = _ffi.makeCallback(
-    { parameters: ["pointer", "u32", "pointer", "pointer"], result: "u32" },
-    (instanceData, functionId, args, out) => dispatchImplementation(instanceData, functionId, args, out),
+    { parameters: ["pointer", "u32", "pointer", "pointer", "pointer"], result: "u32" },
+    (instanceData, functionId, args, out, arena) => dispatchImplementation(instanceData, functionId, args, out, arena),
   );
-  const bridgeResident = symbols.polyplug_js_in_process_bridge_create(
+  const bridgeResident = symbols.polyplug_js_internal_plugin_bridge_create(
     dispatch.pointer,
     destroy.pointer,
     create.pointer,
@@ -657,15 +670,15 @@ export function buildInProcessGuestContract(spec, bridgeLibrary) {
     destroy.close();
     create.close();
     dispatch.close();
-    throw new Error("polyplug_js bridge could not create an in-process adapter");
+    throw new Error("polyplug_js bridge could not create an internal-plugin adapter");
   }
-  const interfacePtr = symbols.polyplug_js_in_process_bridge_interface(bridgeResident);
+  const interfacePtr = symbols.polyplug_js_internal_plugin_bridge_interface(bridgeResident);
   if (interfacePtr === null) {
-    symbols.polyplug_js_in_process_bridge_free(bridgeResident);
+    symbols.polyplug_js_internal_plugin_bridge_free(bridgeResident);
     destroy.close();
     create.close();
     dispatch.close();
-    throw new Error("polyplug_js bridge returned an incomplete in-process adapter");
+    throw new Error("polyplug_js bridge returned an incomplete internal-plugin adapter");
   }
 
   let released = false;
@@ -675,7 +688,7 @@ export function buildInProcessGuestContract(spec, bridgeLibrary) {
         return;
       }
       released = true;
-      symbols.polyplug_js_in_process_bridge_free(bridgeResident);
+      symbols.polyplug_js_internal_plugin_bridge_free(bridgeResident);
       instances.clear();
       dispatch.close();
       destroy.close();
@@ -693,6 +706,98 @@ export function buildInProcessGuestContract(spec, bridgeLibrary) {
 }
 
 /**
+ * Creates the pointer bridge consumed by generated internal JavaScript provider
+ * bindings. The bridge is per registration attempt and owns no plugin state;
+ * the generated bundle resident retains the explicit native bridge library.
+ *
+ * @param {{ symbols: { polyplug_js_internal_plugin_arena_alloc: (arena: PolyPtr, size: bigint) => PolyPtr } }} bridgeLibrary
+ */
+export function createInternalPluginGuestBridge(bridgeLibrary) {
+  if (bridgeLibrary === null || typeof bridgeLibrary !== "object"
+    || bridgeLibrary.symbols === null
+    || typeof bridgeLibrary.symbols.polyplug_js_internal_plugin_arena_alloc !== "function") {
+    throw new TypeError("createInternalPluginGuestBridge requires the polyplug_js bridge library");
+  }
+  let host = null;
+  const pointerAt = (address) => {
+    if (!Number.isSafeInteger(address) || address <= 0) {
+      throw new RangeError("generated JavaScript binding received an invalid pointer");
+    }
+    const pointer = _ffi.pointerCreate(BigInt(address));
+    if (pointer === null) {
+      throw new RangeError("generated JavaScript binding received a null pointer");
+    }
+    return pointer;
+  };
+  const viewAt = (address, size) => {
+    return new DataView(_ffi.pointerView(pointerAt(address)).getArrayBuffer(size));
+  };
+  const splitPointer = (pointer) => {
+    if (pointer === null) {
+      throw new Error("generated JavaScript binding could not allocate return storage");
+    }
+    const value = _ffi.pointerValue(pointer);
+    return [Number(value & 0xFFFF_FFFFn), Number(value >> 32n)];
+  };
+  return Object.freeze({
+    addressOf(pointer) {
+      return pointer === null ? 0 : Number(_ffi.pointerValue(pointer));
+    },
+    setHost(value) {
+      host = value;
+    },
+    readByte(address) {
+      return viewAt(address, 1).getUint8(0);
+    },
+    readU32(address) {
+      return viewAt(address, 4).getUint32(0, true);
+    },
+    readI32(address) {
+      return viewAt(address, 4).getInt32(0, true);
+    },
+    readF32(address) {
+      return viewAt(address, 4).getFloat32(0, true);
+    },
+    readF64(address) {
+      return viewAt(address, 8).getFloat64(0, true);
+    },
+    writeByte(address, value) {
+      viewAt(address, 1).setUint8(0, value);
+    },
+    writeU32(address, value) {
+      viewAt(address, 4).setUint32(0, value, true);
+    },
+    writeI32(address, value) {
+      viewAt(address, 4).setInt32(0, value, true);
+    },
+    writeF32(address, value) {
+      viewAt(address, 4).setFloat32(0, value, true);
+    },
+    writeF64(address, value) {
+      viewAt(address, 8).setFloat64(0, value, true);
+    },
+    arenaAlloc(size, arenaAddress) {
+      if (arenaAddress === 0) {
+        if (host === null) {
+          throw new Error("generated JavaScript binding has no host allocator");
+        }
+        return splitPointer(callHostMethod(
+          host,
+          HOST_API_OFFSETS.alloc,
+          ["pointer", "usize", "usize"],
+          "pointer",
+          [host, BigInt(size), 1n],
+        ));
+      }
+      const arena = pointerAt(arenaAddress);
+      return splitPointer(
+        bridgeLibrary.symbols.polyplug_js_internal_plugin_arena_alloc(arena, BigInt(size)),
+      );
+    },
+  });
+}
+
+/**
  * Combines generated contract adapters with their canonical manifest bytes.
  * Existing PluginDescriptor and GuestContractInterface values are registered
  * directly during the runtime's staging transaction.
@@ -703,15 +808,15 @@ export function buildInProcessGuestContract(spec, bridgeLibrary) {
  *     provider: string,
  *     contractName: string,
  *     version: { major: number, minor: number, patch: number },
- *     adapter: ReturnType<typeof buildInProcessGuestContract>,
+ *     adapter: ReturnType<typeof buildInternalPluginGuestContract>,
  *   }>,
  * }} spec
- * @returns {InProcessBundle}
+ * @returns {InternalPluginBundle}
  */
-export function buildInProcessBundle(spec) {
+export function buildInternalPluginBundle(spec) {
   if (spec === null || typeof spec !== "object" || !Array.isArray(spec.contracts)
     || spec.contracts.length === 0) {
-    throw new TypeError("buildInProcessBundle requires a canonical manifest and at least one contract adapter");
+    throw new TypeError("buildInternalPluginBundle requires a canonical manifest and at least one contract adapter");
   }
 
   const roots = [];
@@ -721,7 +826,7 @@ export function buildInProcessBundle(spec) {
       || typeof contract.provider !== "string" || typeof contract.contractName !== "string"
       || contract.adapter === null || typeof contract.adapter !== "object"
       || contract.adapter.interfacePtr === null || contract.adapter.interfacePtr === undefined) {
-      throw new TypeError("buildInProcessBundle contract must provide a descriptor and guest interface");
+      throw new TypeError("buildInternalPluginBundle contract must provide a descriptor and guest interface");
     }
 
     const descriptor = new Uint8Array(PLUGIN_DESCRIPTOR_SIZE);
@@ -751,7 +856,7 @@ export function buildInProcessBundle(spec) {
       roots.length = 0;
     },
   };
-  return new InProcessBundle(spec.manifest, resident, (host) => {
+  return new InternalPluginBundle(spec.manifest, resident, (host) => {
     for (const registration of registrations) {
       const error = new Uint8Array(ABI_ERROR_SIZE);
       callHostMethod(
@@ -1038,9 +1143,9 @@ export class Runtime {
   // Per-instance FFI callback handles (on_reload / log trampolines).
   // Owned by THIS runtime (Rule 12: no module globals); closed on destroy.
   #callbacks;
-  // Generated in-process bundles transfer their rooted callback/table residents
+  // Generated internal plugins transfer their rooted callback/table residents
   // here only after core accepts their complete registration.
-  #inProcessResidents;
+  #internalPluginResidents;
   #destroyed;
 
   /**
@@ -1053,33 +1158,38 @@ export class Runtime {
     this.#host = host;
     this.#callbacks = callbacks;
     this.#destroyed = false;
-    this.#inProcessResidents = new Map();
+    this.#internalPluginResidents = new Map();
   }
 
   /**
    * Destroy the native runtime, then close the owned FFI callbacks.
    * The native side may invoke the trampolines up until
-   * polyplug_runtime_destroy returns, so close() happens strictly after.
-   * Idempotent.
+   * polyplug_runtime_destroy returns, so close() happens strictly after a
+   * successful destroy. Returns false without releasing state when the native
+   * runtime rejects this thread; callers may retry destroy() on its owner.
+   * @returns {boolean}
    */
   destroy() {
     if (this.#destroyed) {
-      return;
+      return true;
+    }
+    if (!this.#lib.symbols.polyplug_runtime_destroy(this.#host)) {
+      return false;
     }
     this.#destroyed = true;
-    this.#lib.symbols.polyplug_runtime_destroy(this.#host);
-    for (const resident of this.#inProcessResidents.values()) {
+    for (const resident of this.#internalPluginResidents.values()) {
       resident.release();
     }
-    this.#inProcessResidents.clear();
+    this.#internalPluginResidents.clear();
     for (const cb of this.#callbacks) {
       cb.close();
     }
     this.#callbacks = [];
+    return true;
   }
 
   [Symbol.dispose]() {
-    this.destroy();
+    return this.destroy();
   }
 
   /**
@@ -1197,15 +1307,15 @@ export class Runtime {
     if (code !== 0) {
       throw new Error(`unloadBundle failed: ${this.lastError()}`);
     }
-    const resident = this.#inProcessResidents.get(bundleId);
+    const resident = this.#internalPluginResidents.get(bundleId);
     if (resident !== undefined) {
-      this.#inProcessResidents.delete(bundleId);
+      this.#internalPluginResidents.delete(bundleId);
       resident.release();
     }
   }
 
   /**
-   * Synchronously stage and commit one generated in-process bundle.
+   * Synchronously stage and commit one generated internal plugin.
    *
    * The generated bundle owns canonical manifest bytes and rooted callbacks,
    * implementations, descriptors, and interfaces. Core receives each existing
@@ -1213,39 +1323,39 @@ export class Runtime {
    * The resident transfers only after commit succeeds; logical unload releases it
    * only after core drains calls, instances, and leases.
    * @param {{
-   *   _reserveInProcessTransfer: () => void,
-   *   _cancelInProcessTransfer: () => void,
-   *   _inProcessManifest: () => Uint8Array,
+   *   _reserveInternalPluginTransfer: () => void,
+   *   _cancelInternalPluginTransfer: () => void,
+   *   _internalPluginManifest: () => Uint8Array,
    *   _registerGuestContracts: (host: PolyPtr) => void,
-   *   _takeInProcessResident: () => { release: () => void },
+   *   _takeInternalPluginResident: () => { release: () => void },
    * }} bundle
    * @returns {bigint} Stable bundle identifier.
    */
-  registerInProcessBundle(bundle) {
+  registerInternalPlugin(bundle) {
     if (this.#destroyed) {
-      throw new Error("registerInProcessBundle: runtime is destroyed");
+      throw new Error("registerInternalPlugin: runtime is destroyed");
     }
     if (bundle === null || typeof bundle !== "object"
-      || typeof bundle._reserveInProcessTransfer !== "function"
-      || typeof bundle._cancelInProcessTransfer !== "function"
-      || typeof bundle._inProcessManifest !== "function"
+      || typeof bundle._reserveInternalPluginTransfer !== "function"
+      || typeof bundle._cancelInternalPluginTransfer !== "function"
+      || typeof bundle._internalPluginManifest !== "function"
       || typeof bundle._registerGuestContracts !== "function"
-      || typeof bundle._takeInProcessResident !== "function") {
-      throw new TypeError("registerInProcessBundle expects a generated in-process bundle");
+      || typeof bundle._takeInternalPluginResident !== "function") {
+      throw new TypeError("registerInternalPlugin expects a generated internal plugin");
     }
 
-    bundle._reserveInProcessTransfer();
+    bundle._reserveInternalPluginTransfer();
     let staged = false;
     let bundleId = 0n;
     try {
-      const manifest = bundle._inProcessManifest();
+      const manifest = bundle._internalPluginManifest();
       if (!(manifest instanceof Uint8Array) || manifest.byteLength === 0) {
-        throw new TypeError("generated in-process bundle returned invalid manifest bytes");
+        throw new TypeError("generated internal plugin returned invalid manifest bytes");
       }
 
       const bundleIdBuf = new Uint8Array(8);
       const beginError = new Uint8Array(ABI_ERROR_SIZE);
-      this.#lib.symbols.polyplug_begin_in_process_bundle(
+      this.#lib.symbols.polyplug_begin_internal_plugin(
         this.#host,
         _ffi.pointerOf(manifest),
         BigInt(manifest.byteLength),
@@ -1254,7 +1364,7 @@ export class Runtime {
         _ffi.pointerOf(beginError),
       );
       if (new DataView(beginError.buffer).getUint32(0, true) !== AbiErrorCode.Ok) {
-        throw new Error(`registerInProcessBundle failed to begin: ${this.lastError()}`);
+        throw new Error(`registerInternalPlugin failed to begin: ${this.lastError()}`);
       }
 
       bundleId = new DataView(bundleIdBuf.buffer).getBigUint64(0, true);
@@ -1262,30 +1372,129 @@ export class Runtime {
       bundle._registerGuestContracts(this.#host);
 
       const commitError = new Uint8Array(ABI_ERROR_SIZE);
-      this.#lib.symbols.polyplug_commit_in_process_bundle(
+      this.#lib.symbols.polyplug_commit_internal_plugin(
         this.#host,
         bundleId,
         _ffi.pointerOf(commitError),
       );
       staged = false;
       if (new DataView(commitError.buffer).getUint32(0, true) !== AbiErrorCode.Ok) {
-        throw new Error(`registerInProcessBundle failed to commit: ${this.lastError()}`);
+        throw new Error(`registerInternalPlugin failed to commit: ${this.lastError()}`);
       }
 
-      if (this.#inProcessResidents.has(bundleId)) {
-        throw new Error("registerInProcessBundle: runtime returned a duplicate live bundle id");
+      if (this.#internalPluginResidents.has(bundleId)) {
+        throw new Error("registerInternalPlugin: runtime returned a duplicate live bundle id");
       }
-      const resident = bundle._takeInProcessResident();
+      const resident = bundle._takeInternalPluginResident();
       if (resident === null || typeof resident !== "object" || typeof resident.release !== "function") {
-        throw new Error("generated in-process bundle lost its resident during registration");
+        throw new Error("generated internal plugin lost its resident during registration");
       }
-      this.#inProcessResidents.set(bundleId, resident);
+      this.#internalPluginResidents.set(bundleId, resident);
       return bundleId;
     } catch (error) {
       if (staged) {
-        this.#lib.symbols.polyplug_abort_in_process_bundle(this.#host, bundleId);
+        this.#lib.symbols.polyplug_abort_internal_plugin(this.#host, bundleId);
       }
-      bundle._cancelInProcessTransfer();
+      bundle._cancelInternalPluginTransfer();
+      throw error;
+    }
+  }
+
+  /**
+   * Stage and commit a generated internal bundle, returning the exact committed
+   * contract handles in registration order.
+   *
+   * @param {{
+   *   _reserveInternalPluginTransfer: () => void,
+   *   _cancelInternalPluginTransfer: () => void,
+   *   _internalPluginManifest: () => Uint8Array,
+   *   _registerGuestContracts: (host: PolyPtr) => void,
+   *   _takeInternalPluginResident: () => { release: () => void },
+   * }} bundle
+   * @param {number} handleCount Number of generated provider contracts.
+   * @returns {{ bundleId: bigint, handles: Array<{ index: number, generation: number }> }}
+   */
+  registerInternalPluginWithHandles(bundle, handleCount) {
+    if (this.#destroyed) {
+      throw new Error("registerInternalPluginWithHandles: runtime is destroyed");
+    }
+    if (!Number.isSafeInteger(handleCount) || handleCount <= 0) {
+      throw new TypeError("registerInternalPluginWithHandles requires a positive handle count");
+    }
+    if (bundle === null || typeof bundle !== "object"
+      || typeof bundle._reserveInternalPluginTransfer !== "function"
+      || typeof bundle._cancelInternalPluginTransfer !== "function"
+      || typeof bundle._internalPluginManifest !== "function"
+      || typeof bundle._registerGuestContracts !== "function"
+      || typeof bundle._takeInternalPluginResident !== "function") {
+      throw new TypeError("registerInternalPluginWithHandles expects a generated internal plugin");
+    }
+    bundle._reserveInternalPluginTransfer();
+    let staged = false;
+    let bundleId = 0n;
+    try {
+      const manifest = bundle._internalPluginManifest();
+      if (!(manifest instanceof Uint8Array) || manifest.byteLength === 0) {
+        throw new TypeError("generated internal plugin returned invalid manifest bytes");
+      }
+      const bundleIdBuf = new Uint8Array(8);
+      const beginError = new Uint8Array(ABI_ERROR_SIZE);
+      this.#lib.symbols.polyplug_begin_internal_plugin(
+        this.#host,
+        _ffi.pointerOf(manifest),
+        BigInt(manifest.byteLength),
+        5,
+        _ffi.pointerOf(bundleIdBuf),
+        _ffi.pointerOf(beginError),
+      );
+      if (new DataView(beginError.buffer).getUint32(0, true) !== AbiErrorCode.Ok) {
+        throw new Error(`registerInternalPluginWithHandles failed to begin: ${this.lastError()}`);
+      }
+      bundleId = new DataView(bundleIdBuf.buffer).getBigUint64(0, true);
+      staged = true;
+      bundle._registerGuestContracts(this.#host);
+      const handleBytes = new Uint8Array(handleCount * GUEST_CONTRACT_HANDLE_SIZE);
+      const handleCountBytes = new Uint8Array(8);
+      const commitError = new Uint8Array(ABI_ERROR_SIZE);
+      this.#lib.symbols.polyplug_commit_internal_plugin_with_handles(
+        this.#host,
+        bundleId,
+        _ffi.pointerOf(handleBytes),
+        BigInt(handleCount),
+        _ffi.pointerOf(handleCountBytes),
+        _ffi.pointerOf(commitError),
+      );
+      staged = false;
+      if (new DataView(commitError.buffer).getUint32(0, true) !== AbiErrorCode.Ok) {
+        throw new Error(`registerInternalPluginWithHandles failed to commit: ${this.lastError()}`);
+      }
+      const committedCount = Number(new DataView(handleCountBytes.buffer).getBigUint64(0, true));
+      if (committedCount !== handleCount) {
+        throw new Error(`generated internal registration committed ${committedCount} handles, expected ${handleCount}`);
+      }
+      const handles = [];
+      const view = new DataView(handleBytes.buffer);
+      for (let index = 0; index < handleCount; index++) {
+        const offset = index * GUEST_CONTRACT_HANDLE_SIZE;
+        handles.push({
+          index: view.getUint32(offset + GUEST_CONTRACT_HANDLE_INDEX_OFFSET, true),
+          generation: view.getUint32(offset + GUEST_CONTRACT_HANDLE_GENERATION_OFFSET, true),
+        });
+      }
+      if (this.#internalPluginResidents.has(bundleId)) {
+        throw new Error("registerInternalPluginWithHandles: runtime returned a duplicate live bundle id");
+      }
+      const resident = bundle._takeInternalPluginResident();
+      if (resident === null || typeof resident !== "object" || typeof resident.release !== "function") {
+        throw new Error("generated internal plugin lost its resident during registration");
+      }
+      this.#internalPluginResidents.set(bundleId, resident);
+      return { bundleId, handles };
+    } catch (error) {
+      if (staged) {
+        this.#lib.symbols.polyplug_abort_internal_plugin(this.#host, bundleId);
+      }
+      bundle._cancelInternalPluginTransfer();
       throw error;
     }
   }

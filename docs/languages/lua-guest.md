@@ -109,7 +109,7 @@ caller, and method names come from [Generated names](../generated-names.md).
 Lua is interpreted — there is no build step. Copy the entry-point file and the
 generated glue next to the generated `manifest.toml`:
 
-```
+```text
 dist/my_decoder/
 ├── manifest.toml          # from generated/manifest.toml
 ├── decoder.lua            # your entry point

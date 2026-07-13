@@ -10,6 +10,7 @@ compile_error!(
 compile_error!("enable exactly one of `vendored-luajit` or `external-luajit`");
 
 pub mod ffi;
+pub mod host_bridge;
 pub mod loader;
 
 pub use loader::LuaLoader;

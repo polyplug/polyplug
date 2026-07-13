@@ -36,44 +36,57 @@ from polyplug import Runtime
 runtime = Runtime()
 runtime.load_bundle("./plugins/my_plugin")
 
-decoder = PipelineDecoder.create(runtime)
+decoder = PipelineDecoderCaller.create(runtime)
 if decoder:
     result = decoder.decode(input)
 ```
 
 
-## In-process plugin registration
+## Internal plugins
 
-Use generated `host.in_process.InProcessBundle` to register ordinary Python
-implementations in a specific `Runtime`. The generated `add_<contract>()`
-methods accept either an implementation object or a factory. A factory may take
-the owning `HostApi` pointer or no argument; it is called once for each guest
-instance, so state remains instance-local.
+The default command emits external plugin bindings. Generate a separate profile
+for an internal plugin only when the application supplies Python providers:
 
-```python
-from polyplug import Runtime
-from host.in_process import InProcessBundle
-
-
-class Decoder:
-    def decode(self, input: str) -> str:
-        return input.replace(",", "|")
-
-
-runtime = Runtime()
-bundle = InProcessBundle("example.python.decoder").add_pipeline_decoder(Decoder)
-bundle_id = runtime.register_in_process_bundle(bundle)
+```bash
+polyplugc generate --bundle bundle.toml --internal --lang python --out ./generated
 ```
 
-Registration stages the generated bundle's canonical manifest, registers each
-`PluginDescriptor` and `GuestContractInterface`, then commits the complete
-transaction atomically. The `Runtime` retains the bundle resident only after a
-successful commit. A registration failure aborts staging and releases the
-reservation so the object can be retried.
-When supplied, `dependencies` are existing manifest `bundle_dependencies`
-specifications such as `"upstream.bundle@1.0.0"`.
-`unload_bundle` logically drains the bundle before releasing that resident; a
-failed unload leaves it registered and retained.
+The generated `internal.py` exposes `InternalPluginProviders`,
+`InternalPluginRegistration`, and `register(runtime, providers)`. Provider
+arguments are factories called for each guest instance:
+
+```python
+import importlib
+import importlib.util
+import sys
+from pathlib import Path
+
+root = Path("generated/internal/<bundle>-<bundle-id-hex>")
+package_name = "generated_internal_bundle"
+spec = importlib.util.spec_from_file_location(
+    package_name,
+    root / "__init__.py",
+    submodule_search_locations=[str(root)],
+)
+assert spec is not None and spec.loader is not None
+package = importlib.util.module_from_spec(spec)
+sys.modules[package_name] = package
+spec.loader.exec_module(package)
+internal = importlib.import_module(f"{package_name}.internal")
+
+providers = internal.InternalPluginProviders(platform_plugin=lambda host: PlatformPlugin(host))
+registration = internal.register(runtime, providers)
+bundle_id = registration.bundle_id
+```
+
+`register` consumes `providers` on the attempt, stages generated guest provider
+bindings, validates the exact manifest provider/function/dependency set, and
+atomically commits. The registration's named generated host caller bindings use
+the exact committed handles; use them like callers constructed after loading an external plugin.
+Before `runtime.unload_bundle(bundle_id)`, the application must quiesce every
+caller and destroy all guest instances for the bundle. A successful unload
+invalidates those callers and releases the provider roots; callers must not be
+used afterward.
 
 ## Plugin author
 

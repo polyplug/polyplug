@@ -73,7 +73,7 @@ fn last_error_empty_on_fresh_runtime() {
     );
 
     // SAFETY: host was allocated by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 /// After `get_last_error` is called (which clears the error), a second
@@ -104,7 +104,7 @@ fn last_error_cleared_after_read() {
     );
 
     // SAFETY: host was allocated by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 /// `get_error_len` does NOT clear the error; a subsequent
@@ -140,7 +140,7 @@ fn error_len_does_not_clear_error() {
     );
 
     // SAFETY: host was allocated by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 /// `get_last_error` truncates to `buf_len` and returns the number of
@@ -163,7 +163,7 @@ fn last_error_truncates_to_buf_len() {
         // Can't truncate a single-byte message; skip gracefully.
         drain_last_error(host);
         // SAFETY: host was allocated by polyplug_runtime_create.
-        unsafe { polyplug_runtime_destroy(host) };
+        assert!(unsafe { polyplug_runtime_destroy(host) });
         return;
     }
 
@@ -187,7 +187,7 @@ fn last_error_truncates_to_buf_len() {
     );
 
     // SAFETY: host was allocated by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 /// `get_last_error` with `buf_len == 0` returns 0 bytes written but
@@ -223,7 +223,7 @@ fn last_error_zero_buf_len_clears_error() {
     );
 
     // SAFETY: host was allocated by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 /// `get_last_error` with a null buffer and len=0 is the canonical
@@ -251,7 +251,7 @@ fn last_error_null_buf_zero_len_clears_error() {
     assert_eq!(n2, 0, "get_last_error(null buf, 0) must clear the error");
 
     // SAFETY: host was allocated by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 /// Multiple runtimes have independent error storage.
@@ -286,9 +286,9 @@ fn last_error_per_runtime_isolation() {
     assert_eq!(peek_error_len(host2), 0, "host2 still has no error");
 
     // SAFETY: host1 was allocated by polyplug_runtime_create and is destroyed once.
-    unsafe { polyplug_runtime_destroy(host1) };
+    assert!(unsafe { polyplug_runtime_destroy(host1) });
     // SAFETY: host2 was allocated by polyplug_runtime_create and is destroyed once.
-    unsafe { polyplug_runtime_destroy(host2) };
+    assert!(unsafe { polyplug_runtime_destroy(host2) });
 }
 
 /// When no error is present, `get_last_error` writes nothing and the
@@ -316,7 +316,7 @@ fn last_error_no_write_when_empty() {
     }
 
     // SAFETY: host was allocated by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 /// Verifies that a full-capacity read (buf_len == message_len) writes exactly
@@ -349,7 +349,7 @@ fn last_error_exact_buf_len_writes_full_message() {
     assert!(!msg.is_empty(), "decoded error message must be non-empty");
 
     // SAFETY: host was allocated by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 /// A large error message (> typical stack buffer) is handled correctly.
@@ -376,7 +376,7 @@ fn last_error_large_message_handling() {
     if msg_len == 0 {
         // Some error paths do not embed the path; accept gracefully.
         // SAFETY: host is valid and was allocated by polyplug_runtime_create.
-        unsafe { polyplug_runtime_destroy(host) };
+        assert!(unsafe { polyplug_runtime_destroy(host) });
         return;
     }
 
@@ -399,7 +399,7 @@ fn last_error_large_message_handling() {
     );
 
     // SAFETY: host is valid and was allocated by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 /// Repeated set-then-read cycles on the same runtime must produce consistent,
@@ -433,7 +433,7 @@ fn last_error_repeated_cycles_independent() {
     }
 
     // SAFETY: host was allocated by polyplug_runtime_create.
-    unsafe { polyplug_runtime_destroy(host) };
+    assert!(unsafe { polyplug_runtime_destroy(host) });
 }
 
 /// Null host returns 0 (no host to have an error).

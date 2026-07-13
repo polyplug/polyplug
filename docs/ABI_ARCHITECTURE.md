@@ -41,10 +41,10 @@ that needs the path after init copies it into loader-owned state.
 
 ## Host ABI (libpolyplug Exports)
 
-The runtime exports lifecycle functions plus three scoped in-process staging
-functions. Normal runtime operations — allocation, load/reload, discovery,
-resolution, contract registration, and error handling — remain function-pointer
-fields on the `HostApi` returned by `polyplug_runtime_create`.
+The runtime exports lifecycle functions plus four scoped internal plugin
+registration exports. Normal runtime operations — allocation, load/reload,
+discovery, resolution, contract registration, and error handling — remain
+function-pointer fields on the `HostApi` returned by `polyplug_runtime_create`.
 
 ### Runtime Lifecycle
 ```c
@@ -52,38 +52,58 @@ fields on the `HostApi` returned by `polyplug_runtime_create`.
 // Returns a HostApi* that exposes all runtime operations.
 const HostApi* polyplug_runtime_create(const void* config);
 
-// Destroy a runtime instance. Must be called exactly once per handle returned
-// by polyplug_runtime_create. Calling it more than once, or concurrently with
-// itself on the same handle, is undefined behavior — the handle is freed, same
-// as C free(); the HostApi pointer is dangling afterwards and must not be used.
-void polyplug_runtime_destroy(const HostApi* host);
+// Destroy a runtime instance. Returns false only when owner-thread affinity
+// rejects destruction; false leaves the handle valid and unconsumed so its owner
+// can retry. A true result (including for NULL) completes destruction. After true
+// for a non-null handle, the HostApi pointer is dangling and must never be used or
+// passed to destroy again. Concurrent calls are undefined behavior.
+bool polyplug_runtime_destroy(const HostApi* host);
 ```
 
-### In-Process Registration Staging
+### Internal plugin registration staging
 
 ```c
-void polyplug_begin_in_process_bundle(
+void polyplug_begin_internal_plugin(
     const HostApi* host,
     const uint8_t* manifest_bytes,
     size_t manifest_len,
     uint32_t language,
     uint64_t* out_bundle_id,
     AbiError* out_error);
-void polyplug_commit_in_process_bundle(
+void polyplug_commit_internal_plugin(
     const HostApi* host,
     uint64_t bundle_id,
     AbiError* out_error);
-void polyplug_abort_in_process_bundle(const HostApi* host, uint64_t bundle_id);
+void polyplug_commit_internal_plugin_with_handles(
+    const HostApi* host,
+    uint64_t bundle_id,
+    GuestContractHandle* out_handles,
+    size_t handle_capacity,
+    size_t* out_handle_count,
+    AbiError* out_error);
+void polyplug_abort_internal_plugin(const HostApi* host, uint64_t bundle_id);
 ```
 
-`begin` parses and validates the canonical bundle manifest and opens an internal
-transaction on the calling thread. Generated adapters register every provider
-through the existing `HostApi.register_guest_contract` field using only
-`PluginDescriptor` and `GuestContractInterface`; language state stays in
-`GuestContractInterface.adapter_context`. `commit` consumes the transaction,
-validates the complete provider/function/dependency set, and publishes one
-registry snapshot. Registration failures before commit call `abort`; a commit
-result already owns cleanup and must not be aborted again.
+Generated guest provider bindings use these private-to-the-bindings operations
+for an **internal plugin**. `begin` parses and validates the canonical bundle
+manifest and opens a transaction on the calling thread. The bindings register
+every provider through `HostApi.register_guest_contract` using only
+`PluginDescriptor` and `GuestContractInterface`; language state remains in
+`GuestContractInterface.adapter_context`. `commit` validates the exact provider,
+function, and dependency sets and publishes one registry snapshot atomically. The
+handle-returning commit requires output capacity for the generated provider count,
+checks that capacity before publication, then writes the committed handles in the
+same order that `HostApi.register_guest_contract` staged the providers and reports
+that count through `out_handle_count`.
+
+An **external plugin** reaches the same validation and publication transaction
+after its loader acquires its bundle artifact. Acquisition is the only
+source-specific step for registry records, contract handles, generated host caller
+bindings, instances, dispatch, and unload. `reload_bundle` is loader-backed and
+external-only. Replacing an internal plugin requires host quiescence, unload, and
+fresh generated registration rather than `reload_bundle`. A failed registration
+publishes nothing; generated bindings retain or release their own roots according to
+the transaction outcome.
 
 `config` points at a `RuntimeConfig` (`#[repr(C)]`, **72 bytes, align 8**):
 `compatibility: Compatibility` (u32, offset 0), `hot_reload_enabled: bool`
@@ -105,10 +125,11 @@ polyplug_lua loader cdylib as `log` and carries a scalar-callback
 `crates/polyplug_lua/src/ffi.rs`). The `on_reload` callback —
 `fn(user_data, phase: *const ReloadPhase)` — receives a **const pointer** to a
 `ReloadPhase` whose `ReloadPhaseType` is one of `Preparing = 0`, `Reloaded = 1`,
-`Failed = 2`, or `Unloading = 3` (fired before a bundle is invalidated on unload).
-The pointer is always non-null; the pointee (and the `StringView`s inside it) is
-valid only for the duration of the call — copy to retain. `reason` is the null
-view unless `phase_type == Failed`.
+`Failed = 2`, or `Unloading = 3`. The `Unloading` callback is synchronous and fires
+before bundle invalidation, giving the host its required boundary to quiesce callers
+and destroy instances. The pointer is always non-null; the pointee (and the
+`StringView`s inside it) is valid only for the duration of the call — copy to retain.
+`reason` is the null view unless `phase_type == Failed`.
 
 ### Cross-Boundary Allocator (via HostApi fields)
 ```c
@@ -146,7 +167,7 @@ among others.
 
 ## Execution Flow
 
-```
+```text
 Host Application
     │
     ▼

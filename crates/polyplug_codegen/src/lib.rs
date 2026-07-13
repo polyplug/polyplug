@@ -16,9 +16,13 @@ use std::path::PathBuf;
 pub use error::PolyplugcError;
 pub use generate::WriteSummary;
 pub use generate::generate;
+pub use generate::generate_internal_cpp;
+pub use generate::generate_internal_csharp;
+pub use generate::generate_internal_javascript;
+pub use generate::generate_internal_lua;
+pub use generate::generate_internal_python;
+pub use generate::generate_internal_rust;
 pub use generate::generate_ir;
-pub use generate::generate_ir_rust_guest;
-pub use generate::generate_rust_guest;
 pub use generate::parse_lang;
 pub use generate::write_output;
 
@@ -29,9 +33,11 @@ pub struct PlatformKey {
     pub arch: String,
 }
 
-/// The resolved file field from bundle.toml — either a single path or platform map.
+/// The resolved external artifact field from bundle.toml.
 #[derive(Debug, Clone)]
 pub enum ResolvedBundleFile {
+    /// Internal generation intentionally has no artifact path.
+    Absent,
     Single(String),
     PlatformMap(HashMap<PlatformKey, String>),
 }
@@ -64,27 +70,72 @@ pub enum Side {
     Host,
     Guest,
 }
-/// Selects how Rust guest bindings are linked into a consumer.
-///
-/// [`Self::Disk`] preserves the `polyplugc` disk-bundle ABI, including the
-/// loader entry point and author factory symbols. [`Self::InProcess`] emits
-/// runtime-local factories and a canonical manifest registration helper.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RustGuestMode {
-    /// Generate the disk-loaded guest ABI used by `polyplugc`.
-    Disk,
-    /// Generate guest bindings registered by a Rust host at runtime.
-    InProcess {
-        /// Stable bundle name used by the runtime to derive its ID.
-        bundle_name: String,
-    },
-}
 
 #[derive(Debug)]
 pub struct GenerateConfig {
     pub api_toml: PathBuf,
     pub lang: Lang,
     pub side: Side,
+    pub out_dir: PathBuf,
+}
+
+/// Configuration for the opt-in Rust internal-plugin generation profile.
+///
+/// This intentionally stays separate from [`GenerateConfig`] so existing struct
+/// literals and the default external generation contract remain unchanged.
+#[derive(Debug)]
+pub struct InternalRustGenerateConfig {
+    pub bundle_toml: PathBuf,
+    pub out_dir: PathBuf,
+}
+
+/// Configuration for the opt-in C++ internal-plugin generation profile.
+///
+/// This intentionally stays separate from [`GenerateConfig`] so existing struct
+/// literals and the default external generation contract remain unchanged.
+#[derive(Debug)]
+pub struct InternalCppGenerateConfig {
+    pub bundle_toml: PathBuf,
+    pub out_dir: PathBuf,
+}
+
+/// Configuration for the opt-in C# internal-plugin generation profile.
+///
+/// This intentionally stays separate from [`GenerateConfig`] so existing struct
+/// literals and the default external generation contract remain unchanged.
+#[derive(Debug)]
+pub struct InternalCSharpGenerateConfig {
+    pub bundle_toml: PathBuf,
+    pub out_dir: PathBuf,
+}
+
+/// Configuration for the opt-in JavaScript internal-plugin generation profile.
+///
+/// This intentionally stays separate from [`GenerateConfig`] so existing struct
+/// literals and the default external generation contract remain unchanged.
+#[derive(Debug)]
+pub struct InternalJavaScriptGenerateConfig {
+    pub bundle_toml: PathBuf,
+    pub out_dir: PathBuf,
+}
+
+/// Configuration for the opt-in Lua internal-plugin generation profile.
+///
+/// This intentionally stays separate from [`GenerateConfig`] so existing struct
+/// literals and the default external generation contract remain unchanged.
+#[derive(Debug)]
+pub struct InternalLuaGenerateConfig {
+    pub bundle_toml: PathBuf,
+    pub out_dir: PathBuf,
+}
+
+/// Configuration for the opt-in Python internal-plugin generation profile.
+///
+/// This intentionally stays separate from [`GenerateConfig`] so existing struct
+/// literals and the default external generation contract remain unchanged.
+#[derive(Debug)]
+pub struct InternalPythonGenerateConfig {
+    pub bundle_toml: PathBuf,
     pub out_dir: PathBuf,
 }
 

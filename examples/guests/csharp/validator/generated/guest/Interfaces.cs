@@ -19,18 +19,6 @@ public static class ValidatorInterfaces {
     /// </summary>
     public static void SetValidatorFactory(Func<IntPtr, IPipelineValidatorGuestContract> factory) { _factory_validator = factory; }
 
-    private sealed class ValidatorAdapterState { public Func<IntPtr, IPipelineValidatorGuestContract> Factory = null!; }
-    public static GuestContractInterface CreateInProcessInterface(Func<IntPtr, IPipelineValidatorGuestContract> factory) {
-        ArgumentNullException.ThrowIfNull(factory);
-        var context = GCHandle.Alloc(new ValidatorAdapterState { Factory = factory });
-        var iface = VALIDATOR_INTERFACE;
-        iface.AdapterContext = GCHandle.ToIntPtr(context);
-        return iface;
-    }
-
-    public static void ReleaseInProcessInterface(GuestContractInterface iface) {
-        if (iface.AdapterContext != IntPtr.Zero) GCHandle.FromIntPtr(iface.AdapterContext).Free();
-    }
 
     /// <summary>Per-instance payload carried in GuestContractInstance.Data (via GCHandle).</summary>
     private sealed class ValidatorInstanceState {

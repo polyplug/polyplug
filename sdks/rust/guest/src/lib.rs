@@ -145,6 +145,41 @@ impl HostContext {
         })
     }
 
+    /// Allocate a host-owned ABI buffer containing `bytes`.
+    ///
+    /// Generated internal-profile adapters use this for owned `Vec<u8>` returns;
+    /// ownership transfers to the receiving host through the returned [`Buffer`].
+    pub fn alloc_buffer(self, bytes: &[u8]) -> Result<Buffer, GuestError> {
+        if self.host.is_null() {
+            return Err(GuestError {
+                code: AbiErrorCode::Generic,
+                message: "host interface unavailable".to_owned(),
+            });
+        }
+        if bytes.is_empty() {
+            return Ok(Buffer {
+                ptr: ptr::null_mut(),
+                len: 0,
+                cap: 0,
+            });
+        }
+        // SAFETY: self.host was checked non-null above and points at a valid host ABI table.
+        let ptr: *mut u8 = unsafe { ((*self.host).alloc)(self.host, bytes.len(), 1) };
+        if ptr.is_null() {
+            return Err(GuestError {
+                code: AbiErrorCode::Generic,
+                message: "allocation failed".to_owned(),
+            });
+        }
+        // SAFETY: ptr is a non-null allocation for bytes.len() bytes; source and destination do not overlap.
+        unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len()) };
+        Ok(Buffer {
+            ptr,
+            len: bytes.len(),
+            cap: bytes.len(),
+        })
+    }
+
     /// Log a diagnostic into this runtime's logging funnel (`HostApi.log`).
     ///
     /// Routes to the same sink as the host's `RuntimeConfig::log` callback (or
@@ -273,6 +308,26 @@ impl ReturnArena {
         // `size` bytes at `align_of::<T>()`, so it is aligned for `T` and holds
         // `xs.len()` elements. `T: Copy`, so the bytewise copy is a valid clone,
         // and source/destination do not overlap (fresh arena allocation).
+        unsafe { ptr::copy_nonoverlapping(xs.as_ptr(), dst as *mut T, xs.len()) };
+        (dst as u64, xs.len() as u64)
+    }
+
+    /// Copy ABI values into the arena without invoking their destructors.
+    ///
+    /// # Safety
+    /// `T` must be an ABI plain-data type with no destructor; generated bindings
+    /// satisfy this because the copied descriptors transfer ownership to the host.
+    pub unsafe fn alloc_abi_array<T>(&mut self, xs: &[T]) -> (u64, u64) {
+        if xs.is_empty() {
+            return (0, 0);
+        }
+        let size: usize = mem::size_of_val(xs);
+        let align: usize = mem::align_of::<T>();
+        let dst: *mut u8 = self.arena.alloc(size, align);
+        if dst.is_null() {
+            return (0, 0);
+        }
+        // SAFETY: dst is a non-null arena allocation for xs.len() T values; source and destination do not overlap.
         unsafe { ptr::copy_nonoverlapping(xs.as_ptr(), dst as *mut T, xs.len()) };
         (dst as u64, xs.len() as u64)
     }

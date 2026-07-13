@@ -4,5 +4,5 @@
 
 // Main entry point for bundling
 export { TRANSFORMER_INTERFACE, setTransformerFactory } from './contracts';
-export { POLYPLUG_MANIFEST, polyplug_init } from './init';
+export { polyplug_init } from './init';
 export { ValidatorPeer } from './peer_callers';

@@ -13,6 +13,7 @@ from __future__ import annotations
 import ctypes
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Callable, Iterable, Optional, Protocol, runtime_checkable
 
@@ -63,6 +64,7 @@ _ED25519_PUBLIC_KEY_LEN: int = 32
 
 _BACKEND: str = "ctypes"
 _cffi_available: bool = False
+_PENDING_FINALIZER_RUNTIMES: dict[int, object] = {}
 
 try:
     import cffi
@@ -72,20 +74,28 @@ except ImportError:
     pass
 
 
-# ─── Backend Protocol (18-03: HostApi-based) ─────────────────────────────────
+# ─── Backend Protocol (HostApi-based) ───────────────────────────────────────────
 
 @runtime_checkable
 class Backend(Protocol):
-    """Protocol for runtime creation and in-process staging exports."""
+    """Protocol for runtime creation and internal-plugin staging exports."""
 
     def create_host_interface(self, config_ptr: int = 0) -> int: ...
-    def destroy_host_interface(self, host: int) -> None: ...
+    def destroy_host_interface(self, host: int) -> bool: ...
     def load_host_interface(self, host: int) -> HostApi: ...
-    def begin_in_process_bundle(
+    def begin_internal_plugin(
         self, host: int, manifest: bytes, language: int, bundle_id: ctypes.c_uint64, error: AbiError
     ) -> None: ...
-    def commit_in_process_bundle(self, host: int, bundle_id: int, error: AbiError) -> None: ...
-    def abort_in_process_bundle(self, host: int, bundle_id: int) -> None: ...
+    def commit_internal_plugin(self, host: int, bundle_id: int, error: AbiError) -> None: ...
+    def commit_internal_plugin_with_handles(
+        self,
+        host: int,
+        bundle_id: int,
+        handles: object,
+        handle_count: ctypes.c_size_t,
+        error: AbiError,
+    ) -> None: ...
+    def abort_internal_plugin(self, host: int, bundle_id: int) -> None: ...
 
 
 class CTypesBackend:
@@ -100,18 +110,27 @@ class CTypesBackend:
         self.lib.polyplug_runtime_create.argtypes = [self.ctypes.c_void_p]
         self.lib.polyplug_runtime_create.restype = self.ctypes.c_void_p
         self.lib.polyplug_runtime_destroy.argtypes = [self.ctypes.c_void_p]
-        self.lib.polyplug_runtime_destroy.restype = None
-        self.lib.polyplug_begin_in_process_bundle.argtypes = [
+        self.lib.polyplug_runtime_destroy.restype = self.ctypes.c_bool
+        self.lib.polyplug_begin_internal_plugin.argtypes = [
             self.ctypes.c_void_p, self.ctypes.c_void_p, self.ctypes.c_size_t, self.ctypes.c_uint32,
             self.ctypes.POINTER(self.ctypes.c_uint64), self.ctypes.POINTER(AbiError),
         ]
-        self.lib.polyplug_begin_in_process_bundle.restype = None
-        self.lib.polyplug_commit_in_process_bundle.argtypes = [
+        self.lib.polyplug_begin_internal_plugin.restype = None
+        self.lib.polyplug_commit_internal_plugin.argtypes = [
             self.ctypes.c_void_p, self.ctypes.c_uint64, self.ctypes.POINTER(AbiError),
         ]
-        self.lib.polyplug_commit_in_process_bundle.restype = None
-        self.lib.polyplug_abort_in_process_bundle.argtypes = [self.ctypes.c_void_p, self.ctypes.c_uint64]
-        self.lib.polyplug_abort_in_process_bundle.restype = None
+        self.lib.polyplug_commit_internal_plugin.restype = None
+        self.lib.polyplug_commit_internal_plugin_with_handles.argtypes = [
+            self.ctypes.c_void_p,
+            self.ctypes.c_uint64,
+            self.ctypes.POINTER(GuestContractHandle),
+            self.ctypes.c_size_t,
+            self.ctypes.POINTER(self.ctypes.c_size_t),
+            self.ctypes.POINTER(AbiError),
+        ]
+        self.lib.polyplug_commit_internal_plugin_with_handles.restype = None
+        self.lib.polyplug_abort_internal_plugin.argtypes = [self.ctypes.c_void_p, self.ctypes.c_uint64]
+        self.lib.polyplug_abort_internal_plugin.restype = None
 
     def create_host_interface(self, config_ptr: int = 0) -> int:
         """Create runtime and return HostApi pointer.
@@ -121,27 +140,44 @@ class CTypesBackend:
         """
         return self.lib.polyplug_runtime_create(config_ptr or None) or 0
 
-    def destroy_host_interface(self, host: int) -> None:
-        """Destroy HostApi and runtime."""
-        self.lib.polyplug_runtime_destroy(host)
+    def destroy_host_interface(self, host: int) -> bool:
+        """Destroy HostApi and runtime, returning whether ownership was consumed."""
+        return bool(self.lib.polyplug_runtime_destroy(host))
 
     def load_host_interface(self, host: int) -> HostApi:
         """Load HostApi struct from pointer."""
         return HostApi.from_address(host)
 
-    def begin_in_process_bundle(
+    def begin_internal_plugin(
         self, host: int, manifest: bytes, language: int, bundle_id: ctypes.c_uint64, error: AbiError
     ) -> None:
         manifest_buffer = self.ctypes.create_string_buffer(manifest)
-        self.lib.polyplug_begin_in_process_bundle(
+        self.lib.polyplug_begin_internal_plugin(
             host, manifest_buffer, len(manifest), language, self.ctypes.byref(bundle_id), self.ctypes.byref(error)
         )
 
-    def commit_in_process_bundle(self, host: int, bundle_id: int, error: AbiError) -> None:
-        self.lib.polyplug_commit_in_process_bundle(host, bundle_id, self.ctypes.byref(error))
+    def commit_internal_plugin(self, host: int, bundle_id: int, error: AbiError) -> None:
+        self.lib.polyplug_commit_internal_plugin(host, bundle_id, self.ctypes.byref(error))
 
-    def abort_in_process_bundle(self, host: int, bundle_id: int) -> None:
-        self.lib.polyplug_abort_in_process_bundle(host, bundle_id)
+    def commit_internal_plugin_with_handles(
+        self,
+        host: int,
+        bundle_id: int,
+        handles: object,
+        handle_count: ctypes.c_size_t,
+        error: AbiError,
+    ) -> None:
+        self.lib.polyplug_commit_internal_plugin_with_handles(
+            host,
+            bundle_id,
+            handles,
+            len(handles),
+            self.ctypes.byref(handle_count),
+            self.ctypes.byref(error),
+        )
+
+    def abort_internal_plugin(self, host: int, bundle_id: int) -> None:
+        self.lib.polyplug_abort_internal_plugin(host, bundle_id)
 
 
 class CFFIBackend:
@@ -149,10 +185,11 @@ class CFFIBackend:
 
     CDEF = """
         void* polyplug_runtime_create(const void* config);
-        void polyplug_runtime_destroy(void* host);
-        void polyplug_begin_in_process_bundle(const void* host, const void* manifest, size_t manifest_len, uint32_t language, void* bundle_id, void* error);
-        void polyplug_commit_in_process_bundle(const void* host, uint64_t bundle_id, void* error);
-        void polyplug_abort_in_process_bundle(const void* host, uint64_t bundle_id);
+        bool polyplug_runtime_destroy(void* host);
+        void polyplug_begin_internal_plugin(const void* host, const void* manifest, size_t manifest_len, uint32_t language, void* bundle_id, void* error);
+        void polyplug_commit_internal_plugin(const void* host, uint64_t bundle_id, void* error);
+        void polyplug_commit_internal_plugin_with_handles(const void* host, uint64_t bundle_id, void* handles, size_t handle_capacity, void* handle_count, void* error);
+        void polyplug_abort_internal_plugin(const void* host, uint64_t bundle_id);
     """
 
     def __init__(self, lib_path: str) -> None:
@@ -174,19 +211,19 @@ class CFFIBackend:
             )
         )
 
-    def destroy_host_interface(self, host: int) -> None:
-        """Destroy HostApi and runtime."""
-        self.lib.polyplug_runtime_destroy(self.ffi.cast("void*", host))
+    def destroy_host_interface(self, host: int) -> bool:
+        """Destroy HostApi and runtime, returning whether ownership was consumed."""
+        return bool(self.lib.polyplug_runtime_destroy(self.ffi.cast("void*", host)))
 
     def load_host_interface(self, host: int) -> HostApi:
         """Load HostApi struct from pointer (via ctypes)."""
         return HostApi.from_address(host)
 
-    def begin_in_process_bundle(
+    def begin_internal_plugin(
         self, host: int, manifest: bytes, language: int, bundle_id: ctypes.c_uint64, error: AbiError
     ) -> None:
         manifest_buffer = bytearray(manifest)
-        self.lib.polyplug_begin_in_process_bundle(
+        self.lib.polyplug_begin_internal_plugin(
             self.ffi.cast("void*", host),
             self.ffi.from_buffer(manifest_buffer),
             len(manifest_buffer),
@@ -195,13 +232,30 @@ class CFFIBackend:
             self.ffi.cast("void*", ctypes.addressof(error)),
         )
 
-    def commit_in_process_bundle(self, host: int, bundle_id: int, error: AbiError) -> None:
-        self.lib.polyplug_commit_in_process_bundle(
+    def commit_internal_plugin(self, host: int, bundle_id: int, error: AbiError) -> None:
+        self.lib.polyplug_commit_internal_plugin(
             self.ffi.cast("void*", host), bundle_id, self.ffi.cast("void*", ctypes.addressof(error))
         )
 
-    def abort_in_process_bundle(self, host: int, bundle_id: int) -> None:
-        self.lib.polyplug_abort_in_process_bundle(self.ffi.cast("void*", host), bundle_id)
+    def commit_internal_plugin_with_handles(
+        self,
+        host: int,
+        bundle_id: int,
+        handles: object,
+        handle_count: ctypes.c_size_t,
+        error: AbiError,
+    ) -> None:
+        self.lib.polyplug_commit_internal_plugin_with_handles(
+            self.ffi.cast("void*", host),
+            bundle_id,
+            self.ffi.cast("void*", ctypes.addressof(handles)),
+            len(handles),
+            self.ffi.cast("void*", ctypes.addressof(handle_count)),
+            self.ffi.cast("void*", ctypes.addressof(error)),
+        )
+
+    def abort_internal_plugin(self, host: int, bundle_id: int) -> None:
+        self.lib.polyplug_abort_internal_plugin(self.ffi.cast("void*", host), bundle_id)
 
 
 def get_backend() -> str:
@@ -261,6 +315,7 @@ class Runtime:
         lib_path: str = _resolve_lib_path()
         self._backend: Backend = _create_backend(lib_path)
         self.ctypes = ctypes
+        self._internal_plugin_lock = threading.RLock()
 
         # Per-instance reload-callback and config state (set before create so
         # the C callback wrapper outlives the create call).
@@ -277,11 +332,11 @@ class Runtime:
             None if trusted_keys is None else list(trusted_keys)
         )
 
-        # Per-runtime residents for in-process bundles. Each bundle owns its
+        # Per-runtime residents for internal plugins. Each bundle owns its
         # typed factories, ctypes callback roots, implementation objects, and
-        # backing registration storage. A resident enters this mapping only
-        # after core accepts its complete registration.
-        self._in_process_residents: dict[int, object] = {}
+        # backing registration storage. A resident enters this mapping before
+        # commit so native publication cannot expose unrooted callbacks.
+        self._internal_plugin_residents: dict[int, object] = {}
 
         # Per-instance host-contract keepalives: registered interface structs
         # and callback roots remain valid for every runtime dispatch.
@@ -411,10 +466,14 @@ class Runtime:
     def __del__(self) -> None:
         host_ptr: int = getattr(self, "_host", 0)
         backend: Backend = getattr(self, "_backend", None)
-        if host_ptr != 0 and backend is not None:
-            backend.destroy_host_interface(host_ptr)
+        if host_ptr == 0 or backend is None:
+            return
+        if backend.destroy_host_interface(host_ptr):
             self._host = 0
-            self._in_process_residents.clear()
+            self._internal_plugin_residents.clear()
+            _PENDING_FINALIZER_RUNTIMES.pop(host_ptr, None)
+        else:
+            _PENDING_FINALIZER_RUNTIMES[host_ptr] = self
 
     def _make_c_callback(self) -> ctypes.CFUNCTYPE:
         """Internal: Create a C-compatible callback wrapper bound to THIS instance.
@@ -525,52 +584,118 @@ class Runtime:
 
     def unload_bundle(self, bundle_id: int) -> None:
         """Logically unload a bundle and release its resident after core drains it."""
-        host: int = self._ensure_host()
-        err: AbiError = AbiError()
-        self._unload_bundle_fn(host, bundle_id, ctypes.byref(err))
-        self._check_error(err.code, "unload_bundle")
-        self._in_process_residents.pop(bundle_id, None)
+        with self._internal_plugin_lock:
+            host: int = self._ensure_host()
+            err: AbiError = AbiError()
+            self._unload_bundle_fn(host, bundle_id, ctypes.byref(err))
+            self._check_error(err.code, "unload_bundle")
+            self._internal_plugin_residents.pop(bundle_id, None)
 
-    def register_in_process_bundle(self, bundle: object) -> int:
-        """Stage, register, and atomically publish a generated Python bundle."""
-        host: int = self._ensure_host()
-        reserve = getattr(bundle, "_reserve_transfer", None)
-        cancel = getattr(bundle, "_cancel_transfer", None)
-        manifest_for = getattr(bundle, "_in_process_manifest", None)
-        contracts_for = getattr(bundle, "_in_process_contracts", None)
-        if not all(callable(method) for method in (reserve, cancel, manifest_for, contracts_for)):
-            raise TypeError("bundle must be a generated host.in_process.InProcessBundle")
-
-        reserve()
-        staged_bundle_id: int | None = None
+    def _unload_ambiguously_committed_internal_plugin(self, host: int, bundle_id: int) -> None:
+        """Release a root only after resolving an ambiguous native commit outcome."""
+        error = AbiError()
         try:
-            manifest = manifest_for()
-            if not isinstance(manifest, bytes):
-                raise TypeError("_in_process_manifest() must return canonical UTF-8 bytes")
-            bundle_id = ctypes.c_uint64()
-            error = AbiError()
-            self._backend.begin_in_process_bundle(host, manifest, int(SupportedLanguage.Python), bundle_id, error)
-            self._check_error(error.code, "begin_in_process_bundle")
-            staged_bundle_id = bundle_id.value
-
-            for descriptor, interface in contracts_for():
-                error = AbiError()
-                self._register_guest_contract_fn(
-                    host, ctypes.byref(descriptor), ctypes.byref(interface), ctypes.byref(error)
-                )
-                self._check_error(error.code, "register_guest_contract")
-
-            error = AbiError()
-            self._backend.commit_in_process_bundle(host, bundle_id.value, error)
-            staged_bundle_id = None
-            self._check_error(error.code, "commit_in_process_bundle")
-            self._in_process_residents[bundle_id.value] = bundle
-            return bundle_id.value
+            self._unload_bundle_fn(host, bundle_id, ctypes.byref(error))
         except BaseException:
-            if staged_bundle_id is not None:
-                self._backend.abort_in_process_bundle(host, staged_bundle_id)
-            cancel()
-            raise
+            return
+        if error.code == AbiErrorCode.Ok:
+            self._internal_plugin_residents.pop(bundle_id, None)
+        elif error.code == AbiErrorCode.NotFound:
+            self._abort_failed_internal_plugin(host, bundle_id)
+
+    def _abort_failed_internal_plugin(self, host: int, bundle_id: int) -> bool:
+        """Discard a proven-unpublished staging transaction and its root."""
+        try:
+            self._backend.abort_internal_plugin(host, bundle_id)
+        except BaseException:
+            return False
+        self._internal_plugin_residents.pop(bundle_id, None)
+        return True
+
+    def register_generated_internal_plugin(
+        self, manifest: str, bundle: object
+    ) -> tuple[int, tuple[GuestContractHandle, ...]]:
+        """Publish generated internal-plugin providers through the canonical transaction.
+
+        Profile input is consumed on every attempt. A failed registration aborts
+        core staging but does not restore the provider transfer reservation;
+        callers must construct fresh generated providers before retrying.
+        """
+        if not isinstance(manifest, str):
+            raise TypeError("generated internal-plugin manifest must be UTF-8 text")
+        with self._internal_plugin_lock:
+            host: int = self._ensure_host()
+            reserve = getattr(bundle, "_reserve_transfer", None)
+            contracts_for = getattr(bundle, "_internal_plugin_contracts", None)
+            if not all(callable(method) for method in (reserve, contracts_for)):
+                raise TypeError("bundle must be generated internal-plugin provider input")
+
+            reserve()
+            staged_bundle_id: int | None = None
+            try:
+                manifest_bytes = manifest.encode("utf-8")
+                contracts = tuple(contracts_for())
+                bundle_id = ctypes.c_uint64()
+                error = AbiError()
+                self._backend.begin_internal_plugin(
+                    host,
+                    manifest_bytes,
+                    int(SupportedLanguage.Python),
+                    bundle_id,
+                    error,
+                )
+                self._check_error(error.code, "begin_internal_plugin")
+                staged_bundle_id = bundle_id.value
+
+                for descriptor, interface in contracts:
+                    error = AbiError()
+                    self._register_guest_contract_fn(
+                        host, ctypes.byref(descriptor), ctypes.byref(interface), ctypes.byref(error)
+                    )
+                    self._check_error(error.code, "register_guest_contract")
+
+                handles = (GuestContractHandle * len(contracts))()
+            except BaseException:
+                if staged_bundle_id is not None:
+                    self._abort_failed_internal_plugin(host, staged_bundle_id)
+                raise
+
+            self._internal_plugin_residents[bundle_id.value] = bundle
+            handle_count = ctypes.c_size_t()
+            error = AbiError()
+            cleanup_started = False
+            try:
+                self._backend.commit_internal_plugin_with_handles(
+                    host, bundle_id.value, handles, handle_count, error
+                )
+                if error.code != AbiErrorCode.Ok:
+                    try:
+                        self._check_error(error.code, "commit_internal_plugin_with_handles")
+                    except BaseException:
+                        cleanup_started = True
+                        self._abort_failed_internal_plugin(host, bundle_id.value)
+                        raise
+
+                if handle_count.value != len(contracts):
+                    mismatch = RuntimeError(
+                        "committed handle count did not match generated providers"
+                    )
+                    cleanup_started = True
+                    self._unload_ambiguously_committed_internal_plugin(host, bundle_id.value)
+                    raise mismatch
+
+                return bundle_id.value, tuple(handles)
+            except BaseException:
+                if not cleanup_started:
+                    cleanup_started = True
+                    self._unload_ambiguously_committed_internal_plugin(host, bundle_id.value)
+                raise
+
+    def create_generated_internal_plugin_caller(
+        self, caller_type: type, handle: GuestContractHandle
+    ) -> object:
+        """Build an internal-plugin caller from the exact committed registry handle."""
+        return caller_type(handle, ctypes.c_void_p(self._ensure_host()), owner=self)
 
     def find_guest_contract(self, contract_id: int, min_version: int) -> GuestContractHandle:
         """Find a guest contract by contract_id and minimum version.

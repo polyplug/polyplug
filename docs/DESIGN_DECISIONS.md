@@ -41,7 +41,7 @@ Simple string operations in native code:
 ### The Math
 
 **FFI approach** (C# example):
-```
+```text
 byteCount = FFI_Call_GetUtf8ByteCount(utf16String)  // ~10ns FFI + ~2ns work
 buffer = FFI_Call_Alloc(byteCount)                   // ~10ns FFI + ~5ns work
 FFI_Call_Transcode(utf16String, buffer)              // ~10ns FFI + ~30ns work
@@ -49,7 +49,7 @@ Total: ~30ns FFI overhead + ~37ns work = ~67ns
 ```
 
 **Native helper approach** (C# example):
-```
+```text
 byteCount = Native_GetUtf8ByteCount(utf16String)     // ~2ns native
 buffer = HostAlloc(byteCount)                         // ~5ns (still FFI, but unavoidable)
 Native_Transcode(utf16String, buffer)                 // ~30ns native

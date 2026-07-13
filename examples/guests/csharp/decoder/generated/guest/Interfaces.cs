@@ -19,18 +19,6 @@ public static class DecoderInterfaces {
     /// </summary>
     public static void SetDecoderFactory(Func<IntPtr, IPipelineDecoderGuestContract> factory) { _factory_decoder = factory; }
 
-    private sealed class DecoderAdapterState { public Func<IntPtr, IPipelineDecoderGuestContract> Factory = null!; }
-    public static GuestContractInterface CreateInProcessInterface(Func<IntPtr, IPipelineDecoderGuestContract> factory) {
-        ArgumentNullException.ThrowIfNull(factory);
-        var context = GCHandle.Alloc(new DecoderAdapterState { Factory = factory });
-        var iface = DECODER_INTERFACE;
-        iface.AdapterContext = GCHandle.ToIntPtr(context);
-        return iface;
-    }
-
-    public static void ReleaseInProcessInterface(GuestContractInterface iface) {
-        if (iface.AdapterContext != IntPtr.Zero) GCHandle.FromIntPtr(iface.AdapterContext).Free();
-    }
 
     /// <summary>Per-instance payload carried in GuestContractInstance.Data (via GCHandle).</summary>
     private sealed class DecoderInstanceState {

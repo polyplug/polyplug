@@ -4,4 +4,4 @@
 
 // Main entry point for bundling
 export { REPORTER_INTERFACE, setReporterFactory } from './contracts';
-export { POLYPLUG_MANIFEST, polyplug_init } from './init';
+export { polyplug_init } from './init';

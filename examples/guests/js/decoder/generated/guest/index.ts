@@ -4,4 +4,4 @@
 
 // Main entry point for bundling
 export { DECODER_INTERFACE, setDecoderFactory } from './contracts';
-export { POLYPLUG_MANIFEST, polyplug_init } from './init';
+export { polyplug_init } from './init';

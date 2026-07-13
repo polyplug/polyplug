@@ -19,18 +19,6 @@ public static class ReporterInterfaces {
     /// </summary>
     public static void SetReporterFactory(Func<IntPtr, IDataReporterGuestContract> factory) { _factory_reporter = factory; }
 
-    private sealed class ReporterAdapterState { public Func<IntPtr, IDataReporterGuestContract> Factory = null!; }
-    public static GuestContractInterface CreateInProcessInterface(Func<IntPtr, IDataReporterGuestContract> factory) {
-        ArgumentNullException.ThrowIfNull(factory);
-        var context = GCHandle.Alloc(new ReporterAdapterState { Factory = factory });
-        var iface = REPORTER_INTERFACE;
-        iface.AdapterContext = GCHandle.ToIntPtr(context);
-        return iface;
-    }
-
-    public static void ReleaseInProcessInterface(GuestContractInterface iface) {
-        if (iface.AdapterContext != IntPtr.Zero) GCHandle.FromIntPtr(iface.AdapterContext).Free();
-    }
 
     /// <summary>Per-instance payload carried in GuestContractInstance.Data (via GCHandle).</summary>
     private sealed class ReporterInstanceState {

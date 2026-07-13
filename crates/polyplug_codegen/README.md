@@ -12,15 +12,26 @@ this library.
    (`data::Item`: consts, structs, enums, unions, function signatures) from the
    `polyplug_abi` sources and emits the language mirrors under `sdks/*/abi`.
    There is no Rust ABI emitter because the Rust ABI is the source of truth.
-2. **Contract-binding consumers** call `generate`, `generate_ir`, and
-   `write_output` to parse a manifest or render validated IR, then write the
-   generated files. Rust in-process guests use `generate_rust_guest` with
-   `RustGuestMode::InProcess`; their generated `InProcessFactory::new` accepts
-   `Send + Sync + 'static` function items or captured closures and the runtime
-   owns the resulting resident after canonical registration commits. The existing
-   `generate` API and `polyplugc` CLI retain disk-bundle output. `write_output`
-   accepts only relative file paths without root, prefix, or parent-directory
-   components. The `polyplugc` CLI calls the same disk-generation API.
+2. **Contract-binding consumers** use one of two explicit profiles:
+   - `generate(GenerateConfig)` emits the established external plugin guest
+     bindings or generated host caller bindings, depending on `Side`.
+   - `generate_internal_rust(InternalRustGenerateConfig)`,
+     `generate_internal_cpp(InternalCppGenerateConfig)`,
+     `generate_internal_csharp(InternalCSharpGenerateConfig)`,
+     `generate_internal_python(InternalPythonGenerateConfig)`,
+     `generate_internal_lua(InternalLuaGenerateConfig)`, and
+     `generate_internal_javascript(InternalJavaScriptGenerateConfig)` emit one
+     bundle-identity-namespaced internal plugin profile. Each profile emits
+     generated guest provider bindings and generated host caller bindings without
+     changing `GenerateConfig` or default output.
+
+   The CLI selects the latter profile with
+   `polyplugc generate --bundle bundle.toml --internal --lang <language> --out ./generated`.
+   Its generated registrar consumes provider input per attempt, validates and
+   atomically commits the exact manifest set, then returns the committed
+   `BundleId` and named callers constructed from those committed handles.
+   `write_output` accepts only relative file paths without root, prefix, or
+   parent-directory components.
 
 ## Modules
 

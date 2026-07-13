@@ -144,6 +144,11 @@ jobs:
       - name: Run C++ SDK tests
         if: runner.os == 'Linux'
         run: make -C sdks/cpp test
+      - name: Install just
+        if: runner.os == 'Linux'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just
       # Lua + JS host SDK suites (sdks/{lua,js}/host/tests) exercise the LuaJIT
       # and Deno host SDKs directly — the per-instance host-contract providers
       # (W6-B / #85) and reload paths that have NO cargo coverage (the bug class
@@ -152,11 +157,6 @@ jobs:
       # justfile recipes so CI and `just test-host-{lua,js}` can never drift.
       # Linux-only: the cdylib extension is .so and the luajit/deno toolchains
       # mirror the Linux dev setup (matches the C++ SDK step above).
-      - name: Install just
-        if: runner.os == 'Linux'
-        uses: taiki-e/install-action@v2
-        with:
-          tool: just
       - name: Build Lua and JS loaders + polyplugc (for host SDK suites)
         if: runner.os == 'Linux'
         run: cargo build -p polyplug_lua -p polyplug_js -p polyplugc

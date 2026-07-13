@@ -1,4 +1,4 @@
-//! QuickJS in-process plugin loader implementation.
+//! QuickJS JavaScript plugin loader implementation.
 //!
 //! Loads JS plugin bundles via the embedded QuickJS VM (rquickjs).
 //! Each bundle gets its own QuickJS Runtime and Context for complete isolation
@@ -1529,7 +1529,7 @@ impl Drop for InitBundleGuard<'_> {
 
 // ─── JsLoader ────────────────────────────────────────────────────────────────
 
-/// QuickJS in-process JS plugin loader.
+/// QuickJS JavaScript plugin loader.
 pub struct JsLoader {
     /// Per-bundle VM state owned by the loader, keyed by [`BundleId`].
     ///

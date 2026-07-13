@@ -34,83 +34,61 @@ polyplugc generate --bundle bundle.toml --lang lua --out ./generated
 
 ```lua
 local polyplug = require("polyplug")
+local callers = require("generated.host.callers")
 
 local runtime = polyplug.Runtime.new()
 runtime:load_bundle("./plugins/my_plugin")
 
-local decoder = PipelineDecoder.create(runtime)
+local decoder = callers.PipelineDecoder_create(runtime, runtime:host())
 if decoder then
     local result = decoder:decode(input)
 end
 ```
 
-## In-process guest implementations
+Each generated caller creates one guest instance and retains it across method calls.
+Call `caller:reset()` to replace that instance or `caller:destroy()` during teardown.
 
-Generated `host/callers.lua` exposes `in_process_bundle(spec, lua_bridge_lib)` for
-implementations that run in the host LuaJIT VM. `spec.manifest` is the canonical
-`manifest.toml` text for the complete bundle; it declares identity, providers,
-function counts, and dependencies. Supply one table or factory per generated
-contract, then register the complete bundle synchronously. Factories receive the
-`HostApi*` and return a fresh implementation table for each caller instance.
-Obtain `lua_bridge_lib` from the Lua loader module so its scalar native
-trampolines can expand the canonical adapter-context ABI.
+## Internal plugins
+
+The default command emits external plugin bindings. Generate the internal
+profile explicitly when the application supplies Lua implementation factories:
+
+```bash
+polyplugc generate --bundle bundle.toml --internal --lang lua --out ./generated
+```
+
+The bundle-identity-namespaced `guest/internal.lua` module exposes
+`providers(values)` and `register(runtime, providers)`. Each provider is a
+factory that returns a fresh implementation table for a guest instance:
 
 ```lua
-local callers = require("generated.host.callers")
-local lua_loader = require("polyplug.loaders.lua")
+local internal = dofile("generated/internal/<bundle>-<bundle-id-hex>/guest/internal.lua")
 
-local bundle = callers.in_process_bundle({
-    manifest = [[
-loader = "lua"
-name = "my-lua-services"
-id = 0xC4E6F639A4127E2F
-version = "1.0.0"
-file = "in-process"
-provides = ["pipeline.decoder@1.0.0"]
-
-[function_count]
-"pipeline.decoder@1" = 1
-]],
-    implementations = {
-        ["pipeline.decoder"] = function(host)
-            return {
-                decode = function(self, input)
-                    return "decoded:" .. input
-                end,
-            }
-        end,
-    },
-}, lua_loader.bridge_lib())
-
-local bundle_id = runtime:register_in_process_bundle(bundle)
--- Unload only after generated callers have released their instances.
-runtime:unload_bundle(bundle_id)
+local providers = internal.providers({
+    platform_plugin_platform_plugin = make_platform_plugin,
+})
+local registration = internal.register(runtime, providers)
+local bundle_id = registration.bundle_id
 ```
 
-The Runtime starts a manifest-backed staging transaction, invokes
-`HostApi.register_guest_contract` once for every generated descriptor/interface
-pair, and atomically commits only after the full provider set validates. A
-registration failure aborts the open stage; a rejected commit has already
-discarded it. The Runtime becomes the sole owner of the generated
-resident—canonical manifest bytes, typed factories,
-Lua callback cdata, interfaces, descriptors, and live implementations—only after
-the complete registration succeeds. Successful registration consumes the bundle
-resident exactly once; a rejected registration leaves it available for retry. The
-Runtime releases the resident only after successful logical unload; a failed
-unload leaves it intact for callers to drain and retry. Lua errors are contained
-at callback boundaries and returned as ABI errors.
+The registrar consumes provider input on the attempt, registers every generated
+guest provider binding, validates the exact manifest set, and atomically
+publishes it. It returns named generated host caller bindings built from the
+committed handles; their call usage is identical to callers from external plugins.
+Before `runtime:unload_bundle(bundle_id)`, the application must quiesce every
+caller and destroy all guest instances for the bundle. Every committed internal
+bundle is marked privately in `Runtime`; while stateful instances remain,
+`unload_bundle` returns `InternalPluginInUse` and leaves the bundle live. After
+destroying or resetting callers and destroying those instances, retry the unload
+(subject to normal dependency checks). This refusal is a guard, not a replacement
+for host quiescence. External unload paths may warn and proceed with live instances,
+so they cannot use the internal guard. A successful unload invalidates those callers
+and releases the generated provider binding state; callers must not be used afterward.
 
-The generated adapter integration test covers pre-commit and commit-validation
-rollback, per-instance state, two-Runtime isolation, resident lifetime, failed
-unload retention, and unload/re-registration:
-
-```sh
-cargo build -p polyplug -p polyplug_lua -p polyplugc
-POLYPLUG_LIB=$PWD/target/debug/libpolyplug.so \
-POLYPLUG_LUA_LIB=$PWD/target/debug/libpolyplug_lua.so \
-POLYPLUGC_BIN=$PWD/target/debug/polyplugc \
-luajit sdks/lua/host/tests/test_in_process_runtime.lua
-```
+For an internal Lua plugin, the native `host_bridge` owns `Resident` and
+`ContractBridge` records. Those records retain provider factories, dispatchers, and
+per-instance Lua values through Lua registry references, and release those references
+when the resident is released during lifecycle cleanup.
 
 ## Plugin author
 

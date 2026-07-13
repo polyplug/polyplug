@@ -100,13 +100,13 @@ field must be one of: `native`, `lua`, `python`, `js-quickjs`, `dotnet`.
 
 ## Step 3 — Generate guest glue code
 
-```
+```bash
 polyplugc generate --bundle bundle.toml --lang rust --out generated
 ```
 
 This writes six files into `generated/`:
 
-```
+```text
 generated/
 ├── manifest.toml          generated manifest (never edit by hand)
 └── guest/
@@ -156,7 +156,7 @@ the contract (`GreeterHelloGuestContract` for `greeter.Hello`). Implement that
 trait on any struct, then export the factory the generated `create_instance`
 calls for every host-created instance (`polyplug_create_<plugin>`):
 
-```rust
+```rust,ignore
 use polyplug_abi::StringView;
 use polyplug_guest::{GuestError, HostContext, to_str};
 
@@ -173,7 +173,7 @@ struct Plugin {
 impl GreeterHelloGuestContract for Plugin {
     fn greet(&self, name: StringView) -> Result<StringView, GuestError> {
         // SAFETY: `name` is a valid StringView live for the duration of this call.
-        let s: &str = unsafe { to_str(&name) };
+        let s: &str = unsafe { to_str(&name) }?;
         self.host.alloc_string(&format!("Hello, {}!", s))
     }
 }
@@ -209,7 +209,7 @@ Key points:
 
 ## Step 6 — Build
 
-```
+```bash
 cargo build --release
 ```
 
@@ -223,13 +223,13 @@ The output on Linux is `target/release/libmy_greeter.so`. On macOS it is
 A bundle is a directory containing `manifest.toml` plus the artifact named by
 its `[file]` entry:
 
-```
+```text
 dist/my_greeter/
 ├── manifest.toml       (from generated/manifest.toml)
 └── libmy_greeter.so    (from target/release/)
 ```
 
-```
+```bash
 mkdir -p dist/my_greeter
 cp generated/manifest.toml dist/my_greeter/
 cp target/release/libmy_greeter.so dist/my_greeter/
@@ -242,13 +242,13 @@ precomputed `id` field (`fnv1a_64(name)`) that the runtime verifies.
 
 ## Step 8 — Validate the bundle
 
-```
+```bash
 polyplugc validate --bundle-dir dist/my_greeter
 ```
 
 Expected output:
 
-```
+```text
 OK: dist/my_greeter
 ```
 
@@ -263,7 +263,7 @@ matches the declared runtime.
 
 On the host side, generate typed callers from the same `api.toml`:
 
-```
+```bash
 polyplugc generate --api api.toml --lang rust --out host/generated
 ```
 
@@ -274,13 +274,13 @@ The caller struct is named after the contract (`GreeterHelloContract` for
 
 A minimal host that loads and calls the plugin:
 
-```rust
+```rust,ignore
 use polyplug_abi::runtime::RuntimeConfig;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
 use polyplug_abi::{Compatibility, GuestContractHandle};
 use polyplug_native::{NativeConfig, NativeLoader};
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 #[path = "host/generated/mod.rs"]
 mod generated;
@@ -298,13 +298,11 @@ fn main() {
         ..RuntimeConfig::default()
     };
 
-    let runtime: &'static Runtime = Box::leak(Box::new(
-        Runtime::builder()
-            .loader(NativeLoader::new(NativeConfig {}))
-            .config(config)
-            .build()
-            .expect("runtime build"),
-    ));
+    let runtime: Arc<Runtime> = Runtime::builder()
+        .loader(NativeLoader::new(NativeConfig {}))
+        .config(config)
+        .build()
+        .expect("runtime build");
 
     let plugins_dir = PathBuf::from("dist");
     let scan = scanner::scan_dirs(std::slice::from_ref(&plugins_dir));
@@ -316,7 +314,7 @@ fn main() {
         .find_guest_contract(GREETER_HELLO_CONTRACT_ID, 0)
         .expect("contract not found");
 
-    let mut caller = GreeterHelloContract::new(handle, runtime.as_context_ptr())
+    let mut caller = GreeterHelloContract::new(handle, Arc::clone(&runtime))
         .expect("caller init");
 
     let input = polyplug_abi::StringView {
@@ -346,7 +344,7 @@ If the host enforces a signature policy, sign the assembled bundle so it loads
 under `SignaturePolicy::Required`. Generate a keypair once and keep
 `signing.key` secret:
 
-```
+```bash
 polyplugc keygen --out keys/
 polyplugc sign --bundle-dir dist/my_greeter --key keys/signing.key
 polyplugc verify --bundle-dir dist/my_greeter
@@ -360,7 +358,7 @@ tamper detection, not author approval).
 
 On the host, opt in to enforcement when building the runtime:
 
-```rust
+```rust,ignore
 use polyplug_abi::runtime::SignaturePolicy;
 
 let runtime = Runtime::builder()

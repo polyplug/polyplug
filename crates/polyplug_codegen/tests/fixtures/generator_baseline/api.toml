@@ -1,0 +1,98 @@
+[[enum]]
+name = "Status"
+repr = "u32"
+docs = "Status reported by a baseline provider."
+
+[[enum.variants]]
+name = "Ready"
+value = "0"
+docs = "The provider is ready."
+
+[[enum.variants]]
+name = "Busy"
+value = "1"
+docs = "The provider is busy."
+
+[[enum]]
+name = "Capabilities"
+repr = "u32"
+bitflag = true
+
+[[enum.variants]]
+name = "NoCapabilities"
+value = "0"
+
+[[enum.variants]]
+name = "Streaming"
+value = "1"
+
+[[enum.variants]]
+name = "Metrics"
+value = "1 << 1"
+
+[[enum.variants]]
+name = "All"
+value = "Streaming | Metrics"
+
+[[types]]
+name = "Payload"
+docs = "A compact payload shared across the provider boundary."
+fields = [
+  { name = "status", type = "Status", docs = "Current state." },
+  { name = "capabilities", type = "Capabilities", docs = "Supported features." },
+  { name = "sequence", type = "u64", docs = "Monotonic sequence." },
+  { name = "ratio", type = "f32", docs = "Normalized measurement." },
+]
+
+[[plugin_contract]]
+name = "baseline.echo"
+version = "1.2.3"
+docs = "Transforms payloads while preserving caller-visible metadata."
+
+[[plugin_contract.functions]]
+name = "transform"
+docs = "Transforms textual and structured input."
+params = [
+  { name = "message", type = "StringView", docs = "Input message." },
+  { name = "payload", type = "Payload", docs = "Associated metadata." },
+  { name = "enabled", type = "bool", docs = "Whether transformation is enabled." },
+]
+return = { type = "StringView", docs = "Transformed message." }
+
+[[plugin_contract.functions]]
+name = "write"
+params = [{ name = "bytes", type = "Buffer", docs = "Bytes to store." }]
+return = "u64"
+
+[[plugin_contract.functions]]
+name = "reset"
+
+[[plugin_contract]]
+name = "baseline.metrics"
+version = "2.1.0"
+
+[[plugin_contract.functions]]
+name = "snapshot"
+return = "Payload"
+
+[[plugin_contract.functions]]
+name = "measure"
+params = [{ name = "value", type = "f64" }]
+return = "f64"
+
+[[host_contract]]
+name = "host.telemetry"
+version = "1.0.0"
+singleton = true
+docs = "Host-owned telemetry sink."
+
+[[host_contract.functions]]
+name = "report"
+params = [
+  { name = "message", type = "StringView", docs = "Message to report." },
+  { name = "status", type = "Status", docs = "Reported state." },
+]
+
+[[host_contract.functions]]
+name = "read_sequence"
+return = "u64"

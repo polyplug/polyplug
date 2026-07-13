@@ -50,3 +50,12 @@ New to polyplug? Start with the [Quick Start](../QUICKSTART.md).
 
 Generated code lives under `examples/hosts/lua/generated/` (host callers) and
 `examples/guests/lua/<plugin>/generated/` (guest glue).
+
+## Internal plugin profile
+
+External plugins use the standard bundle command. An application can instead
+generate one internal profile with
+`polyplugc generate --bundle bundle.toml --internal --lang lua --out ./generated`.
+It supplies ordinary Lua factories to generated guest provider bindings and
+receives generated host caller bindings from the committed handles; registration,
+calls, and unload then follow the same pipeline as an external plugin.

@@ -1,4 +1,4 @@
-//! polyplug_js — QuickJS in-process JS adapter for polyplug.
+//! polyplug_js — QuickJS JavaScript adapter for polyplug.
 //!
 //! Implements BundleLoader for js-quickjs plugin bundles.
 //! Each bundle owns an isolated QuickJS VM. No subprocess. No IPC.

@@ -129,7 +129,7 @@ dotnet build -c Release      # → decoder.dll
 Copy the built assembly, the generated `manifest.toml`, and **every dependency
 assembly** the plugin needs into one bundle directory:
 
-```
+```text
 dist/csharp_decoder/
 ├── manifest.toml          # from generated/manifest.toml
 ├── decoder.dll            # from bin/Release/net10.0/

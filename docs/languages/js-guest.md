@@ -136,7 +136,7 @@ The re-exported `polyplug_init` becomes the entry point the QuickJS loader calls
 
 Copy the bundled `bundle.js` next to the generated `manifest.toml`:
 
-```
+```text
 dist/my_decoder/
 ├── manifest.toml       # from generated/manifest.toml — never the hand-written bundle.toml
 └── bundle.js           # rolldown output

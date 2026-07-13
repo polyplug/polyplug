@@ -12,7 +12,9 @@ use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
+#[cfg(test)]
 use std::panic;
+#[cfg(debug_assertions)]
 use std::process;
 #[cfg(test)]
 use std::thread;

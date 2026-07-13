@@ -10,10 +10,12 @@
 
 #![allow(clippy::expect_used)]
 
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Output;
+use tempfile::tempdir;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -224,6 +226,48 @@ fn generate_api_and_bundle_conflict_fails() {
     ]);
     // clap enforces conflicts_with so this must fail.
     assert_failure_contains(&output, "cannot be used with");
+}
+
+#[test]
+fn generate_internal_rust_profile_uses_bundle_namespace_without_artifact_fields() {
+    let temp = tempdir().expect("create temporary directory");
+    let api_path = temp.path().join("api.toml");
+    let bundle_path = temp.path().join("bundle.toml");
+    let out_dir = temp.path().join("out");
+    fs::write(
+        &api_path,
+        "[[plugin_contract]]\nname = \"cli.profile\"\nversion = \"1.0\"\n\n[[plugin_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n",
+    )
+    .expect("write API");
+    fs::write(
+        &bundle_path,
+        "[bundle]\nname = \"cli_internal_bundle\"\nversion = \"1.0\"\napi = \"api.toml\"\n\n[[plugin]]\nname = \"cli_provider\"\nimplements = [\"cli.profile@1.0\"]\n",
+    )
+    .expect("write artifactless bundle");
+
+    let output = run_polyplugc(&[
+        "generate",
+        "--bundle",
+        bundle_path.to_str().expect("bundle path utf8"),
+        "--internal",
+        "--lang",
+        "rust",
+        "--out",
+        out_dir.to_str().expect("output path utf8"),
+    ]);
+    assert_success(&output);
+    assert!(
+        out_dir
+            .join("internal/cli_internal_bundle-d1f3f480817f82c8/guest/init.rs")
+            .is_file(),
+        "internal CLI profile must emit guest provider bindings in its namespace"
+    );
+    assert!(
+        out_dir
+            .join("internal/cli_internal_bundle-d1f3f480817f82c8/host/host_callers.rs")
+            .is_file(),
+        "internal CLI profile must emit matching host caller bindings in its namespace"
+    );
 }
 
 // ─── generate: non-existent path ─────────────────────────────────────────────

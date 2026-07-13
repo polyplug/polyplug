@@ -61,11 +61,20 @@ pub enum RuntimeError {
     },
 
     #[error(
-        "cannot unload in-process bundle `{bundle}` while {active_instances} stateful instance(s) are active"
+        "cannot unload internal plugin `{bundle}` while {active_instances} stateful instance(s) are active"
     )]
-    InProcessBundleInUse {
+    InternalPluginInUse {
         bundle: String,
         active_instances: u64,
+    },
+
+    #[error(
+        "cannot release internal-plugin resident for bundle `{bundle}` from OS thread {current_thread_id}; owner is {owner_thread_id}"
+    )]
+    InternalPluginResidentWrongThread {
+        bundle: String,
+        owner_thread_id: u64,
+        current_thread_id: u64,
     },
 }
 
@@ -214,23 +223,26 @@ pub enum RegistryError {
     #[error("duplicate provider for contract `{contract}`: `{existing}` already registered")]
     DuplicateProvider { contract: String, existing: String },
 
-    #[error("in-process bundle name must not be empty")]
-    EmptyInProcessBundleName,
+    #[error("internal plugin name must not be empty")]
+    EmptyInternalPluginName,
 
-    #[error("in-process bundle must provide at least one contract")]
-    EmptyInProcessBundle,
+    #[error("internal plugin must provide at least one contract")]
+    EmptyInternalPlugin,
 
-    #[error("in-process contract at index {index} has an empty contract name")]
-    EmptyInProcessContract { index: usize },
+    #[error("internal plugin contract at index {index} has an empty contract name")]
+    EmptyInternalPluginContract { index: usize },
 
-    #[error("in-process bundle `{bundle}` derived the reserved bundle ID 0")]
-    ReservedInProcessBundleId { bundle: String },
+    #[error("internal plugin `{bundle}` derived the reserved bundle ID 0")]
+    ReservedInternalPluginId { bundle: String },
 
     #[error("bundle `{bundle}` is already registered")]
     BundleAlreadyRegistered { bundle: String },
 
     #[error("bundle metadata missing for bundle_id=0x{bundle_id:016X}")]
     MissingBundleMetadata { bundle_id: u64 },
+
+    #[error("internal-plugin resident already attached for bundle_id=0x{bundle_id:016X}")]
+    InternalPluginResidentAlreadyAttached { bundle_id: u64 },
 
     #[error("invalid plugin handle: index={index} is out of bounds")]
     InvalidHandle { index: u32 },

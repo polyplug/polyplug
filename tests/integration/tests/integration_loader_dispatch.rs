@@ -12,7 +12,7 @@ use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
-use polyplug_common::{ManifestData, ManifestError};
+use polyplug_common::ManifestData;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_lua::LuaLoader;
 use polyplug_python::PythonLoader;
@@ -49,13 +49,22 @@ impl BundleLoader for StubLoader {
 // ─── ManifestData parsing ──────────────────────────────────────────────────────
 
 #[test]
-fn manifest_missing_loader_field_is_error() {
-    let toml_src: &str = "";
-    let result: Result<ManifestData, RuntimeError> = ManifestData::parse_from_str(toml_src)
-        .map_err(|e: ManifestError| RuntimeError::Loader(e.into()));
+fn manifest_missing_loader_field_fails_external_acquisition_validation() {
+    let manifest: ManifestData = ManifestData::parse_from_str("")
+        .expect("source-neutral manifest without a loader should parse successfully");
+    assert!(manifest.loader.is_empty());
+
+    let result: Result<(), RuntimeError> = manifest
+        .validate_acquisition()
+        .map_err(|error| RuntimeError::Loader(error.into()));
     match result {
-        Err(RuntimeError::Loader(LoaderError::ManifestParse { .. })) => {}
-        other => panic!("expected ManifestParse error for absent loader field, got: {other:?}"),
+        Err(RuntimeError::Loader(LoaderError::ManifestParse { reason, .. })) => {
+            assert_eq!(reason, "loader field is required but was empty");
+        }
+        other => panic!(
+            "expected ManifestParse loader-required error from external acquisition validation, \
+             got: {other:?}"
+        ),
     }
 }
 

@@ -11,7 +11,7 @@ polyplug is **blazing-fast by construction** — built for **zero-overhead, nati
 2. **Cache the pointer** - The resolved `*const GuestContractInterface` stays valid while the bundle is loaded
 3. **One indirect call** - Dispatch to the plugin function
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                    HOT PATH CALL FLOW                            │
 ├─────────────────────────────────────────────────────────────────┤
@@ -286,7 +286,7 @@ interface = rt.resolve_guest_contract(handle)  # raw interface pointer
 
 All host libraries implement the same hot-reload safety pattern:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                  HOT-RELOAD SAFE RESOLUTION                       │
 ├─────────────────────────────────────────────────────────────────┤
@@ -390,7 +390,7 @@ example host, no guest dispatch (see
 > (the `confidence_interval` field) after a local `cargo bench`.
 
 **Rust core (`cargo bench -p polyplug`):**
-```
+```text
 ffi/resolve_plugin/direct_interface:    ~10 ns
 ffi/find_all_by_contract/single_match:  ~46 ns   (allocates the result array)
 registry/resolve:                       ~4 ns
@@ -557,10 +557,9 @@ interpreter, measured in the [guest-dispatch](#calling-into-a-plugin-guest-dispa
 section.)
 
 - **A C# app loading a C# plugin reuses the host's own .NET runtime.** A native
-  app (Rust / C++ / …) loads a C# plugin by spinning up a .NET runtime through the
-  loader; a C# app already *is* a .NET process, so the loader loads the plugin into
-  the runtime that's already there instead of starting a second one. That's the
-  `csharp × C#` cell — a normal in-process call, no extra runtime.
+  app (Rust / C++ / …) loads a C# plugin by starting a .NET runtime through the
+  loader; a C# app already *is* a .NET process, so the loader uses that runtime
+  rather than starting a second one. That is the `csharp × C#` cell.
 
 > This grid measures the **whole** call (argument in, call, string back), so its
 > numbers are larger than the single-boundary charts above — the
@@ -674,7 +673,7 @@ retain-and-rewind, and the measured arena costs — is a concept, documented in
 
 QuickJS guest plugins use a cached Context architecture for minimal dispatch overhead:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                 QUICKJS DISPATCH ARCHITECTURE                    │
 ├─────────────────────────────────────────────────────────────────┤
@@ -1049,10 +1048,11 @@ last struct field, so it drops after `registry`/`loaders` (whose teardown
 `dlclose`s plugin libraries that may hold pointers into the `HostApi`).
 `polyplug_runtime_destroy` reconstructs the `Arc<Runtime>` and drops it, cascading
 into `Runtime` teardown that frees the owned `HostApi` box last. A long-running
-host that creates and destroys many short-lived runtimes no longer leaks. This
-narrowed the destroy contract to **exactly-once** (the runtime owns and frees the
-`HostApi` on the single legitimate destroy; calling destroy again or concurrently
-on the same handle is undefined behavior, same as C `free()`).
+host that creates and destroys many short-lived runtimes no longer leaks. Owner-thread
+affinity may reject a destroy attempt without reconstructing the Arc; that `false`
+result leaves the handle valid for an owner-thread retry. The single `true` result
+consumes the non-null handle; calling destroy again or concurrently is undefined
+behavior, same as C `free()`.
 
 The regression is locked in two ways: `crates/polyplug/tests/leak_host_abi.rs`
 asserts post-warmup RSS growth stays under 1 MiB across 50,000 build→drop cycles

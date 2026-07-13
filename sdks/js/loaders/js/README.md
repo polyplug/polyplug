@@ -17,5 +17,6 @@ const bridge = bridgeLibrary();
 
 Requires [`@polyplug/host`](https://www.npmjs.com/package/@polyplug/host). The
 loader native (`libpolyplug_js`) must be resolvable by the OS loader or via the
-`POLYPLUG_JS_LIB` environment variable. Pass `bridge` explicitly to generated
-JavaScript in-process adapters.
+`POLYPLUG_JS_LIB` environment variable. The explicit internal plugin generated
+profile obtains the bridge through `bridgeLibrary()`; external plugins are
+acquired by this loader from their bundle artifacts.

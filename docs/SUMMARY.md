@@ -9,6 +9,16 @@
 - [Development Workflow](WORKFLOW.md)
 - [Linux-to-Windows MSVC Cross-Compilation](CROSS_COMPILATION.md)
 
+# How polyplug works
+
+- [Overview](how-it-works/overview.md)
+- [Generated bindings](how-it-works/generated-bindings.md)
+- [Acquisition](how-it-works/acquisition.md)
+- [Registration](how-it-works/registration.md)
+- [Registry and calls](how-it-works/registry-and-calls.md)
+- [Lifecycle](how-it-works/lifecycle.md)
+- [Application integration](how-it-works/application-integration.md)
+
 # Languages
 
 - [Rust](languages/rust.md)

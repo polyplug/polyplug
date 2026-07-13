@@ -38,7 +38,7 @@ pub struct OldNativeOnlyInterface {
 
 VM loaders used **static trampolines** + **global registries**:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  OLD ARCHITECTURE (BROKEN)                                                   │
 │                                                                              │
@@ -65,7 +65,7 @@ VM loaders used **static trampolines** + **global registries**:
 
 ### New Architecture
 
-```rust
+```rust,ignore
 #[repr(C)]
 pub struct GuestContractInterface {
     pub contract_id: u64,
@@ -112,7 +112,7 @@ pub struct VmDispatch {
 
 ### Host Caller (Generated Code)
 
-```rust
+```rust,ignore
 pub fn decode(&self, input: StringView) -> Result<StringView, ContractError> {
     let interface = self.guard.interface();
     
@@ -147,7 +147,7 @@ pub fn decode(&self, input: StringView) -> Result<StringView, ContractError> {
 
 ### Native Plugins: Zero Overhead
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  NATIVE DISPATCH FLOW                                                        │
 │                                                                              │
@@ -177,7 +177,7 @@ Modern CPUs have sophisticated branch predictors. For a given `GuestContractInte
 
 ### VM Plugins: Minimal Overhead
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  VM DISPATCH FLOW                                                            │
 │                                                                              │
@@ -217,14 +217,14 @@ Modern CPUs have sophisticated branch predictors. For a given `GuestContractInte
 ### Why a Union Instead of Two Structs?
 
 **Option A: Two separate structs**
-```rust
+```rust,ignore
 struct NativeGuestContractInterface { ... }
 struct VmGuestContractInterface { ... }
 ```
 Problem: Host code needs to know which type at compile time. But host code is generated once and must work with any plugin type.
 
 **Option B: Union (chosen)**
-```rust
+```rust,ignore
 union DispatchMechanisms {
     native: NativeDispatch,
     vm: VmDispatch,
@@ -243,7 +243,7 @@ struct GuestContractInterface {
 Problem: VM functions aren't native pointers. Can't store `mlua::Function` or `v8::Global<v8::Function>` in a `*const ()`.
 
 **Option B: loader_data (chosen)**
-```rust
+```rust,ignore
 struct VmDispatch {
     call: dispatch_fn,
     loader_data: *mut c_void,  // Points to LuaLoaderData, JsLoaderData, etc.
@@ -285,7 +285,7 @@ The key improvement: **One dispatch function per loader**, not 64 static trampol
 
 Each VM loader defines its own data structure:
 
-```rust
+```rust,ignore
 // Lua: Store mlua::Function directly
 struct LuaLoaderData {
     functions: Vec<mlua::Function>,
@@ -316,7 +316,7 @@ struct DotnetLoaderData {
 
 The dispatch function IS the implementation. No wrappers:
 
-```rust
+```rust,ignore
 // Lua dispatch - ALL calling logic here.
 // Out-param ABI: returns void, writes the AbiError through out_err.
 unsafe extern "C" fn lua_dispatch(

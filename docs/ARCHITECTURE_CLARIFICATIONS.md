@@ -46,7 +46,7 @@ What the model excludes (CLAUDE.md Rule 12):
 The generated glue declares an author factory and constructs the implementation
 per instance:
 
-```rust
+```rust,ignore
 // generated/guest/interfaces.rs (Rust shape; other languages mirror it)
 unsafe extern "Rust" {
     fn polyplug_create_validator(host: HostContext) -> Box<dyn PipelineValidatorGuestContract>;
@@ -95,7 +95,7 @@ keys on `data` — id 0 is reserved for "the default instance". Ids start at 1.
 
 ## Caller wrappers own instances
 
-```rust
+```rust,ignore
 // examples/hosts/rust/generated/host/host_callers.rs
 pub struct PipelineValidatorContract {
     interface: *const GuestContractInterface,  // resolved interface pointer
@@ -122,7 +122,7 @@ The host destroys all instances when it receives the `Preparing` notification, s
 the runtime can swap the interface slot with no live instance pointing at the old
 code (the runtime-side mechanics are [Pipeline 6 — hot-reload](ARCHITECTURE.md#pipeline-6--hot-reload)):
 
-```rust
+```rust,ignore
 // Hot-reload: Preparing phase
 // Host drops all wrappers (each drop calls destroy_instance)
 drop(w1); drop(w2); drop(w3);
@@ -142,7 +142,7 @@ Notification flow from the instance perspective:
 Loading **multiple bundles** that each implement the same contract yields
 independent providers (in addition to per-wrapper instances within each):
 
-```rust
+```rust,ignore
 runtime.load_bundle("./plugins/validator_v1")?;
 runtime.load_bundle("./plugins/validator_v2")?;
 

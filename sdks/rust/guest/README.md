@@ -37,6 +37,41 @@ cargo install polyplugc
 polyplugc generate --bundle bundle.toml --lang rust --out ./generated
 ```
 
+## Internal plugins
+
+The default command emits external plugin guest bindings. Generate the explicit
+internal profile when the application supplies Rust implementations:
+
+```bash
+polyplugc generate --bundle bundle.toml --internal --lang rust --out ./generated
+```
+
+The generated profile exports `guest::domain::InternalProviders` and
+`guest::init::register`. Factories may capture application configuration and
+produce a fresh domain implementation per guest instance:
+
+```rust
+use generated::guest::{
+    domain::{InternalProviderFactory, InternalProviders},
+    init::register,
+};
+
+let registration = register(
+    runtime.clone(),
+    InternalProviders {
+        platform_plugin_platform_plugin: InternalProviderFactory::new(|| Box::new(PlatformPlugin::new())),
+    },
+)?;
+let bundle_id = registration.bundle_id;
+```
+
+`register` consumes provider input on the attempt, stages generated guest
+provider bindings, validates the exact manifest provider/function/dependency
+set, and atomically commits. Its named generated host caller bindings use the
+committed handles, exactly as for external plugin discovery. Unload only after
+callers and instances drain; successful unload invalidates callers and releases
+the generated provider state.
+
 ## Implement
 
 Implement the generated `<Contract>GuestContract` trait and export the author

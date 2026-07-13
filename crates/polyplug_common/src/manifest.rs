@@ -204,11 +204,9 @@ pub enum ManifestDependency {
 /// Data parsed from a bundle's `manifest.toml`.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ManifestData {
-    /// The loader required to load this bundle (e.g. `"native"`, `"lua"`,
-    /// `"js-quickjs"`). Matched against `BundleLoader::loader_name()` during
-    /// dispatch.
-    /// REQUIRED — must be explicitly set in the manifest, no default.
-    #[serde(skip_serializing_if = "String::is_empty")]
+    /// The external loader required to acquire a disk bundle (e.g. `"native"`,
+    /// `"lua"`, `"js-quickjs"`). Internal registration leaves this empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub loader: String,
     /// Bundle name — human-readable identifier for this bundle.
     #[serde(default)]
@@ -256,30 +254,15 @@ impl ManifestData {
             .collect::<Vec<ManifestDependency>>()
     }
 
-    /// Validate the manifest has all required fields and well-formed values.
+    /// Validate canonical bundle identity, provider metadata, and dependencies.
     ///
-    /// Checks performed:
-    /// - `loader`, `name` are non-empty; `file` is present.
-    /// - `id` is non-zero (folded in from the former inline load-path check).
-    /// - `id` equals `polyplug_utils::bundle_id(name)` (TRUST_MODEL §2 identity).
-    /// - every `provides` / `bundle_dependencies` entry matches `name[@version]`
-    ///   grammar, with a parseable version when one is given.
-    pub fn validate(&self) -> Result<(), ManifestError> {
-        if self.loader.is_empty() {
-            return Err(ManifestError::Parse {
-                path: self.path.display().to_string(),
-                reason: "loader field is required but was empty".to_owned(),
-            });
-        }
+    /// This validation applies to every prepared-bundle transaction. External
+    /// acquisition validates its loader and artifact separately.
+    pub fn validate_metadata(&self) -> Result<(), ManifestError> {
         if self.name.is_empty() {
             return Err(ManifestError::Parse {
                 path: self.path.display().to_string(),
                 reason: "name field is required but was empty".to_owned(),
-            });
-        }
-        if self.file.is_empty() {
-            return Err(ManifestError::MissingFile {
-                bundle: self.name.clone(),
             });
         }
         if self.id == 0 {
@@ -298,7 +281,6 @@ impl ManifestData {
             });
         }
 
-        // Validate provides / bundle_dependencies version specs.
         for spec in &self.provides {
             validate_name_version_spec(spec, "provides", &self.path)?;
         }
@@ -306,20 +288,10 @@ impl ManifestData {
             validate_name_version_spec(spec, "bundle_dependencies", &self.path)?;
         }
 
-        // Cross-check each dependency's declared `contract_id` against the value
-        // derived from its `contract` name and the major component of `min_version`.
-        // A `contract_id` of 0 means "absent" and is accepted (it is filled in by the
-        // graph layer). A non-zero value that disagrees with the canonical hash is a
-        // tampered or hand-edited manifest and is rejected. The derivation mirrors the
-        // polyplugc parser: major = Version::from_str(min_version).major, default 0.
         for dep in &self.dependencies {
             if dep.contract_id.id() == 0 {
                 continue;
             }
-            // The dependency `contract` field may carry an `@version` suffix
-            // (e.g. "dep.contract@1"); the canonical contract_id hashes the BARE
-            // name plus the major from `min_version`, consistent with how the
-            // capability graph and polyplugc resolve contract ids.
             let bare_contract: &str = match dep.contract.split_once('@') {
                 Some((name, _)) => name,
                 None => dep.contract.as_str(),
@@ -344,6 +316,23 @@ impl ManifestData {
             }
         }
         Ok(())
+    }
+
+    /// Validate all fields required to acquire an external bundle artifact.
+    pub fn validate_acquisition(&self) -> Result<(), ManifestError> {
+        if self.loader.is_empty() {
+            return Err(ManifestError::Parse {
+                path: self.path.display().to_string(),
+                reason: "loader field is required but was empty".to_owned(),
+            });
+        }
+        self.validate_file()
+    }
+
+    /// Validate both canonical metadata and external acquisition fields.
+    pub fn validate(&self) -> Result<(), ManifestError> {
+        self.validate_metadata()?;
+        self.validate_acquisition()
     }
 
     /// Validate that the file field is present and non-empty.

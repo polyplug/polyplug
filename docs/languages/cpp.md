@@ -17,7 +17,7 @@ cargo install polyplugc
 pull it from a [GitHub release](https://github.com/polyplug/polyplug/releases))
 and add the include roots you need to your compiler's include path:
 
-```
+```text
 sdks/cpp/
 ├── abi/        polyplug/abi.hpp     — frozen C ABI structs + StringView helpers
 ├── host/       polyplug.hpp         — RAII Runtime + Builder (host side)
@@ -46,3 +46,12 @@ New to polyplug? Start with the [Quick Start](../QUICKSTART.md).
 
 Generated code lives under `examples/hosts/cpp/generated/` (host callers) and
 `examples/guests/cpp/<plugin>/generated/` (guest glue).
+
+## Internal plugin profile
+
+External plugins use the standard bundle command. An application can instead
+generate one internal profile with
+`polyplugc generate --bundle bundle.toml --internal --lang cpp --out ./generated`.
+It supplies ordinary C++ factories to generated guest provider bindings and
+receives generated host caller bindings from the committed handles; registration,
+calls, and unload then follow the same pipeline as an external plugin.

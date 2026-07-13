@@ -193,8 +193,7 @@ impl Runtime {
         // A vacated interface keeps such instances valid today, but they must be
         // destroyed before the bundle is truly freed — surface the hazard, do not
         // block the reload (informational only).
-        let exported: Vec<GuestContractId> = self.registry.bundle_exported_contracts(bundle_id);
-        let live: u64 = self.live_instance_count_for_contracts(&exported);
+        let live: u64 = self.live_instance_count_for_bundle(bundle_id);
         if live > 0 {
             let name: String = manifest.name.clone();
             self.logger.log(LogLevel::Warn, "reload", || {
@@ -243,14 +242,10 @@ impl Runtime {
                     return Err(err);
                 }
 
-                // The swap reclaimed the previous interface and the guest-side state
-                // of every instance it created: all pre-reload instances of this
-                // bundle's contracts are now dead (a correct caller revalidates and
-                // recreates its instance on the new interface). Reset their live
-                // accounting so instances abandoned across the reload — never
-                // destroyed through the vacated interface — do not inflate the
-                // diagnostic count forever.
-                self.reset_instance_counts_for_contracts(&exported);
+                // The swap reclaimed the previous interface and guest-side state for
+                // this bundle. Reset only its accounting so another provider of the
+                // same contract keeps its independent live-instance diagnostics.
+                self.reset_instance_count_for_bundle(bundle_id);
 
                 // Mark this bundle visited before cascading so a dependency cycle
                 // (A→B→A) terminates instead of recursing forever.

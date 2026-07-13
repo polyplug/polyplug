@@ -42,7 +42,7 @@ edit these files. For the emitted symbol names, see
 
 Include the module from your binary:
 
-```rust
+```rust,ignore
 #[path = "host/generated/mod.rs"]
 mod generated;
 
@@ -52,7 +52,7 @@ use generated::host::types::*;
 
 ## 3. Build the runtime
 
-```rust
+```rust,ignore
 use polyplug::runtime::Runtime;
 use polyplug_abi::runtime::RuntimeConfig;
 use polyplug_abi::Compatibility;
@@ -75,7 +75,7 @@ let runtime: Arc<Runtime> = Runtime::builder()
 Register one loader per guest language. Loaders with no options construct directly;
 other loaders use their concrete configuration type:
 
-```rust
+```rust,ignore
 let runtime: Arc<Runtime> = Runtime::builder()
     .loader(NativeLoader::new(NativeConfig {}))
     .loader(JsLoader::new())
@@ -94,7 +94,7 @@ The full multi-loader host is `examples/hosts/rust/src/main.rs`.
 Pass `.on_reload(...)` to observe reload phases. Hot-reload applies to native,
 Lua, and JS bundles — see [Hot Reload](../HOT_RELOAD_DESIGN.md).
 
-```rust
+```rust,ignore
 use polyplug_abi::runtime::{ReloadPhase, ReloadPhaseType};
 
 let runtime: Arc<Runtime> = Runtime::builder()
@@ -114,7 +114,7 @@ let runtime: Arc<Runtime> = Runtime::builder()
 
 ### Signature policy (optional)
 
-```rust
+```rust,ignore
 use polyplug_abi::runtime::SignaturePolicy;
 
 let runtime: Arc<Runtime> = Runtime::builder()
@@ -133,7 +133,7 @@ let runtime: Arc<Runtime> = Runtime::builder()
 If your `api.toml` defines a host contract (a service the host provides to
 plugins), register it before loading bundles:
 
-```rust
+```rust,ignore
 use polyplug_abi::HostContractInterface;
 use generated::host::host_contracts::{HOSTLOGGER_CONTRACT_ID, HostLogger};
 use generated::host::interface_factories::create_host_logger_interface;
@@ -159,7 +159,7 @@ runtime
 
 ## 5. Load bundles
 
-```rust
+```rust,ignore
 use polyplug::loader::scanner;
 use std::path::PathBuf;
 
@@ -180,7 +180,7 @@ for (path, _manifest) in &scan.found {
 
 ## 6. Call a contract
 
-```rust
+```rust,ignore
 use polyplug_abi::{GuestContractHandle, StringView};
 use generated::host::types::PIPELINE_DECODER_CONTRACT_ID;
 use generated::host::host_callers::PipelineDecoderContract;

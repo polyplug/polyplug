@@ -19,18 +19,6 @@ public static class TransformerInterfaces {
     /// </summary>
     public static void SetTransformerFactory(Func<IntPtr, IDataTransformerGuestContract> factory) { _factory_transformer = factory; }
 
-    private sealed class TransformerAdapterState { public Func<IntPtr, IDataTransformerGuestContract> Factory = null!; }
-    public static GuestContractInterface CreateInProcessInterface(Func<IntPtr, IDataTransformerGuestContract> factory) {
-        ArgumentNullException.ThrowIfNull(factory);
-        var context = GCHandle.Alloc(new TransformerAdapterState { Factory = factory });
-        var iface = TRANSFORMER_INTERFACE;
-        iface.AdapterContext = GCHandle.ToIntPtr(context);
-        return iface;
-    }
-
-    public static void ReleaseInProcessInterface(GuestContractInterface iface) {
-        if (iface.AdapterContext != IntPtr.Zero) GCHandle.FromIntPtr(iface.AdapterContext).Free();
-    }
 
     /// <summary>Per-instance payload carried in GuestContractInstance.Data (via GCHandle).</summary>
     private sealed class TransformerInstanceState {
