@@ -96,6 +96,24 @@ fn internal_output(temp: &TempDir, name: &str, contract: &str) -> polyplug_codeg
     .expect("generate Lua internal profile")
 }
 
+fn lua_path_literal(path: &Path) -> String {
+    let path = path.display().to_string();
+    for delimiter_len in 0.. {
+        let delimiter = "=".repeat(delimiter_len);
+        let closing = format!("]{delimiter}]");
+        if !path.contains(&closing) {
+            return format!("[{delimiter}[{path}]{delimiter}]");
+        }
+    }
+    unreachable!("a finite path has an available Lua long-string delimiter")
+}
+
+#[test]
+fn lua_path_literal_avoids_embedded_long_string_delimiters() {
+    let path = Path::new("a]]b]=]c]==]d]===]e");
+    assert_eq!(lua_path_literal(path), "[====[a]]b]=]c]==]d]===]e]====]");
+}
+
 #[test]
 fn internal_lua_profile_is_opt_in_artifactless_and_typed() {
     let temp = TempDir::new().expect("create Lua profile fixture");
@@ -103,36 +121,39 @@ fn internal_lua_profile_is_opt_in_artifactless_and_typed() {
     let paths = output
         .files
         .iter()
-        .map(|file| file.path.to_string_lossy().into_owned())
-        .collect::<HashSet<_>>();
+        .map(|file| file.path.clone())
+        .collect::<HashSet<PathBuf>>();
     assert_eq!(
         paths.len(),
         5,
         "internal Lua profile has a fixed five-file surface"
     );
+    let namespace = Path::new("internal").join(format!(
+        "lua_internal_profile-{:016x}",
+        polyplug_utils::bundle_id("lua_internal_profile")
+    ));
     assert!(
-        paths
-            .iter()
-            .all(|path| path.starts_with("internal/lua_internal_profile-")),
+        paths.iter().all(|path| path.starts_with(&namespace)),
         "internal Lua files must remain bundle-namespaced"
     );
     for required_path in [
-        "guest/internal.lua",
-        "guest/types.lua",
-        "host/callers.lua",
-        "host/types.lua",
-        "init.lua",
+        Path::new("guest").join("internal.lua"),
+        Path::new("guest").join("types.lua"),
+        Path::new("host").join("callers.lua"),
+        Path::new("host").join("types.lua"),
+        PathBuf::from("init.lua"),
     ] {
         assert!(
-            paths.iter().any(|path| path.ends_with(required_path)),
-            "internal Lua profile missing `{required_path}`"
+            paths.iter().any(|path| path.ends_with(&required_path)),
+            "internal Lua profile missing `{}`",
+            required_path.display()
         );
     }
 
     let internal = output
         .files
         .iter()
-        .find(|file| file.path.ends_with("guest/internal.lua"))
+        .find(|file| file.path.ends_with(Path::new("guest").join("internal.lua")))
         .expect("internal Lua registrar")
         .content
         .as_str();
@@ -194,7 +215,7 @@ fn internal_lua_profile_is_opt_in_artifactless_and_typed() {
     let callers = output
         .files
         .iter()
-        .find(|file| file.path.ends_with("host/callers.lua"))
+        .find(|file| file.path.ends_with(Path::new("host").join("callers.lua")))
         .expect("internal host callers")
         .content
         .as_str();
@@ -227,12 +248,14 @@ fn internal_lua_profile_is_opt_in_artifactless_and_typed() {
     let external_paths = external
         .files
         .iter()
-        .map(|file| file.path.to_string_lossy().into_owned())
-        .collect::<HashSet<_>>();
-    let expected_external_paths = ["guest/contracts.lua", "guest/types.lua"]
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<HashSet<_>>();
+        .map(|file| file.path.clone())
+        .collect::<HashSet<PathBuf>>();
+    let expected_external_paths = [
+        Path::new("guest").join("contracts.lua"),
+        Path::new("guest").join("types.lua"),
+    ]
+    .into_iter()
+    .collect::<HashSet<_>>();
     assert_eq!(
         external_paths, expected_external_paths,
         "external Lua guest generation must retain its canonical file set"
@@ -248,12 +271,14 @@ fn internal_lua_profile_is_opt_in_artifactless_and_typed() {
     let default_host_paths = external_host
         .files
         .iter()
-        .map(|file| file.path.to_string_lossy().into_owned())
-        .collect::<HashSet<_>>();
-    let expected_default_host_paths = ["host/callers.lua", "host/types.lua"]
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<HashSet<_>>();
+        .map(|file| file.path.clone())
+        .collect::<HashSet<PathBuf>>();
+    let expected_default_host_paths = [
+        Path::new("host").join("callers.lua"),
+        Path::new("host").join("types.lua"),
+    ]
+    .into_iter()
+    .collect::<HashSet<_>>();
     assert_eq!(
         default_host_paths, expected_default_host_paths,
         "default Lua host generation must retain its canonical file set"
@@ -261,7 +286,7 @@ fn internal_lua_profile_is_opt_in_artifactless_and_typed() {
     let default_callers = external_host
         .files
         .iter()
-        .find(|file| file.path == Path::new("host/callers.lua"))
+        .find(|file| file.path == Path::new("host").join("callers.lua"))
         .expect("default Lua host callers")
         .content
         .as_str();
@@ -314,7 +339,7 @@ fn generated_internal_lua_profile_marshals_nonempty_nested_arrays() {
     let profile = output
         .files
         .iter()
-        .find(|file| file.path.ends_with("guest/internal.lua"))
+        .find(|file| file.path.ends_with(Path::new("guest").join("internal.lua")))
         .expect("generated internal Lua profile");
     let profile_path = out_dir.join(&profile.path);
     let script = temp.path().join("nested-arrays-e2e.lua");
@@ -356,7 +381,7 @@ package.preload["polyplug.loaders.lua"] = function()
         end,
     }}
 end
-local bindings = dofile({profile_path:?})
+local bindings = dofile({})
 local runtime = {{
     host = function() return 1 end,
     register_internal_plugin = function()
@@ -397,7 +422,8 @@ local first = ffi.cast("Inner*", ffi.cast("uintptr_t", outer[0].items))
 assert(first[0].label.len == 1)
 assert(first[1].label.len == 1)
 assert(#roots.values == 3)
-"#
+"#,
+            lua_path_literal(&profile_path)
         ),
     )
     .expect("write nested Lua E2E script");
@@ -434,7 +460,7 @@ fn generated_internal_lua_profile_rolls_back_earlier_callers_before_unload() {
     let profile = output
         .files
         .iter()
-        .find(|file| file.path.ends_with("guest/internal.lua"))
+        .find(|file| file.path.ends_with(Path::new("guest").join("internal.lua")))
         .expect("generated internal Lua profile");
     let profile_path = out_dir.join(&profile.path);
     let script = temp.path().join("caller-rollback-e2e.lua");
@@ -473,7 +499,7 @@ package.preload["polyplug.loaders.lua"] = function()
         end,
     }}
 end
-local bindings = dofile({profile_path:?})
+local bindings = dofile({})
 local runtime = {{
     host = function() return 1 end,
     register_internal_plugin = function()
@@ -493,7 +519,8 @@ assert(created == 1)
 assert(added == 2)
 assert(destroyed == 1)
 assert(unloaded == 1)
-"#
+"#,
+            lua_path_literal(&profile_path)
         ),
     )
     .expect("write caller rollback Lua E2E script");
@@ -518,7 +545,7 @@ fn generated_internal_lua_profile_rejects_non_factory_before_resident_allocation
     let profile = output
         .files
         .iter()
-        .find(|file| file.path.ends_with("guest/internal.lua"))
+        .find(|file| file.path.ends_with(Path::new("guest").join("internal.lua")))
         .expect("generated internal Lua profile");
     let profile_path = out_dir.join(&profile.path);
     let script = temp.path().join("factory-validation-e2e.lua");
@@ -545,7 +572,7 @@ package.preload["polyplug.loaders.lua"] = function()
         end,
     }}
 end
-local bindings = dofile({profile_path:?})
+local bindings = dofile({})
 local ok, err = pcall(function()
     bindings.register({{ host = function() return 1 end }}, bindings.providers({{
         factory_validation_provider_platform_Plugin = "not a factory",
@@ -554,7 +581,8 @@ end)
 assert(not ok)
 assert(tostring(err):find("must be a factory function", 1, true))
 assert(allocations == 0)
-"#
+"#,
+            lua_path_literal(&profile_path)
         ),
     )
     .expect("write factory-validation Lua E2E script");

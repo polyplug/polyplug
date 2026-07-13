@@ -74,27 +74,22 @@ fn internal_rust_profile_accepts_artifactless_bundle_and_namespaces_both_binding
         .expect("generate internal Rust profile"),
     );
 
+    let namespace = Path::new("internal").join(format!(
+        "internal_profile_bundle-{:016x}",
+        bundle_id("internal_profile_bundle")
+    ));
     assert!(
-        output.keys().all(|path| {
-            path.to_string_lossy()
-                .starts_with("internal/internal_profile_bundle-")
-        }),
+        output.keys().all(|path| path.starts_with(&namespace)),
         "every profile file must be bundle-identity namespaced: {output:#?}"
     );
     let interfaces = output
-        .get(&PathBuf::from(
-            "internal/internal_profile_bundle-150b189f827dc36b/guest/interfaces.rs",
-        ))
+        .get(&namespace.join("guest").join("interfaces.rs"))
         .expect("generated guest provider bindings");
     let init = output
-        .get(&PathBuf::from(
-            "internal/internal_profile_bundle-150b189f827dc36b/guest/init.rs",
-        ))
+        .get(&namespace.join("guest").join("init.rs"))
         .expect("generated internal registration");
     let callers = output
-        .get(&PathBuf::from(
-            "internal/internal_profile_bundle-150b189f827dc36b/host/host_callers.rs",
-        ))
+        .get(&namespace.join("host").join("host_callers.rs"))
         .expect("generated host caller bindings");
 
     assert!(interfaces.contains("pub struct InternalProviders"));
@@ -161,24 +156,16 @@ fn two_internal_bundles_with_distinct_apis_have_collision_free_namespaces() {
             file.path.display()
         );
     }
-    let first_namespace = format!(
-        "internal/first_internal_bundle-{:016x}",
+    let first_namespace = Path::new("internal").join(format!(
+        "first_internal_bundle-{:016x}",
         bundle_id("first_internal_bundle")
-    );
-    let second_namespace = format!(
-        "internal/second_internal_bundle-{:016x}",
+    ));
+    let second_namespace = Path::new("internal").join(format!(
+        "second_internal_bundle-{:016x}",
         bundle_id("second_internal_bundle")
-    );
-    assert!(
-        paths
-            .iter()
-            .any(|path| { path.to_string_lossy().starts_with(&first_namespace) })
-    );
-    assert!(
-        paths
-            .iter()
-            .any(|path| { path.to_string_lossy().starts_with(&second_namespace) })
-    );
+    ));
+    assert!(paths.iter().any(|path| path.starts_with(&first_namespace)));
+    assert!(paths.iter().any(|path| path.starts_with(&second_namespace)));
 }
 
 #[test]
@@ -287,12 +274,12 @@ fn output_writer_rejects_duplicate_paths_before_writing() {
     let output = GenerateOutput {
         files: vec![
             GeneratedFile {
-                path: PathBuf::from("internal/same.rs"),
+                path: Path::new("internal").join("same.rs"),
                 content: "first".to_owned(),
                 force_regenerate: false,
             },
             GeneratedFile {
-                path: PathBuf::from("internal/same.rs"),
+                path: Path::new("internal").join("same.rs"),
                 content: "second".to_owned(),
                 force_regenerate: false,
             },
@@ -304,7 +291,7 @@ fn output_writer_rejects_duplicate_paths_before_writing() {
         Err(PolyplugcError::DuplicateOutputPath { .. })
     ));
     assert!(
-        !temp.path().join("internal/same.rs").exists(),
+        !temp.path().join("internal").join("same.rs").exists(),
         "duplicate rejection must happen before any write"
     );
 }

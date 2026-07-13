@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use polyplug_codegen::{InternalRustGenerateConfig, generate_internal_rust, write_output};
+use polyplug_utils::bundle_id;
 use tempfile::TempDir;
 
 fn workspace_root() -> PathBuf {
@@ -50,17 +51,18 @@ fn generated_internal_rust_same_contract_providers_dispatch_statefully_and_unloa
     let source_dir = crate_root.join("src");
     fs::create_dir_all(&source_dir).expect("create consumer source directory");
     write_output(&generated, &source_dir).expect("write generated bindings");
-    let generated_module_path = generated
-        .files
-        .iter()
-        .find_map(|file| {
-            let path = file.path.to_string_lossy();
-            (path.starts_with("internal/")
-                && path.ends_with("/mod.rs")
-                && path.matches('/').count() == 2)
-                .then_some(path.into_owned())
-        })
-        .expect("generated internal root module");
+    let generated_root = Path::new("internal").join(format!(
+        "generated_internal_plugin-{:016x}",
+        bundle_id("generated_internal_plugin")
+    ));
+    let generated_module_path = generated_root.join("mod.rs");
+    assert!(
+        generated
+            .files
+            .iter()
+            .any(|file| file.path == generated_module_path),
+        "generated internal root module"
+    );
 
     fs::write(
         crate_root.join("Cargo.toml"),

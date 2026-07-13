@@ -110,10 +110,10 @@ jobs:
         run: brew install luajit
       - name: Build C# SDK
         run: dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Debug
-      # The host-SDK runtime suites below (C#, Python, C++) need both the core
-      # and the native-loader cdylibs in target/debug.
-      - name: Build libpolyplug + native loader
-        run: cargo build -p polyplug -p polyplug_native
+      # The host-SDK runtime suites and generated Python/Lua internal-plugin E2Es
+      # need their native core and bridge cdylibs in target/debug.
+      - name: Build core, native loader, and Lua bridge cdylibs
+        run: cargo build -p polyplug -p polyplug_native -p polyplug_lua
       # The native *_SO / *_DIR integration suites load pre-built fixture
       # cdylibs from gitignored locations that only this script produces.
       - name: Build test fixtures
@@ -230,6 +230,10 @@ jobs:
       # every crate, including all six language loaders, compiles on Windows MSVC.
       - name: Build workspace
         run: cargo build --workspace
+      # Keep the cdylibs required by the generated Python/Lua runtime E2Es
+      # explicit: workspace builds do not document that test precondition.
+      - name: Build core, native loader, and Lua bridge cdylibs
+        run: cargo build -p polyplug -p polyplug_native -p polyplug_lua
       - name: Build C# SDK
         run: dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Debug
       # Produce the native/C++/C# test fixture binaries (<name>.dll on Windows —

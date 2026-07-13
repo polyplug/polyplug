@@ -64,25 +64,23 @@ fn internal_javascript_profile_is_namespaced_typed_and_consumed_on_attempt() {
         })
         .expect("generate internal JavaScript profile"),
     );
-    let prefix = format!(
-        "internal/javascript_internal-{:016x}",
+    let namespace = Path::new("internal").join(format!(
+        "javascript_internal-{:016x}",
         bundle_id("javascript_internal")
-    );
+    ));
     assert!(
-        output
-            .keys()
-            .all(|path| path.to_string_lossy().starts_with(&prefix)),
+        output.keys().all(|path| path.starts_with(&namespace)),
         "every internal JavaScript file must be namespaced: {output:#?}"
     );
 
     let facade = output
-        .get(&PathBuf::from(format!("{prefix}/internal.ts")))
+        .get(&namespace.join("internal.ts"))
         .expect("internal façade");
     let contracts = output
-        .get(&PathBuf::from(format!("{prefix}/guest/contracts.ts")))
+        .get(&namespace.join("guest").join("contracts.ts"))
         .expect("guest provider bindings");
     let callers = output
-        .get(&PathBuf::from(format!("{prefix}/host/callers.ts")))
+        .get(&namespace.join("host").join("callers.ts"))
         .expect("host caller bindings");
 
     assert!(facade.contains("export class InternalProviders"));
@@ -140,7 +138,9 @@ fn default_and_external_javascript_generation_do_not_emit_internal_artifacts() {
     );
     for output in [&default, &external] {
         assert!(
-            output.keys().all(|path| !path.starts_with("internal")),
+            output
+                .keys()
+                .all(|path| !path.starts_with(Path::new("internal"))),
             "default/external generation must not emit internal paths: {output:#?}"
         );
         assert!(
@@ -198,14 +198,14 @@ fn distinct_javascript_internal_bundles_emit_collision_free_packages() {
             file.path.display()
         );
     }
-    assert!(
-        paths
-            .iter()
-            .any(|path| path.to_string_lossy().contains("javascript_first-"))
-    );
-    assert!(
-        paths
-            .iter()
-            .any(|path| path.to_string_lossy().contains("javascript_second-"))
-    );
+    let first_namespace = Path::new("internal").join(format!(
+        "javascript_first-{:016x}",
+        bundle_id("javascript_first")
+    ));
+    let second_namespace = Path::new("internal").join(format!(
+        "javascript_second-{:016x}",
+        bundle_id("javascript_second")
+    ));
+    assert!(paths.iter().any(|path| path.starts_with(&first_namespace)));
+    assert!(paths.iter().any(|path| path.starts_with(&second_namespace)));
 }

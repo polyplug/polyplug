@@ -4,6 +4,8 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::env::consts::OS;
+use std::env::join_paths;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -27,6 +29,14 @@ fn output_map(output: GenerateOutput) -> BTreeMap<PathBuf, String> {
         .into_iter()
         .map(|file| (file.path, file.content))
         .collect()
+}
+
+fn native_library_name(stem: &str) -> String {
+    match OS {
+        "windows" => format!("{stem}.dll"),
+        "macos" => format!("lib{stem}.dylib"),
+        _ => format!("lib{stem}.so"),
+    }
 }
 
 fn write_api(path: &Path) {
@@ -70,25 +80,23 @@ fn internal_plugin_python_profile_is_namespaced_typed_and_consumed_on_attempt() 
         })
         .expect("generate internal Python profile"),
     );
-    let prefix = format!(
-        "internal/python_internal-{:016x}",
+    let namespace = Path::new("internal").join(format!(
+        "python_internal-{:016x}",
         bundle_id("python_internal")
-    );
+    ));
     assert!(
-        output
-            .keys()
-            .all(|path| path.to_string_lossy().starts_with(&prefix)),
+        output.keys().all(|path| path.starts_with(&namespace)),
         "every internal Python file must be namespaced: {output:#?}"
     );
 
     let facade = output
-        .get(&PathBuf::from(format!("{prefix}/internal.py")))
+        .get(&namespace.join("internal.py"))
         .expect("internal façade");
     let contracts = output
-        .get(&PathBuf::from(format!("{prefix}/guest/contracts.py")))
+        .get(&namespace.join("guest").join("contracts.py"))
         .expect("guest provider bindings");
     let callers = output
-        .get(&PathBuf::from(format!("{prefix}/host/callers.py")))
+        .get(&namespace.join("host").join("callers.py"))
         .expect("host caller bindings");
 
     assert!(facade.contains("class InternalPluginProviders:"));
@@ -113,9 +121,9 @@ fn internal_plugin_python_profile_is_namespaced_typed_and_consumed_on_attempt() 
     assert!(callers.contains("class PythonProfileContractCaller:"));
     assert!(callers.contains("if interface == self._interface:"));
     assert!(callers.contains("self._cached_revision = self._live_revision()"));
-    assert!(output.contains_key(&PathBuf::from(format!("{prefix}/__init__.py"))));
-    assert!(output.contains_key(&PathBuf::from(format!("{prefix}/host/__init__.py"))));
-    assert!(output.contains_key(&PathBuf::from(format!("{prefix}/guest/__init__.py"))));
+    assert!(output.contains_key(&namespace.join("__init__.py")));
+    assert!(output.contains_key(&namespace.join("host").join("__init__.py")));
+    assert!(output.contains_key(&namespace.join("guest").join("__init__.py")));
 }
 
 #[test]
@@ -152,10 +160,10 @@ fn default_and_external_python_generation_do_not_emit_internal_artifacts() {
     assert_eq!(
         default_paths,
         vec![
-            PathBuf::from("host/callers.py"),
-            PathBuf::from("host/callers.pyi"),
-            PathBuf::from("host/types.py"),
-            PathBuf::from("host/types.pyi"),
+            Path::new("host").join("callers.py"),
+            Path::new("host").join("callers.pyi"),
+            Path::new("host").join("types.py"),
+            Path::new("host").join("types.pyi"),
         ],
         "default generation must retain exactly the canonical host caller bindings"
     );
@@ -163,11 +171,11 @@ fn default_and_external_python_generation_do_not_emit_internal_artifacts() {
     assert_eq!(
         external_paths,
         vec![
-            PathBuf::from("guest/contracts.py"),
-            PathBuf::from("guest/contracts.pyi"),
-            PathBuf::from("guest/init.py"),
-            PathBuf::from("guest/types.py"),
-            PathBuf::from("guest/types.pyi"),
+            Path::new("guest").join("contracts.py"),
+            Path::new("guest").join("contracts.pyi"),
+            Path::new("guest").join("init.py"),
+            Path::new("guest").join("types.py"),
+            Path::new("guest").join("types.pyi"),
             PathBuf::from("manifest.toml"),
         ],
         "external generation must retain exactly the canonical guest provider bindings"
@@ -222,16 +230,12 @@ fn distinct_python_internal_plugin_bundles_emit_collision_free_packages() {
             file.path.display()
         );
     }
-    assert!(
-        paths
-            .iter()
-            .any(|path| path.to_string_lossy().contains("python_first-"))
-    );
-    assert!(
-        paths
-            .iter()
-            .any(|path| path.to_string_lossy().contains("python_second-"))
-    );
+    let first_namespace =
+        Path::new("internal").join(format!("python_first-{:016x}", bundle_id("python_first")));
+    let second_namespace =
+        Path::new("internal").join(format!("python_second-{:016x}", bundle_id("python_second")));
+    assert!(paths.iter().any(|path| path.starts_with(&first_namespace)));
+    assert!(paths.iter().any(|path| path.starts_with(&second_namespace)));
 }
 
 #[test]
@@ -254,7 +258,7 @@ fn generated_python_internal_plugin_registration_imports_and_consumes_real_provi
     let callers = output
         .files
         .iter()
-        .find(|file| file.path.ends_with("host/callers.py"))
+        .find(|file| file.path.ends_with(Path::new("host").join("callers.py")))
         .expect("generated profile callers");
     let buffer_start = callers
         .content
@@ -406,17 +410,17 @@ runtime.unload_bundle(bundle_id)
         .expect("crates directory")
         .parent()
         .expect("workspace directory");
-    let python_path = [
-        workspace.join("sdks/python"),
-        workspace.join("sdks/python/host"),
-        workspace.join("sdks/python/polyplug_abi"),
-        workspace.join("sdks/python/guest"),
-    ]
-    .iter()
-    .map(|path| path.to_string_lossy())
-    .collect::<Vec<_>>()
-    .join(":");
-    let library = workspace.join("target/debug/libpolyplug.so");
+    let python_path = join_paths([
+        workspace.join("sdks").join("python"),
+        workspace.join("sdks").join("python").join("host"),
+        workspace.join("sdks").join("python").join("polyplug_abi"),
+        workspace.join("sdks").join("python").join("guest"),
+    ])
+    .expect("join Python import paths");
+    let library = workspace
+        .join("target")
+        .join("debug")
+        .join(native_library_name("polyplug"));
     assert!(
         library.is_file(),
         "build libpolyplug before running Python profile E2E"

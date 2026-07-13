@@ -1,10 +1,16 @@
 #![allow(clippy::expect_used)]
 
+#[cfg(windows)]
+use core::iter::once;
 use std::collections::HashSet;
+#[cfg(windows)]
+use std::env::{join_paths, split_paths, var_os};
+use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Output;
 
 use polyplug_codegen::{
     GenerateConfig, InternalCppGenerateConfig, Lang, Side, generate, generate_internal_cpp,
@@ -19,6 +25,169 @@ fn workspace_root() -> PathBuf {
         .parent()
         .expect("workspace root")
         .to_path_buf()
+}
+
+fn build_polyplug_runtime(root: &Path) -> PathBuf {
+    let build = Command::new(env!("CARGO"))
+        .args(["build", "-p", "polyplug"])
+        .current_dir(root)
+        .status()
+        .expect("build real polyplug runtime");
+    assert!(build.success(), "build real polyplug runtime");
+    root.join("target").join("debug")
+}
+
+fn msvc_import_library_candidates(runtime_dir: &Path) -> [PathBuf; 2] {
+    [
+        runtime_dir.join("polyplug.dll.lib"),
+        runtime_dir.join("polyplug.lib"),
+    ]
+}
+
+#[cfg(windows)]
+fn discover_msvc_import_library(runtime_dir: &Path) -> Result<PathBuf, String> {
+    let candidates = msvc_import_library_candidates(runtime_dir);
+    candidates
+        .iter()
+        .find(|candidate| candidate.is_file())
+        .cloned()
+        .ok_or_else(|| {
+            let expected = candidates
+                .iter()
+                .map(|candidate| candidate.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "Cargo did not produce the MSVC polyplug import library in {}. Expected one of: {expected}. Run `cargo build -p polyplug` with the x86_64-pc-windows-msvc toolchain.",
+                runtime_dir.display()
+            )
+        })
+}
+
+fn msvc_cpp_runtime_args(
+    driver: &Path,
+    generated: &Path,
+    root: &Path,
+    executable: &Path,
+    import_library: &Path,
+) -> Vec<OsString> {
+    let mut executable_flag = OsString::from("/Fe");
+    executable_flag.push(executable);
+    let mut generated_include = OsString::from("/I");
+    generated_include.push(generated);
+    let mut host_include = OsString::from("/I");
+    host_include.push(root.join("sdks").join("cpp").join("host"));
+    let mut abi_include = OsString::from("/I");
+    abi_include.push(root.join("sdks").join("cpp").join("abi"));
+    vec![
+        OsString::from("/nologo"),
+        OsString::from("/std:c++20"),
+        OsString::from("/EHsc"),
+        generated_include,
+        host_include,
+        abi_include,
+        driver.as_os_str().to_os_string(),
+        executable_flag,
+        OsString::from("/link"),
+        import_library.as_os_str().to_os_string(),
+    ]
+}
+
+fn compile_cpp_runtime_driver(
+    driver: &Path,
+    generated: &Path,
+    root: &Path,
+    runtime_dir: &Path,
+    executable_name: &str,
+) -> Output {
+    #[cfg(windows)]
+    {
+        let executable = generated.join(executable_name).with_extension("exe");
+        let import_library = discover_msvc_import_library(runtime_dir)
+            .expect("discover Cargo-generated MSVC polyplug import library");
+        return Command::new("cl.exe")
+            .args(msvc_cpp_runtime_args(
+                driver,
+                generated,
+                root,
+                &executable,
+                &import_library,
+            ))
+            .current_dir(generated)
+            .output()
+            .expect("compile generated C++ runtime driver with MSVC");
+    }
+    #[cfg(not(windows))]
+    {
+        let executable = generated.join(executable_name);
+        Command::new("g++")
+            .arg("-std=c++20")
+            .arg(driver)
+            .arg("-I")
+            .arg(generated)
+            .arg("-I")
+            .arg(root.join("sdks").join("cpp").join("host"))
+            .arg("-I")
+            .arg(root.join("sdks").join("cpp").join("abi"))
+            .arg("-L")
+            .arg(runtime_dir)
+            .arg("-lpolyplug")
+            .arg(format!("-Wl,-rpath,{}", runtime_dir.display()))
+            .arg("-o")
+            .arg(executable)
+            .output()
+            .expect("compile generated C++ runtime driver")
+    }
+}
+
+fn runtime_driver_path(generated: &Path, executable_name: &str) -> PathBuf {
+    let executable = generated.join(executable_name);
+    if cfg!(windows) {
+        executable.with_extension("exe")
+    } else {
+        executable
+    }
+}
+
+fn run_cpp_runtime_driver(executable: &Path, runtime_dir: &Path) -> Output {
+    let mut command = Command::new(executable);
+    #[cfg(windows)]
+    {
+        let existing = var_os("PATH");
+        let paths = existing.as_deref().map(split_paths).into_iter().flatten();
+        let path = join_paths(once(runtime_dir.to_path_buf()).chain(paths))
+            .expect("runtime PATH entries must be valid");
+        command.env("PATH", path);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = runtime_dir;
+    }
+    command.output().expect("run generated C++ runtime driver")
+}
+
+#[test]
+fn msvc_runtime_driver_command_uses_cargo_import_library() {
+    let root = Path::new("workspace");
+    let generated = Path::new("generated");
+    let runtime_dir = Path::new("target").join("debug");
+    let import_library = msvc_import_library_candidates(&runtime_dir)
+        .into_iter()
+        .next()
+        .expect("MSVC import library candidate");
+    let driver = generated.join("driver.cpp");
+    let executable = generated.join("driver.exe");
+    let args = msvc_cpp_runtime_args(&driver, generated, root, &executable, &import_library);
+
+    let mut executable_flag = OsString::from("/Fe");
+    executable_flag.push(&executable);
+    assert!(args.iter().any(|arg| arg == driver.as_os_str()));
+    assert!(args.iter().any(|arg| arg == import_library.as_os_str()));
+    assert!(args.iter().any(|arg| arg == &OsString::from("/link")));
+    assert!(
+        args.iter().any(|arg| arg == &executable_flag),
+        "MSVC command must produce the requested executable"
+    );
 }
 
 fn write_api(path: &Path, contract: &str) {
@@ -120,29 +289,32 @@ fn internal_cpp_profile_is_opt_in_artifactless_and_typed() {
     let paths = output
         .files
         .iter()
-        .map(|file| file.path.to_string_lossy().into_owned())
-        .collect::<HashSet<_>>();
+        .map(|file| file.path.clone())
+        .collect::<HashSet<PathBuf>>();
+    let namespace = Path::new("internal").join(format!(
+        "cpp_internal_profile-{:016x}",
+        polyplug_utils::bundle_id("cpp_internal_profile")
+    ));
+    let internal_header_path = Path::new("guest").join("internal_plugin.hpp");
+    let callers_path = Path::new("host").join("host_callers.hpp");
+    let interfaces_path = Path::new("guest").join("interfaces.hpp");
+    assert!(paths.iter().all(|path| path.starts_with(&namespace)));
     assert!(
         paths
             .iter()
-            .all(|path| path.starts_with("internal/cpp_internal_profile-"))
+            .any(|path| path.ends_with(&internal_header_path))
     );
+    assert!(paths.iter().any(|path| path.ends_with(&callers_path)));
     assert!(
-        paths
+        !paths
             .iter()
-            .any(|path| path.ends_with("guest/internal_plugin.hpp"))
+            .any(|path| path.ends_with(Path::new("manifest.toml")))
     );
-    assert!(
-        paths
-            .iter()
-            .any(|path| path.ends_with("host/host_callers.hpp"))
-    );
-    assert!(!paths.iter().any(|path| path.ends_with("manifest.toml")));
 
     let internal = output
         .files
         .iter()
-        .find(|file| file.path.ends_with("guest/internal_plugin.hpp"))
+        .find(|file| file.path.ends_with(&internal_header_path))
         .expect("internal registrar header")
         .content
         .as_str();
@@ -165,7 +337,7 @@ fn internal_cpp_profile_is_opt_in_artifactless_and_typed() {
     let callers = output
         .files
         .iter()
-        .find(|file| file.path.ends_with("host/host_callers.hpp"))
+        .find(|file| file.path.ends_with(&callers_path))
         .expect("internal host caller header")
         .content
         .as_str();
@@ -174,7 +346,7 @@ fn internal_cpp_profile_is_opt_in_artifactless_and_typed() {
     let interfaces = output
         .files
         .iter()
-        .find(|file| file.path.ends_with("guest/interfaces.hpp"))
+        .find(|file| file.path.ends_with(&interfaces_path))
         .expect("internal ABI dispatch header")
         .content
         .as_str();
@@ -202,7 +374,7 @@ fn internal_cpp_profile_is_opt_in_artifactless_and_typed() {
         external
             .files
             .iter()
-            .all(|file| !file.path.starts_with("guest/internal")),
+            .all(|file| !file.path.starts_with(Path::new("guest").join("internal"))),
         "external generation must not emit internal-plugin artifacts"
     );
 }
@@ -223,27 +395,28 @@ fn two_internal_cpp_bundles_compile_without_symbol_collisions() {
     let generated = temp.path().join("generated");
     write_output(&first, &generated).expect("write first internal C++ profile");
     write_output(&second, &generated).expect("write second internal C++ profile");
+    let internal_header_path = Path::new("guest").join("internal_plugin.hpp");
     let first_header = first
         .files
         .iter()
-        .find(|file| file.path.ends_with("guest/internal_plugin.hpp"))
+        .find(|file| file.path.ends_with(&internal_header_path))
         .expect("first internal header")
         .path
-        .to_string_lossy()
-        .into_owned();
+        .clone();
     let second_header = second
         .files
         .iter()
-        .find(|file| file.path.ends_with("guest/internal_plugin.hpp"))
+        .find(|file| file.path.ends_with(&internal_header_path))
         .expect("second internal header")
         .path
-        .to_string_lossy()
-        .into_owned();
+        .clone();
     let consumer = generated.join("coexist.cpp");
     fs::write(
         &consumer,
         format!(
-            "#include \"{first_header}\"\n#include \"{second_header}\"\nint main() {{ return 0; }}\n"
+            "#include \"{}\"\n#include \"{}\"\nint main() {{ return 0; }}\n",
+            first_header.display(),
+            second_header.display()
         ),
     )
     .expect("write C++ coexistence consumer");
@@ -271,12 +444,13 @@ fn internal_cpp_profile_registers_dispatches_and_retries_with_real_runtime() {
     let output = internal_output(&temp, "cpp_runtime_profile", "platform.Plugin");
     let generated = temp.path().join("generated");
     write_output(&output, &generated).expect("write internal C++ profile");
+    let internal_header_path = Path::new("guest").join("internal_plugin.hpp");
     let internal_header = output
         .files
         .iter()
-        .find(|file| file.path.ends_with("guest/internal_plugin.hpp"))
+        .find(|file| file.path.ends_with(&internal_header_path))
         .expect("internal registration header");
-    let header_path = internal_header.path.to_string_lossy().into_owned();
+    let header_path = internal_header.path.display().to_string();
     let namespace = internal_header
         .content
         .lines()
@@ -398,40 +572,17 @@ int main() {
     .expect("write generated C++ runtime driver");
 
     let root = workspace_root();
-    let build = Command::new(env!("CARGO"))
-        .args(["build", "-p", "polyplug"])
-        .current_dir(&root)
-        .status()
-        .expect("build real polyplug runtime");
-    assert!(build.success(), "build real polyplug runtime");
-    let runtime_dir = root.join("target/debug");
-    let executable = generated.join("runtime_profile");
-    let compile = Command::new("g++")
-        .arg("-std=c++20")
-        .arg(&driver)
-        .arg("-I")
-        .arg(&generated)
-        .arg("-I")
-        .arg(root.join("sdks/cpp/host"))
-        .arg("-I")
-        .arg(root.join("sdks/cpp/abi"))
-        .arg("-L")
-        .arg(&runtime_dir)
-        .arg("-lpolyplug")
-        .arg(format!("-Wl,-rpath,{}", runtime_dir.display()))
-        .arg("-o")
-        .arg(&executable)
-        .output()
-        .expect("compile generated C++ runtime driver");
+    let runtime_dir = build_polyplug_runtime(&root);
+    let executable = runtime_driver_path(&generated, "runtime_profile");
+    let compile =
+        compile_cpp_runtime_driver(&driver, &generated, &root, &runtime_dir, "runtime_profile");
     assert!(
         compile.status.success(),
         "generated C++ runtime driver did not compile:\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&compile.stdout),
         String::from_utf8_lossy(&compile.stderr),
     );
-    let execution = Command::new(&executable)
-        .output()
-        .expect("run generated C++ runtime driver");
+    let execution = run_cpp_runtime_driver(&executable, &runtime_dir);
     assert!(
         execution.status.success(),
         "generated C++ runtime driver failed with {:?}:\nstdout: {}\nstderr: {}",
@@ -475,15 +626,16 @@ fn internal_cpp_profile_binds_exact_handles_and_rolls_back_failed_factories() {
     let generated = temp.path().join("generated");
     write_output(&older, &generated).expect("write older profile");
     write_output(&current, &generated).expect("write current profile");
+    let internal_header_path = Path::new("guest").join("internal_plugin.hpp");
     let older_header = older
         .files
         .iter()
-        .find(|file| file.path.ends_with("guest/internal_plugin.hpp"))
+        .find(|file| file.path.ends_with(&internal_header_path))
         .expect("older header");
     let current_header = current
         .files
         .iter()
-        .find(|file| file.path.ends_with("guest/internal_plugin.hpp"))
+        .find(|file| file.path.ends_with(&internal_header_path))
         .expect("current header");
     let older_namespace = older_header
         .content
@@ -621,40 +773,17 @@ int main() {
     )
     .expect("write exact-handle driver");
     let root = workspace_root();
-    let build = Command::new(env!("CARGO"))
-        .args(["build", "-p", "polyplug"])
-        .current_dir(&root)
-        .status()
-        .expect("build real polyplug runtime");
-    assert!(build.success(), "build real polyplug runtime");
-    let runtime_dir = root.join("target/debug");
-    let executable = generated.join("exact_handles");
-    let compile = Command::new("g++")
-        .arg("-std=c++20")
-        .arg(&driver)
-        .arg("-I")
-        .arg(&generated)
-        .arg("-I")
-        .arg(root.join("sdks/cpp/host"))
-        .arg("-I")
-        .arg(root.join("sdks/cpp/abi"))
-        .arg("-L")
-        .arg(&runtime_dir)
-        .arg("-lpolyplug")
-        .arg(format!("-Wl,-rpath,{}", runtime_dir.display()))
-        .arg("-o")
-        .arg(&executable)
-        .output()
-        .expect("compile exact-handle driver");
+    let runtime_dir = build_polyplug_runtime(&root);
+    let executable = runtime_driver_path(&generated, "exact_handles");
+    let compile =
+        compile_cpp_runtime_driver(&driver, &generated, &root, &runtime_dir, "exact_handles");
     assert!(
         compile.status.success(),
         "exact-handle driver did not compile:\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&compile.stdout),
         String::from_utf8_lossy(&compile.stderr),
     );
-    let execution = Command::new(&executable)
-        .output()
-        .expect("run exact-handle driver");
+    let execution = run_cpp_runtime_driver(&executable, &runtime_dir);
     assert!(
         execution.status.success(),
         "exact-handle driver failed with {:?}:\nstdout: {}\nstderr: {}",

@@ -74,7 +74,7 @@ impl LuaGenerator {
             path: PathBuf::from("init.lua"),
             content: format!(
                 "{}local source = debug.getinfo(1, \"S\").source\n\
-                 local root = assert(source:match(\"^@(.+)/init%.lua$\"), \"generated internal Lua bindings need a file path\")\n\
+                 local root = assert(source:match(\"^@(.+)[/\\\\]init%.lua$\"), \"generated internal Lua bindings need a file path\")\n\
                  return {{ guest = dofile(root .. \"/guest/internal.lua\"), host = dofile(root .. \"/host/callers.lua\") }}\n",
                 file_header()
             ),
@@ -213,7 +213,7 @@ fn generate_lua_internal_profile_file(
         &[("lua_loader", "polyplug.loaders.lua")],
     ]));
     out.push_str("\nlocal source = debug.getinfo(1, \"S\").source\n");
-    out.push_str("local root = assert(source:match(\"^@(.+)/guest/internal%.lua$\"), \"generated internal Lua bindings need a file path\")\n");
+    out.push_str("local root = assert(source:match(\"^@(.+)[/\\\\]guest[/\\\\]internal%.lua$\"), \"generated internal Lua bindings need a file path\")\n");
     out.push_str("local types = dofile(root .. \"/guest/types.lua\")\n");
     out.push_str("local native_bridge = lua_loader.internal_plugin_bridge()\n");
     out.push_str("local string_view_ptr_t = ffi.typeof(\"StringView*\")\n");

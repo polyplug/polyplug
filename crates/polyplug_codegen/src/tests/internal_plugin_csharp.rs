@@ -2,17 +2,20 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_utils::bundle_id;
-use std::collections::{BTreeMap, HashSet};
-use std::fs;
-use std::path::Path;
-use std::path::PathBuf;
-use std::process::Command;
-
 use crate::{
     GenerateConfig, GenerateOutput, InternalCSharpGenerateConfig, Lang, Side, generate,
     generate_internal_csharp, write_output,
 };
+use core::iter::once;
+use polyplug_utils::bundle_id;
+use std::collections::{BTreeMap, HashSet};
+use std::env::consts::OS;
+use std::env::{join_paths, split_paths, var_os};
+use std::ffi::{OsStr, OsString};
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
 
 fn output_map(output: GenerateOutput) -> BTreeMap<PathBuf, String> {
     output
@@ -29,6 +32,41 @@ fn workspace_root() -> PathBuf {
         .parent()
         .expect("workspace root")
         .to_path_buf()
+}
+
+fn native_library_search_variable() -> &'static str {
+    match OS {
+        "windows" => "PATH",
+        "macos" => "DYLD_LIBRARY_PATH",
+        _ => "LD_LIBRARY_PATH",
+    }
+}
+
+fn prepend_native_library_search_path(native_dir: &Path, existing: Option<&OsStr>) -> OsString {
+    let existing_paths = existing.map(split_paths).into_iter().flatten();
+    join_paths(once(native_dir.to_path_buf()).chain(existing_paths))
+        .expect("native library search paths must be valid")
+}
+
+fn configure_native_library_search_path(command: &mut Command, native_dir: &Path) {
+    let variable = native_library_search_variable();
+    let value = prepend_native_library_search_path(native_dir, var_os(variable).as_deref());
+    command.env(variable, value);
+}
+
+#[test]
+fn native_library_search_path_prepends_and_preserves_entries() {
+    let native_dir = Path::new("native");
+    let existing = join_paths([Path::new("existing")]).expect("create existing native search path");
+    let paths = split_paths(&prepend_native_library_search_path(
+        native_dir,
+        Some(existing.as_os_str()),
+    ))
+    .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        vec![native_dir.to_path_buf(), PathBuf::from("existing")]
+    );
 }
 
 fn write_api(path: &Path, contract_name: &str) {
@@ -132,10 +170,12 @@ fn internal_csharp_profile_uses_identity_namespaces_and_typed_registration() {
         .expect("generate C# internal profile"),
     );
 
+    let namespace = Path::new("internal").join(format!(
+        "csharp_profile-{:016x}",
+        bundle_id("csharp_profile")
+    ));
     assert!(
-        output.keys().all(|path| path
-            .to_string_lossy()
-            .starts_with("internal/csharp_profile-")),
+        output.keys().all(|path| path.starts_with(&namespace)),
         "every C# profile output must be bundle-identity namespaced: {output:#?}"
     );
     let registration = output
@@ -476,12 +516,15 @@ static class Program
         ),
     )
     .expect("write C# internal profile executable project");
-    let output = Command::new("dotnet")
+    let native_dir = root.join("target").join("debug");
+    let mut command = Command::new("dotnet");
+    command
         .args(["run", "--nologo", "--verbosity", "quiet"])
         .arg("--project")
         .arg(&project)
-        .current_dir(&source)
-        .env("LD_LIBRARY_PATH", root.join("target/debug"))
+        .current_dir(&source);
+    configure_native_library_search_path(&mut command, &native_dir);
+    let output = command
         .output()
         .expect("run generated C# internal profile executable");
     assert!(
