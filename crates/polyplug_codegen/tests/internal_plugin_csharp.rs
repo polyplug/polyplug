@@ -99,6 +99,7 @@ fn write_project(project: &Path, references: &[PathBuf]) {
 }
 
 fn run_project(project: &Path) -> Output {
+    let project = fs::canonicalize(project).expect("canonicalize generated C# project directory");
     Command::new("dotnet")
         .args(["run", "--project"])
         .arg(project.join("Primitive.csproj"))
