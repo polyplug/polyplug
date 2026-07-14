@@ -28,7 +28,7 @@ version = "1.0.0"
 [[host_contract.functions]]
 name = "log"
 params = [{ name = "message", type = "StringView" }]
-returns = "void"
+return = "void"
 "#;
     fs::write(&api_toml_path, content).expect("failed to write test api.toml");
     api_toml_path
