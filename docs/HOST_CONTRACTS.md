@@ -37,7 +37,7 @@ version = "1.0.0"
 [[host_contract.functions]]
 name = "log"
 params = [{ name = "message", type = "StringView" }]
-returns = "void"
+return = "void"
 ```
 
 ## How the implementation is carried

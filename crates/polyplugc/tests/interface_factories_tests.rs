@@ -39,16 +39,16 @@ version = "1.0.0"
 [[host_contract.functions]]
 name = "log"
 params = [{ name = "message", type = "StringView" }]
-returns = "void"
+return = "void"
 
 [[host_contract.functions]]
 name = "log_level"
 params = [{ name = "message", type = "StringView" }, { name = "level", type = "u32" }]
-returns = "void"
+return = "void"
 
 [[host_contract.functions]]
 name = "get_level"
-returns = "u32"
+return = "u32"
 "#;
     fs::write(&api_toml_path, content).expect("failed to write test api.toml");
     api_toml_path
