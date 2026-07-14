@@ -557,7 +557,8 @@ public:
             if (!introspection->get_bundle_descriptor(host_, bundle_id, &view)) {
                 continue;
             }
-            DescriptorAllocation name{host_, view.name};
+            DescriptorAllocation name{
+                host_, Array{view.name, view.name_len, view.name__align}};
             descriptors.push_back(LoadedBundleDescriptor{
                 view.id,
                 name.copy(),
@@ -586,8 +587,15 @@ public:
             if (!introspection->get_registered_contract_descriptor(host_, items[index], &view)) {
                 continue;
             }
-            DescriptorAllocation name{host_, view.plugin.name};
-            DescriptorAllocation contract_name{host_, view.plugin.contract_name};
+            DescriptorAllocation name{
+                host_, Array{view.plugin.name, view.plugin.name_len, view.plugin.name__align}};
+            DescriptorAllocation contract_name{
+                host_,
+                Array{
+                    view.plugin.contract_name,
+                    view.plugin.contract_name_len,
+                    view.plugin.contract_name__align,
+                }};
             descriptors.push_back(RegisteredContractDescriptor{
                 view.handle,
                 view.bundle_id,

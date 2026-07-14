@@ -17,15 +17,25 @@ namespace {
 
 enum class IntrospectionMode {
     Populated,
+    NullAndEmpty,
+    CallbackFalse,
     Empty,
     OlderRuntime,
+};
+
+struct NativeAllocation {
+    std::unique_ptr<uint8_t[]> storage;
+    bool is_string;
 };
 
 HostApi g_host{};
 RuntimeIntrospection g_introspection{};
 IntrospectionMode g_mode = IntrospectionMode::Populated;
-std::vector<std::unique_ptr<uint8_t[]>> g_allocations{};
+std::vector<NativeAllocation> g_allocations{};
 std::vector<std::pair<size_t, size_t>> g_free_calls{};
+size_t g_poisoned_string_frees = 0;
+size_t g_false_bundle_callbacks = 0;
+size_t g_false_contract_callbacks = 0;
 int failures = 0;
 
 void check(bool condition, const char* description) {
@@ -41,20 +51,20 @@ Version version() {
 }
 
 template <typename T>
-Array allocate_array(const T* values, size_t len, size_t alignment) {
+Array allocate_array(const T* values, size_t len, size_t alignment, bool is_string = false) {
     const size_t bytes = len * sizeof(T);
-    auto allocation = std::make_unique<uint8_t[]>(bytes == 0 ? 1 : bytes);
+    auto storage = std::make_unique<uint8_t[]>(bytes == 0 ? 1 : bytes);
     if (bytes != 0) {
-        std::memcpy(allocation.get(), values, bytes);
+        std::memcpy(storage.get(), values, bytes);
     }
-    uint8_t* items = allocation.get();
-    g_allocations.push_back(std::move(allocation));
+    uint8_t* items = storage.get();
+    g_allocations.push_back(NativeAllocation{std::move(storage), is_string});
     return Array{items, len, alignment};
 }
 
 Array owned_string(const char* value) {
     return allocate_array(
-        reinterpret_cast<const uint8_t*>(value), std::strlen(value), alignof(uint8_t));
+        reinterpret_cast<const uint8_t*>(value), std::strlen(value), alignof(uint8_t), true);
 }
 
 void list_bundles(const HostApi*, Array* out) {
@@ -66,11 +76,66 @@ void list_bundles(const HostApi*, Array* out) {
         *out = allocate_array(ids.data(), ids.size(), alignof(uint64_t));
         return;
     }
+    if (g_mode == IntrospectionMode::NullAndEmpty) {
+        constexpr std::array<uint64_t, 2> ids{50, 60};
+        *out = allocate_array(ids.data(), ids.size(), alignof(uint64_t));
+        return;
+    }
+    if (g_mode == IntrospectionMode::CallbackFalse) {
+        constexpr std::array<uint64_t, 1> ids{70};
+        *out = allocate_array(ids.data(), ids.size(), alignof(uint64_t));
+        return;
+    }
     *out = allocate_array<uint64_t>(nullptr, 0, alignof(uint64_t));
 }
 
 bool get_bundle_descriptor(const HostApi*, uint64_t bundle_id, BundleDescriptorView* out) {
-    if (g_mode != IntrospectionMode::Populated || out == nullptr) {
+    if (out == nullptr) {
+        return false;
+    }
+    if (g_mode == IntrospectionMode::CallbackFalse) {
+        ++g_false_bundle_callbacks;
+        static char borrowed_name[] = "borrowed bundle";
+        *out = BundleDescriptorView{
+            bundle_id,
+            borrowed_name,
+            std::strlen(borrowed_name),
+            alignof(uint8_t),
+            version(),
+            SupportedLanguage::Cpp,
+            BundleSourceKind::Internal,
+        };
+        return false;
+    }
+    if (g_mode == IntrospectionMode::NullAndEmpty) {
+        if (bundle_id == 50) {
+            *out = BundleDescriptorView{
+                bundle_id,
+                nullptr,
+                0,
+                alignof(uint8_t),
+                version(),
+                SupportedLanguage::Cpp,
+                BundleSourceKind::Internal,
+            };
+            return true;
+        }
+        if (bundle_id == 60) {
+            const Array name = owned_string("");
+            *out = BundleDescriptorView{
+                bundle_id,
+                name.items,
+                name.len,
+                name.align,
+                version(),
+                SupportedLanguage::Cpp,
+                BundleSourceKind::Path,
+            };
+            return true;
+        }
+        return false;
+    }
+    if (g_mode != IntrospectionMode::Populated) {
         return false;
     }
     const char* name = nullptr;
@@ -95,7 +160,16 @@ bool get_bundle_descriptor(const HostApi*, uint64_t bundle_id, BundleDescriptorV
     default:
         return false;
     }
-    *out = BundleDescriptorView{bundle_id, owned_string(name), version(), SupportedLanguage::Cpp, source};
+    const Array owned_name = owned_string(name);
+    *out = BundleDescriptorView{
+        bundle_id,
+        owned_name.items,
+        owned_name.len,
+        owned_name.align,
+        version(),
+        SupportedLanguage::Cpp,
+        source,
+    };
     return true;
 }
 
@@ -108,12 +182,66 @@ void list_registered_guest_contracts(const HostApi*, Array* out) {
         *out = allocate_array(handles.data(), handles.size(), alignof(GuestContractHandle));
         return;
     }
+    if (g_mode == IntrospectionMode::NullAndEmpty) {
+        constexpr std::array<GuestContractHandle, 1> handles{{{3, 9}}};
+        *out = allocate_array(handles.data(), handles.size(), alignof(GuestContractHandle));
+        return;
+    }
+    if (g_mode == IntrospectionMode::CallbackFalse) {
+        constexpr std::array<GuestContractHandle, 1> handles{{{4, 10}}};
+        *out = allocate_array(handles.data(), handles.size(), alignof(GuestContractHandle));
+        return;
+    }
     *out = allocate_array<GuestContractHandle>(nullptr, 0, alignof(GuestContractHandle));
 }
 
 bool get_registered_contract_descriptor(
     const HostApi*, GuestContractHandle handle, RegisteredContractDescriptorView* out) {
-    if (g_mode != IntrospectionMode::Populated || out == nullptr) {
+    if (out == nullptr) {
+        return false;
+    }
+    if (g_mode == IntrospectionMode::CallbackFalse) {
+        ++g_false_contract_callbacks;
+        static char borrowed_plugin_name[] = "borrowed plugin";
+        static char borrowed_contract_name[] = "borrowed.contract";
+        *out = RegisteredContractDescriptorView{
+            handle,
+            70,
+            701,
+            OwnedPluginDescriptorView{
+                borrowed_plugin_name,
+                std::strlen(borrowed_plugin_name),
+                alignof(uint8_t),
+                borrowed_contract_name,
+                std::strlen(borrowed_contract_name),
+                alignof(uint8_t),
+                version(),
+            },
+        };
+        return false;
+    }
+    if (g_mode == IntrospectionMode::NullAndEmpty) {
+        if (handle.index != 3) {
+            return false;
+        }
+        const Array empty_contract_name = owned_string("");
+        *out = RegisteredContractDescriptorView{
+            handle,
+            50,
+            501,
+            OwnedPluginDescriptorView{
+                nullptr,
+                0,
+                alignof(uint8_t),
+                empty_contract_name.items,
+                empty_contract_name.len,
+                empty_contract_name.align,
+                version(),
+            },
+        };
+        return true;
+    }
+    if (g_mode != IntrospectionMode::Populated) {
         return false;
     }
     const char* plugin_name = nullptr;
@@ -136,13 +264,19 @@ bool get_registered_contract_descriptor(
     default:
         return false;
     }
+    const Array owned_plugin_name = owned_string(plugin_name);
+    const Array owned_contract_name = owned_string(contract_name);
     *out = RegisteredContractDescriptorView{
         handle,
         bundle_id,
         contract_id,
         OwnedPluginDescriptorView{
-            owned_string(plugin_name),
-            owned_string(contract_name),
+            owned_plugin_name.items,
+            owned_plugin_name.len,
+            owned_plugin_name.align,
+            owned_contract_name.items,
+            owned_contract_name.len,
+            owned_contract_name.align,
             version(),
         },
     };
@@ -153,12 +287,15 @@ void free_array(const HostApi*, uint8_t* pointer, size_t size, size_t alignment)
     g_free_calls.emplace_back(size, alignment);
     const auto found = std::find_if(
         g_allocations.begin(), g_allocations.end(),
-        [pointer](const std::unique_ptr<uint8_t[]>& allocation) { return allocation.get() == pointer; });
+        [pointer](const NativeAllocation& allocation) { return allocation.storage.get() == pointer; });
     if (found == g_allocations.end()) {
         check(false, "SDK must free each native temporary array exactly once");
         return;
     }
     std::memset(pointer, 0xA5, size == 0 ? 1 : size);
+    if (found->is_string) {
+        ++g_poisoned_string_frees;
+    }
     g_allocations.erase(found);
 }
 
@@ -184,6 +321,9 @@ void reset(IntrospectionMode mode) {
     g_mode = mode;
     g_free_calls.clear();
     g_allocations.clear();
+    g_poisoned_string_frees = 0;
+    g_false_bundle_callbacks = 0;
+    g_false_contract_callbacks = 0;
     g_host = HostApi{};
     g_host.list_bundles = list_bundles;
     g_host.free = free_array;
@@ -236,8 +376,48 @@ int main() {
         {std::strlen("beta"), alignof(uint8_t)},
         {2 * sizeof(GuestContractHandle), alignof(GuestContractHandle)},
     });
+    check(g_poisoned_string_frees == 8, "every owned native string is poisoned before release");
     check(bundles[1].name == "path", "bundle snapshot remains valid after native array free");
     check(contracts[1].contract_name == "example.beta", "contract snapshot remains valid after native array free");
+
+    reset(IntrospectionMode::NullAndEmpty);
+    polyplug::Runtime null_and_empty = polyplug::Runtime::builder().build();
+    const std::vector<polyplug::LoadedBundleDescriptor> null_and_empty_bundles =
+        null_and_empty.bundle_descriptors();
+    const std::vector<polyplug::RegisteredContractDescriptor> null_and_empty_contracts =
+        null_and_empty.registered_contract_descriptors();
+    check(
+        null_and_empty_bundles.size() == 2 && null_and_empty_bundles[0].name.empty()
+            && null_and_empty_bundles[1].name.empty(),
+        "null and allocated-empty bundle names become empty snapshots");
+    check(
+        null_and_empty_contracts.size() == 1 && null_and_empty_contracts[0].plugin_name.empty()
+            && null_and_empty_contracts[0].contract_name.empty(),
+        "null and allocated-empty contract names become empty snapshots");
+    assert_free_calls({
+        {2 * sizeof(uint64_t), alignof(uint64_t)},
+        {0, alignof(uint8_t)},
+        {0, alignof(uint8_t)},
+        {sizeof(GuestContractHandle), alignof(GuestContractHandle)},
+    });
+    check(g_poisoned_string_frees == 2, "allocated empty strings are poisoned and freed exactly once");
+
+    reset(IntrospectionMode::CallbackFalse);
+    polyplug::Runtime callback_false = polyplug::Runtime::builder().build();
+    check(
+        callback_false.bundle_descriptors().empty(),
+        "a false bundle descriptor callback transfers no descriptor ownership");
+    check(
+        callback_false.registered_contract_descriptors().empty(),
+        "a false contract descriptor callback transfers no descriptor ownership");
+    check(
+        g_false_bundle_callbacks == 1 && g_false_contract_callbacks == 1,
+        "false descriptor callbacks are invoked before their outputs are ignored");
+    assert_free_calls({
+        {sizeof(uint64_t), alignof(uint64_t)},
+        {sizeof(GuestContractHandle), alignof(GuestContractHandle)},
+    });
+    check(g_poisoned_string_frees == 0, "false callbacks do not transfer borrowed strings for freeing");
 
     reset(IntrospectionMode::Empty);
     polyplug::Runtime empty = polyplug::Runtime::builder().build();
