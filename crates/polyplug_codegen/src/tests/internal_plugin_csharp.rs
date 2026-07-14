@@ -350,8 +350,9 @@ fn two_internal_csharp_profiles_with_different_apis_compile_together() {
 #[test]
 fn generated_internal_csharp_profile_registers_and_dispatches_real_runtime_shapes() {
     let temp = tempfile::tempdir().expect("create temporary directory");
-    let api = temp.path().join("api.toml");
-    let bundle = temp.path().join("bundle.toml");
+    let temp_root = fs::canonicalize(temp.path()).expect("canonicalize temporary directory");
+    let api = temp_root.join("api.toml");
+    let bundle = temp_root.join("bundle.toml");
     write_api(&api, "profile.Contract");
     fs::write(
         &bundle,
@@ -362,8 +363,8 @@ fn generated_internal_csharp_profile_registers_and_dispatches_real_runtime_shape
         "Polyplug.Generated.Internal.Bundleprofilee2e{:016X}",
         bundle_id("profilee2e")
     );
-    let domain_root = temp.path().join("domain");
-    let contracts_root = temp.path().join("contracts");
+    let domain_root = temp_root.join("domain");
+    let contracts_root = temp_root.join("contracts");
     let layout = OutputLayout {
         bindings: OutputDestination::Inline,
         domain_types: OutputDestination::Emit {
@@ -379,7 +380,7 @@ fn generated_internal_csharp_profile_registers_and_dispatches_real_runtime_shape
     };
     let output = generate_internal_csharp(InternalCSharpGenerateConfig {
         bundle_toml: bundle,
-        out_dir: temp.path().join("out"),
+        out_dir: temp_root.join("out"),
         layout,
     })
     .expect("generate executable C# internal profile");
@@ -401,7 +402,7 @@ fn generated_internal_csharp_profile_registers_and_dispatches_real_runtime_shape
             .iter()
             .all(|file| !file.path.ends_with(Path::new("guest/Contracts.cs")))
     );
-    let source = temp.path().join("source");
+    let source = temp_root.join("source");
     write_output(&output, &source).expect("write executable C# profile");
 
     let root = workspace_root();
@@ -652,12 +653,13 @@ fn write_split_project(
 #[test]
 fn partitioned_csharp_outputs_compile_and_run_against_external_domain_packages() {
     let temp = tempfile::tempdir().expect("create C# split-output fixture");
-    let api = temp.path().join("api.toml");
+    let temp_root = fs::canonicalize(temp.path()).expect("canonicalize temporary directory");
+    let api = temp_root.join("api.toml");
     write_api(&api, "shape.Contract");
 
-    let bindings_root = temp.path().join("bindings");
-    let domain_root = temp.path().join("domain");
-    let contracts_root = temp.path().join("contracts");
+    let bindings_root = temp_root.join("bindings");
+    let domain_root = temp_root.join("domain");
+    let contracts_root = temp_root.join("contracts");
     let domain_import =
         ValidatedImport::parse(Lang::CSharp, "Split.DomainTypes").expect("valid domain namespace");
     let contracts_import = ValidatedImport::parse(Lang::CSharp, "Split.GuestContracts")
