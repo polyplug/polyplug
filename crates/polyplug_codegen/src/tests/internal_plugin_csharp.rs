@@ -36,6 +36,24 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn canonicalize_for_toolchain(path: &Path) -> PathBuf {
+    let canonical = path
+        .canonicalize()
+        .expect("canonicalize temporary directory");
+    if cfg!(windows) {
+        let path = canonical.to_string_lossy().into_owned();
+        if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+            PathBuf::from(format!(r"\\{rest}"))
+        } else if let Some(rest) = path.strip_prefix(r"\\?\") {
+            PathBuf::from(rest)
+        } else {
+            canonical
+        }
+    } else {
+        canonical
+    }
+}
+
 fn native_library_search_variable() -> &'static str {
     match OS {
         "windows" => "PATH",
@@ -350,7 +368,7 @@ fn two_internal_csharp_profiles_with_different_apis_compile_together() {
 #[test]
 fn generated_internal_csharp_profile_registers_and_dispatches_real_runtime_shapes() {
     let temp = tempfile::tempdir().expect("create temporary directory");
-    let temp_root = fs::canonicalize(temp.path()).expect("canonicalize temporary directory");
+    let temp_root = canonicalize_for_toolchain(temp.path());
     let api = temp_root.join("api.toml");
     let bundle = temp_root.join("bundle.toml");
     write_api(&api, "profile.Contract");
@@ -653,7 +671,7 @@ fn write_split_project(
 #[test]
 fn partitioned_csharp_outputs_compile_and_run_against_external_domain_packages() {
     let temp = tempfile::tempdir().expect("create C# split-output fixture");
-    let temp_root = fs::canonicalize(temp.path()).expect("canonicalize temporary directory");
+    let temp_root = canonicalize_for_toolchain(temp.path());
     let api = temp_root.join("api.toml");
     write_api(&api, "shape.Contract");
 

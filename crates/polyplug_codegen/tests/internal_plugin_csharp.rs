@@ -21,6 +21,24 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn canonicalize_for_toolchain(path: &Path) -> PathBuf {
+    let canonical = path
+        .canonicalize()
+        .expect("canonicalize generated C# project");
+    if cfg!(windows) {
+        let path = canonical.to_string_lossy().into_owned();
+        if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+            PathBuf::from(format!(r"\\{rest}"))
+        } else if let Some(rest) = path.strip_prefix(r"\\?\") {
+            PathBuf::from(rest)
+        } else {
+            canonical
+        }
+    } else {
+        canonical
+    }
+}
+
 fn write_primitive_api(path: &Path, contract: &str) {
     fs::write(
         path,
@@ -99,7 +117,7 @@ fn write_project(project: &Path, references: &[PathBuf]) {
 }
 
 fn run_project(project: &Path) -> Output {
-    let project = fs::canonicalize(project).expect("canonicalize generated C# project directory");
+    let project = canonicalize_for_toolchain(project);
     Command::new("dotnet")
         .args(["run", "--project"])
         .arg(project.join("Primitive.csproj"))
