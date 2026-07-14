@@ -42,13 +42,14 @@ use polyplug_utils::guest_contract_id;
 use polyplug_utils::host_contract_id;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RawApiSchema {
     #[serde(default)]
     pub types: Vec<RawType>,
     #[serde(rename = "enum", default)]
     pub r#enum: Vec<RawEnum>,
-    #[serde(default, alias = "contract")]
-    pub plugin_contract: Vec<RawContract>,
+    #[serde(default)]
+    pub guest_contract: Vec<RawGuestContract>,
     #[serde(default)]
     pub host_contract: Vec<RawHostContract>,
 }
@@ -72,7 +73,7 @@ pub(crate) struct RawField {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawContract {
+pub(crate) struct RawGuestContract {
     pub name: String,
     pub version: toml::Spanned<String>,
     #[serde(default)]
@@ -447,20 +448,29 @@ pub fn parse_api_str(content: &str) -> Result<ValidatedIr, PolyplugcError> {
     parse_api_str_with_file(content, "<input>")
 }
 
+fn api_schema_error(e: toml::de::Error, file: &str, source: &str) -> PolyplugcError {
+    let message: String = match e.message() {
+        message if message.contains("unknown field `plugin_contract`") => {
+            "`[[plugin_contract]]` is invalid; use `[[guest_contract]]` instead".to_owned()
+        }
+        message if message.contains("unknown field `contract`") => {
+            "`[[contract]]` is invalid; use `[[guest_contract]]` instead".to_owned()
+        }
+        message if message.contains("unknown field") => format!(
+            "{message}; valid top-level API keys are `[[types]]`, `[[enum]]`, `[[guest_contract]]`, and `[[host_contract]]`"
+        ),
+        message => message.to_owned(),
+    };
+    let location: Option<SourceLocation> = e
+        .span()
+        .map(|span| location_from_span(file, source, span.start));
+    PolyplugcError::TomlParseError { message, location }
+}
+
 fn parse_api_str_with_file(content: &str, file: &str) -> Result<ValidatedIr, PolyplugcError> {
     let content: Cow<'_, str> = normalize_source_line_endings(content);
-    if content.contains("[[contract]]") && !content.contains("[[plugin_contract]]") {
-        eprintln!("warning: [[contract]] is deprecated, use [[plugin_contract]] instead");
-    }
-    let raw: RawApiSchema = toml::from_str(content.as_ref()).map_err(|e| {
-        let location: Option<SourceLocation> = e
-            .span()
-            .map(|span| location_from_span(file, content.as_ref(), span.start));
-        PolyplugcError::TomlParseError {
-            message: e.message().to_owned(),
-            location,
-        }
-    })?;
+    let raw: RawApiSchema = toml::from_str(content.as_ref())
+        .map_err(|e| api_schema_error(e, file, content.as_ref()))?;
     lower_api(raw, content.as_ref(), file)
 }
 
@@ -998,32 +1008,36 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
         });
     }
 
-    // Reject duplicate plugin-contract names (mirrors the host-contract dup check below).
-    let mut seen_plugin_contracts: Vec<&str> = Vec::with_capacity(raw.plugin_contract.len());
-    for raw_contract in &raw.plugin_contract {
-        if seen_plugin_contracts.contains(&raw_contract.name.as_str()) {
+    // Reject duplicate guest-contract names (mirrors the host-contract check below).
+    let mut seen_guest_contracts: Vec<&str> = Vec::with_capacity(raw.guest_contract.len());
+    for raw_guest_contract in &raw.guest_contract {
+        if seen_guest_contracts.contains(&raw_guest_contract.name.as_str()) {
             return Err(PolyplugcError::DuplicateContractName {
-                name: raw_contract.name.clone(),
+                name: raw_guest_contract.name.clone(),
                 first_defined_at: None,
             });
         }
-        seen_plugin_contracts.push(&raw_contract.name);
+        seen_guest_contracts.push(&raw_guest_contract.name);
     }
 
     let mut resolved_contracts: Vec<ResolvedContract> = Vec::new();
-    for raw_contract in &raw.plugin_contract {
-        validate_contract_members(&raw_contract.name, "contract", &raw_contract.functions)?;
-        let version: Version = parse_version_spanned(&raw_contract.version, file, source)?;
-        let contract_id: u64 = guest_contract_id(&raw_contract.name, version.major);
-        let docs: Option<String> = normalize_docs(raw_contract.docs.as_ref(), file, source)?;
+    for raw_guest_contract in &raw.guest_contract {
+        validate_contract_members(
+            &raw_guest_contract.name,
+            "guest contract",
+            &raw_guest_contract.functions,
+        )?;
+        let version: Version = parse_version_spanned(&raw_guest_contract.version, file, source)?;
+        let contract_id: u64 = guest_contract_id(&raw_guest_contract.name, version.major);
+        let docs: Option<String> = normalize_docs(raw_guest_contract.docs.as_ref(), file, source)?;
 
         let mut functions: Vec<ResolvedFunction> = Vec::new();
-        for (function_id, raw_fn) in raw_contract.functions.iter().enumerate() {
+        for (function_id, raw_fn) in raw_guest_contract.functions.iter().enumerate() {
             let mut params: Vec<ResolvedParam> = Vec::new();
             for p in &raw_fn.params {
                 let ty: ResolvedTypeRef = resolve_type_ref_spanned(
                     &p.ty,
-                    &raw_contract.name,
+                    &raw_guest_contract.name,
                     &all_known_names,
                     file,
                     source,
@@ -1040,7 +1054,7 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
                 .returns
                 .as_ref()
                 .map(|raw_return| {
-                    resolve_type_ref(raw_return.ty(), &raw_contract.name, &all_known_names)
+                    resolve_type_ref(raw_return.ty(), &raw_guest_contract.name, &all_known_names)
                 })
                 .transpose()?
                 // An explicit `return = "void"` means "no return"; normalize it to
@@ -1059,7 +1073,7 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
         }
 
         resolved_contracts.push(ResolvedContract {
-            name: raw_contract.name.clone(),
+            name: raw_guest_contract.name.clone(),
             contract_id,
             version,
             functions,
@@ -1129,10 +1143,10 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
         });
     }
 
-    let plugin_contract_names: Vec<&str> = raw
-        .plugin_contract
+    let guest_contract_names: Vec<&str> = raw
+        .guest_contract
         .iter()
-        .map(|c| c.name.as_str())
+        .map(|contract| contract.name.as_str())
         .collect();
     for raw_host_contract in &raw.host_contract {
         if !raw_host_contract.name.starts_with("host.") {
@@ -1140,7 +1154,7 @@ fn lower_api(raw: RawApiSchema, source: &str, file: &str) -> Result<ValidatedIr,
                 name: raw_host_contract.name.clone(),
             });
         }
-        if plugin_contract_names.contains(&raw_host_contract.name.as_str()) {
+        if guest_contract_names.contains(&raw_host_contract.name.as_str()) {
             return Err(PolyplugcError::DuplicateContractName {
                 name: raw_host_contract.name.clone(),
                 first_defined_at: None,
@@ -1349,26 +1363,60 @@ mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
 
-    const SAMPLE_API: &str = "[[plugin_contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n[[plugin_contract.functions]]\nname = \"decode\"\n\n[[plugin_contract.functions]]\nname = \"supported_formats\"\n    return = \"StringView\"";
+    const SAMPLE_API: &str = "[[guest_contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n[[guest_contract.functions]]\nname = \"decode\"\n\n[[guest_contract.functions]]\nname = \"supported_formats\"\n    return = \"StringView\"";
 
     const SAMPLE_BUNDLE: &str = "[bundle]\nname = \"image-plugin\"\nversion = \"1.0.0\"\nloader = \"python\"\nfile = \"test.py\"\n\n[[plugin]]\nname = \"jpeg_decoder\"\nimplements = [\"image.decode@1.0\"]";
 
     #[test]
-    fn parse_minimal_api() {
-        let ir: ValidatedIr = parse_api_str(SAMPLE_API).expect("parse api");
+    fn parse_canonical_guest_contract_preserves_contract_id() {
+        let ir: ValidatedIr = parse_api_str(SAMPLE_API).expect("parse canonical guest contract");
         assert_eq!(ir.contracts.len(), 1);
         assert_eq!(ir.contracts[0].name, "image.decode");
+        assert_eq!(ir.contracts[0].contract_id, 18_154_885_241_241_252_316);
         assert_eq!(ir.contracts[0].functions.len(), 2);
         assert_eq!(ir.contracts[0].functions[0].function_id, 0);
         assert_eq!(ir.contracts[0].functions[1].function_id, 1);
     }
 
+    fn assert_rejected_legacy_or_unknown_table(toml: &str, invalid_table: &str) {
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        match result {
+            Err(PolyplugcError::TomlParseError { message, .. }) => {
+                assert!(
+                    message.contains(invalid_table),
+                    "unexpected message: {message}"
+                );
+                assert!(
+                    message.contains("[[guest_contract]]"),
+                    "diagnostic must name the canonical table: {message}"
+                );
+            }
+            other => panic!("expected legacy or unknown table rejection, got {other:?}"),
+        }
+    }
+
     #[test]
-    fn parse_api_with_deprecated_contract_syntax() {
-        let deprecated_api: &str = "[[contract]]\nname = \"test.add\"\nversion = \"1.0.0\"\n";
-        let ir: ValidatedIr = parse_api_str(deprecated_api).expect("parse deprecated api");
-        assert_eq!(ir.contracts.len(), 1);
-        assert_eq!(ir.contracts[0].name, "test.add");
+    fn parse_legacy_plugin_contract_rejected() {
+        assert_rejected_legacy_or_unknown_table(
+            "[[plugin_contract]]\nname = \"test.add\"\nversion = \"1.0.0\"\n",
+            "[[plugin_contract]]",
+        );
+    }
+
+    #[test]
+    fn parse_legacy_contract_rejected() {
+        assert_rejected_legacy_or_unknown_table(
+            "[[contract]]\nname = \"test.add\"\nversion = \"1.0.0\"\n",
+            "[[contract]]",
+        );
+    }
+
+    #[test]
+    fn parse_unknown_top_level_table_rejected() {
+        assert_rejected_legacy_or_unknown_table(
+            "[[guest_contrat]]\nname = \"test.add\"\nversion = \"1.0.0\"\n",
+            "guest_contrat",
+        );
     }
 
     #[test]
@@ -1580,9 +1628,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_host_contract_duplicate_with_plugin_contract_rejected() {
+    fn parse_host_contract_duplicate_with_guest_contract_rejected() {
         let toml: &str = concat!(
-            "[[plugin_contract]]\nname = \"host.logger\"\nversion = \"1.0.0\"\n\n",
+            "[[guest_contract]]\nname = \"host.logger\"\nversion = \"1.0.0\"\n\n",
             "[[host_contract]]\nname = \"host.logger\"\nversion = \"1.0.0\"\n"
         );
         let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
@@ -1608,7 +1656,7 @@ mod tests {
     #[test]
     fn parse_both_contract_types_valid() {
         let toml: &str = concat!(
-            "[[plugin_contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n",
+            "[[guest_contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n",
             "[[host_contract]]\nname = \"host.logger\"\nversion = \"1.0.0\"\n"
         );
         let ir: ValidatedIr = parse_api_str(toml).expect("parse both contract types");
@@ -1642,8 +1690,8 @@ mod tests {
     fn parse_function_named_reserved_keyword_rejected() {
         // `class` is a keyword in Python and C++ — generated code would not compile.
         let toml: &str = concat!(
-            "[[plugin_contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n",
-            "[[plugin_contract.functions]]\nname = \"class\"\n"
+            "[[guest_contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n",
+            "[[guest_contract.functions]]\nname = \"class\"\n"
         );
         let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
         match result {
@@ -1719,7 +1767,7 @@ mod tests {
     #[test]
     fn parse_contract_segment_named_reserved_keyword_rejected() {
         // A dotted contract segment that is reserved (`int` is a C++ keyword).
-        let toml: &str = "[[plugin_contract]]\nname = \"image.int\"\nversion = \"1.0.0\"\n";
+        let toml: &str = "[[guest_contract]]\nname = \"image.int\"\nversion = \"1.0.0\"\n";
         let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
         assert!(
             matches!(result, Err(PolyplugcError::ReservedIdentifier { ref name, .. }) if name == "int"),
@@ -1730,8 +1778,8 @@ mod tests {
     #[test]
     fn parse_polyplug_prefixed_function_rejected() {
         let toml: &str = concat!(
-            "[[plugin_contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n",
-            "[[plugin_contract.functions]]\nname = \"polyplug_init\"\n"
+            "[[guest_contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n",
+            "[[guest_contract.functions]]\nname = \"polyplug_init\"\n"
         );
         let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
         assert!(
@@ -1748,8 +1796,8 @@ mod tests {
             "[[types.fields]]\nname = \"width\"\ntype = \"u32\"\n\n",
             "[[enum]]\nname = \"LogLevel\"\nrepr = \"u32\"\n\n",
             "[[enum.variants]]\nname = \"Debug\"\nvalue = \"0\"\n\n",
-            "[[plugin_contract]]\nname = \"pipeline.Decoder\"\nversion = \"1.0.0\"\n\n",
-            "[[plugin_contract.functions]]\nname = \"decode\"\n"
+            "[[guest_contract]]\nname = \"pipeline.Decoder\"\nversion = \"1.0.0\"\n\n",
+            "[[guest_contract.functions]]\nname = \"decode\"\n"
         );
         let ir: ValidatedIr = parse_api_str(toml).expect("normal names must parse");
         assert_eq!(ir.contracts.len(), 1);
@@ -1844,7 +1892,7 @@ mod tests {
         // `Array<Foo>` desugars to a synthesized `ArrayOf_Foo { items, len }` struct
         // and the return resolves to that wrapper. The element marshaling is emitted
         // by the generators at the return boundary.
-        let api: &str = "[[types]]\nname = \"Foo\"\nfields = [{ name = \"a\", type = \"u32\" }, { name = \"s\", type = \"StringView\" }]\n\n[[plugin_contract]]\nname = \"x.C\"\nversion = \"1.0.0\"\n\n[[plugin_contract.functions]]\nname = \"list\"\nreturn = \"Array<Foo>\"";
+        let api: &str = "[[types]]\nname = \"Foo\"\nfields = [{ name = \"a\", type = \"u32\" }, { name = \"s\", type = \"StringView\" }]\n\n[[guest_contract]]\nname = \"x.C\"\nversion = \"1.0.0\"\n\n[[guest_contract.functions]]\nname = \"list\"\nreturn = \"Array<Foo>\"";
         let ir: ValidatedIr = parse_api_str(api).expect("parse Array<Foo>");
         let wrapper: &ResolvedType = ir
             .types
@@ -1863,7 +1911,7 @@ mod tests {
 
     #[test]
     fn array_wrapper_emitted_once_across_multiple_uses() {
-        let api: &str = "[[types]]\nname = \"Foo\"\nfields = [{ name = \"a\", type = \"u32\" }]\n\n[[plugin_contract]]\nname = \"x.C\"\nversion = \"1.0.0\"\n\n[[plugin_contract.functions]]\nname = \"a\"\nreturn = \"Array<Foo>\"\n\n[[plugin_contract.functions]]\nname = \"b\"\nreturn = \"Array<Foo>\"";
+        let api: &str = "[[types]]\nname = \"Foo\"\nfields = [{ name = \"a\", type = \"u32\" }]\n\n[[guest_contract]]\nname = \"x.C\"\nversion = \"1.0.0\"\n\n[[guest_contract.functions]]\nname = \"a\"\nreturn = \"Array<Foo>\"\n\n[[guest_contract.functions]]\nname = \"b\"\nreturn = \"Array<Foo>\"";
         let ir: ValidatedIr = parse_api_str(api).expect("parse");
         let count: usize = ir
             .types
@@ -1875,7 +1923,7 @@ mod tests {
 
     #[test]
     fn array_of_unknown_element_is_rejected() {
-        let api: &str = "[[plugin_contract]]\nname = \"x.C\"\nversion = \"1.0.0\"\n\n[[plugin_contract.functions]]\nname = \"list\"\nreturn = \"Array<Nope>\"";
+        let api: &str = "[[guest_contract]]\nname = \"x.C\"\nversion = \"1.0.0\"\n\n[[guest_contract.functions]]\nname = \"list\"\nreturn = \"Array<Nope>\"";
         assert!(
             parse_api_str(api).is_err(),
             "Array<Unknown> must be rejected"
@@ -1884,7 +1932,7 @@ mod tests {
 
     #[test]
     fn nested_array_is_rejected() {
-        let api: &str = "[[types]]\nname = \"Foo\"\nfields = [{ name = \"a\", type = \"u32\" }]\n\n[[plugin_contract]]\nname = \"x.C\"\nversion = \"1.0.0\"\n\n[[plugin_contract.functions]]\nname = \"list\"\nreturn = \"Array<Array<Foo>>\"";
+        let api: &str = "[[types]]\nname = \"Foo\"\nfields = [{ name = \"a\", type = \"u32\" }]\n\n[[guest_contract]]\nname = \"x.C\"\nversion = \"1.0.0\"\n\n[[guest_contract.functions]]\nname = \"list\"\nreturn = \"Array<Array<Foo>>\"";
         assert!(
             parse_api_str(api).is_err(),
             "nested arrays must be rejected"

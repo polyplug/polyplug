@@ -31,7 +31,7 @@ fn bundle_err(toml: &str) -> PolyplugcError {
 
 #[test]
 fn malformed_toml_missing_equals() {
-    let err: PolyplugcError = api_err("[[contract]]\nname \"no-equals\"");
+    let err: PolyplugcError = api_err("[[guest_contract]]\nname \"no-equals\"");
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
         "expected TomlParseError for malformed TOML, got {err:?}",
@@ -40,7 +40,7 @@ fn malformed_toml_missing_equals() {
 
 #[test]
 fn malformed_toml_unclosed_bracket() {
-    let err: PolyplugcError = api_err("[[contract\nname = \"x\"");
+    let err: PolyplugcError = api_err("[[guest_contract\nname = \"x\"");
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
         "expected TomlParseError for unclosed bracket, got {err:?}",
@@ -50,7 +50,7 @@ fn malformed_toml_unclosed_bracket() {
 #[test]
 fn malformed_toml_invalid_string_literal() {
     // Unquoted string value is not valid TOML.
-    let err: PolyplugcError = api_err("[[contract]]\nname = bad value");
+    let err: PolyplugcError = api_err("[[guest_contract]]\nname = bad value");
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
         "expected TomlParseError for invalid string literal, got {err:?}",
@@ -103,8 +103,8 @@ fn bundle_missing_version_field() {
 
 #[test]
 fn contract_missing_version_field() {
-    // `version` is required inside [[contract]].
-    let err: PolyplugcError = api_err("[[contract]]\nname = \"my.contract\"");
+    // `version` is required inside [[guest_contract]].
+    let err: PolyplugcError = api_err("[[guest_contract]]\nname = \"my.contract\"");
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
         "expected TomlParseError for missing contract version, got {err:?}",
@@ -113,8 +113,8 @@ fn contract_missing_version_field() {
 
 #[test]
 fn contract_missing_name_field() {
-    // `name` is required inside [[contract]].
-    let err: PolyplugcError = api_err("[[contract]]\nversion = \"1.0\"");
+    // `name` is required inside [[guest_contract]].
+    let err: PolyplugcError = api_err("[[guest_contract]]\nversion = \"1.0\"");
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
         "expected TomlParseError for missing contract name, got {err:?}",
@@ -207,9 +207,9 @@ fn duplicate_type_and_enum_different_names_ok() {
 #[test]
 fn unknown_type_in_function_param_rejected() {
     let toml: &str = concat!(
-        "[[contract]]\nname = \"test.math\"\nversion = \"1.0\"\n\n",
-        "[[contract.functions]]\nname = \"add\"\n\n",
-        "[[contract.functions.params]]\nname = \"a\"\ntype = \"NonExistentType\"\n",
+        "[[guest_contract]]\nname = \"test.math\"\nversion = \"1.0\"\n\n",
+        "[[guest_contract.functions]]\nname = \"add\"\n\n",
+        "[[guest_contract.functions.params]]\nname = \"a\"\ntype = \"NonExistentType\"\n",
     );
     let err: PolyplugcError = api_err(toml);
     assert!(
@@ -224,8 +224,8 @@ fn unknown_type_in_function_param_rejected() {
 #[test]
 fn unknown_type_in_function_return_rejected() {
     let toml: &str = concat!(
-        "[[contract]]\nname = \"test.math\"\nversion = \"1.0\"\n\n",
-        "[[contract.functions]]\nname = \"compute\"\nreturn = \"GhostType\"\n",
+        "[[guest_contract]]\nname = \"test.math\"\nversion = \"1.0\"\n\n",
+        "[[guest_contract.functions]]\nname = \"compute\"\nreturn = \"GhostType\"\n",
     );
     let err: PolyplugcError = api_err(toml);
     assert!(
@@ -257,29 +257,29 @@ fn unknown_type_in_struct_field_rejected() {
 fn known_primitive_types_accepted() {
     // All primitives should resolve without error.
     let toml: &str = concat!(
-        "[[contract]]\nname = \"prims\"\nversion = \"1.0\"\n\n",
-        "[[contract.functions]]\nname = \"a\"\n",
-        "[[contract.functions.params]]\nname = \"p\"\ntype = \"u8\"\n\n",
-        "[[contract.functions]]\nname = \"b\"\n",
-        "[[contract.functions.params]]\nname = \"p\"\ntype = \"u16\"\n\n",
-        "[[contract.functions]]\nname = \"c\"\n",
-        "[[contract.functions.params]]\nname = \"p\"\ntype = \"u32\"\n\n",
-        "[[contract.functions]]\nname = \"d\"\n",
-        "[[contract.functions.params]]\nname = \"p\"\ntype = \"u64\"\n\n",
-        "[[contract.functions]]\nname = \"e\"\n",
-        "[[contract.functions.params]]\nname = \"p\"\ntype = \"i8\"\n\n",
-        "[[contract.functions]]\nname = \"f\"\n",
-        "[[contract.functions.params]]\nname = \"p\"\ntype = \"i16\"\n\n",
-        "[[contract.functions]]\nname = \"g\"\n",
-        "[[contract.functions.params]]\nname = \"p\"\ntype = \"i32\"\n\n",
-        "[[contract.functions]]\nname = \"h\"\n",
-        "[[contract.functions.params]]\nname = \"p\"\ntype = \"i64\"\n\n",
-        "[[contract.functions]]\nname = \"i\"\n",
-        "[[contract.functions.params]]\nname = \"p\"\ntype = \"f32\"\n\n",
-        "[[contract.functions]]\nname = \"j\"\n",
-        "[[contract.functions.params]]\nname = \"p\"\ntype = \"f64\"\n\n",
-        "[[contract.functions]]\nname = \"k\"\n",
-        "[[contract.functions.params]]\nname = \"p\"\ntype = \"bool\"\n",
+        "[[guest_contract]]\nname = \"prims\"\nversion = \"1.0\"\n\n",
+        "[[guest_contract.functions]]\nname = \"a\"\n",
+        "[[guest_contract.functions.params]]\nname = \"p\"\ntype = \"u8\"\n\n",
+        "[[guest_contract.functions]]\nname = \"b\"\n",
+        "[[guest_contract.functions.params]]\nname = \"p\"\ntype = \"u16\"\n\n",
+        "[[guest_contract.functions]]\nname = \"c\"\n",
+        "[[guest_contract.functions.params]]\nname = \"p\"\ntype = \"u32\"\n\n",
+        "[[guest_contract.functions]]\nname = \"d\"\n",
+        "[[guest_contract.functions.params]]\nname = \"p\"\ntype = \"u64\"\n\n",
+        "[[guest_contract.functions]]\nname = \"e\"\n",
+        "[[guest_contract.functions.params]]\nname = \"p\"\ntype = \"i8\"\n\n",
+        "[[guest_contract.functions]]\nname = \"f\"\n",
+        "[[guest_contract.functions.params]]\nname = \"p\"\ntype = \"i16\"\n\n",
+        "[[guest_contract.functions]]\nname = \"g\"\n",
+        "[[guest_contract.functions.params]]\nname = \"p\"\ntype = \"i32\"\n\n",
+        "[[guest_contract.functions]]\nname = \"h\"\n",
+        "[[guest_contract.functions.params]]\nname = \"p\"\ntype = \"i64\"\n\n",
+        "[[guest_contract.functions]]\nname = \"i\"\n",
+        "[[guest_contract.functions.params]]\nname = \"p\"\ntype = \"f32\"\n\n",
+        "[[guest_contract.functions]]\nname = \"j\"\n",
+        "[[guest_contract.functions.params]]\nname = \"p\"\ntype = \"f64\"\n\n",
+        "[[guest_contract.functions]]\nname = \"k\"\n",
+        "[[guest_contract.functions.params]]\nname = \"p\"\ntype = \"bool\"\n",
     );
     let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
@@ -292,12 +292,12 @@ fn known_primitive_types_accepted() {
 fn abi_builtins_accepted_as_type_refs() {
     // StringView, Buffer, Ptr, Void are all valid ABI types.
     let toml: &str = concat!(
-        "[[contract]]\nname = \"builtins\"\nversion = \"1.0\"\n\n",
-        "[[contract.functions]]\nname = \"a\"\n",
-        "[[contract.functions.params]]\nname = \"s\"\ntype = \"StringView\"\n\n",
-        "[[contract.functions]]\nname = \"b\"\nreturn = \"Buffer\"\n\n",
-        "[[contract.functions]]\nname = \"c\"\nreturn = \"Void\"\n\n",
-        "[[contract.functions]]\nname = \"d\"\nreturn = \"ptr\"\n",
+        "[[guest_contract]]\nname = \"builtins\"\nversion = \"1.0\"\n\n",
+        "[[guest_contract.functions]]\nname = \"a\"\n",
+        "[[guest_contract.functions.params]]\nname = \"s\"\ntype = \"StringView\"\n\n",
+        "[[guest_contract.functions]]\nname = \"b\"\nreturn = \"Buffer\"\n\n",
+        "[[guest_contract.functions]]\nname = \"c\"\nreturn = \"Void\"\n\n",
+        "[[guest_contract.functions]]\nname = \"d\"\nreturn = \"ptr\"\n",
     );
     let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
@@ -313,9 +313,9 @@ fn user_defined_type_resolves_when_declared() {
         "[[types]]\nname = \"Point\"\n",
         "[[types.fields]]\nname = \"x\"\ntype = \"f32\"\n",
         "[[types.fields]]\nname = \"y\"\ntype = \"f32\"\n\n",
-        "[[contract]]\nname = \"geo\"\nversion = \"1.0\"\n\n",
-        "[[contract.functions]]\nname = \"distance\"\n",
-        "[[contract.functions.params]]\nname = \"p\"\ntype = \"Point\"\n",
+        "[[guest_contract]]\nname = \"geo\"\nversion = \"1.0\"\n\n",
+        "[[guest_contract.functions]]\nname = \"distance\"\n",
+        "[[guest_contract.functions.params]]\nname = \"p\"\ntype = \"Point\"\n",
     );
     let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
@@ -330,8 +330,8 @@ fn enum_type_resolves_as_param_type() {
     let toml: &str = concat!(
         "[[enum]]\nname = \"Status\"\nrepr = \"u32\"\n",
         "[[enum.variants]]\nname = \"Ok\"\nvalue = \"0\"\n\n",
-        "[[contract]]\nname = \"svc\"\nversion = \"1.0\"\n\n",
-        "[[contract.functions]]\nname = \"get_status\"\nreturn = \"Status\"\n",
+        "[[guest_contract]]\nname = \"svc\"\nversion = \"1.0\"\n\n",
+        "[[guest_contract.functions]]\nname = \"get_status\"\nreturn = \"Status\"\n",
     );
     let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
@@ -576,7 +576,7 @@ fn enum_valid_grouped_expr_accepted() {
 
 #[test]
 fn version_non_numeric_major_rejected() {
-    let err: PolyplugcError = api_err("[[contract]]\nname = \"x\"\nversion = \"abc.0\"");
+    let err: PolyplugcError = api_err("[[guest_contract]]\nname = \"x\"\nversion = \"abc.0\"");
     assert!(
         matches!(err, PolyplugcError::ValidationFailed { .. }),
         "expected ValidationFailed for non-numeric major, got {err:?}",
@@ -586,7 +586,7 @@ fn version_non_numeric_major_rejected() {
 #[test]
 fn version_negative_component_rejected() {
     // u32::parse rejects negative numbers.
-    let err: PolyplugcError = api_err("[[contract]]\nname = \"x\"\nversion = \"-1.0\"");
+    let err: PolyplugcError = api_err("[[guest_contract]]\nname = \"x\"\nversion = \"-1.0\"");
     assert!(
         matches!(err, PolyplugcError::ValidationFailed { .. }),
         "expected ValidationFailed for negative version component, got {err:?}",
@@ -596,7 +596,8 @@ fn version_negative_component_rejected() {
 #[test]
 fn version_overflow_rejected() {
     // 4294967296 > u32::MAX
-    let err: PolyplugcError = api_err("[[contract]]\nname = \"x\"\nversion = \"4294967296.0\"");
+    let err: PolyplugcError =
+        api_err("[[guest_contract]]\nname = \"x\"\nversion = \"4294967296.0\"");
     assert!(
         matches!(err, PolyplugcError::ValidationFailed { .. }),
         "expected ValidationFailed for overflowing version, got {err:?}",
@@ -605,7 +606,8 @@ fn version_overflow_rejected() {
 
 #[test]
 fn version_minor_overflow_rejected() {
-    let err: PolyplugcError = api_err("[[contract]]\nname = \"x\"\nversion = \"1.4294967296\"");
+    let err: PolyplugcError =
+        api_err("[[guest_contract]]\nname = \"x\"\nversion = \"1.4294967296\"");
     assert!(
         matches!(err, PolyplugcError::ValidationFailed { .. }),
         "expected ValidationFailed for overflowing minor version, got {err:?}",
@@ -614,7 +616,8 @@ fn version_minor_overflow_rejected() {
 
 #[test]
 fn version_patch_overflow_rejected() {
-    let err: PolyplugcError = api_err("[[contract]]\nname = \"x\"\nversion = \"1.0.4294967296\"");
+    let err: PolyplugcError =
+        api_err("[[guest_contract]]\nname = \"x\"\nversion = \"1.0.4294967296\"");
     assert!(
         matches!(err, PolyplugcError::ValidationFailed { .. }),
         "expected ValidationFailed for overflowing patch version, got {err:?}",
@@ -623,7 +626,7 @@ fn version_patch_overflow_rejected() {
 
 #[test]
 fn version_empty_string_rejected() {
-    let err: PolyplugcError = api_err("[[contract]]\nname = \"x\"\nversion = \"\"");
+    let err: PolyplugcError = api_err("[[guest_contract]]\nname = \"x\"\nversion = \"\"");
     // Empty string: split('.') yields [""], parse_u32("") will fail.
     assert!(
         matches!(err, PolyplugcError::ValidationFailed { .. }),
@@ -635,7 +638,7 @@ fn version_empty_string_rejected() {
 fn version_single_component_accepted() {
     // "1" → major=1, minor=0, patch=0 — should succeed.
     let result: Result<ValidatedIr, PolyplugcError> =
-        parse_api_str("[[contract]]\nname = \"x\"\nversion = \"1\"");
+        parse_api_str("[[guest_contract]]\nname = \"x\"\nversion = \"1\"");
     assert!(
         result.is_ok(),
         "expected single component version to succeed, got {result:?}"
@@ -646,7 +649,7 @@ fn version_single_component_accepted() {
 fn version_major_minor_accepted() {
     // "2.3" → major=2, minor=3, patch=0 — should succeed.
     let result: Result<ValidatedIr, PolyplugcError> =
-        parse_api_str("[[contract]]\nname = \"x\"\nversion = \"2.3\"");
+        parse_api_str("[[guest_contract]]\nname = \"x\"\nversion = \"2.3\"");
     assert!(
         result.is_ok(),
         "expected major.minor version to succeed, got {result:?}"
@@ -747,10 +750,10 @@ fn comments_only_api_toml_accepted() {
 #[test]
 fn multiple_contracts_all_parse() {
     let toml: &str = concat!(
-        "[[contract]]\nname = \"svc.alpha\"\nversion = \"1.0\"\n\n",
-        "[[contract.functions]]\nname = \"ping\"\n\n",
-        "[[contract]]\nname = \"svc.beta\"\nversion = \"2.1\"\n\n",
-        "[[contract.functions]]\nname = \"pong\"\n",
+        "[[guest_contract]]\nname = \"svc.alpha\"\nversion = \"1.0\"\n\n",
+        "[[guest_contract.functions]]\nname = \"ping\"\n\n",
+        "[[guest_contract]]\nname = \"svc.beta\"\nversion = \"2.1\"\n\n",
+        "[[guest_contract.functions]]\nname = \"pong\"\n",
     );
     let ir: ValidatedIr = parse_api_str(toml).expect("expected multiple contracts to parse");
     assert_eq!(ir.contracts.len(), 2, "expected 2 contracts");
@@ -762,11 +765,11 @@ fn multiple_contracts_all_parse() {
 fn second_contract_has_bad_type_rejected() {
     // First contract is fine; second has an unknown type reference.
     let toml: &str = concat!(
-        "[[contract]]\nname = \"svc.good\"\nversion = \"1.0\"\n\n",
-        "[[contract.functions]]\nname = \"ok\"\n\n",
-        "[[contract]]\nname = \"svc.bad\"\nversion = \"1.0\"\n\n",
-        "[[contract.functions]]\nname = \"broken\"\n\n",
-        "[[contract.functions.params]]\nname = \"x\"\ntype = \"Phantom\"\n",
+        "[[guest_contract]]\nname = \"svc.good\"\nversion = \"1.0\"\n\n",
+        "[[guest_contract.functions]]\nname = \"ok\"\n\n",
+        "[[guest_contract]]\nname = \"svc.bad\"\nversion = \"1.0\"\n\n",
+        "[[guest_contract.functions]]\nname = \"broken\"\n\n",
+        "[[guest_contract.functions.params]]\nname = \"x\"\ntype = \"Phantom\"\n",
     );
     let err: PolyplugcError = api_err(toml);
     assert!(
@@ -783,22 +786,22 @@ fn second_contract_has_bad_type_rejected() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn invalid_contract_name_segment_rejected() {
-    // A dotted contract name with a segment that is not a valid identifier
+fn invalid_guest_contract_name_segment_rejected() {
+    // A dotted guest contract name with a segment that is not a valid identifier
     // (starts with a digit) must be rejected — it would produce broken codegen.
     let err: PolyplugcError =
-        api_err("[[plugin_contract]]\nname = \"pipeline.1bad\"\nversion = \"1.0\"\n");
+        api_err("[[guest_contract]]\nname = \"pipeline.1bad\"\nversion = \"1.0\"\n");
     assert!(
-        matches!(err, PolyplugcError::InvalidIdentifier { ref kind, .. } if kind == "contract"),
-        "expected InvalidIdentifier(contract) for `pipeline.1bad`, got {err:?}",
+        matches!(err, PolyplugcError::InvalidIdentifier { ref kind, .. } if kind == "guest contract"),
+        "expected InvalidIdentifier(guest contract) for `pipeline.1bad`, got {err:?}",
     );
 }
 
 #[test]
 fn invalid_function_name_rejected() {
     let err: PolyplugcError = api_err(concat!(
-        "[[plugin_contract]]\nname = \"svc.ok\"\nversion = \"1.0\"\n\n",
-        "[[plugin_contract.functions]]\nname = \"has space\"\n",
+        "[[guest_contract]]\nname = \"svc.ok\"\nversion = \"1.0\"\n\n",
+        "[[guest_contract.functions]]\nname = \"has space\"\n",
     ));
     assert!(
         matches!(err, PolyplugcError::InvalidIdentifier { ref kind, .. } if kind == "function"),
@@ -809,9 +812,9 @@ fn invalid_function_name_rejected() {
 #[test]
 fn invalid_param_name_rejected() {
     let err: PolyplugcError = api_err(concat!(
-        "[[plugin_contract]]\nname = \"svc.ok\"\nversion = \"1.0\"\n\n",
-        "[[plugin_contract.functions]]\nname = \"go\"\n\n",
-        "[[plugin_contract.functions.params]]\nname = \"1arg\"\ntype = \"StringView\"\n",
+        "[[guest_contract]]\nname = \"svc.ok\"\nversion = \"1.0\"\n\n",
+        "[[guest_contract.functions]]\nname = \"go\"\n\n",
+        "[[guest_contract.functions.params]]\nname = \"1arg\"\ntype = \"StringView\"\n",
     ));
     assert!(
         matches!(err, PolyplugcError::InvalidIdentifier { ref kind, .. } if kind == "parameter"),
@@ -820,10 +823,10 @@ fn invalid_param_name_rejected() {
 }
 
 #[test]
-fn duplicate_plugin_contract_name_rejected() {
+fn duplicate_guest_contract_name_rejected() {
     let err: PolyplugcError = api_err(concat!(
-        "[[plugin_contract]]\nname = \"svc.dup\"\nversion = \"1.0\"\n\n",
-        "[[plugin_contract]]\nname = \"svc.dup\"\nversion = \"1.0\"\n",
+        "[[guest_contract]]\nname = \"svc.dup\"\nversion = \"1.0\"\n\n",
+        "[[guest_contract]]\nname = \"svc.dup\"\nversion = \"1.0\"\n",
     ));
     assert!(
         matches!(err, PolyplugcError::DuplicateContractName { ref name, .. } if name == "svc.dup"),
@@ -834,9 +837,9 @@ fn duplicate_plugin_contract_name_rejected() {
 #[test]
 fn duplicate_function_name_within_contract_rejected() {
     let err: PolyplugcError = api_err(concat!(
-        "[[plugin_contract]]\nname = \"svc.ok\"\nversion = \"1.0\"\n\n",
-        "[[plugin_contract.functions]]\nname = \"run\"\n\n",
-        "[[plugin_contract.functions]]\nname = \"run\"\n",
+        "[[guest_contract]]\nname = \"svc.ok\"\nversion = \"1.0\"\n\n",
+        "[[guest_contract.functions]]\nname = \"run\"\n\n",
+        "[[guest_contract.functions]]\nname = \"run\"\n",
     ));
     assert!(
         matches!(
@@ -852,7 +855,7 @@ fn duplicate_function_name_within_contract_rejected() {
 fn valid_dotted_contract_name_accepted() {
     // Sanity: a normal dotted PascalCase contract name must still parse.
     let ir: ValidatedIr =
-        parse_api_str("[[plugin_contract]]\nname = \"pipeline.Decoder\"\nversion = \"1.0\"\n")
+        parse_api_str("[[guest_contract]]\nname = \"pipeline.Decoder\"\nversion = \"1.0\"\n")
             .expect("valid dotted contract name must parse");
     assert_eq!(ir.contracts.len(), 1);
     assert_eq!(ir.contracts[0].name, "pipeline.Decoder");

@@ -29,6 +29,13 @@ dotnet tool install -g Polyplug.Cli      # or: cargo install polyplugc
 polyplugc generate --bundle bundle.toml --lang csharp --out ./generated
 ```
 
+## Shared generated declarations
+
+The command remains unified by default. For a shared .NET declaration assembly,
+emit or import DomainTypes as `Common.Domain` and GuestContracts as
+`Common.GuestContracts`; see the [canonical split-output guide][codegen].
+
+
 ## Host application
 
 ```csharp
@@ -109,3 +116,4 @@ public static class Registration
 [guest]: https://github.com/polyplug/polyplug/blob/main/docs/languages/csharp-guest.md
 [docs]: https://github.com/polyplug/polyplug/tree/main/docs
 [examples]: https://github.com/polyplug/polyplug/tree/main/examples
+[codegen]: https://github.com/polyplug/polyplug/blob/main/docs/CODE_GENERATION.md

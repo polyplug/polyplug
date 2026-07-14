@@ -42,8 +42,8 @@ fn missing_closing_bracket_single_table() {
 
 #[test]
 fn missing_closing_bracket_array_of_tables() {
-    // `[[contract` missing the closing `]]` — TOML parse error.
-    let err: PolyplugcError = api_err("[[contract\nname = \"x\"\nversion = \"1.0\"");
+    // `[[guest_contract` missing the closing `]]` — TOML parse error.
+    let err: PolyplugcError = api_err("[[guest_contract\nname = \"x\"\nversion = \"1.0\"");
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
         "expected TomlParseError for missing `]]` in array-of-tables header, got {err:?}",
@@ -52,10 +52,10 @@ fn missing_closing_bracket_array_of_tables() {
 
 #[test]
 fn missing_closing_bracket_nested_subtable() {
-    // `[[contract.functions` missing the closing `]]`.
+    // `[[guest_contract.functions` missing the closing `]]`.
     let err: PolyplugcError = api_err(concat!(
-        "[[contract]]\nname = \"x\"\nversion = \"1.0\"\n\n",
-        "[[contract.functions\nname = \"f\"\n",
+        "[[guest_contract]]\nname = \"x\"\nversion = \"1.0\"\n\n",
+        "[[guest_contract.functions\nname = \"f\"\n",
     ));
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
@@ -79,7 +79,8 @@ fn unclosed_inline_array_value() {
 #[test]
 fn unclosed_inline_table_value() {
     // Inline table `{name = "x"` missing the closing `}`.
-    let err: PolyplugcError = api_err("[[contract]]\nname = {value = \"x\"\nversion = \"1.0\"");
+    let err: PolyplugcError =
+        api_err("[[guest_contract]]\nname = {value = \"x\"\nversion = \"1.0\"");
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
         "expected TomlParseError for unclosed inline table, got {err:?}",
@@ -93,7 +94,8 @@ fn unclosed_inline_table_value() {
 #[test]
 fn invalid_escape_sequence_backslash_q() {
     // `\q` is not a valid TOML escape sequence.
-    let err: PolyplugcError = api_err("[[contract]]\nname = \"bad\\qescape\"\nversion = \"1.0\"");
+    let err: PolyplugcError =
+        api_err("[[guest_contract]]\nname = \"bad\\qescape\"\nversion = \"1.0\"");
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
         "expected TomlParseError for `\\q` escape, got {err:?}",
@@ -113,7 +115,8 @@ fn invalid_escape_sequence_backslash_a() {
 #[test]
 fn invalid_escape_sequence_lone_backslash() {
     // A lone trailing backslash before end-of-string is invalid.
-    let err: PolyplugcError = api_err("[[contract]]\nname = \"trailing\\\"\nversion = \"1.0\"");
+    let err: PolyplugcError =
+        api_err("[[guest_contract]]\nname = \"trailing\\\"\nversion = \"1.0\"");
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
         "expected TomlParseError for lone trailing backslash, got {err:?}",
@@ -127,7 +130,7 @@ fn valid_escape_sequences_accepted() {
     // name validation (not the TOML parser) rejects it — which proves the escape
     // was lexed successfully rather than producing a TOML parse error.
     let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(
-        "[[contract]]\nname = \"esc\\\\slash\\\"quote\\nnewline\\ttab\"\nversion = \"1.0\"",
+        "[[guest_contract]]\nname = \"esc\\\\slash\\\"quote\\nnewline\\ttab\"\nversion = \"1.0\"",
     );
     assert!(
         matches!(result, Err(PolyplugcError::InvalidIdentifier { .. })),
@@ -140,15 +143,16 @@ fn valid_escape_sequences_accepted() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn mixed_table_and_array_of_tables_same_key() {
-    // Defining `[contract]` and then `[[contract]]` for the same key violates the TOML spec.
+fn mixed_guest_contract_table_and_array_of_tables_same_key() {
+    // Defining `[guest_contract]` and then `[[guest_contract]]` for the same key
+    // violates the TOML specification.
     let err: PolyplugcError = api_err(concat!(
-        "[contract]\nname = \"single\"\nversion = \"1.0\"\n\n",
-        "[[contract]]\nname = \"array\"\nversion = \"1.0\"\n",
+        "[guest_contract]\nname = \"single\"\nversion = \"1.0\"\n\n",
+        "[[guest_contract]]\nname = \"array\"\nversion = \"1.0\"\n",
     ));
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
-        "expected TomlParseError for mixed `[contract]` + `[[contract]]`, got {err:?}",
+        "expected TomlParseError for mixed `[guest_contract]` + `[[guest_contract]]`, got {err:?}",
     );
 }
 
@@ -166,12 +170,13 @@ fn redefining_existing_table_header() {
 }
 
 #[test]
-fn array_element_defined_before_array_header() {
-    // Assigning `contract.name` as a dotted key then using `[[contract]]`
-    // is a TOML conflict (implicitly created vs. explicitly created).
+fn guest_contract_element_defined_before_array_header() {
+    // Assigning `guest_contract.name` as a dotted key then using
+    // `[[guest_contract]]` is a TOML conflict (implicitly created vs. explicitly
+    // created).
     let err: PolyplugcError = api_err(concat!(
-        "contract.name = \"dotted\"\n\n",
-        "[[contract]]\nname = \"array\"\nversion = \"1.0\"\n",
+        "guest_contract.name = \"dotted\"\n\n",
+        "[[guest_contract]]\nname = \"array\"\nversion = \"1.0\"\n",
     ));
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
@@ -244,7 +249,7 @@ fn comments_only_is_invalid_bundle_toml() {
 fn comment_after_value_is_valid() {
     // Inline comments after values are valid TOML.
     let toml: &str = concat!(
-        "[[contract]] # define a contract\n",
+        "[[guest_contract]] # define a contract\n",
         "name = \"svc.foo\" # the name\n",
         "version = \"1.0\" # the version\n",
     );
@@ -259,7 +264,8 @@ fn comment_after_value_is_valid() {
 fn comment_mid_key_value_is_invalid() {
     // A `#` inside a quoted key name is still a valid character inside a string,
     // but a `#` between the key and `=` terminates the line early — TOML error.
-    let err: PolyplugcError = api_err("[[contract]]\nname # comment = \"x\"\nversion = \"1.0\"");
+    let err: PolyplugcError =
+        api_err("[[guest_contract]]\nname # comment = \"x\"\nversion = \"1.0\"");
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
         "expected TomlParseError for `#` between key and `=`, got {err:?}",
@@ -273,7 +279,8 @@ fn comment_mid_key_value_is_invalid() {
 #[test]
 fn unicode_escape_with_too_few_hex_digits() {
     // `\uXXX` requires exactly 4 hex digits; 3 is invalid.
-    let err: PolyplugcError = api_err("[[contract]]\nname = \"bad\\u004\"\nversion = \"1.0\"");
+    let err: PolyplugcError =
+        api_err("[[guest_contract]]\nname = \"bad\\u004\"\nversion = \"1.0\"");
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
         "expected TomlParseError for `\\u` with 3 hex digits, got {err:?}",
@@ -283,7 +290,8 @@ fn unicode_escape_with_too_few_hex_digits() {
 #[test]
 fn unicode_escape_with_non_hex_digit() {
     // `\uXXXG` — `G` is not a valid hex digit.
-    let err: PolyplugcError = api_err("[[contract]]\nname = \"bad\\u000G\"\nversion = \"1.0\"");
+    let err: PolyplugcError =
+        api_err("[[guest_contract]]\nname = \"bad\\u000G\"\nversion = \"1.0\"");
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
         "expected TomlParseError for `\\u000G` non-hex digit, got {err:?}",
@@ -293,7 +301,7 @@ fn unicode_escape_with_non_hex_digit() {
 #[test]
 fn unicode_escape_surrogate_pair_rejected() {
     // `\uD800` is a lone surrogate — invalid in TOML (must be valid Unicode scalar).
-    let err: PolyplugcError = api_err("[[contract]]\nname = \"\\uD800\"\nversion = \"1.0\"");
+    let err: PolyplugcError = api_err("[[guest_contract]]\nname = \"\\uD800\"\nversion = \"1.0\"");
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
         "expected TomlParseError for lone surrogate `\\uD800`, got {err:?}",
@@ -304,7 +312,7 @@ fn unicode_escape_surrogate_pair_rejected() {
 fn unicode_escape_valid_codepoint_accepted() {
     // `\u0041` is 'A' — a perfectly valid Unicode scalar value.
     let result: Result<ValidatedIr, PolyplugcError> =
-        parse_api_str("[[contract]]\nname = \"\\u0041BC\"\nversion = \"1.0\"");
+        parse_api_str("[[guest_contract]]\nname = \"\\u0041BC\"\nversion = \"1.0\"");
     assert!(
         result.is_ok(),
         "expected valid \\u0041 Unicode escape to be accepted, got {result:?}"
@@ -318,7 +326,7 @@ fn long_unicode_escape_u_uppercase_valid() {
     // codepoint (emoji), so name validation rejects it afterwards. An
     // InvalidIdentifier (not a TomlParseError) proves the escape lexed.
     let result: Result<ValidatedIr, PolyplugcError> =
-        parse_api_str("[[contract]]\nname = \"emoji\\U0001F600end\"\nversion = \"1.0\"");
+        parse_api_str("[[guest_contract]]\nname = \"emoji\\U0001F600end\"\nversion = \"1.0\"");
     assert!(
         matches!(result, Err(PolyplugcError::InvalidIdentifier { .. })),
         "expected \\U0001F600 long Unicode escape to lex (then fail identifier validation), got {result:?}"
@@ -333,7 +341,7 @@ fn long_unicode_escape_u_uppercase_valid() {
 fn very_long_name_value_accepted() {
     // A 10 000-character name string — TOML has no line-length limit.
     let long_name: String = "a".repeat(10_000);
-    let toml: String = format!("[[contract]]\nname = \"{long_name}\"\nversion = \"1.0\"\n");
+    let toml: String = format!("[[guest_contract]]\nname = \"{long_name}\"\nversion = \"1.0\"\n");
     let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(&toml);
     assert!(
         result.is_ok(),
@@ -347,7 +355,8 @@ fn very_long_name_value_accepted() {
 fn very_long_comment_line_accepted() {
     // A comment that is 50 000 characters long should not cause an error.
     let long_comment: String = format!("# {}", "x".repeat(50_000));
-    let toml: String = format!("{long_comment}\n[[contract]]\nname = \"svc\"\nversion = \"1.0\"\n");
+    let toml: String =
+        format!("{long_comment}\n[[guest_contract]]\nname = \"svc\"\nversion = \"1.0\"\n");
     let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(&toml);
     assert!(
         result.is_ok(),
@@ -360,7 +369,7 @@ fn very_long_key_name_invalid() {
     // A key that is not a valid TOML bare key (contains spaces) must fail.
     // We rely on the space to make the key malformed rather than just "long".
     let long_key: String = format!("{} extra", "a".repeat(1_000));
-    let toml: String = format!("[[contract]]\n{long_key} = \"v\"\nversion = \"1.0\"\n");
+    let toml: String = format!("[[guest_contract]]\n{long_key} = \"v\"\nversion = \"1.0\"\n");
     let err: PolyplugcError = api_err(&toml);
     assert!(
         matches!(err, PolyplugcError::TomlParseError { .. }),
@@ -420,18 +429,18 @@ fn super_table_key_conflict_after_dotted_key() {
 
 #[test]
 fn contract_functions_params_nested_array_round_trip() {
-    // A fully-specified nested structure [[contract]] → [[contract.functions]] →
-    // [[contract.functions.params]] must parse cleanly.
+    // A fully-specified nested structure [[guest_contract]] → [[guest_contract.functions]] →
+    // [[guest_contract.functions.params]] must parse cleanly.
     let toml: &str = concat!(
-        "[[contract]]\n",
+        "[[guest_contract]]\n",
         "name = \"math.ops\"\n",
         "version = \"1.0\"\n\n",
-        "[[contract.functions]]\n",
+        "[[guest_contract.functions]]\n",
         "name = \"add\"\n\n",
-        "[[contract.functions.params]]\n",
+        "[[guest_contract.functions.params]]\n",
         "name = \"a\"\n",
         "type = \"u32\"\n\n",
-        "[[contract.functions.params]]\n",
+        "[[guest_contract.functions.params]]\n",
         "name = \"b\"\n",
         "type = \"u32\"\n",
     );

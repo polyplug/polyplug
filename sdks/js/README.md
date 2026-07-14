@@ -32,6 +32,13 @@ npm install -g @polyplug/cli          # or, on Deno: deno install -gA -n polyplu
 polyplugc generate --bundle bundle.toml --lang js-quickjs --out ./generated
 ```
 
+## Shared generated declarations
+
+The command remains unified by default. For a shared JavaScript package, emit
+or import DomainTypes as `@app/domain` and GuestContracts as
+`@app/guest-contracts`; see the [canonical split-output guide][codegen].
+
+
 ## Host application
 
 ```typescript
@@ -113,3 +120,4 @@ export { polyplug_init };
 [guest]: https://github.com/polyplug/polyplug/blob/main/docs/languages/js-guest.md
 [docs]: https://github.com/polyplug/polyplug/tree/main/docs
 [examples]: https://github.com/polyplug/polyplug/tree/main/examples
+[codegen]: https://github.com/polyplug/polyplug/blob/main/docs/CODE_GENERATION.md

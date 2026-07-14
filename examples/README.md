@@ -16,6 +16,10 @@ Input → Decoder → Transformer → Encoder → Reporter → Validator
 "name,value,42" → "DECODED:name|value|42" → "TRANSFORMED:NAME|value (transformed)|43" → ...
 ```
 
+`api.toml` uses `[[guest_contract]]` for the five plugin-provided stages and
+`[[host_contract]]` for services the hosts provide. `plugin_contract` is not a
+schema alias; migrate a legacy table before running the examples.
+
 ## Guest Plugins (30 total)
 
 | Language | Decoder | Encoder | Transformer | Reporter | Validator |
@@ -60,3 +64,4 @@ examples/
 - `api.toml` — API definition
 - `../sdks/` — SDKs for each language
 - `../../docs/` — Design documentation
+- `../docs/CODE_GENERATION.md` — unified default and opt-in split output for all six languages

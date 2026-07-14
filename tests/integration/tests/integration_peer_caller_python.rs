@@ -36,6 +36,7 @@
 mod cli_support;
 use cli_support::cli_generate;
 
+use core::{ptr, slice};
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
@@ -47,6 +48,7 @@ use polyplug_abi::StringView;
 use polyplug_codegen::GenerateConfig;
 use polyplug_codegen::GenerateOutput;
 use polyplug_codegen::Lang;
+use polyplug_codegen::OutputLayout;
 use polyplug_codegen::Side;
 
 use polyplug_lua::LuaLoader;
@@ -54,8 +56,8 @@ use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
 use polyplug_utils::bundle_id;
 use polyplug_utils::guest_contract_id;
-use std::path::Path;
-use std::path::PathBuf;
+use std::fs::{self, DirEntry};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 // ─── Paths ──────────────────────────────────────────────────────────────────────
@@ -76,7 +78,7 @@ fn workspace_root() -> PathBuf {
 /// current guest SDK into `site-packages/`, and return the bundle directory.
 fn build_python_consumer(tmp: &Path) -> PathBuf {
     let bundle_dir: PathBuf = tmp.join("peer_consumer_python");
-    std::fs::create_dir_all(&bundle_dir).expect("create python consumer dir");
+    fs::create_dir_all(&bundle_dir).expect("create python consumer dir");
 
     let api_path: PathBuf = workspace_root().join("examples").join("api.toml");
     let bundle_toml: String = format!(
@@ -96,7 +98,7 @@ fn build_python_consumer(tmp: &Path) -> PathBuf {
         api = api_path.to_string_lossy().replace('\\', "/"),
     );
     let bundle_toml_path: PathBuf = bundle_dir.join("bundle.toml");
-    std::fs::write(&bundle_toml_path, bundle_toml).expect("write bundle.toml");
+    fs::write(&bundle_toml_path, bundle_toml).expect("write bundle.toml");
 
     // Generate the python guest glue (contracts.py, peer_callers.py, …) + manifest.
     let gen_dir: PathBuf = bundle_dir.join("generated");
@@ -104,19 +106,20 @@ fn build_python_consumer(tmp: &Path) -> PathBuf {
         api_toml: bundle_toml_path,
         lang: Lang::Python,
         side: Side::Guest,
-        out_dir: gen_dir.clone(),
+        layout: OutputLayout::unified(),
     };
-    let output: GenerateOutput = cli_generate(&config).expect("polyplugc generate (python)");
+    let output: GenerateOutput =
+        cli_generate(&config, &gen_dir).expect("polyplugc generate (python)");
     for file in &output.files {
         let file_path: PathBuf = gen_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("create generated parent dir");
+            fs::create_dir_all(parent).expect("create generated parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("write generated file");
+        fs::write(&file_path, &file.content).expect("write generated file");
     }
 
     // The loader discovers manifest.toml at the bundle root.
-    std::fs::rename(
+    fs::rename(
         gen_dir.join("manifest.toml"),
         bundle_dir.join("manifest.toml"),
     )
@@ -149,7 +152,7 @@ fn build_python_consumer(tmp: &Path) -> PathBuf {
          \n\
          \n\
          set_transformer_factory(TransformerImpl)\n";
-    std::fs::write(bundle_dir.join("consumer.py"), consumer_py).expect("write consumer.py");
+    fs::write(bundle_dir.join("consumer.py"), consumer_py).expect("write consumer.py");
 
     // Vendor the CURRENT guest SDK into site-packages/ (the loader prepends
     // <bundle>/site-packages to sys.path). Copy the real SDK — NOT a stale
@@ -158,8 +161,8 @@ fn build_python_consumer(tmp: &Path) -> PathBuf {
     let sdk_root: PathBuf = workspace_root().join("sdks").join("python");
 
     let guest_dst: PathBuf = site.join("polyplug_guest");
-    std::fs::create_dir_all(&guest_dst).expect("create polyplug_guest dir");
-    std::fs::copy(
+    fs::create_dir_all(&guest_dst).expect("create polyplug_guest dir");
+    fs::copy(
         sdk_root
             .join("guest")
             .join("polyplug_guest")
@@ -170,19 +173,19 @@ fn build_python_consumer(tmp: &Path) -> PathBuf {
 
     let abi_src: PathBuf = sdk_root.join("polyplug_abi").join("polyplug_abi");
     let abi_dst: PathBuf = site.join("polyplug_abi");
-    std::fs::create_dir_all(&abi_dst).expect("create polyplug_abi dir");
+    fs::create_dir_all(&abi_dst).expect("create polyplug_abi dir");
     for name in ["__init__.py", "abi.py", "string_view_helper.py"] {
-        std::fs::copy(abi_src.join(name), abi_dst.join(name))
+        fs::copy(abi_src.join(name), abi_dst.join(name))
             .unwrap_or_else(|e| panic!("vendor polyplug_abi/{name}: {e}"));
     }
 
     // polyplug_abi.abi falls back to `from polyplug.abi.abi import *`, so the
     // canonical generated ABI module must be reachable as the `polyplug` package.
     let polyplug_abi_pkg: PathBuf = site.join("polyplug").join("abi");
-    std::fs::create_dir_all(&polyplug_abi_pkg).expect("create polyplug/abi dir");
-    std::fs::write(site.join("polyplug").join("__init__.py"), b"").expect("polyplug __init__");
-    std::fs::write(polyplug_abi_pkg.join("__init__.py"), b"").expect("polyplug/abi __init__");
-    std::fs::copy(
+    fs::create_dir_all(&polyplug_abi_pkg).expect("create polyplug/abi dir");
+    fs::write(site.join("polyplug").join("__init__.py"), b"").expect("polyplug __init__");
+    fs::write(polyplug_abi_pkg.join("__init__.py"), b"").expect("polyplug/abi __init__");
+    fs::copy(
         sdk_root.join("abi").join("abi.py"),
         polyplug_abi_pkg.join("abi.py"),
     )
@@ -230,7 +233,7 @@ end
 /// Write a Lua provider bundle for `pipeline.Validator@1` and return its dir.
 fn build_lua_provider(tmp: &Path) -> PathBuf {
     let dir: PathBuf = tmp.join("peer_provider_lua_python");
-    std::fs::create_dir_all(&dir).expect("create provider dir");
+    fs::create_dir_all(&dir).expect("create provider dir");
 
     let id_val: u64 = bundle_id("peer_provider_lua_python");
     let manifest: String = format!(
@@ -245,8 +248,8 @@ fn build_lua_provider(tmp: &Path) -> PathBuf {
          [function_count]\n\
          \"pipeline.Validator@1\" = 1\n",
     );
-    std::fs::write(dir.join("manifest.toml"), manifest).expect("write manifest.toml");
-    std::fs::write(dir.join("provider.lua"), provider_lua_src()).expect("write provider.lua");
+    fs::write(dir.join("manifest.toml"), manifest).expect("write manifest.toml");
+    fs::write(dir.join("provider.lua"), provider_lua_src()).expect("write provider.lua");
 
     let fixtures_lua: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -254,19 +257,19 @@ fn build_lua_provider(tmp: &Path) -> PathBuf {
         .join("fixtures")
         .join("test_plugin_lua");
     let polyplug_dir: PathBuf = dir.join("polyplug");
-    std::fs::create_dir_all(&polyplug_dir).expect("create polyplug dir");
+    fs::create_dir_all(&polyplug_dir).expect("create polyplug dir");
     let fixture_polyplug: PathBuf = fixtures_lua.join("polyplug");
-    for entry in std::fs::read_dir(&fixture_polyplug).expect("read fixture polyplug dir") {
-        let entry: std::fs::DirEntry = entry.expect("dir entry");
-        std::fs::copy(entry.path(), polyplug_dir.join(entry.file_name()))
+    for entry in fs::read_dir(&fixture_polyplug).expect("read fixture polyplug dir") {
+        let entry: DirEntry = entry.expect("dir entry");
+        fs::copy(entry.path(), polyplug_dir.join(entry.file_name()))
             .expect("copy polyplug sdk file");
     }
-    std::fs::copy(
+    fs::copy(
         fixtures_lua.join("polyplug_abi.lua"),
         dir.join("polyplug_abi.lua"),
     )
     .expect("copy polyplug_abi.lua");
-    std::fs::copy(
+    fs::copy(
         fixtures_lua.join("polyplug_guest.lua"),
         dir.join("polyplug_guest.lua"),
     )
@@ -330,7 +333,7 @@ fn python_peer_caller_validate_roundtrip() {
             0_u32,
             &input_view as *const StringView as *const (),
             &mut out_view as *mut StringView as *mut (),
-            core::ptr::null_mut(),
+            ptr::null_mut(),
             &mut err as *mut AbiError,
         )
     };
@@ -346,7 +349,7 @@ fn python_peer_caller_validate_roundtrip() {
     );
 
     // SAFETY: out_view points to host-allocated bytes valid until bundle unload.
-    let result_bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_view.ptr, out_view.len) };
+    let result_bytes: &[u8] = unsafe { slice::from_raw_parts(out_view.ptr, out_view.len) };
     let result: &str = core::str::from_utf8(result_bytes).expect("result is UTF-8");
 
     assert_eq!(

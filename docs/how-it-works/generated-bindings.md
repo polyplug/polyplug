@@ -26,6 +26,26 @@ files by bundle identity, for example
 `internal/<bundle-name>-<bundle-id>/`, so profiles for different bundles do not
 collide in one output directory.
 
+## Unified or split source ownership
+
+Generation is unified by default: bindings, application DomainTypes, and guest
+contract declarations are written under the one `--out` directory. A split layout
+is opt-in and is identical for ordinary external bundles and `--internal`
+profiles. **Bindings** remain generated ABI glue—callers, marshaling, entry
+points, registrars, and manifests. **DomainTypes** are the application-owned
+structs, enums, and flags shared by callers and provider implementations.
+**GuestContracts** are the generated typed traits/interfaces providers implement.
+
+Do not make a generated private ABI `types.rs` (or its C++, C#, Python, Lua, or
+JavaScript equivalent) the public domain module. It contains ABI-only layouts
+and conversion machinery; domain data belongs in DomainTypes and provider
+abstractions belong in GuestContracts. A split layout can emit canonical
+declarations in a shared package or use ImportOnly to consume declarations
+generated elsewhere, while keeping bindings private to the consuming crate or
+module. The [code-generation guide](../CODE_GENERATION.md) documents exact
+flags, all language import forms, the Rust three-crate pattern, validation, and
+the per-file atomic-write/no-cross-root-transaction boundary.
+
 ## Generated guest provider bindings
 
 Generated guest provider bindings are the provider-author surface for an internal

@@ -39,6 +39,7 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
+use core::ptr;
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
@@ -49,13 +50,16 @@ use polyplug_abi::GuestContractInterface;
 use polyplug_codegen::GenerateConfig;
 use polyplug_codegen::GenerateOutput;
 use polyplug_codegen::Lang;
+use polyplug_codegen::OutputLayout;
 use polyplug_codegen::Side;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
 use polyplug_utils::guest_contract_id;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tempfile::TempDir;
 
 mod cli_support;
 use cli_support::cli_generate;
@@ -77,10 +81,10 @@ fn workspace_root() -> PathBuf {
 /// The single-contract API both bundles generate from: `iso.Probe@1` with a
 /// no-arg `value() -> i32`. The returned integer comes entirely from the author
 /// impl constructed by the factory, so it is the per-runtime discriminator.
-const PROBE_API_TOML: &str = "[[plugin_contract]]\n\
+const PROBE_API_TOML: &str = "[[guest_contract]]\n\
      name = \"iso.Probe\"\n\
      version = \"1.0.0\"\n\n\
-     [[plugin_contract.functions]]\n\
+     [[guest_contract.functions]]\n\
      name = \"value\"\n\
      return = \"i32\"\n";
 
@@ -91,10 +95,10 @@ const PROBE_API_TOML: &str = "[[plugin_contract]]\n\
 /// their generated symbols and `bundle_id` are identical by construction.
 fn write_probe_bundle(tmp: &Path, dir_name: &str, return_value: i32) -> PathBuf {
     let bundle_dir: PathBuf = tmp.join(dir_name);
-    std::fs::create_dir_all(&bundle_dir).expect("create probe bundle dir");
+    fs::create_dir_all(&bundle_dir).expect("create probe bundle dir");
 
     let api_path: PathBuf = bundle_dir.join("api.toml");
-    std::fs::write(&api_path, PROBE_API_TOML).expect("write api.toml");
+    fs::write(&api_path, PROBE_API_TOML).expect("write api.toml");
 
     let bundle_toml: String = format!(
         "[bundle]\n\
@@ -109,7 +113,7 @@ fn write_probe_bundle(tmp: &Path, dir_name: &str, return_value: i32) -> PathBuf 
         name = SHARED_BUNDLE_NAME,
     );
     let bundle_toml_path: PathBuf = bundle_dir.join("bundle.toml");
-    std::fs::write(&bundle_toml_path, bundle_toml).expect("write bundle.toml");
+    fs::write(&bundle_toml_path, bundle_toml).expect("write bundle.toml");
 
     // Generate the python guest glue (generated/guest/contracts.py, …) + manifest.
     let gen_dir: PathBuf = bundle_dir.join("generated");
@@ -117,19 +121,20 @@ fn write_probe_bundle(tmp: &Path, dir_name: &str, return_value: i32) -> PathBuf 
         api_toml: bundle_toml_path,
         lang: Lang::Python,
         side: Side::Guest,
-        out_dir: gen_dir.clone(),
+        layout: OutputLayout::unified(),
     };
-    let output: GenerateOutput = cli_generate(&config).expect("polyplugc generate (python)");
+    let output: GenerateOutput =
+        cli_generate(&config, &gen_dir).expect("polyplugc generate (python)");
     for file in &output.files {
         let file_path: PathBuf = gen_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("create generated parent dir");
+            fs::create_dir_all(parent).expect("create generated parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("write generated file");
+        fs::write(&file_path, &file.content).expect("write generated file");
     }
 
     // The loader discovers manifest.toml at the bundle root.
-    std::fs::rename(
+    fs::rename(
         gen_dir.join("manifest.toml"),
         bundle_dir.join("manifest.toml"),
     )
@@ -154,7 +159,7 @@ fn write_probe_bundle(tmp: &Path, dir_name: &str, return_value: i32) -> PathBuf 
          \n\
          set_probe_factory(ProbeImpl)\n",
     );
-    std::fs::write(bundle_dir.join("entry.py"), entry_py).expect("write entry.py");
+    fs::write(bundle_dir.join("entry.py"), entry_py).expect("write entry.py");
 
     vendor_python_sdk(&bundle_dir);
 
@@ -169,8 +174,8 @@ fn vendor_python_sdk(bundle_dir: &Path) {
     let sdk_root: PathBuf = workspace_root().join("sdks").join("python");
 
     let guest_dst: PathBuf = site.join("polyplug_guest");
-    std::fs::create_dir_all(&guest_dst).expect("create polyplug_guest dir");
-    std::fs::copy(
+    fs::create_dir_all(&guest_dst).expect("create polyplug_guest dir");
+    fs::copy(
         sdk_root
             .join("guest")
             .join("polyplug_guest")
@@ -181,19 +186,19 @@ fn vendor_python_sdk(bundle_dir: &Path) {
 
     let abi_src: PathBuf = sdk_root.join("polyplug_abi").join("polyplug_abi");
     let abi_dst: PathBuf = site.join("polyplug_abi");
-    std::fs::create_dir_all(&abi_dst).expect("create polyplug_abi dir");
+    fs::create_dir_all(&abi_dst).expect("create polyplug_abi dir");
     for name in ["__init__.py", "abi.py", "string_view_helper.py"] {
-        std::fs::copy(abi_src.join(name), abi_dst.join(name))
+        fs::copy(abi_src.join(name), abi_dst.join(name))
             .unwrap_or_else(|e| panic!("vendor polyplug_abi/{name}: {e}"));
     }
 
     // polyplug_abi.abi falls back to `from polyplug.abi.abi import *`, so the
     // canonical generated ABI module must be reachable as the `polyplug` package.
     let polyplug_abi_pkg: PathBuf = site.join("polyplug").join("abi");
-    std::fs::create_dir_all(&polyplug_abi_pkg).expect("create polyplug/abi dir");
-    std::fs::write(site.join("polyplug").join("__init__.py"), b"").expect("polyplug __init__");
-    std::fs::write(polyplug_abi_pkg.join("__init__.py"), b"").expect("polyplug/abi __init__");
-    std::fs::copy(
+    fs::create_dir_all(&polyplug_abi_pkg).expect("create polyplug/abi dir");
+    fs::write(site.join("polyplug").join("__init__.py"), b"").expect("polyplug __init__");
+    fs::write(polyplug_abi_pkg.join("__init__.py"), b"").expect("polyplug/abi __init__");
+    fs::copy(
         sdk_root.join("abi").join("abi.py"),
         polyplug_abi_pkg.join("abi.py"),
     )
@@ -231,9 +236,9 @@ fn dispatch_probe_value(rt: &Runtime) -> i32 {
             vtable.dispatch.vm.loader_data,
             GuestContractInstance::null(),
             0,
-            core::ptr::null(),
+            ptr::null(),
             &mut out as *mut i32 as *mut (),
-            core::ptr::null_mut(),
+            ptr::null_mut(),
             &mut err as *mut AbiError,
         )
     };
@@ -253,7 +258,7 @@ fn dispatch_probe_value(rt: &Runtime) -> i32 {
 /// prevents this: each runtime's default impl dispatches its OWN value.
 #[test]
 fn two_runtimes_generated_probe_impl_globals_do_not_collide() {
-    let tmp: tempfile::TempDir = tempfile::TempDir::new().expect("tempdir");
+    let tmp: tempfile::TempDir = TempDir::new().expect("tempdir");
 
     let bundle_a: PathBuf = write_probe_bundle(tmp.path(), "probe_a", 0x11);
     let bundle_b: PathBuf = write_probe_bundle(tmp.path(), "probe_b", 0x22);

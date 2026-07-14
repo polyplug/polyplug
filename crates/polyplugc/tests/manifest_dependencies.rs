@@ -19,18 +19,18 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 
-use polyplug_codegen::{GenerateConfig, GenerateOutput, Lang, Side};
+use polyplug_codegen::{GenerateConfig, GenerateOutput, Lang, OutputLayout, Side};
 use polyplug_common::{ManifestData, ManifestDependency};
 
 mod cli_support;
 use cli_support::cli_generate;
 
 const API_TOML: &str = "\
-[[plugin_contract]]
+[[guest_contract]]
 name = \"pipeline.Decoder\"
 version = \"1.0.0\"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = \"decode\"
 return = \"StringView\"
 ";
@@ -96,7 +96,7 @@ fn generate_manifest_for_lang(lang: Lang) -> String {
         api_toml: bundle_path,
         lang,
         side: Side::Guest,
-        out_dir: tmp_dir.join("out"),
+        layout: OutputLayout::unified(),
     };
     let output: GenerateOutput = cli_generate(&config).expect("generate guest");
 

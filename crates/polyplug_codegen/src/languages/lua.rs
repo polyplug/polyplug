@@ -1,6 +1,6 @@
 //! Lua code generator — produces LuaJIT FFI bindings from ABI items.
 //!
-//! Generates typed function pointer typedefs in ffi.cdef, correct Array<T>
+//! Generates typed function pointer typedefs in ffi.cdef, correct `Array<T>`
 //! representations, and snake_case naming per D-35.
 
 use crate::data::{ConstInfo, EnumInfo, FunctionInfo, StructInfo, UnionInfo};

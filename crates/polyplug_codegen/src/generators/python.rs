@@ -27,6 +27,7 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use crate::ir::array_element_name;
+use crate::{OutputLayout, OutputPartition, Side};
 use langprint::backends::python_backend::{
     PythonBackend, PythonEnum, PythonEnumMember, PythonFunction, PythonFunctionRenderOptions,
     PythonParameter,
@@ -85,6 +86,7 @@ impl CodeGenerator for PythonGenerator {
     fn generate_host(
         &self,
         ir: &ValidatedIr,
+        _layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
         let types_py: String = generate_host_types_file(ir)?;
@@ -96,21 +98,29 @@ impl CodeGenerator for PythonGenerator {
             path: PathBuf::from("host/types.py"),
             content: types_py,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/types.pyi"),
             content: types_pyi,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/callers.py"),
             content: callers_py,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/callers.pyi"),
             content: callers_pyi,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
 
         // Emit host/contracts.py and host/contracts.pyi if there are host contracts
@@ -121,11 +131,15 @@ impl CodeGenerator for PythonGenerator {
                 path: PathBuf::from("host/contracts.py"),
                 content: contracts_py,
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
             files.files.push(GeneratedFile {
                 path: PathBuf::from("host/contracts.pyi"),
                 content: contracts_pyi,
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
             // Emit host/interface_factories.py if there are host contracts
             let interface_factories_py: String = generate_python_host_interface_factories_file(ir);
@@ -133,6 +147,8 @@ impl CodeGenerator for PythonGenerator {
                 path: PathBuf::from("host/interface_factories.py"),
                 content: interface_factories_py,
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
         }
 
@@ -142,32 +158,41 @@ impl CodeGenerator for PythonGenerator {
     fn generate_guest(
         &self,
         ir: &ValidatedIr,
+        _layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
         let types_py: String = generate_python_types_file(ir)?;
         let types_pyi: String = generate_python_types_stub(ir)?;
-        let contracts_py: String = generate_guest_contracts_file(ir)?;
+        let contracts_py: String = generate_guest_contracts_file(ir, None)?;
         let contracts_pyi: String = generate_guest_contracts_stub(ir);
 
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/types.py"),
             content: types_py,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/types.pyi"),
             content: types_pyi,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/contracts.py"),
             content: contracts_py,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/contracts.pyi"),
             content: contracts_pyi,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
 
         let init_py: String = generate_init_py(ir);
@@ -175,6 +200,8 @@ impl CodeGenerator for PythonGenerator {
             path: PathBuf::from("guest/init.py"),
             content: init_py,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
 
         if ir.bundle.is_some() {
@@ -183,6 +210,8 @@ impl CodeGenerator for PythonGenerator {
                 path: PathBuf::from("manifest.toml"),
                 content: manifest_content,
                 force_regenerate: true,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
         }
 
@@ -193,11 +222,15 @@ impl CodeGenerator for PythonGenerator {
                 path: PathBuf::from("guest/host_contracts.py"),
                 content: host_contracts_py,
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/host_contracts.pyi"),
                 content: host_contracts_pyi,
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
         }
 
@@ -210,16 +243,400 @@ impl CodeGenerator for PythonGenerator {
                 path: PathBuf::from("guest/peer_callers.py"),
                 content: peer_py,
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/peer_callers.pyi"),
                 content: peer_pyi,
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
         }
 
         Ok(())
     }
+    fn apply_output_layout(
+        &self,
+        ir: &ValidatedIr,
+        side: crate::Side,
+        layout: &OutputLayout,
+        files: &mut GeneratedFiles,
+    ) -> Result<(), PolyplugcError> {
+        apply_python_output_layout(ir, side == Side::Guest, layout, files)
+    }
+}
+
+fn python_layout_import(
+    layout: &OutputLayout,
+    partition: crate::OutputPartition,
+    inline_module: &str,
+) -> String {
+    layout
+        .destination(partition)
+        .import()
+        .map(|import| import.as_str())
+        .unwrap_or(inline_module)
+        .to_owned()
+}
+
+fn python_domain_imports(ir: &ValidatedIr) -> BTreeSet<String> {
+    let mut imports: BTreeSet<String> = ir.enums.iter().map(|item| item.name.clone()).collect();
+    imports.extend(ir.types.iter().map(|item| item.name.clone()));
+    imports
+}
+
+fn generate_python_domain_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
+    let mut out: String = String::from(PY_HEADER);
+    let mut stdlib: Vec<ImportEntry> = vec![py_import("ctypes")];
+    if !ir.enums.is_empty() {
+        stdlib.push(py_import("enum"));
+    }
+    stdlib.extend(py_from("typing", &["ClassVar"]));
+    out.push_str(&python_import_block(&[
+        &py_from("__future__", &["annotations"]),
+        &stdlib,
+        &python_types_abi_imports(ir),
+    ]));
+    out.push('\n');
+    for item in &ir.enums {
+        generate_python_enum(&mut out, item)?;
+        out.push('\n');
+    }
+    for item in &ir.types {
+        generate_python_user_type(&mut out, item, &ir.enums);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+fn generate_python_domain_types_stub(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
+    let mut out: String = String::from(PY_HEADER);
+    let mut stdlib: Vec<ImportEntry> = vec![py_import("ctypes")];
+    if !ir.enums.is_empty() {
+        stdlib.push(py_import("enum"));
+    }
+    stdlib.extend(py_from("typing", &["ClassVar"]));
+    out.push_str(&python_import_block(&[
+        &py_from("__future__", &["annotations"]),
+        &stdlib,
+        &python_types_abi_imports(ir),
+    ]));
+    out.push('\n');
+    for item in &ir.enums {
+        generate_python_enum(&mut out, item)?;
+        out.push('\n');
+    }
+    for item in &ir.types {
+        generate_python_user_type_stub(&mut out, item);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+fn generate_python_binding_types_file(ir: &ValidatedIr, domain_import: &str) -> String {
+    let mut out: String = String::from(PY_HEADER);
+    out.push_str(&python_import_block(&[
+        &py_from("__future__", &["annotations"]),
+        &[py_import("ctypes")],
+        &py_from("typing", &["ClassVar"]),
+        &python_types_abi_imports(ir),
+    ]));
+    out.push('\n');
+    let imports: Vec<String> = python_domain_imports(ir).into_iter().collect();
+    if !imports.is_empty() {
+        out.push_str(&format!(
+            "from {domain_import} import {}\n\n",
+            imports.join(", ")
+        ));
+    }
+    for contract in &ir.contracts {
+        let struct_name: String = contract_name_to_struct(&contract.name);
+        for function in &contract.functions {
+            if needs_arg_pack(&function.params) {
+                emit_python_arg_pack_struct(&mut out, &struct_name, function, &ir.enums);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+fn generate_python_binding_types_stub(ir: &ValidatedIr, domain_import: &str) -> String {
+    let mut out: String = String::from(PY_HEADER);
+    out.push_str(&python_import_block(&[
+        &py_from("__future__", &["annotations"]),
+        &[py_import("ctypes")],
+        &py_from("typing", &["ClassVar"]),
+        &python_types_abi_imports(ir),
+    ]));
+    out.push('\n');
+    let imports: Vec<String> = python_domain_imports(ir).into_iter().collect();
+    if !imports.is_empty() {
+        out.push_str(&format!(
+            "from {domain_import} import {}\n\n",
+            imports.join(", ")
+        ));
+    }
+    for contract in &ir.contracts {
+        let struct_name: String = contract_name_to_struct(&contract.name);
+        for function in &contract.functions {
+            if needs_arg_pack(&function.params) {
+                emit_python_arg_pack_stub(&mut out, &struct_name, function);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+fn generate_python_guest_protocol(
+    out: &mut String,
+    class_name: &str,
+    factory_name: &str,
+    contract: &ResolvedContract,
+) -> Result<(), PolyplugcError> {
+    out.push_str(&format!("class {class_name}(Protocol):\n"));
+    write_python_docstring(out, "    ", contract.docs.as_deref());
+    for function in &contract.functions {
+        generate_guest_trait_method(out, function)?;
+    }
+    emit_python_factory_slot(out, factory_name, class_name)
+}
+
+fn generate_python_guest_contract_declarations(
+    ir: &ValidatedIr,
+    domain_import: &str,
+) -> Result<String, PolyplugcError> {
+    let mut out: String = String::from(PY_HEADER);
+    out.push_str(&python_import_block(&[
+        &py_from("__future__", &["annotations"]),
+        &py_from("typing", &["Callable", "Protocol"]),
+    ]));
+    out.push('\n');
+    let imports: Vec<String> = python_domain_imports(ir).into_iter().collect();
+    if !imports.is_empty() {
+        out.push_str(&format!(
+            "from {domain_import} import {}\n\n",
+            imports.join(", ")
+        ));
+    }
+    if let Some(bundle) = &ir.bundle {
+        for plugin in &bundle.plugins {
+            for implemented in &plugin.implements {
+                if let Some(contract) = ir.contracts.iter().find(|contract| {
+                    implemented
+                        == &format!(
+                            "{}@{}.{}",
+                            contract.name, contract.version.major, contract.version.minor
+                        )
+                }) {
+                    generate_python_guest_protocol(
+                        &mut out,
+                        &plugin_guest_trait_name(&plugin.name, &contract.name),
+                        &python_internal_name(&plugin.name),
+                        contract,
+                    )?;
+                    out.push('\n');
+                }
+            }
+        }
+    } else {
+        for contract in &ir.contracts {
+            generate_python_guest_protocol(
+                &mut out,
+                &contract_name_to_guest_trait(&contract.name),
+                &contract_name_to_upper_snake(&contract.name),
+                contract,
+            )?;
+            out.push('\n');
+        }
+    }
+    Ok(out)
+}
+
+fn generate_python_guest_contract_declarations_stub(
+    ir: &ValidatedIr,
+    domain_import: &str,
+) -> String {
+    let mut out: String = String::from(PY_HEADER);
+    out.push_str("from __future__ import annotations\nfrom typing import Callable\n\n");
+    let imports: Vec<String> = python_domain_imports(ir).into_iter().collect();
+    if !imports.is_empty() {
+        out.push_str(&format!(
+            "from {domain_import} import {}\n\n",
+            imports.join(", ")
+        ));
+    }
+    if let Some(bundle) = &ir.bundle {
+        for plugin in &bundle.plugins {
+            for implemented in &plugin.implements {
+                if let Some(contract) = ir.contracts.iter().find(|contract| {
+                    implemented
+                        == &format!(
+                            "{}@{}.{}",
+                            contract.name, contract.version.major, contract.version.minor
+                        )
+                }) {
+                    emit_guest_trait_stub_class(
+                        &mut out,
+                        &plugin_guest_trait_name(&plugin.name, &contract.name),
+                        &python_internal_name(&plugin.name),
+                        contract,
+                    );
+                }
+            }
+        }
+    } else {
+        for contract in &ir.contracts {
+            emit_guest_trait_stub_class(
+                &mut out,
+                &contract_name_to_guest_trait(&contract.name),
+                &contract_name_to_upper_snake(&contract.name),
+                contract,
+            );
+        }
+    }
+    out
+}
+
+fn apply_python_output_layout(
+    ir: &ValidatedIr,
+    include_guest_contracts: bool,
+    layout: &OutputLayout,
+    files: &mut GeneratedFiles,
+) -> Result<(), PolyplugcError> {
+    if layout == &OutputLayout::unified() {
+        return Ok(());
+    }
+
+    let internal_profile = files
+        .files
+        .iter()
+        .any(|file| file.path == Path::new("internal.py"));
+    let guest_contracts_inline = matches!(
+        layout.destination(crate::OutputPartition::GuestContracts),
+        crate::OutputDestination::Inline
+    );
+    let domain_root_import = python_layout_import(
+        layout,
+        OutputPartition::DomainTypes,
+        if internal_profile && guest_contracts_inline {
+            ".domain"
+        } else {
+            "domain"
+        },
+    );
+    let domain_binding_import = python_layout_import(
+        layout,
+        OutputPartition::DomainTypes,
+        if internal_profile {
+            "..domain"
+        } else {
+            "domain"
+        },
+    );
+    let guest_runtime_import = python_layout_import(
+        layout,
+        OutputPartition::GuestContracts,
+        if internal_profile {
+            "..guest_contracts"
+        } else {
+            "guest_contracts"
+        },
+    );
+    let guest_internal_import =
+        python_layout_import(layout, OutputPartition::GuestContracts, ".guest_contracts");
+    let domain_needed = !python_domain_imports(ir).is_empty();
+    let omit_guest_contracts = matches!(
+        layout.destination(crate::OutputPartition::GuestContracts),
+        crate::OutputDestination::Omit
+    );
+
+    files.files.push(GeneratedFile {
+        path: PathBuf::from("domain.py"),
+        content: generate_python_domain_types_file(ir)?,
+        force_regenerate: false,
+        partition: OutputPartition::DomainTypes,
+        references: Vec::new(),
+    });
+    files.files.push(GeneratedFile {
+        path: PathBuf::from("domain.pyi"),
+        content: generate_python_domain_types_stub(ir)?,
+        force_regenerate: false,
+        partition: OutputPartition::DomainTypes,
+        references: Vec::new(),
+    });
+    if include_guest_contracts && !omit_guest_contracts {
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("guest_contracts.py"),
+            content: generate_python_guest_contract_declarations(ir, &domain_root_import)?,
+            force_regenerate: false,
+            partition: OutputPartition::GuestContracts,
+            references: domain_needed
+                .then_some(OutputPartition::DomainTypes)
+                .into_iter()
+                .collect(),
+        });
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("guest_contracts.pyi"),
+            content: generate_python_guest_contract_declarations_stub(ir, &domain_root_import),
+            force_regenerate: false,
+            partition: OutputPartition::GuestContracts,
+            references: domain_needed
+                .then_some(OutputPartition::DomainTypes)
+                .into_iter()
+                .collect(),
+        });
+    }
+
+    for file in &mut files.files {
+        if matches!(
+            file.path.as_path(),
+            path if path == Path::new("host/types.py") || path == Path::new("guest/types.py")
+        ) {
+            file.content = generate_python_binding_types_file(ir, &domain_binding_import);
+            if domain_needed {
+                file.references.push(OutputPartition::DomainTypes);
+            }
+        } else if matches!(
+            file.path.as_path(),
+            path if path == Path::new("host/types.pyi") || path == Path::new("guest/types.pyi")
+        ) {
+            file.content = generate_python_binding_types_stub(ir, &domain_binding_import);
+            if domain_needed {
+                file.references.push(OutputPartition::DomainTypes);
+            }
+        } else if file.path == Path::new("guest/contracts.py") {
+            if !omit_guest_contracts {
+                file.content = generate_guest_contracts_file(ir, Some(&guest_runtime_import))?;
+                if internal_profile {
+                    file.content = file
+                        .content
+                        .replace("from guest.types import ", "from .types import ");
+                    file.content = file.content.replacen(
+                        "from __future__ import annotations\n",
+                        "from __future__ import annotations\nfrom polyplug_abi import Buffer\n",
+                        1,
+                    );
+                }
+                file.references.push(OutputPartition::GuestContracts);
+            }
+        } else if file.path == Path::new("guest/contracts.pyi") {
+            if !omit_guest_contracts {
+                file.content = format!("{PY_HEADER}from {guest_runtime_import} import *\n");
+                file.references.push(OutputPartition::GuestContracts);
+            }
+        } else if file.path == Path::new("internal.py") && !omit_guest_contracts {
+            file.content = file.content.replace(
+                "from .guest.contracts import ",
+                &format!("from {guest_internal_import} import "),
+            );
+            file.references.push(OutputPartition::GuestContracts);
+        }
+    }
+    Ok(())
 }
 
 impl PythonGenerator {
@@ -227,10 +644,11 @@ impl PythonGenerator {
         &self,
         ir: &ValidatedIr,
         _bundle_name: &str,
+        layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
         let mut host_files: GeneratedFiles = GeneratedFiles::default();
-        self.generate_host(ir, &mut host_files)?;
+        self.generate_host(ir, &OutputLayout::unified(), &mut host_files)?;
         for mut file in host_files.files {
             file.content = file
                 .content
@@ -242,7 +660,7 @@ impl PythonGenerator {
         }
 
         let mut guest_files: GeneratedFiles = GeneratedFiles::default();
-        self.generate_guest(ir, &mut guest_files)?;
+        self.generate_guest(ir, &OutputLayout::unified(), &mut guest_files)?;
         for mut file in guest_files.files {
             if file.path == Path::new("manifest.toml") || file.path == Path::new("guest/init.py") {
                 continue;
@@ -263,23 +681,32 @@ impl PythonGenerator {
                 path: PathBuf::from(path),
                 content: String::from("# THIS FILE IS AUTO-GENERATED BY polyplugc. DO NOT EDIT.\n"),
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
         }
         files.files.push(GeneratedFile {
             path: PathBuf::from("internal.py"),
             content: generate_python_internal_profile_file(ir)?,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("internal.pyi"),
             content: generate_python_internal_profile_stub(ir)?,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/internal_adapter.py"),
             content: generate_python_internal_adapter_file(ir)?,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
+        apply_python_output_layout(ir, true, layout, files)?;
         Ok(())
     }
 }
@@ -554,7 +981,7 @@ fn generate_python_internal_adapter_file(ir: &ValidatedIr) -> Result<String, Pol
             message: "generated Python adapter manifest method was missing".to_owned(),
         })?;
     let contracts_start = out
-        .find("    def _internal_plugin_contracts")
+        .find("    def _internal_guest_contracts")
         .ok_or_else(|| PolyplugcError::ValidationFailed {
             message: "generated Python adapter contracts method was missing".to_owned(),
         })?;
@@ -1114,7 +1541,7 @@ def alloc_string_arena(allocate: Callable[[int, int], int], _arena: int, value: 
             lines.append(f"bundle_dependencies = [{', '.join(json.dumps(dependency) for dependency in self._dependencies)}]")
         return ("\n".join(lines) + "\n").encode("utf-8")
 
-    def _internal_plugin_contracts(self) -> tuple[tuple[PluginDescriptor, GuestContractInterface], ...]:
+    def _internal_guest_contracts(self) -> tuple[tuple[PluginDescriptor, GuestContractInterface], ...]:
         return tuple((adapter.descriptor, adapter.interface) for adapter in self._adapters)
 "#);
     Ok(out)
@@ -1325,7 +1752,10 @@ fn generate_host_caller_class_stub(out: &mut String, contract: &ResolvedContract
     out.push('\n');
 }
 
-fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
+fn generate_guest_contracts_file(
+    ir: &ValidatedIr,
+    declaration_module: Option<&str>,
+) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     // `struct` is only used by the precompiled scalar (un)pack consts; emit the
@@ -1402,6 +1832,43 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
         &project,
     ]));
     out.push('\n');
+    if let Some(module) = declaration_module {
+        if module.starts_with('.') {
+            let module_name = module.trim_start_matches('.');
+            let parent = &module[..module.len() - module_name.len()];
+            out.push_str(&format!(
+                "from {parent} import {module_name} as _guest_contracts\n"
+            ));
+        } else {
+            out.push_str(&format!("import {module} as _guest_contracts\n"));
+        }
+        let mut classes: BTreeSet<String> = BTreeSet::new();
+        if let Some(bundle) = &ir.bundle {
+            for plugin in &bundle.plugins {
+                for implemented in &plugin.implements {
+                    if let Some(contract) = ir.contracts.iter().find(|contract| {
+                        implemented
+                            == &format!(
+                                "{}@{}.{}",
+                                contract.name, contract.version.major, contract.version.minor
+                            )
+                    }) {
+                        classes.insert(plugin_guest_trait_name(&plugin.name, &contract.name));
+                    }
+                }
+            }
+        } else {
+            classes.extend(
+                ir.contracts
+                    .iter()
+                    .map(|contract| contract_name_to_guest_trait(&contract.name)),
+            );
+        }
+        for class in classes {
+            out.push_str(&format!("from {module} import {class}\n"));
+        }
+        out.push('\n');
+    }
 
     out.push_str("POLYPLUG_ABI_VERSION: int = 1\n\n");
 
@@ -1432,7 +1899,9 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
-                    generate_guest_plugin_trait(&mut out, &plugin.name, contract)?;
+                    if declaration_module.is_none() {
+                        generate_guest_plugin_trait(&mut out, &plugin.name, contract)?;
+                    }
                     generate_guest_plugin_interface(&mut out, &plugin.name, contract, ir)?;
                     let plugin_lower: String = plugin.name.to_lowercase().replace('.', "_");
                     registrations.push((
@@ -1446,7 +1915,9 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
         }
     } else {
         for contract in &ir.contracts {
-            generate_guest_contract_trait(&mut out, contract)?;
+            if declaration_module.is_none() {
+                generate_guest_contract_trait(&mut out, contract)?;
+            }
             generate_guest_contract_interface(&mut out, contract, ir)?;
             let lower: String = contract.name.replace('.', "_");
             let upper: String = contract_name_to_upper_snake(&contract.name);
@@ -1502,7 +1973,11 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
     init_body.push_str("    _ = ctx_ptr\n");
     init_body.push_str("    registrations: list[dict[str, Any]] = []\n");
     for (_, _, impl_var, _) in &registrations {
-        init_body.push_str(&format!("    if _{impl_var}_FACTORY is None:\n"));
+        let factory = match declaration_module {
+            Some(_) => format!("_guest_contracts._{impl_var}_FACTORY"),
+            None => format!("_{impl_var}_FACTORY"),
+        };
+        init_body.push_str(&format!("    if {factory} is None:\n"));
         init_body.push_str("        return [], AbiError(code=int(AbiErrorCode.Generic))\n");
     }
     for (display_name, lower, impl_var, contract) in &registrations {
@@ -1510,7 +1985,11 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
         init_body.push_str("    register_contract(\n");
         init_body.push_str("        registrations,\n");
         init_body.push_str(&format!("        contract=\"{contract_str}\",\n"));
-        init_body.push_str(&format!("        factory=_{impl_var}_FACTORY,\n"));
+        let factory = match declaration_module {
+            Some(_) => format!("_guest_contracts._{impl_var}_FACTORY"),
+            None => format!("_{impl_var}_FACTORY"),
+        };
+        init_body.push_str(&format!("        factory={factory},\n"));
         init_body.push_str("        functions=[\n");
         for func in &contract.functions {
             init_body.push_str(&format!("            {lower}_{}_abi,\n", func.name));
@@ -5575,9 +6054,11 @@ mod tests {
         };
         let generator: PythonGenerator = PythonGenerator;
         let mut files: GeneratedFiles = GeneratedFiles::default();
-        generator.generate_host(&ir, &mut files).expect("host gen");
         generator
-            .generate_guest(&ir, &mut files)
+            .generate_host(&ir, &OutputLayout::unified(), &mut files)
+            .expect("host gen");
+        generator
+            .generate_guest(&ir, &OutputLayout::unified(), &mut files)
             .expect("guest gen");
         for file in &files.files {
             assert!(
@@ -6174,7 +6655,7 @@ mod tests {
             bundle: Some(bundle),
         };
 
-        let py: String = generate_guest_contracts_file(&ir).expect("generate .py");
+        let py: String = generate_guest_contracts_file(&ir, None).expect("generate .py");
         let pyi: String = generate_guest_contracts_stub(&ir);
 
         for needle in [
@@ -6489,7 +6970,7 @@ mod tests {
             .expect("generate internal-plugin adapter seed");
 
         assert!(output.contains("def _internal_plugin_manifest(self) -> bytes:"));
-        assert!(output.contains("def _internal_plugin_contracts(self)"));
+        assert!(output.contains("def _internal_guest_contracts(self)"));
         assert!(output.contains("PluginDescriptor"));
         assert!(output.contains("GuestContractInterface"));
         for record in [

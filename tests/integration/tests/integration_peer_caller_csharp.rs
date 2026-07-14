@@ -46,6 +46,7 @@ use polyplug_abi::StringView;
 use polyplug_codegen::GenerateConfig;
 use polyplug_codegen::GenerateOutput;
 use polyplug_codegen::Lang;
+use polyplug_codegen::OutputLayout;
 use polyplug_codegen::Side;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
@@ -137,9 +138,10 @@ fn build_csharp_consumer(tmp_root: &Path) -> PathBuf {
         api_toml: bundle_toml_path,
         lang: Lang::CSharp,
         side: Side::Guest,
-        out_dir: gen_dir.clone(),
+        layout: OutputLayout::unified(),
     };
-    let output: GenerateOutput = cli_generate(&config).expect("polyplugc generate (csharp)");
+    let output: GenerateOutput =
+        cli_generate(&config, &gen_dir).expect("polyplugc generate (csharp)");
     for file in &output.files {
         let file_path: PathBuf = gen_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {

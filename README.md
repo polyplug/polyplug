@@ -23,6 +23,34 @@ Within the trusted host-process boundary, polyplug still makes hard guarantees:
 - **Lock-free reads and safe true-unload** — contract resolution serves from an epoch-published snapshot; unloading reclaims the interface and the backing library/VM once no reader is still pinned (model-checked with [loom](https://docs.rs/loom)).
 - **Bundle identity and integrity** — a bundle can carry a detached Ed25519 signature over a canonical digest of every file it contains, with a host-chosen `SignaturePolicy` from TOFU integrity up to pinned-key authenticity. This proves *who* authored a bundle and that it wasn't tampered with — it is identity, not isolation.
 
+## Define the API once
+
+An `api.toml` separates the two directions of the API. Use
+`[[guest_contract]]` for functionality that a plugin implements and the host
+calls; use `[[host_contract]]` only for services that the host implements and
+plugins call. The table role is part of the schema, while contract names,
+versions, function order, and their derived ABI IDs remain stable.
+
+```toml
+[[guest_contract]]
+name = "greeter.Hello"
+version = "1.0.0"
+
+[[guest_contract.functions]]
+name = "greet"
+params = [{ name = "name", type = "StringView" }]
+return = "StringView"
+```
+
+See the [Quick Start](docs/QUICKSTART.md) for a complete guest implementation
+and [Host Contracts](docs/HOST_CONTRACTS.md) for the opposite direction.
+
+Need shared application types or a separate implementation crate? The default
+generation layout remains unified, but the opt-in [Code generation and split
+output guide](docs/CODE_GENERATION.md) explains the `Bindings`, `DomainTypes`,
+and `GuestContracts` partitions, exact CLI flags for every language, and the
+ordinary/internal profile split.
+
 ## One plugin pipeline, two acquisition paths
 
 An application may acquire an **external plugin** from a bundle directory, or

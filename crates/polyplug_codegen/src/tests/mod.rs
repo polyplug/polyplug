@@ -9,5 +9,6 @@ mod internal_plugin_csharp;
 mod internal_plugin_js;
 mod internal_plugin_python;
 mod internal_plugin_rust;
+mod output_layout;
 mod parser_errors;
 mod toml_malformed;

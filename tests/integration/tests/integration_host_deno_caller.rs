@@ -22,6 +22,7 @@ use std::process::Command;
 use polyplug_codegen::GenerateConfig;
 use polyplug_codegen::GenerateOutput;
 use polyplug_codegen::Lang;
+use polyplug_codegen::OutputLayout;
 use polyplug_codegen::Side;
 
 const POLYPLUG_SO: &str = env!("POLYPLUG_SO");
@@ -96,10 +97,10 @@ fn generated_deno_caller_dispatches_struct_param_through_native_guest() {
         api_toml: api_toml.clone(),
         lang: Lang::JsQuickJs,
         side: Side::Host,
-        out_dir: gen_dir.clone(),
+        layout: OutputLayout::unified(),
     };
     let output: GenerateOutput =
-        cli_generate(&config).expect("polyplugc generate (js-quickjs host)");
+        cli_generate(&config, &gen_dir).expect("polyplugc generate (js-quickjs host)");
     for file in &output.files {
         let file_path: PathBuf = gen_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {

@@ -11,9 +11,8 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{GenerateConfig, GeneratedFile, Lang, Side};
+use polyplug_codegen::{GenerateConfig, GeneratedFile, Lang, OutputLayout, Side};
 use std::io::Write as _;
-use std::path::PathBuf;
 use tempfile::Builder;
 use tempfile::NamedTempFile;
 
@@ -43,16 +42,16 @@ fields = [
   { name = "end_ns",   type = "i64" }
 ]
 
-[[contract]]
+[[guest_contract]]
 name = "bench.timer"
 version = "1.0.0"
 
-[[contract.functions]]
+[[guest_contract.functions]]
 name = "elapsed"
 params = [{ name = "start", type = "u64" }]
 return = "i64"
 
-[[contract.functions]]
+[[guest_contract.functions]]
 name = "pair"
 return = "TimestampPair"
 "#;
@@ -63,15 +62,11 @@ return = "TimestampPair"
 /// specified language / side combination.
 fn run_generate(toml_content: &str, lang: Lang, side: Side) -> Vec<GeneratedFile> {
     let tmp: NamedTempFile = write_temp_toml(toml_content);
-    // Per-call unique out_dir: `cli_generate` collects EVERY file under out_dir,
-    // so a shared dir would let parallel tests clobber/read each other's output.
-    // Derive from the already-unique temp file path to guarantee isolation.
-    let out_dir: PathBuf = tmp.path().with_extension("out_dir");
     let config: GenerateConfig = GenerateConfig {
         api_toml: tmp.path().to_path_buf(),
         lang,
         side,
-        out_dir,
+        layout: OutputLayout::unified(),
     };
     cli_generate(&config)
         .expect("generate() must not fail for valid API TOML")
@@ -228,11 +223,11 @@ value = "0"
 name = "Tick"
 value = "1"
 
-[[contract]]
+[[guest_contract]]
 name = "bench.events"
 version = "1.0.0"
 
-[[contract.functions]]
+[[guest_contract.functions]]
 name = "kind"
 return = "EventKind"
 "#;
@@ -313,11 +308,11 @@ fn csharp_i64_field_maps_to_long() {
 #[test]
 fn csharp_arg_pack_struct_has_sequential_layout() {
     const TWO_PARAM_TOML: &str = r#"
-[[contract]]
+[[guest_contract]]
 name = "math.ops"
 version = "1.0.0"
 
-[[contract.functions]]
+[[guest_contract.functions]]
 name = "add_longs"
 params = [
   { name = "a", type = "u64" },

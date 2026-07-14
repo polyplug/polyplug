@@ -12,7 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use polyplug_codegen::{GenerateConfig, GenerateOutput, GeneratedFile, Side};
+use polyplug_codegen::{GenerateConfig, GenerateOutput, GeneratedFile, OutputPartition, Side};
 
 /// Locate the compiled `polyplugc` binary.
 ///
@@ -44,12 +44,14 @@ pub fn polyplugc_bin() -> PathBuf {
 /// Run `polyplugc generate` for `config` and return the emitted files as a
 /// `GenerateOutput`. Panics with the binary's stderr if generation fails.
 ///
-/// The binary writes into `config.out_dir`; the returned `files` carry paths
-/// relative to that dir (matching the old in-process output) with
-/// `force_regenerate` defaulted to `false` (the flag is not observable on disk).
+/// The helper owns a temporary output root so the production configuration remains
+/// limited to generation inputs and its canonical output layout. Returned paths are
+/// relative to that root, and `force_regenerate` defaults to `false` because the
+/// flag is not observable on disk.
 pub fn cli_generate(config: &GenerateConfig) -> Result<GenerateOutput, String> {
-    let out_dir: &Path = &config.out_dir;
-    fs::create_dir_all(out_dir).map_err(|e| format!("create out_dir failed: {e}"))?;
+    let temporary_output = tempfile::tempdir()
+        .map_err(|error| format!("create temporary output directory failed: {error}"))?;
+    let out_dir: &Path = temporary_output.path();
 
     let flag: &str = match config.side {
         Side::Host => "--api",
@@ -77,7 +79,11 @@ pub fn cli_generate(config: &GenerateConfig) -> Result<GenerateOutput, String> {
 
     let mut files: Vec<GeneratedFile> = Vec::new();
     collect_files(out_dir, out_dir, &mut files);
-    Ok(GenerateOutput { files })
+    Ok(GenerateOutput::from_files(
+        config.lang,
+        config.layout.clone(),
+        files,
+    ))
 }
 
 /// Recursively collect every file under `dir` into `files`, with paths relative
@@ -97,6 +103,8 @@ fn collect_files(root: &Path, dir: &Path, files: &mut Vec<GeneratedFile>) {
                 path: rel.to_path_buf(),
                 content,
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
         }
     }

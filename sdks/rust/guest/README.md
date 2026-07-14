@@ -37,6 +37,12 @@ cargo install polyplugc
 polyplugc generate --bundle bundle.toml --lang rust --out ./generated
 ```
 
+## Shared generated declarations
+
+The command remains unified by default. For an application-internal Rust
+plugin, generate DomainTypes and GuestContracts once in a `common` crate and
+ImportOnly from the binding crate; see the [canonical split-output guide][codegen].
+
 ## Internal plugins
 
 The default command emits external plugin guest bindings. Generate the explicit
@@ -112,3 +118,4 @@ form a bundle.
 [host]: https://github.com/polyplug/polyplug/blob/main/docs/languages/rust-host.md
 [docs]: https://github.com/polyplug/polyplug/tree/main/docs
 [examples]: https://github.com/polyplug/polyplug/tree/main/examples
+[codegen]: https://github.com/polyplug/polyplug/blob/main/docs/CODE_GENERATION.md

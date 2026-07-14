@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{GenerateConfig, Lang, Side};
+use polyplug_codegen::{GenerateConfig, Lang, OutputLayout, Side};
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -12,11 +12,11 @@ fn create_test_api_with_host_contracts(tmp_dir: &Path) -> PathBuf {
     fs::create_dir_all(tmp_dir).expect("create tmp_dir");
     let api_toml_path: PathBuf = tmp_dir.join("test_host_contract_api.toml");
     let content: &str = r#"# Test API with host contracts
-[[plugin_contract]]
+[[guest_contract]]
 name = "example.worker"
 version = "1.0.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "do_work"
 params = [{ name = "input", type = "StringView" }]
 return = "StringView"
@@ -44,7 +44,7 @@ fn test_rust_host_contract_generates_host_contracts_file() {
         api_toml: api_toml.clone(),
         lang: Lang::Rust,
         side: Side::Host,
-        out_dir: tmp_dir.clone(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");
@@ -88,7 +88,7 @@ fn test_rust_host_contract_guest_generates_caller() {
         api_toml: api_toml.clone(),
         lang: Lang::Rust,
         side: Side::Guest,
-        out_dir: tmp_dir.clone(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");
@@ -129,7 +129,7 @@ fn test_cpp_host_contract_generates_host_contracts_file() {
         api_toml: api_toml.clone(),
         lang: Lang::Cpp,
         side: Side::Host,
-        out_dir: tmp_dir.clone(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");
@@ -174,7 +174,7 @@ fn test_cpp_host_contract_guest_generates_caller() {
         api_toml: api_toml.clone(),
         lang: Lang::Cpp,
         side: Side::Guest,
-        out_dir: tmp_dir.clone(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");
@@ -212,7 +212,7 @@ fn test_csharp_host_contract_generates_contracts_file() {
         api_toml: api_toml.clone(),
         lang: Lang::CSharp,
         side: Side::Host,
-        out_dir: tmp_dir.clone(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");
@@ -253,7 +253,7 @@ fn test_csharp_host_contract_guest_generates_caller() {
         api_toml: api_toml.clone(),
         lang: Lang::CSharp,
         side: Side::Guest,
-        out_dir: tmp_dir.clone(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");
@@ -285,7 +285,7 @@ fn generate_csharp_host_side(tmp_dir: &Path) -> (String, String) {
         api_toml,
         lang: Lang::CSharp,
         side: Side::Host,
-        out_dir: tmp_dir.to_path_buf(),
+        layout: OutputLayout::unified(),
     };
     let output = cli_generate(&config).expect("polyplugc::generate failed");
     for file in &output.files {
@@ -392,7 +392,7 @@ fn generate_csharp_guest_host_contracts(tmp_dir: &Path) -> String {
         api_toml,
         lang: Lang::CSharp,
         side: Side::Guest,
-        out_dir: tmp_dir.to_path_buf(),
+        layout: OutputLayout::unified(),
     };
     let output = cli_generate(&config).expect("polyplugc::generate failed");
     for file in &output.files {
@@ -477,7 +477,7 @@ fn test_python_host_contract_generates_contracts_file() {
         api_toml: api_toml.clone(),
         lang: Lang::Python,
         side: Side::Host,
-        out_dir: tmp_dir.clone(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");
@@ -519,7 +519,7 @@ fn test_python_host_contract_guest_generates_caller() {
         api_toml: api_toml.clone(),
         lang: Lang::Python,
         side: Side::Guest,
-        out_dir: tmp_dir.clone(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");
@@ -561,7 +561,7 @@ fn test_python_host_caller_branches_on_dispatch_type() {
         api_toml: api_toml.clone(),
         lang: Lang::Python,
         side: Side::Host,
-        out_dir: tmp_dir.clone(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");
@@ -615,7 +615,7 @@ fn test_lua_host_contract_generates_contracts_file() {
         api_toml: api_toml.clone(),
         lang: Lang::Lua,
         side: Side::Host,
-        out_dir: tmp_dir.clone(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");
@@ -656,7 +656,7 @@ fn test_lua_host_contract_guest_generates_caller() {
         api_toml: api_toml.clone(),
         lang: Lang::Lua,
         side: Side::Guest,
-        out_dir: tmp_dir.clone(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");
@@ -729,7 +729,7 @@ fn test_js_quickjs_host_contract_generates_contracts_file() {
         api_toml: api_toml.clone(),
         lang: Lang::JsQuickJs,
         side: Side::Host,
-        out_dir: tmp_dir.clone(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");
@@ -770,7 +770,7 @@ fn test_js_quickjs_host_contract_guest_generates_caller() {
         api_toml: api_toml.clone(),
         lang: Lang::JsQuickJs,
         side: Side::Guest,
-        out_dir: tmp_dir.clone(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");

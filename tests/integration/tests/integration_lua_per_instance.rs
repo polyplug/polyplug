@@ -37,6 +37,7 @@ use polyplug_abi::HostApi;
 use polyplug_codegen::GenerateConfig;
 use polyplug_codegen::GenerateOutput;
 use polyplug_codegen::Lang;
+use polyplug_codegen::OutputLayout;
 use polyplug_codegen::Side;
 
 use polyplug_lua::LuaLoader;
@@ -62,13 +63,13 @@ fn workspace_root() -> PathBuf {
 /// `iso.Counter@1`: `inc() -> i32` (advance and return the new count) and
 /// `get() -> i32` (read the current count). Both are no-arg, so the only state is
 /// the per-instance counter — the per-instance discriminator.
-const COUNTER_API_TOML: &str = "[[plugin_contract]]\n\
+const COUNTER_API_TOML: &str = "[[guest_contract]]\n\
      name = \"iso.Counter\"\n\
      version = \"1.0.0\"\n\n\
-     [[plugin_contract.functions]]\n\
+     [[guest_contract.functions]]\n\
      name = \"inc\"\n\
      return = \"i32\"\n\n\
-     [[plugin_contract.functions]]\n\
+     [[guest_contract.functions]]\n\
      name = \"get\"\n\
      return = \"i32\"\n";
 
@@ -101,9 +102,9 @@ fn write_counter_bundle(tmp: &Path, dir_name: &str) -> PathBuf {
         api_toml: bundle_toml_path,
         lang: Lang::Lua,
         side: Side::Guest,
-        out_dir: gen_dir.clone(),
+        layout: OutputLayout::unified(),
     };
-    let output: GenerateOutput = cli_generate(&config).expect("polyplugc generate (lua)");
+    let output: GenerateOutput = cli_generate(&config, &gen_dir).expect("polyplugc generate (lua)");
     for file in &output.files {
         let file_path: PathBuf = gen_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {

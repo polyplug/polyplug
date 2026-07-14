@@ -3,7 +3,7 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{GenerateConfig, Lang, Side};
+use polyplug_codegen::{GenerateConfig, Lang, OutputLayout, Side};
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -29,7 +29,7 @@ fn generate_cpp_bindings(bundle_toml: &Path, out_dir: &Path, side: Side) {
         api_toml: bundle_toml.to_path_buf(),
         lang: Lang::Cpp,
         side,
-        out_dir: out_dir.to_path_buf(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");

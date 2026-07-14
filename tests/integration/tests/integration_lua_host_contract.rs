@@ -34,6 +34,7 @@ use polyplug_abi::Version;
 use polyplug_codegen::GenerateConfig;
 use polyplug_codegen::GenerateOutput;
 use polyplug_codegen::Lang;
+use polyplug_codegen::OutputLayout;
 use polyplug_codegen::Side;
 use polyplug_utils::HostContractId;
 use polyplug_utils::guest_contract_id;
@@ -178,9 +179,9 @@ fn build_lua_bundle(tmp: &Path) -> PathBuf {
         api_toml: bundle_toml_path,
         lang: Lang::Lua,
         side: Side::Guest,
-        out_dir: gen_dir.clone(),
+        layout: OutputLayout::unified(),
     };
-    let output: GenerateOutput = cli_generate(&config).expect("polyplugc generate (lua)");
+    let output: GenerateOutput = cli_generate(&config, &gen_dir).expect("polyplugc generate (lua)");
     for file in &output.files {
         let file_path: PathBuf = gen_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {

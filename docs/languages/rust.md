@@ -66,3 +66,9 @@ generate one internal profile with
 It supplies ordinary Rust factories to generated guest provider bindings and
 receives generated host caller bindings from the committed handles; registration,
 calls, and unload then follow the same pipeline as an external plugin.
+
+## Shared generated declarations
+
+Rust's default remains one generated tree. To place application domain values
+and guest traits in a `common` crate while keeping ABI bindings private, follow
+the [split-output guide](../CODE_GENERATION.md#rust-common-platform-and-core).

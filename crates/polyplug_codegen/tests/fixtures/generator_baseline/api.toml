@@ -44,12 +44,12 @@ fields = [
   { name = "ratio", type = "f32", docs = "Normalized measurement." },
 ]
 
-[[plugin_contract]]
+[[guest_contract]]
 name = "baseline.echo"
 version = "1.2.3"
 docs = "Transforms payloads while preserving caller-visible metadata."
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "transform"
 docs = "Transforms textual and structured input."
 params = [
@@ -59,23 +59,23 @@ params = [
 ]
 return = { type = "StringView", docs = "Transformed message." }
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "write"
 params = [{ name = "bytes", type = "Buffer", docs = "Bytes to store." }]
 return = "u64"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "reset"
 
-[[plugin_contract]]
+[[guest_contract]]
 name = "baseline.metrics"
 version = "2.1.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "snapshot"
 return = "Payload"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "measure"
 params = [{ name = "value", type = "f64" }]
 return = "f64"

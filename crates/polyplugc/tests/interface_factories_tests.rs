@@ -8,7 +8,7 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{GenerateConfig, Lang, Side};
+use polyplug_codegen::{GenerateConfig, Lang, OutputLayout, Side};
 use polyplug_utils::host_contract_id;
 use std::fs;
 use std::path::PathBuf;
@@ -23,11 +23,11 @@ fn create_test_api_with_host_contract(tmp_dir: &PathBuf) -> PathBuf {
     fs::create_dir_all(tmp_dir).expect("create tmp_dir");
     let api_toml_path: PathBuf = tmp_dir.join("test_interface_api.toml");
     let content: &str = r#"# Test API with host contract for interface factory tests
-[[plugin_contract]]
+[[guest_contract]]
 name = "example.worker"
 version = "1.0.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "do_work"
 params = [{ name = "input", type = "StringView" }]
 return = "StringView"
@@ -62,7 +62,7 @@ fn generate_host_interface_factories(tmp_dir: &PathBuf) -> String {
         api_toml: api_toml.clone(),
         lang: Lang::Rust,
         side: Side::Host,
-        out_dir: tmp_dir.clone(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");

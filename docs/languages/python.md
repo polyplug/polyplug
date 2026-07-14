@@ -58,3 +58,10 @@ generate one internal profile with
 It supplies ordinary Python factories to generated guest provider bindings and
 receives generated host caller bindings from the committed handles; registration,
 calls, and unload then follow the same pipeline as an external plugin.
+
+## Shared generated declarations
+
+Python keeps the default unified output. A split project uses importable module
+names such as `common.domain` and `common.guest_contracts`; see the
+[split-output guide](../CODE_GENERATION.md#tested-specifier-forms-for-every-maintained-language)
+for the exact emit and ImportOnly commands.

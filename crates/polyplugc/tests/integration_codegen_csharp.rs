@@ -3,7 +3,7 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{GenerateConfig, Lang, Side};
+use polyplug_codegen::{GenerateConfig, Lang, OutputLayout, Side};
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -29,7 +29,7 @@ fn generate_csharp_bindings(bundle_toml: &Path, out_dir: &Path) {
         api_toml: bundle_toml.to_path_buf(),
         lang: Lang::CSharp,
         side: Side::Guest,
-        out_dir: out_dir.to_path_buf(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");
@@ -97,7 +97,7 @@ fn test_csharp_codegen_generates_enum_types() {
         api_toml: api_toml.to_path_buf(),
         lang: Lang::CSharp,
         side: Side::Host,
-        out_dir: out_dir.to_path_buf(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");

@@ -98,11 +98,11 @@ fields = [
     { name = "name", type = "StringView" },
 ]
 
-[[plugin_contract]]
+[[guest_contract]]
 name = "sys.Enumerator"
 version = "1.0.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "enum_procs"
 return = "Array<Proc>"
 "#;
@@ -756,15 +756,15 @@ fields = [
     { name = "tag",  type = "StringView" },
 ]
 
-[[plugin_contract]]
+[[guest_contract]]
 name = "sys.Kitchen"
 version = "1.0.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "make"
 return = "Array<Kitchen>"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "empty"
 return = "Array<Kitchen>"
 "#;
@@ -1636,19 +1636,19 @@ value = "0"
 name = "Busy"
 value = "7"
 
-[[plugin_contract]]
+[[guest_contract]]
 name = "sys.Gaps"
 version = "1.0.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "nums"
 return = "Array<u32>"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "names"
 return = "Array<StringView>"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "codes"
 return = "Array<Status>"
 "#;
@@ -2384,11 +2384,11 @@ fields = [
     { name = "tags", type = "Array<StringView>" },
 ]
 
-[[plugin_contract]]
+[[guest_contract]]
 name = "sys.Groups"
 version = "1.0.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "groups"
 return = "Array<Group>"
 "#;
@@ -3094,11 +3094,11 @@ fields = [
     { name = "n",    type = "u32" },
 ]
 
-[[plugin_contract]]
+[[guest_contract]]
 name = "sys.Recs"
 version = "1.0.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "recs"
 return = "Array<Rec>"
 "#;
@@ -3695,16 +3695,16 @@ value = "0"
 name = "Busy"
 value = "7"
 
-[[plugin_contract]]
+[[guest_contract]]
 name = "sys.P"
 version = "1.0.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "one"
 params = [ { name = "s", type = "Status" } ]
 return = "u32"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "two"
 params = [ { name = "s", type = "Status" }, { name = "n", type = "u32" } ]
 return = "u32"
@@ -3830,11 +3830,11 @@ fields = [
     { name = "id",   type = "u32" },
 ]
 
-[[plugin_contract]]
+[[guest_contract]]
 name = "sys.Sink"
 version = "1.0.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "push"
 params = [
     { name = "frame", type = "Frame" },

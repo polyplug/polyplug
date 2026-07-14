@@ -14,7 +14,11 @@ use super::collect_peer_contracts;
 use super::peer_min_version;
 
 use super::docs::write_jsdoc;
+use crate::OutputDestination;
+use crate::OutputLayout;
+use crate::OutputPartition;
 use crate::PolyplugcError;
+use crate::Side;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -79,6 +83,17 @@ fn js_import_block(groups: &[&[ImportEntry]]) -> String {
 }
 use std::string::FromUtf8Error;
 
+fn has_domain_types(ir: &ValidatedIr) -> bool {
+    !ir.enums.is_empty() || !ir.types.is_empty()
+}
+
+fn domain_type_references(ir: &ValidatedIr) -> Vec<OutputPartition> {
+    has_domain_types(ir)
+        .then_some(OutputPartition::DomainTypes)
+        .into_iter()
+        .collect()
+}
+
 /// Generator for js-quickjs plugin bundles.
 ///
 /// Produces TypeScript files using lo/hi u32 pairs for 64-bit values
@@ -92,32 +107,120 @@ impl JsQuickjsGenerator {
         &self,
         ir: &ValidatedIr,
         _bundle_name: &str,
+        layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
-        files.files.push(GeneratedFile {
-            path: PathBuf::from("host/types.ts"),
-            content: generate_types_ts(ir)?,
-            force_regenerate: false,
-        });
+        let split: bool = layout != &OutputLayout::unified();
+        if !split {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("host/types.ts"),
+                content: generate_types_ts(ir)?,
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
+            });
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("host/callers.ts"),
+                content: generate_internal_callers_ts(ir)?,
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
+            });
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/types.ts"),
+                content: generate_types_ts(ir)?,
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
+            });
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/contracts.ts"),
+                content: generate_internal_contracts_ts(ir)?
+                    .replace("\"./types\"", "\"./types.ts\""),
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
+            });
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("internal.ts"),
+                content: generate_internal_profile_ts(ir)?,
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
+            });
+            return Ok(());
+        }
+
+        let domain_module: String =
+            js_partition_module(layout, OutputPartition::DomainTypes, "../domain/types.ts");
+        let guest_contracts_omitted: bool = matches!(
+            layout.destination(OutputPartition::GuestContracts),
+            OutputDestination::Omit
+        );
+        let domain_types_present: bool = has_domain_types(ir);
+        let contracts_module: String =
+            js_partition_module(layout, OutputPartition::GuestContracts, "./contracts.ts");
+        if domain_types_present {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("domain/types.ts"),
+                content: generate_domain_types_ts(ir)?,
+                force_regenerate: false,
+                partition: OutputPartition::DomainTypes,
+                references: Vec::new(),
+            });
+        }
+        if !guest_contracts_omitted {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/contracts.ts"),
+                content: generate_guest_contract_declarations_ts(ir, &domain_module)?,
+                force_regenerate: false,
+                partition: OutputPartition::GuestContracts,
+                references: domain_type_references(ir),
+            });
+        }
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/callers.ts"),
-            content: generate_internal_callers_ts(ir)?,
+            content: with_js_domain_type_imports(
+                generate_internal_callers_ts(ir)?,
+                &domain_module,
+                ir,
+            )?,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: domain_type_references(ir),
         });
+        let mut guest_binding_references: Vec<OutputPartition> = domain_type_references(ir);
+        if !guest_contracts_omitted {
+            guest_binding_references.push(OutputPartition::GuestContracts);
+        }
+        let guest_binding_content: String = generate_internal_contracts_ts_with_type_source(
+            ir,
+            &domain_module,
+            guest_contracts_omitted,
+            true,
+        )?;
         files.files.push(GeneratedFile {
-            path: PathBuf::from("guest/types.ts"),
-            content: generate_types_ts(ir)?,
+            path: PathBuf::from("guest/bindings.ts"),
+            content: if guest_contracts_omitted {
+                guest_binding_content
+            } else {
+                with_js_guest_contract_type_imports(guest_binding_content, &contracts_module, ir)?
+            },
             force_regenerate: false,
-        });
-        files.files.push(GeneratedFile {
-            path: PathBuf::from("guest/contracts.ts"),
-            content: generate_internal_contracts_ts(ir)?.replace("\"./types\"", "\"./types.ts\""),
-            force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: guest_binding_references,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("internal.ts"),
-            content: generate_internal_profile_ts(ir)?,
+            content: generate_internal_profile_ts_with_modules(
+                ir,
+                &domain_module,
+                "./host/callers.ts",
+                "./guest/bindings.ts",
+            )?,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: domain_type_references(ir),
         });
         Ok(())
     }
@@ -127,30 +230,79 @@ impl CodeGenerator for JsQuickjsGenerator {
     fn generate_host(
         &self,
         ir: &ValidatedIr,
+        layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
-        files.files.push(GeneratedFile {
-            path: PathBuf::from("host/types.ts"),
-            content: generate_types_ts(ir)?,
-            force_regenerate: false,
-        });
+        let split: bool = layout != &OutputLayout::unified();
+        let domain_module: String =
+            js_partition_module(layout, OutputPartition::DomainTypes, "./types");
+        let domain_types_present: bool = has_domain_types(ir);
+        if !split || domain_types_present {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("host/types.ts"),
+                content: if split {
+                    generate_domain_types_ts(ir)?
+                } else {
+                    generate_types_ts(ir)?
+                },
+                force_regenerate: false,
+                partition: if split {
+                    OutputPartition::DomainTypes
+                } else {
+                    OutputPartition::Bindings
+                },
+                references: Vec::new(),
+            });
+        }
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/callers.ts"),
-            content: generate_callers_ts(ir)?,
+            content: if split {
+                with_js_domain_type_imports(generate_callers_ts(ir)?, &domain_module, ir)?
+            } else {
+                generate_callers_ts(ir)?
+            },
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: if split {
+                domain_type_references(ir)
+            } else {
+                Vec::new()
+            },
         });
-        // Emit host/contracts.ts if there are host contracts
         if !ir.host_contracts.is_empty() {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("host/contracts.ts"),
-                content: generate_host_contracts_ts(ir),
+                content: if split {
+                    with_js_domain_type_imports(generate_host_contracts_ts(ir), &domain_module, ir)?
+                } else {
+                    generate_host_contracts_ts(ir)
+                },
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: if split {
+                    domain_type_references(ir)
+                } else {
+                    Vec::new()
+                },
             });
-            // Emit host/interface_factories.ts if there are host contracts
             files.files.push(GeneratedFile {
                 path: PathBuf::from("host/interface_factories.ts"),
-                content: generate_js_host_interface_factories_ts(ir)?,
+                content: if split {
+                    with_js_domain_type_imports(
+                        generate_js_host_interface_factories_ts(ir)?,
+                        &domain_module,
+                        ir,
+                    )?
+                } else {
+                    generate_js_host_interface_factories_ts(ir)?
+                },
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: if split {
+                    domain_type_references(ir)
+                } else {
+                    Vec::new()
+                },
             });
         }
         Ok(())
@@ -159,61 +311,171 @@ impl CodeGenerator for JsQuickjsGenerator {
     fn generate_guest(
         &self,
         ir: &ValidatedIr,
+        layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
-        files.files.push(GeneratedFile {
-            path: PathBuf::from("guest/types.ts"),
-            content: generate_types_ts(ir)?,
-            force_regenerate: false,
-        });
-        files.files.push(GeneratedFile {
-            path: PathBuf::from("guest/contracts.ts"),
-            content: generate_contracts_ts(ir)?,
-            force_regenerate: false,
-        });
+        let split: bool = layout != &OutputLayout::unified();
+        let domain_module: String =
+            js_partition_module(layout, OutputPartition::DomainTypes, "./types");
+        let guest_contracts_omitted: bool = matches!(
+            layout.destination(OutputPartition::GuestContracts),
+            OutputDestination::Omit
+        );
+        let contracts_module: String =
+            js_partition_module(layout, OutputPartition::GuestContracts, "./contracts");
+        let domain_types_present: bool = has_domain_types(ir);
+        if !split || domain_types_present {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/types.ts"),
+                content: if split {
+                    generate_domain_types_ts(ir)?
+                } else {
+                    generate_types_ts(ir)?
+                },
+                force_regenerate: false,
+                partition: if split {
+                    OutputPartition::DomainTypes
+                } else {
+                    OutputPartition::Bindings
+                },
+                references: Vec::new(),
+            });
+        }
+        if split {
+            if !guest_contracts_omitted {
+                files.files.push(GeneratedFile {
+                    path: PathBuf::from("guest/contracts.ts"),
+                    content: generate_guest_contract_declarations_ts(ir, &domain_module)?,
+                    force_regenerate: false,
+                    partition: OutputPartition::GuestContracts,
+                    references: domain_type_references(ir),
+                });
+            }
+            let mut guest_binding_references: Vec<OutputPartition> = domain_type_references(ir);
+            if !guest_contracts_omitted {
+                guest_binding_references.push(OutputPartition::GuestContracts);
+            }
+            let guest_binding_content: String = generate_contracts_ts_with_type_source(
+                ir,
+                &domain_module,
+                guest_contracts_omitted,
+                true,
+            )?;
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/bindings.ts"),
+                content: if guest_contracts_omitted {
+                    guest_binding_content
+                } else {
+                    with_js_guest_contract_type_imports(
+                        guest_binding_content,
+                        &contracts_module,
+                        ir,
+                    )?
+                },
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: guest_binding_references,
+            });
+        } else {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/contracts.ts"),
+                content: generate_contracts_ts(ir)?,
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
+            });
+        }
+        let binding_module: &str = if split { "./bindings" } else { "./contracts" };
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/interface.ts"),
-            content: generate_interface_ts(ir),
+            content: generate_interface_ts_with_bindings(ir, binding_module),
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/init.ts"),
-            content: generate_init_ts(ir),
+            content: generate_init_ts_with_bindings(ir, binding_module),
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/index.ts"),
-            content: generate_index_ts(ir),
+            content: generate_index_ts_with_bindings(ir, binding_module),
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
         if ir.bundle.is_some() {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("manifest.toml"),
                 content: generate_manifest_toml(ir),
                 force_regenerate: true,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
         }
         if !ir.host_contracts.is_empty() {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/host_contracts.ts"),
-                content: generate_guest_host_contracts_ts(ir)?,
+                content: if split {
+                    with_js_domain_type_imports(
+                        generate_guest_host_contracts_ts(ir)?,
+                        &domain_module,
+                        ir,
+                    )?
+                } else {
+                    generate_guest_host_contracts_ts(ir)?
+                },
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: if split {
+                    domain_type_references(ir)
+                } else {
+                    Vec::new()
+                },
             });
         }
-        // ── peer_callers.ts ────────────────────────────────────────────────────
         let peer_contracts: Vec<&ResolvedContract> = collect_peer_contracts(ir);
         if !peer_contracts.is_empty() {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/peer_callers.ts"),
-                content: generate_guest_peer_callers_ts(ir, &peer_contracts)?,
+                content: if split {
+                    with_js_domain_type_imports(
+                        generate_guest_peer_callers_ts(ir, &peer_contracts)?,
+                        &domain_module,
+                        ir,
+                    )?
+                } else {
+                    generate_guest_peer_callers_ts(ir, &peer_contracts)?
+                },
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: if split {
+                    domain_type_references(ir)
+                } else {
+                    Vec::new()
+                },
             });
         }
         files.files.push(GeneratedFile {
             path: PathBuf::from("README.md"),
             content: generate_readme_quickjs(ir),
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
+        Ok(())
+    }
+
+    fn apply_output_layout(
+        &self,
+        _ir: &ValidatedIr,
+        _side: Side,
+        _layout: &OutputLayout,
+        _files: &mut GeneratedFiles,
+    ) -> Result<(), PolyplugcError> {
         Ok(())
     }
 }
@@ -358,6 +620,128 @@ fn generate_types_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     Ok(out)
 }
 
+fn generate_domain_types_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
+    let mut out: String = String::new();
+    out.push_str(
+        "// THIS FILE IS AUTO-GENERATED BY polyplugc\n\
+         // DO NOT EDIT BY HAND\n\
+         // Runtime: js-quickjs\n\n",
+    );
+    for e in &ir.enums {
+        generate_js_quickjs_enum(&mut out, e)?;
+    }
+    for type_def in &ir.types {
+        render_resolved_type(&mut out, type_def);
+    }
+    Ok(out)
+}
+
+fn generate_guest_contract_declarations_ts(
+    ir: &ValidatedIr,
+    domain_module: &str,
+) -> Result<String, PolyplugcError> {
+    let mut out: String = String::new();
+    out.push_str(
+        "// THIS FILE IS AUTO-GENERATED BY polyplugc\n\
+         // DO NOT EDIT BY HAND\n\
+         // Runtime: js-quickjs guest contract declarations\n\n",
+    );
+    let imports: String = js_import_block(&[&js_domain_type_entries(ir, domain_module)]);
+    out.push_str(&imports);
+    if !imports.is_empty() {
+        out.push('\n');
+    }
+    for contract in &ir.contracts {
+        render_guest_contract_types(&mut out, contract);
+    }
+    Ok(out)
+}
+
+fn js_partition_module(
+    layout: &OutputLayout,
+    partition: OutputPartition,
+    inline_module: &str,
+) -> String {
+    layout
+        .destination(partition)
+        .import()
+        .map(|import| import.as_str().to_owned())
+        .unwrap_or_else(|| inline_module.to_owned())
+}
+
+fn js_domain_type_entries(ir: &ValidatedIr, source: &str) -> Vec<ImportEntry> {
+    ir.enums
+        .iter()
+        .map(|enum_def| enum_def.name.clone())
+        .chain(ir.types.iter().map(|type_def| type_def.name.clone()))
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .map(|name| ImportEntry::JsTypeNamed {
+            name,
+            source: source.to_owned(),
+        })
+        .collect()
+}
+
+fn with_js_domain_type_imports(
+    content: String,
+    source: &str,
+    ir: &ValidatedIr,
+) -> Result<String, PolyplugcError> {
+    insert_js_type_imports(content, js_domain_type_entries(ir, source))
+}
+
+fn js_contract_function_type_name(
+    contract: &ResolvedContract,
+    function: &ResolvedFunction,
+) -> String {
+    format!("{}_{}", contract.name.replace('.', "_"), function.name)
+}
+
+fn js_guest_contract_type_entries(ir: &ValidatedIr, source: &str) -> Vec<ImportEntry> {
+    ir.contracts
+        .iter()
+        .flat_map(|contract| {
+            contract
+                .functions
+                .iter()
+                .map(move |function| js_contract_function_type_name(contract, function))
+        })
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .map(|name| ImportEntry::JsTypeNamed {
+            name,
+            source: source.to_owned(),
+        })
+        .collect()
+}
+
+fn with_js_guest_contract_type_imports(
+    content: String,
+    source: &str,
+    ir: &ValidatedIr,
+) -> Result<String, PolyplugcError> {
+    insert_js_type_imports(content, js_guest_contract_type_entries(ir, source))
+}
+
+fn insert_js_type_imports(
+    mut content: String,
+    entries: Vec<ImportEntry>,
+) -> Result<String, PolyplugcError> {
+    let imports: String = js_import_block(&[&entries]);
+    if imports.is_empty() {
+        return Ok(content);
+    }
+    let header_end: usize =
+        content
+            .find("\n\n")
+            .ok_or_else(|| PolyplugcError::ValidationFailed {
+                message: "generated TypeScript file is missing its header separator".to_owned(),
+            })?;
+    content.insert_str(header_end + 2, &format!("{imports}\n"));
+    Ok(content)
+}
+
 fn render_resolved_type(out: &mut String, type_def: &ResolvedType) {
     write_jsdoc(out, "", type_def.docs.as_deref(), &[], None);
     out.push_str(&format!("export interface {} {{\n", type_def.name));
@@ -374,6 +758,18 @@ fn render_resolved_field(out: &mut String, field: &ResolvedField) {
 }
 
 fn render_contract_types(out: &mut String, contract: &ResolvedContract) {
+    render_contract_types_with_surface(out, contract, false);
+}
+
+fn render_guest_contract_types(out: &mut String, contract: &ResolvedContract) {
+    render_contract_types_with_surface(out, contract, true);
+}
+
+fn render_contract_types_with_surface(
+    out: &mut String,
+    contract: &ResolvedContract,
+    guest_provider_surface: bool,
+) {
     write_jsdoc(out, "", contract.docs.as_deref(), &[], None);
     for func in &contract.functions {
         let params: String = func
@@ -382,10 +778,7 @@ fn render_contract_types(out: &mut String, contract: &ResolvedContract) {
             .map(|p: &ResolvedParam| format!("{}: {}", p.name, ts_type_ref(&p.ty)))
             .collect::<Vec<String>>()
             .join(", ");
-        let ret_type: String = match &func.returns {
-            None => "void".to_owned(),
-            Some(ty) => ts_type_ref(ty),
-        };
+        let ret_type: String = js_contract_return_type(func, guest_provider_surface);
         let documented_params: Vec<(&str, Option<&str>)> = func
             .params
             .iter()
@@ -399,16 +792,34 @@ fn render_contract_types(out: &mut String, contract: &ResolvedContract) {
             func.return_docs.as_deref(),
         );
         out.push_str(&format!(
-            "export type {}_{} = ({}) => {};\n",
-            contract.name.replace('.', "_"),
-            func.name,
+            "export type {} = ({}) => {};\n",
+            js_contract_function_type_name(contract, func),
             params,
             ret_type
         ));
     }
 }
 
+fn js_contract_return_type(function: &ResolvedFunction, guest_provider_surface: bool) -> String {
+    match &function.returns {
+        None => "void".to_owned(),
+        Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) if guest_provider_surface => {
+            "string".to_owned()
+        }
+        Some(ty) => ts_type_ref(ty),
+    }
+}
+
 fn generate_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
+    generate_contracts_ts_with_type_source(ir, "./types", false, false)
+}
+
+fn generate_contracts_ts_with_type_source(
+    ir: &ValidatedIr,
+    type_source: &str,
+    local_contract_types: bool,
+    use_contract_type_aliases: bool,
+) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(
         "// THIS FILE IS AUTO-GENERATED BY polyplugc\n\
@@ -441,19 +852,25 @@ fn generate_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
             }
         }
     }
-    // An empty type set emits nothing (there are no type references to satisfy),
-    // dropping the placeholder `import type { } from './types';`.
     let type_entries: Vec<ImportEntry> = type_imports
         .iter()
         .map(|n: &String| ImportEntry::JsTypeNamed {
             name: n.clone(),
-            source: "./types".to_string(),
+            source: type_source.to_owned(),
         })
         .collect();
     let block: String = js_import_block(&[&type_entries]);
     out.push_str(&block);
     if !block.is_empty() {
         out.push('\n');
+    }
+    if local_contract_types {
+        for contract in &ir.contracts {
+            render_guest_contract_types(&mut out, contract);
+        }
+        if !ir.contracts.is_empty() {
+            out.push('\n');
+        }
     }
     out.push_str("/** Dispatch mechanism type — determines how function calls are routed. */\n");
     out.push_str("const DispatchType = Object.freeze({\n");
@@ -474,12 +891,15 @@ fn generate_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
                     let set_factory_name: String = js_factory_setter_name(&plugin.name);
                     render_plugin_interface_quickjs(
                         &mut out,
-                        &plugin.name,
-                        contract,
-                        ir,
-                        &plugin_var,
-                        &set_factory_name,
-                        false,
+                        JsPluginInterfaceConfig {
+                            plugin_name: &plugin.name,
+                            contract,
+                            ir,
+                            interface_var: &plugin_var,
+                            set_factory_name: &set_factory_name,
+                            export_wrappers: false,
+                            use_contract_type_aliases,
+                        },
                     )?;
                 }
             }
@@ -582,16 +1002,33 @@ fn js_internal_type_entries(
 }
 
 fn generate_internal_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
+    generate_internal_contracts_ts_with_type_source(ir, "./types", false, false)
+}
+
+fn generate_internal_contracts_ts_with_type_source(
+    ir: &ValidatedIr,
+    type_source: &str,
+    local_contract_types: bool,
+    use_contract_type_aliases: bool,
+) -> Result<String, PolyplugcError> {
     let entries: Vec<(&ResolvedPlugin, &ResolvedContract)> = js_internal_provider_entries(ir)?;
     let mut out: String = String::from(
         "// THIS FILE IS AUTO-GENERATED BY polyplugc\n\
          // DO NOT EDIT BY HAND\n\
          // Runtime: js-quickjs internal provider bindings\n\n",
     );
-    let imports: String = js_import_block(&[&js_internal_type_entries(&entries, "./types")]);
+    let imports: String = js_import_block(&[&js_internal_type_entries(&entries, type_source)]);
     out.push_str(&imports);
     if !imports.is_empty() {
         out.push('\n');
+    }
+    if local_contract_types {
+        for contract in &ir.contracts {
+            render_guest_contract_types(&mut out, contract);
+        }
+        if !ir.contracts.is_empty() {
+            out.push('\n');
+        }
     }
     out.push_str("const DispatchType = Object.freeze({ VirtualMachine: 1 } as const);\n\n");
     emit_ts_utf8_encoder_helper(&mut out)?;
@@ -600,12 +1037,15 @@ fn generate_internal_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcE
         let setter: String = format!("set{}Factory", symbol);
         render_plugin_interface_quickjs(
             &mut out,
-            &plugin.name,
-            contract,
-            ir,
-            &symbol,
-            &setter,
-            true,
+            JsPluginInterfaceConfig {
+                plugin_name: &plugin.name,
+                contract,
+                ir,
+                interface_var: &symbol,
+                set_factory_name: &setter,
+                export_wrappers: true,
+                use_contract_type_aliases,
+            },
         )?;
     }
     Ok(out)
@@ -619,6 +1059,20 @@ fn js_internal_author_type(ty: &ResolvedTypeRef) -> String {
 }
 
 fn generate_internal_profile_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
+    generate_internal_profile_ts_with_modules(
+        ir,
+        "./guest/types.ts",
+        "./host/callers.ts",
+        "./guest/contracts.ts",
+    )
+}
+
+fn generate_internal_profile_ts_with_modules(
+    ir: &ValidatedIr,
+    type_source: &str,
+    callers_source: &str,
+    wrappers_source: &str,
+) -> Result<String, PolyplugcError> {
     let entries: Vec<(&ResolvedPlugin, &ResolvedContract)> = js_internal_provider_entries(ir)?;
     let mut out: String = String::from(
         "// THIS FILE IS AUTO-GENERATED BY polyplugc\n\
@@ -630,8 +1084,7 @@ fn generate_internal_profile_ts(ir: &ValidatedIr) -> Result<String, PolyplugcErr
 import { bridgeLibrary } from "@polyplug/loaders/js";
 "#,
     );
-    let imports: String =
-        js_import_block(&[&js_internal_type_entries(&entries, "./guest/types.ts")]);
+    let imports: String = js_import_block(&[&js_internal_type_entries(&entries, type_source)]);
     out.push_str(&imports);
     let caller_classes: BTreeSet<String> = entries
         .iter()
@@ -639,7 +1092,7 @@ import { bridgeLibrary } from "@polyplug/loaders/js";
         .collect();
     for class in caller_classes {
         out.push_str(&format!(
-            "import {{ {class}Contract }} from \"./host/callers.ts\";\n"
+            "import {{ {class}Contract }} from {callers_source:?};\n"
         ));
     }
     let wrapper_imports: Vec<String> = entries
@@ -653,7 +1106,7 @@ import { bridgeLibrary } from "@polyplug/loaders/js";
         .collect();
     if !wrapper_imports.is_empty() {
         out.push_str(&format!(
-            "import {{ {} }} from \"./guest/contracts.ts\";\n",
+            "import {{ {} }} from {wrappers_source:?};\n",
             wrapper_imports.join(", ")
         ));
     }
@@ -785,15 +1238,29 @@ import { bridgeLibrary } from "@polyplug/loaders/js";
     Ok(out)
 }
 
+struct JsPluginInterfaceConfig<'a> {
+    plugin_name: &'a str,
+    contract: &'a ResolvedContract,
+    ir: &'a ValidatedIr,
+    interface_var: &'a str,
+    set_factory_name: &'a str,
+    export_wrappers: bool,
+    use_contract_type_aliases: bool,
+}
+
 fn render_plugin_interface_quickjs(
     out: &mut String,
-    plugin_name: &str,
-    contract: &ResolvedContract,
-    ir: &ValidatedIr,
-    interface_var: &str,
-    set_factory_name: &str,
-    export_wrappers: bool,
+    config: JsPluginInterfaceConfig<'_>,
 ) -> Result<(), PolyplugcError> {
+    let JsPluginInterfaceConfig {
+        plugin_name,
+        contract,
+        ir,
+        interface_var,
+        set_factory_name,
+        export_wrappers,
+        use_contract_type_aliases,
+    } = config;
     let plugin_var: String = interface_var.to_owned();
     let contract_name_full: String = format!("{}@{}", contract.name, contract.version.major);
     let contract_id: u64 = guest_contract_id(&contract.name, contract.version.major);
@@ -803,6 +1270,46 @@ fn render_plugin_interface_quickjs(
     let version_major: u32 = contract.version.major;
     let version_minor: u32 = contract.version.minor;
     let version_patch: u32 = contract.version.patch;
+    let impl_members: Vec<String> = contract
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(idx, function)| {
+            if use_contract_type_aliases {
+                format!(
+                    "fn{idx}: {}",
+                    js_contract_function_type_name(contract, function)
+                )
+            } else {
+                let params: String = function
+                    .params
+                    .iter()
+                    .map(|param| format!("{}: {}", param.name, ts_type_ref(&param.ty)))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                let ret: String = js_contract_return_type(function, true);
+                format!("fn{idx}: ({params}) => {ret}")
+            }
+        })
+        .collect();
+    let impl_shape: String = format!("{{ {} }}", impl_members.join("; "));
+    let implementation_surface: String = if use_contract_type_aliases {
+        let implementation_type: String = format!("{plugin_var}Provider");
+        out.push_str(&format!("\ntype {implementation_type} = {impl_shape};\n"));
+        implementation_type
+    } else {
+        impl_shape.clone()
+    };
+    let wrapper_impl_type: &str = if use_contract_type_aliases {
+        &implementation_surface
+    } else {
+        "any"
+    };
+    let interface_factory_type: &str = if use_contract_type_aliases {
+        &implementation_surface
+    } else {
+        "any"
+    };
 
     out.push_str(&format!(
         "// Plugin: {plugin_name} ({contract_name_full})\n"
@@ -812,13 +1319,10 @@ fn render_plugin_interface_quickjs(
         let params: String = func
             .params
             .iter()
-            .map(|p: &ResolvedParam| format!("{}: {}", p.name, ts_type_ref(&p.ty)))
+            .map(|param| format!("{}: {}", param.name, ts_type_ref(&param.ty)))
             .collect::<Vec<String>>()
             .join(", ");
-        let ret_type: String = match &func.returns {
-            None => "void".to_owned(),
-            Some(ty) => ts_type_ref(ty),
-        };
+        let ret_type: String = js_contract_return_type(func, use_contract_type_aliases);
         let documented_params: Vec<(&str, Option<&str>)> = func
             .params
             .iter()
@@ -841,26 +1345,14 @@ fn render_plugin_interface_quickjs(
     out.push_str(&format!("    contractLo: 0x{:08X},\n", contract_lo));
     out.push_str(&format!("    contractHi: 0x{:08X},\n", contract_hi));
     out.push_str("    dispatchType: DispatchType.VirtualMachine,\n");
-    // No createInstance/destroyInstance stubs: the loader reads this interface from
-    // polyplug_init's returned registrations, extracts only `functions`, and
-    // substitutes its own instance lifecycle — stubs here would be dead code with a
-    // misleading "override" promise.
     out.push_str(&format!("    fnCount: {function_count},\n"));
-    out.push_str(
-        "    functions: [] as ((impl: any, args_ptr: number, out_ptr: number, arena_ptr: number, bridge: any) => number)[],\n",
-    );
-    // The factory builds a fresh impl object per instance. setXFactory installs it
-    // before registration; the loader reads `vtable.factory` and calls it with the
-    // bridge + host vtable lo/hi for the load-time default impl and once per
-    // create_instance.
-    out.push_str(
-        "    factory: null as null | ((bridge: any, hostLo: number, hostHi: number) => any),\n",
-    );
+    out.push_str(&format!(
+        "    functions: [] as ((impl: {wrapper_impl_type}, args_ptr: number, out_ptr: number, arena_ptr: number, bridge: any) => number)[],\n",
+    ));
+    out.push_str(&format!(
+        "    factory: null as null | ((bridge: any, hostLo: number, hostHi: number) => {interface_factory_type}),\n",
+    ));
     out.push_str(&format!("    contractName: \"{contract_name_full}\",\n"));
-    // Packed contract version: the loader recovers `major = version >> 16`, so the
-    // major version is encoded in the high 16 bits. This threads the contract's real
-    // version into GuestContractInterface.contract_version / PluginDescriptor.version,
-    // instead of the loader's hardcoded 0.0.0.
     out.push_str(&format!("    version: 0x{:08X},\n", version_major << 16));
     out.push_str("};\n");
 
@@ -871,27 +1363,11 @@ fn render_plugin_interface_quickjs(
     out.push_str("};\n");
 
     let set_factory_name: String = set_factory_name.to_owned();
-
-    // Generate ABI wrapper functions for each contract function
-    // These wrappers handle the raw pointer conversion between the loader and user code
     let mut abi_wrappers: Vec<String> = Vec::new();
     for (idx, func) in contract.functions.iter().enumerate() {
         let wrapper_name: String = format!("{}_fn{}_abi_wrapper", plugin_var.to_lowercase(), idx);
         let has_params: bool = !func.params.is_empty();
         let has_return: bool = func.returns.is_some();
-
-        // Generate the ABI wrapper function.
-        // The loader dispatches via js_dispatch, which passes:
-        //   impl      — the per-instance impl object the loader resolved
-        //   args_ptr  — full address of the packed args buffer (as Number/f64)
-        //   out_ptr   — full address of the output buffer (as Number/f64)
-        //   arena_ptr — this call's CallArena pointer (Number); threaded to
-        //               `bridge.arenaAlloc(size, arena_ptr)` for StringView returns
-        //   bridge    — the host-capability bridge (NOT read from any global — Rule 12)
-        // User-space addresses are < 2^48 < 2^53 (float64 mantissa), so the
-        // usize→f64→usize round-trip is exact. readU32/writeU32 also accept f64.
-        // langprint renders the wrapper's `function name(...): number` FORM; the
-        // dispatch body below is built into `body` and handed back verbatim.
         let mut body: String = String::new();
         body.push_str("    // SAFETY: args_ptr and out_ptr are valid addresses passed as f64\n");
         body.push_str("    // by the loader. readU32/writeU32 accept f64 and convert to usize.\n");
@@ -912,16 +1388,9 @@ fn render_plugin_interface_quickjs(
             body.push_str("    if (!out_ptr) return 8;\n");
         }
 
-        // Per-signature argument unpacking. The host-side caller passes a
-        // pointer to the bare value for a single parameter and a
-        // #[repr(C)]-equivalent arg-pack struct for 2+ parameters (mirrors the
-        // rust generator's emit_args_setup), so reads use C-layout offsets
-        // (natural alignment), NOT a fixed StringView shape.
         let mut arg_names: Vec<String> = Vec::new();
         if func.params.len() == 1 {
             let param: &ResolvedParam = &func.params[0];
-            // SAFETY (emitted reads): args_ptr is a valid host-allocated
-            // buffer holding exactly one ABI value of the parameter type.
             let expr: String = js_read_expr(&param.ty, "args_ptr", 0, ir)?;
             body.push_str(&format!("    var arg_{} = {};\n", param.name, expr));
             arg_names.push(format!("arg_{}", param.name));
@@ -930,9 +1399,6 @@ fn render_plugin_interface_quickjs(
             for param in &func.params {
                 let align: usize = js_c_align(&param.ty, ir)?;
                 offset = align_up(offset, align);
-                // SAFETY (emitted reads): args_ptr points at the C-layout
-                // arg-pack struct written by the host caller; each field is
-                // read at its natural-alignment offset.
                 let expr: String = js_read_expr(&param.ty, "args_ptr", offset, ir)?;
                 body.push_str(&format!("    var arg_{} = {};\n", param.name, expr));
                 offset += js_c_size(&param.ty, ir)?;
@@ -940,7 +1406,6 @@ fn render_plugin_interface_quickjs(
             }
         }
 
-        // Call the implementation
         if has_return {
             body.push_str(&format!(
                 "    var result = impl.fn{idx}({});\n",
@@ -950,12 +1415,7 @@ fn render_plugin_interface_quickjs(
             body.push_str(&format!("    impl.fn{idx}({});\n", arg_names.join(", ")));
         }
 
-        // Write the return value back through out_ptr per the contract's
-        // declared return type (the host pre-allocates an out slot of exactly
-        // that C-layout size and reads it back after dispatch).
         if let Some(ret_ty) = &func.returns {
-            // SAFETY (emitted writes): out_ptr is a valid host-allocated out
-            // slot sized for the declared return type.
             emit_js_guest_return_write(&mut body, ret_ty, ir)?;
         }
         body.push_str("    return 0;");
@@ -963,7 +1423,7 @@ fn render_plugin_interface_quickjs(
         out.push_str(&render_js_defn_fn(
             &wrapper_name,
             js_params(&[
-                ("impl", "any"),
+                ("impl", wrapper_impl_type),
                 ("args_ptr", "number"),
                 ("out_ptr", "number"),
                 ("arena_ptr", "number"),
@@ -973,56 +1433,19 @@ fn render_plugin_interface_quickjs(
             body,
             export_wrappers,
         )?);
-
         abi_wrappers.push(wrapper_name);
     }
 
-    // Install the per-instance factory + ABI wrappers. The factory receives the
-    // bridge and the host vtable lo/hi (threaded explicitly — no global, Rule 12)
-    // and returns a fresh impl object ({ fn0, fn1, ... }) per instance; the loader
-    // calls it once at load (default impl) and once per create_instance, then
-    // passes the resolved impl as each wrapper's first argument. No module-global
-    // impl or host pointer: state lives on the per-instance object the factory
-    // builds, and the bridge/host travel as explicit arguments.
-    //
-    // A StringView return is typed `string`: the author returns a plain string and
-    // the generated wrapper arena-allocates it (mirrors lua/python).
-    let impl_members: Vec<String> = contract
-        .functions
-        .iter()
-        .enumerate()
-        .map(|(idx, f)| {
-            let params: String = f
-                .params
-                .iter()
-                .map(|p| format!("{}: {}", p.name, ts_type_ref(&p.ty)))
-                .collect::<Vec<String>>()
-                .join(", ");
-            let ret: String = match &f.returns {
-                None => "void".to_owned(),
-                Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) => "string".to_owned(),
-                Some(ty) => ts_type_ref(ty),
-            };
-            format!("fn{idx}: ({}) => {}", params, ret)
-        })
-        .collect();
-    let impl_shape: String = format!("{{ {} }}", impl_members.join("; "));
-
-    // The exported `setXFactory` TypeScript signature is FORM — langprint's JS
-    // backend renders it in TypeScript mode (inline param/return types); the two
-    // assignment lines are the LOGIC body slot. `export` rides the render `before`
-    // slot. polyplugc still owns the type STRINGS (the factory arrow type, the
-    // impl-shape) — langprint owns the structure.
     let functions_list: String = abi_wrappers
         .iter()
-        .map(|w| w.as_str())
+        .map(|wrapper| wrapper.as_str())
         .collect::<Vec<&str>>()
         .join(", ");
     out.push('\n');
     out.push_str(&render_js_set_factory(
         &set_factory_name,
         &plugin_var,
-        &impl_shape,
+        &implementation_surface,
         &functions_list,
     )?);
 
@@ -1036,11 +1459,11 @@ fn render_plugin_interface_quickjs(
 fn render_js_set_factory(
     set_factory_name: &str,
     plugin_var: &str,
-    impl_shape: &str,
+    implementation_surface: &str,
     functions_list: &str,
 ) -> Result<String, PolyplugcError> {
     let factory_type: String =
-        format!("(bridge: any, hostLo: number, hostHi: number) => {impl_shape}");
+        format!("(bridge: any, hostLo: number, hostHi: number) => {implementation_surface}");
     let function: JsFunction = JsFunction {
         name: set_factory_name.to_owned(),
         parameters: vec![JsParameter {
@@ -1394,6 +1817,18 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
     out.push_str("}\n");
 
     out
+}
+
+fn generate_interface_ts_with_bindings(ir: &ValidatedIr, bindings_module: &str) -> String {
+    generate_interface_ts(ir).replace("'./contracts'", &format!("'{bindings_module}'"))
+}
+
+fn generate_index_ts_with_bindings(ir: &ValidatedIr, bindings_module: &str) -> String {
+    generate_index_ts(ir).replace("'./contracts'", &format!("'{bindings_module}'"))
+}
+
+fn generate_init_ts_with_bindings(ir: &ValidatedIr, bindings_module: &str) -> String {
+    generate_init_ts(ir).replace("'./contracts'", &format!("'{bindings_module}'"))
 }
 
 fn generate_manifest_toml(ir: &ValidatedIr) -> String {
@@ -3138,8 +3573,10 @@ fn emit_js_guest_marshal(
     }
 }
 
-/// Emit an allocating `StringView` write for a guest return: encode `value`,
-/// arena-allocate the bytes, copy them in, and write `{ptr, len}` at `base + off`.
+/// Emit a `StringView` return write for a guest return. Author-facing top-level
+/// strings are encoded into the call arena; nested fields may already carry their
+/// canonical `{ ptr_lo, ptr_hi, len }` representation from an imported domain
+/// package and are copied without re-encoding.
 fn emit_js_guest_string_view(
     out: &mut String,
     indent: &str,
@@ -3150,34 +3587,53 @@ fn emit_js_guest_string_view(
 ) {
     let id: usize = ctx.uid;
     ctx.uid += 1;
+    out.push_str(&format!("{indent}if (typeof {value} === \"string\") {{\n"));
     out.push_str(&format!(
-        "{indent}const _sb{id} = _ppEncodeUtf8({value});\n"
+        "{indent}    const _sb{id} = _ppEncodeUtf8({value});\n"
     ));
     out.push_str(&format!(
-        "{indent}const _sbuf{id} = polyplug.arenaAlloc(_sb{id}.length > 0 ? _sb{id}.length : 1, arena_ptr);\n"
+        "{indent}    const _sbuf{id} = polyplug.arenaAlloc(_sb{id}.length > 0 ? _sb{id}.length : 1, arena_ptr);\n"
     ));
     out.push_str(&format!(
-        "{indent}const _sp{id} = _sbuf{id}[0] + _sbuf{id}[1] * 4294967296;\n"
+        "{indent}    const _sp{id} = _sbuf{id}[0] + _sbuf{id}[1] * 4294967296;\n"
     ));
     out.push_str(&format!(
-        "{indent}for (let _i{id} = 0; _i{id} < _sb{id}.length; _i{id}++) {{ polyplug.writeByte(_sp{id} + _i{id}, _sb{id}[_i{id}]); }}\n"
+        "{indent}    for (let _i{id} = 0; _i{id} < _sb{id}.length; _i{id}++) {{ polyplug.writeByte(_sp{id} + _i{id}, _sb{id}[_i{id}]); }}\n"
     ));
     out.push_str(&format!(
-        "{indent}polyplug.writeU32({}, _sbuf{id}[0]);\n",
+        "{indent}    polyplug.writeU32({}, _sbuf{id}[0]);\n",
         js_ptr_at(base, off)
     ));
     out.push_str(&format!(
-        "{indent}polyplug.writeU32({}, _sbuf{id}[1]);\n",
+        "{indent}    polyplug.writeU32({}, _sbuf{id}[1]);\n",
         js_ptr_at(base, off + 4)
     ));
     out.push_str(&format!(
-        "{indent}polyplug.writeU32({}, _sb{id}.length);\n",
+        "{indent}    polyplug.writeU32({}, _sb{id}.length);\n",
         js_ptr_at(base, off + 8)
     ));
     out.push_str(&format!(
-        "{indent}polyplug.writeU32({}, 0);\n",
+        "{indent}    polyplug.writeU32({}, 0);\n",
         js_ptr_at(base, off + 12)
     ));
+    out.push_str(&format!("{indent}}} else {{\n"));
+    out.push_str(&format!(
+        "{indent}    polyplug.writeU32({}, {value}.ptr_lo);\n",
+        js_ptr_at(base, off)
+    ));
+    out.push_str(&format!(
+        "{indent}    polyplug.writeU32({}, {value}.ptr_hi);\n",
+        js_ptr_at(base, off + 4)
+    ));
+    out.push_str(&format!(
+        "{indent}    polyplug.writeU32({}, {value}.len);\n",
+        js_ptr_at(base, off + 8)
+    ));
+    out.push_str(&format!(
+        "{indent}    polyplug.writeU32({}, 0);\n",
+        js_ptr_at(base, off + 12)
+    ));
+    out.push_str(&format!("{indent}}}\n"));
 }
 
 /// Emit an allocating array write: allocate `value.length` elements from the
@@ -4702,6 +5158,11 @@ mod tests {
     use crate::ResolvedBundleFile;
     use crate::ir::ResolvedDependency;
     use crate::ir::Version;
+    use crate::{Lang, OutputDestination, OutputPartition, ValidatedImport};
+    use std::fs;
+    use std::path::Path;
+    use std::process::Command;
+    use tempfile::tempdir;
 
     #[test]
     fn generate_js_quickjs_enum_non_bitflag() {
@@ -4967,7 +5428,7 @@ mod tests {
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_host(&ir, &mut files)
+            .generate_host(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_host");
         let names: Vec<String> = files
             .files
@@ -4992,7 +5453,7 @@ mod tests {
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_host(&ir, &mut files)
+            .generate_host(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_host");
         let names: Vec<String> = files
             .files
@@ -5267,7 +5728,7 @@ mod tests {
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_guest(&ir, &mut files)
+            .generate_guest(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_guest");
         let names: Vec<String> = files
             .files
@@ -5401,7 +5862,7 @@ mod tests {
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_guest(&ir, &mut files)
+            .generate_guest(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_guest");
         let names: Vec<String> = files
             .files
@@ -5456,7 +5917,7 @@ mod tests {
         let generator: JsQuickjsGenerator = JsQuickjsGenerator;
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_guest(&ir, &mut files)
+            .generate_guest(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_guest");
         let names: Vec<String> = files
             .files
@@ -5606,7 +6067,7 @@ mod tests {
         let generator: JsQuickjsGenerator = JsQuickjsGenerator;
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_guest(&ir, &mut files)
+            .generate_guest(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_guest");
         let names: Vec<String> = files
             .files
@@ -5616,6 +6077,413 @@ mod tests {
         assert!(
             !names.contains(&"guest/peer_callers.ts".to_owned()),
             "unexpected guest/peer_callers.ts: {names:?}"
+        );
+    }
+
+    fn canonical_contract_layout_ir() -> ValidatedIr {
+        let contract: ResolvedContract = ResolvedContract {
+            name: "test.add".to_owned(),
+            contract_id: guest_contract_id("test.add", 1),
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "add".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "args".to_owned(),
+                    ty: ResolvedTypeRef::UserDefined("AddArgs".to_owned()),
+                    docs: None,
+                }],
+                returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+                docs: None,
+                return_docs: None,
+            }],
+            docs: None,
+        };
+        ValidatedIr {
+            types: vec![ResolvedType {
+                name: "AddArgs".to_owned(),
+                fields: vec![
+                    ResolvedField {
+                        name: "a".to_owned(),
+                        ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                        docs: None,
+                    },
+                    ResolvedField {
+                        name: "b".to_owned(),
+                        ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                        docs: None,
+                    },
+                ],
+                docs: None,
+            }],
+            enums: vec![],
+            contracts: vec![contract],
+            host_contracts: vec![],
+            bundle: Some(ResolvedBundle {
+                name: "test_js_bundle".to_owned(),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                loader: "js-quickjs".to_owned(),
+                file: ResolvedBundleFile::Single("plugin.js".to_owned()),
+                plugins: vec![ResolvedPlugin {
+                    name: "test_adder".to_owned(),
+                    implements: vec!["test.add@1.0".to_owned()],
+                    optional: vec![],
+                }],
+                bundle_id: 0,
+                dependencies: vec![],
+                needs_reinit_on_dep_reload: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn imported_guest_contract_aliases_define_quickjs_provider_surface() {
+        let layout: OutputLayout = OutputLayout {
+            bindings: OutputDestination::Inline,
+            domain_types: OutputDestination::ImportOnly {
+                import: ValidatedImport::parse(Lang::JsQuickJs, "canonical-domain")
+                    .expect("canonical domain import"),
+            },
+            guest_contracts: OutputDestination::ImportOnly {
+                import: ValidatedImport::parse(Lang::JsQuickJs, "canonical-contracts")
+                    .expect("canonical contracts import"),
+            },
+        };
+        let generator: JsQuickjsGenerator = JsQuickjsGenerator;
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_guest(&canonical_contract_layout_ir(), &layout, &mut files)
+            .expect("generate split JavaScript guest");
+        layout
+            .validate(Lang::JsQuickJs, &files.files)
+            .expect("external contracts must be a valid binding dependency");
+        let bindings: &GeneratedFile = files
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("guest/bindings.ts"))
+            .expect("guest bindings");
+        assert!(
+            bindings
+                .content
+                .contains("import type { test_add_add } from 'canonical-contracts';"),
+            "bindings must import the canonical contract alias: {}",
+            bindings.content
+        );
+        assert!(
+            bindings
+                .content
+                .contains("type TEST_ADDERProvider = { fn0: test_add_add };"),
+            "provider surface must use the canonical function alias: {}",
+            bindings.content
+        );
+        assert!(
+            bindings
+                .content
+                .contains("test_adder_fn0_abi_wrapper(impl: TEST_ADDERProvider"),
+            "wrapper must consume the canonical provider surface: {}",
+            bindings.content
+        );
+        assert!(
+            bindings
+                .content
+                .contains("hostHi: number) => TEST_ADDERProvider"),
+            "factory must return the canonical provider surface: {}",
+            bindings.content
+        );
+        assert!(
+            bindings
+                .references
+                .contains(&OutputPartition::GuestContracts),
+            "external canonical contracts must remain a semantic dependency"
+        );
+
+        let temp = tempdir().expect("temporary Deno project");
+        let root: &Path = temp.path();
+        fs::create_dir_all(root.join("guest")).expect("guest directory");
+        fs::create_dir_all(root.join("canonical")).expect("canonical directory");
+        fs::write(root.join("guest/bindings.ts"), &bindings.content).expect("guest bindings");
+        fs::write(
+            root.join("canonical/domain.ts"),
+            "export interface AddArgs { readonly a: number; readonly b: number; }\n",
+        )
+        .expect("canonical domain");
+        fs::write(
+            root.join("deno.json"),
+            r#"{"imports":{"canonical-domain":"./canonical/domain.ts","canonical-contracts":"./canonical/contracts.ts"}}"#,
+        )
+        .expect("Deno import map");
+        fs::write(
+            root.join("canonical/contracts.ts"),
+            "import type { AddArgs } from \"canonical-domain\";\nexport type test_add_add = (args: AddArgs) => number;\n",
+        )
+        .expect("valid canonical contracts");
+        let valid_check = Command::new("deno")
+            .args([
+                "check",
+                "--quiet",
+                "--config",
+                "deno.json",
+                "guest/bindings.ts",
+            ])
+            .current_dir(root)
+            .output()
+            .expect("run Deno typecheck");
+        assert!(
+            valid_check.status.success(),
+            "valid canonical aliases must typecheck: {}",
+            String::from_utf8_lossy(&valid_check.stderr)
+        );
+        fs::write(
+            root.join("runtime.ts"),
+            r#"import { TEST_ADDER_INTERFACE, setTestAdderFactory } from "./guest/bindings.ts";
+setTestAdderFactory(() => ({ fn0: args => args.a + args.b }));
+const slots = new Map<number, number>([[16, 12], [20, 30]]);
+const bridge = {
+    readU32(address: number): number { return slots.get(address) ?? 0; },
+    writeU32(address: number, value: number): void { slots.set(address, value); },
+};
+const factory = TEST_ADDER_INTERFACE.factory;
+if (factory === null) throw new Error("missing provider factory");
+const provider = factory(bridge, 0, 0);
+const result = TEST_ADDER_INTERFACE.functions[0](provider, 16, 32, 0, bridge);
+if (result !== 0 || slots.get(32) !== 42) throw new Error("canonical provider dispatch failed");"#,
+        )
+        .expect("runtime E2E");
+        let runtime = Command::new("deno")
+            .args(["run", "--quiet", "--config", "deno.json", "runtime.ts"])
+            .current_dir(root)
+            .output()
+            .expect("run Deno provider E2E");
+        assert!(
+            runtime.status.success(),
+            "canonical provider must dispatch at runtime: {}",
+            String::from_utf8_lossy(&runtime.stderr)
+        );
+
+        fs::write(
+            root.join("canonical/contracts.ts"),
+            "export type test_add_add = (args: string) => string;\n",
+        )
+        .expect("stale canonical contracts");
+        let stale_check = Command::new("deno")
+            .args([
+                "check",
+                "--quiet",
+                "--config",
+                "deno.json",
+                "guest/bindings.ts",
+            ])
+            .current_dir(root)
+            .output()
+            .expect("run stale Deno typecheck");
+        assert!(
+            !stale_check.status.success(),
+            "incompatible canonical aliases must fail typechecking"
+        );
+    }
+
+    #[test]
+    fn omitted_guest_contracts_emit_local_quickjs_provider_aliases() {
+        let layout: OutputLayout = OutputLayout {
+            bindings: OutputDestination::Inline,
+            domain_types: OutputDestination::Inline,
+            guest_contracts: OutputDestination::Omit,
+        };
+        let generator: JsQuickjsGenerator = JsQuickjsGenerator;
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_guest(&canonical_contract_layout_ir(), &layout, &mut files)
+            .expect("generate omitted JavaScript guest contracts");
+        layout
+            .validate(Lang::JsQuickJs, &files.files)
+            .expect("omitted contracts must be locally self-contained");
+        let bindings: &GeneratedFile = files
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("guest/bindings.ts"))
+            .expect("guest bindings");
+        assert!(
+            bindings
+                .content
+                .contains("export type test_add_add = (args: AddArgs) => number;"),
+            "Omit must emit the one local contract alias used by the provider: {}",
+            bindings.content
+        );
+        assert!(
+            bindings
+                .content
+                .contains("type TEST_ADDERProvider = { fn0: test_add_add };"),
+            "Omit must retain the same provider surface: {}",
+            bindings.content
+        );
+        assert!(
+            !bindings
+                .references
+                .contains(&OutputPartition::GuestContracts),
+            "local aliases must not retain an omitted-partition reference"
+        );
+    }
+
+    fn primitive_omit_ir() -> ValidatedIr {
+        let contract = ResolvedContract {
+            name: "test.increment".to_owned(),
+            contract_id: guest_contract_id("test.increment", 1),
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "increment".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "value".to_owned(),
+                    ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    docs: None,
+                }],
+                returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+                docs: None,
+                return_docs: None,
+            }],
+            docs: None,
+        };
+        ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![contract],
+            host_contracts: vec![],
+            bundle: Some(ResolvedBundle {
+                name: "primitive_omit".to_owned(),
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                loader: "js-quickjs".to_owned(),
+                file: ResolvedBundleFile::Single("plugin.js".to_owned()),
+                plugins: vec![ResolvedPlugin {
+                    name: "test_incrementer".to_owned(),
+                    implements: vec!["test.increment@1.0".to_owned()],
+                    optional: vec![],
+                }],
+                bundle_id: 0,
+                dependencies: vec![],
+                needs_reinit_on_dep_reload: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn primitive_omitted_partitions_are_self_contained_for_quickjs_guest_and_internal() {
+        let layout = OutputLayout {
+            bindings: OutputDestination::Inline,
+            domain_types: OutputDestination::Omit,
+            guest_contracts: OutputDestination::Omit,
+        };
+        let ir = primitive_omit_ir();
+        let generator = JsQuickjsGenerator;
+        let mut guest_files = GeneratedFiles::default();
+        generator
+            .generate_guest(&ir, &layout, &mut guest_files)
+            .expect("generate primitive-only JavaScript guest");
+        layout
+            .validate(Lang::JsQuickJs, &guest_files.files)
+            .expect("primitive guest must not retain omitted declaration dependencies");
+        assert!(
+            !guest_files.files.iter().any(|file| {
+                matches!(
+                    file.partition,
+                    OutputPartition::DomainTypes | OutputPartition::GuestContracts
+                )
+            }),
+            "primitive-only guest must emit neither declaration partition"
+        );
+        let guest_bindings = guest_files
+            .files
+            .iter()
+            .find(|file| file.path == Path::new("guest/bindings.ts"))
+            .expect("primitive guest bindings");
+        assert!(
+            !guest_bindings.content.contains("import type")
+                && guest_bindings
+                    .content
+                    .contains("export type test_increment_increment = (value: number) => number;"),
+            "primitive Omit bindings must carry a local type alias and no domain import: {}",
+            guest_bindings.content
+        );
+
+        let mut internal_files = GeneratedFiles::default();
+        generator
+            .generate_internal_bundle(&ir, "primitive_omit", &layout, &mut internal_files)
+            .expect("generate primitive-only JavaScript internal profile");
+        layout
+            .validate(Lang::JsQuickJs, &internal_files.files)
+            .expect("primitive internal profile must not retain omitted declaration dependencies");
+        assert!(
+            !internal_files.files.iter().any(|file| {
+                matches!(
+                    file.partition,
+                    OutputPartition::DomainTypes | OutputPartition::GuestContracts
+                )
+            }) && internal_files.files.iter().all(|file| {
+                !file.references.iter().any(|reference| {
+                    matches!(
+                        reference,
+                        OutputPartition::DomainTypes | OutputPartition::GuestContracts
+                    )
+                })
+            }),
+            "primitive internal profile must not emit or reference empty declaration partitions"
+        );
+
+        let temp = tempdir().expect("temporary primitive Deno project");
+        let root = temp.path();
+        fs::create_dir_all(root.join("guest")).expect("guest directory");
+        fs::write(root.join("guest/bindings.ts"), &guest_bindings.content)
+            .expect("primitive guest bindings");
+        let typecheck = Command::new("deno")
+            .args(["check", "--quiet", "guest/bindings.ts"])
+            .current_dir(root)
+            .output()
+            .expect("typecheck primitive guest bindings");
+        assert!(
+            typecheck.status.success(),
+            "primitive Omit bindings must typecheck: {}",
+            String::from_utf8_lossy(&typecheck.stderr)
+        );
+        fs::write(
+            root.join("runtime.ts"),
+            r#"import { TEST_INCREMENTER_INTERFACE, setTestIncrementerFactory } from "./guest/bindings.ts";
+setTestIncrementerFactory(() => ({ fn0: value => value + 1 }));
+const slots = new Map<number, number>([[16, 41]]);
+const bridge = {
+    readU32(address: number): number { return slots.get(address) ?? 0; },
+    writeU32(address: number, value: number): void { slots.set(address, value); },
+};
+const factory = TEST_INCREMENTER_INTERFACE.factory;
+if (factory === null) throw new Error("missing provider factory");
+const provider = factory(bridge, 0, 0);
+const result = TEST_INCREMENTER_INTERFACE.functions[0](provider, 16, 32, 0, bridge);
+if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider dispatch failed");"#,
+        )
+        .expect("primitive runtime E2E");
+        let runtime = Command::new("deno")
+            .args(["run", "--quiet", "runtime.ts"])
+            .current_dir(root)
+            .output()
+            .expect("run primitive provider E2E");
+        assert!(
+            runtime.status.success(),
+            "primitive Omit provider must dispatch at runtime: {}",
+            String::from_utf8_lossy(&runtime.stderr)
         );
     }
 
@@ -5652,12 +6520,15 @@ mod tests {
         let mut out: String = String::new();
         render_plugin_interface_quickjs(
             &mut out,
-            "shapes_plugin",
-            contract,
-            ir,
-            "SHAPES_PLUGIN",
-            "setShapesPluginFactory",
-            false,
+            JsPluginInterfaceConfig {
+                plugin_name: "shapes_plugin",
+                contract,
+                ir,
+                interface_var: "SHAPES_PLUGIN",
+                set_factory_name: "setShapesPluginFactory",
+                export_wrappers: false,
+                use_contract_type_aliases: false,
+            },
         )
         .expect("render_plugin_interface_quickjs");
         out

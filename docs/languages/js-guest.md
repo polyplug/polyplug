@@ -45,7 +45,7 @@ implements = ["pipeline.Decoder@1.0"]
 
 `implements` names each contract as `<namespace>.<Name>@<major_version>`. Add one
 `[[plugin]]` section per plugin in the bundle. One `polyplug_init` call returns one
-registration for every declared plugin contract. The runtime validates and publishes
+registration for every declared guest contract. The runtime validates and publishes
 the complete registration set atomically; a rejected registration never exposes a
 partial bundle. Logical unload removes every contract's QuickJS VM state after
 in-flight runtime calls quiesce. To declare a runtime dependency on another

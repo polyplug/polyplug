@@ -25,6 +25,7 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
+use core::ptr;
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
@@ -36,13 +37,16 @@ use polyplug_abi::HostApi;
 use polyplug_codegen::GenerateConfig;
 use polyplug_codegen::GenerateOutput;
 use polyplug_codegen::Lang;
+use polyplug_codegen::OutputLayout;
 use polyplug_codegen::Side;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
 use polyplug_utils::guest_contract_id;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tempfile::TempDir;
 
 mod cli_support;
 use cli_support::cli_generate;
@@ -61,13 +65,13 @@ fn workspace_root() -> PathBuf {
 /// `iso.Counter@1`: `inc() -> i32` (advance and return the new count) and
 /// `get() -> i32` (read the current count). Both are no-arg, so the only state is
 /// the per-instance counter — the per-instance discriminator.
-const COUNTER_API_TOML: &str = "[[plugin_contract]]\n\
+const COUNTER_API_TOML: &str = "[[guest_contract]]\n\
      name = \"iso.Counter\"\n\
      version = \"1.0.0\"\n\n\
-     [[plugin_contract.functions]]\n\
+     [[guest_contract.functions]]\n\
      name = \"inc\"\n\
      return = \"i32\"\n\n\
-     [[plugin_contract.functions]]\n\
+     [[guest_contract.functions]]\n\
      name = \"get\"\n\
      return = \"i32\"\n";
 
@@ -76,9 +80,9 @@ const COUNTER_API_TOML: &str = "[[plugin_contract]]\n\
 /// instance, vendor the current guest SDK, and return the bundle directory.
 fn write_counter_bundle(tmp: &Path, dir_name: &str) -> PathBuf {
     let bundle_dir: PathBuf = tmp.join(dir_name);
-    std::fs::create_dir_all(&bundle_dir).expect("create counter bundle dir");
+    fs::create_dir_all(&bundle_dir).expect("create counter bundle dir");
 
-    std::fs::write(bundle_dir.join("api.toml"), COUNTER_API_TOML).expect("write api.toml");
+    fs::write(bundle_dir.join("api.toml"), COUNTER_API_TOML).expect("write api.toml");
 
     let bundle_toml: String = format!(
         "[bundle]\n\
@@ -93,25 +97,26 @@ fn write_counter_bundle(tmp: &Path, dir_name: &str) -> PathBuf {
         name = BUNDLE_NAME,
     );
     let bundle_toml_path: PathBuf = bundle_dir.join("bundle.toml");
-    std::fs::write(&bundle_toml_path, bundle_toml).expect("write bundle.toml");
+    fs::write(&bundle_toml_path, bundle_toml).expect("write bundle.toml");
 
     let gen_dir: PathBuf = bundle_dir.join("generated");
     let config: GenerateConfig = GenerateConfig {
         api_toml: bundle_toml_path,
         lang: Lang::Python,
         side: Side::Guest,
-        out_dir: gen_dir.clone(),
+        layout: OutputLayout::unified(),
     };
-    let output: GenerateOutput = cli_generate(&config).expect("polyplugc generate (python)");
+    let output: GenerateOutput =
+        cli_generate(&config, &gen_dir).expect("polyplugc generate (python)");
     for file in &output.files {
         let file_path: PathBuf = gen_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).expect("create generated parent dir");
+            fs::create_dir_all(parent).expect("create generated parent dir");
         }
-        std::fs::write(&file_path, &file.content).expect("write generated file");
+        fs::write(&file_path, &file.content).expect("write generated file");
     }
 
-    std::fs::rename(
+    fs::rename(
         gen_dir.join("manifest.toml"),
         bundle_dir.join("manifest.toml"),
     )
@@ -137,7 +142,7 @@ fn write_counter_bundle(tmp: &Path, dir_name: &str) -> PathBuf {
          \n\
          \n\
          set_counter_factory(CounterImpl)\n";
-    std::fs::write(bundle_dir.join("entry.py"), entry_py).expect("write entry.py");
+    fs::write(bundle_dir.join("entry.py"), entry_py).expect("write entry.py");
 
     vendor_python_sdk(&bundle_dir);
 
@@ -152,8 +157,8 @@ fn vendor_python_sdk(bundle_dir: &Path) {
     let sdk_root: PathBuf = workspace_root().join("sdks").join("python");
 
     let guest_dst: PathBuf = site.join("polyplug_guest");
-    std::fs::create_dir_all(&guest_dst).expect("create polyplug_guest dir");
-    std::fs::copy(
+    fs::create_dir_all(&guest_dst).expect("create polyplug_guest dir");
+    fs::copy(
         sdk_root
             .join("guest")
             .join("polyplug_guest")
@@ -164,17 +169,17 @@ fn vendor_python_sdk(bundle_dir: &Path) {
 
     let abi_src: PathBuf = sdk_root.join("polyplug_abi").join("polyplug_abi");
     let abi_dst: PathBuf = site.join("polyplug_abi");
-    std::fs::create_dir_all(&abi_dst).expect("create polyplug_abi dir");
+    fs::create_dir_all(&abi_dst).expect("create polyplug_abi dir");
     for name in ["__init__.py", "abi.py", "string_view_helper.py"] {
-        std::fs::copy(abi_src.join(name), abi_dst.join(name))
+        fs::copy(abi_src.join(name), abi_dst.join(name))
             .unwrap_or_else(|e| panic!("vendor polyplug_abi/{name}: {e}"));
     }
 
     let polyplug_abi_pkg: PathBuf = site.join("polyplug").join("abi");
-    std::fs::create_dir_all(&polyplug_abi_pkg).expect("create polyplug/abi dir");
-    std::fs::write(site.join("polyplug").join("__init__.py"), b"").expect("polyplug __init__");
-    std::fs::write(polyplug_abi_pkg.join("__init__.py"), b"").expect("polyplug/abi __init__");
-    std::fs::copy(
+    fs::create_dir_all(&polyplug_abi_pkg).expect("create polyplug/abi dir");
+    fs::write(site.join("polyplug").join("__init__.py"), b"").expect("polyplug __init__");
+    fs::write(polyplug_abi_pkg.join("__init__.py"), b"").expect("polyplug/abi __init__");
+    fs::copy(
         sdk_root.join("abi").join("abi.py"),
         polyplug_abi_pkg.join("abi.py"),
     )
@@ -222,9 +227,9 @@ fn dispatch_no_arg_i32(
             vtable.dispatch.vm.loader_data,
             instance,
             fn_id,
-            core::ptr::null(),
+            ptr::null(),
             &mut out as *mut i32 as *mut (),
-            core::ptr::null_mut(),
+            ptr::null_mut(),
             &mut err as *mut AbiError,
         )
     };
@@ -243,7 +248,7 @@ fn two_instances_of_one_python_contract_have_independent_state() {
     const INC_FN: u32 = 0;
     const GET_FN: u32 = 1;
 
-    let tmp: tempfile::TempDir = tempfile::TempDir::new().expect("tempdir");
+    let tmp: tempfile::TempDir = TempDir::new().expect("tempdir");
     let bundle: PathBuf = write_counter_bundle(tmp.path(), "counter");
 
     let loader: PythonLoader = PythonLoader::new(PythonConfig::default());
@@ -269,13 +274,13 @@ fn two_instances_of_one_python_contract_have_independent_state() {
         (host_api.create_guest_instance)(
             host,
             vtable_ptr,
-            core::ptr::null(),
+            ptr::null(),
             &mut instance_a as *mut GuestContractInstance,
         );
         (host_api.create_guest_instance)(
             host,
             vtable_ptr,
-            core::ptr::null(),
+            ptr::null(),
             &mut instance_b as *mut GuestContractInstance,
         );
     }

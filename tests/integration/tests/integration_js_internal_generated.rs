@@ -7,9 +7,17 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use polyplug_codegen::GenerateConfig;
 use polyplug_codegen::InternalJavaScriptGenerateConfig;
+use polyplug_codegen::Lang;
+use polyplug_codegen::OutputDestination;
+use polyplug_codegen::OutputLayout;
+use polyplug_codegen::Side;
+use polyplug_codegen::ValidatedImport;
+use polyplug_codegen::generate;
 use polyplug_codegen::generate_internal_javascript;
 use polyplug_codegen::write_output;
+use polyplug_utils::bundle_id;
 
 const POLYPLUG_SO: &str = env!("POLYPLUG_SO");
 
@@ -36,6 +44,32 @@ fn to_file_url(path: &Path) -> String {
         format!("file://{normalized}")
     } else {
         format!("file:///{normalized}")
+    }
+}
+
+fn internal_namespace(bundle_name: &str) -> PathBuf {
+    Path::new("internal").join(format!("{bundle_name}-{:016x}", bundle_id(bundle_name)))
+}
+
+fn split_layout(domain_root: PathBuf, contracts_root: PathBuf, namespace: &Path) -> OutputLayout {
+    OutputLayout {
+        bindings: OutputDestination::Inline,
+        domain_types: OutputDestination::Emit {
+            import: ValidatedImport::parse(
+                Lang::JsQuickJs,
+                to_file_url(&domain_root.join(namespace).join("domain/types.ts")),
+            )
+            .expect("valid domain module URL"),
+            root: domain_root,
+        },
+        guest_contracts: OutputDestination::Emit {
+            import: ValidatedImport::parse(
+                Lang::JsQuickJs,
+                to_file_url(&contracts_root.join(namespace).join("guest/contracts.ts")),
+            )
+            .expect("valid contracts module URL"),
+            root: contracts_root,
+        },
     }
 }
 
@@ -83,9 +117,13 @@ fn generated_javascript_internal_profile_registers_and_dispatches() {
     let bundle: PathBuf = scratch.path().join("bundle.toml");
     let older_bundle: PathBuf = scratch.path().join("older.toml");
     let generated: PathBuf = scratch.path().join("generated");
+    let domain_root: PathBuf = scratch.path().join("domain");
+    let contracts_root: PathBuf = scratch.path().join("contracts");
+    let profile_namespace = internal_namespace("generated_js_internal");
+    let older_namespace = internal_namespace("older_js_internal");
     fs::write(
         &api,
-        "[[enum]]\nname = \"Mode\"\nrepr = \"u32\"\n\n[[enum.variants]]\nname = \"Fast\"\nvalue = \"1\"\n\n[[types]]\nname = \"Inner\"\nfields = [{ name = \"name\", type = \"StringView\" }]\n\n[[types]]\nname = \"Outer\"\nfields = [{ name = \"inner\", type = \"Inner\" }, { name = \"payload\", type = \"Buffer\" }]\n\n[[plugin_contract]]\nname = \"generated.js.profile\"\nversion = \"1.0\"\n\n[[plugin_contract.functions]]\nname = \"next\"\nreturn = \"u32\"\n\n[[plugin_contract.functions]]\nname = \"scalar\"\nparams = [{ name = \"value\", type = \"u32\" }]\nreturn = \"u32\"\n\n[[plugin_contract.functions]]\nname = \"text\"\nparams = [{ name = \"value\", type = \"StringView\" }]\nreturn = \"StringView\"\n\n[[plugin_contract.functions]]\nname = \"accept\"\nparams = [{ name = \"mode\", type = \"Mode\" }, { name = \"item\", type = \"Outer\" }, { name = \"values\", type = \"Array<u32>\" }]\n\n[[plugin_contract.functions]]\nname = \"list\"\nreturn = \"Array<u32>\"\n\n[[plugin_contract.functions]]\nname = \"fail\"\n",
+        "[[enum]]\nname = \"Mode\"\nrepr = \"u32\"\n\n[[enum.variants]]\nname = \"Fast\"\nvalue = \"1\"\n\n[[types]]\nname = \"Inner\"\nfields = [{ name = \"name\", type = \"StringView\" }]\n\n[[types]]\nname = \"Outer\"\nfields = [{ name = \"inner\", type = \"Inner\" }, { name = \"payload\", type = \"Buffer\" }]\n\n[[guest_contract]]\nname = \"generated.js.profile\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"next\"\nreturn = \"u32\"\n\n[[guest_contract.functions]]\nname = \"scalar\"\nparams = [{ name = \"value\", type = \"u32\" }]\nreturn = \"u32\"\n\n[[guest_contract.functions]]\nname = \"text\"\nparams = [{ name = \"value\", type = \"StringView\" }]\nreturn = \"StringView\"\n\n[[guest_contract.functions]]\nname = \"accept\"\nparams = [{ name = \"mode\", type = \"Mode\" }, { name = \"item\", type = \"Outer\" }, { name = \"values\", type = \"Array<u32>\" }]\n\n[[guest_contract.functions]]\nname = \"list\"\nreturn = \"Array<u32>\"\n\n[[guest_contract.functions]]\nname = \"fail\"\n",
     )
     .expect("write API");
     fs::write(
@@ -102,15 +140,45 @@ fn generated_javascript_internal_profile_registers_and_dispatches() {
     let output = generate_internal_javascript(InternalJavaScriptGenerateConfig {
         bundle_toml: bundle,
         out_dir: generated.clone(),
+        layout: split_layout(
+            domain_root.clone(),
+            contracts_root.clone(),
+            &profile_namespace,
+        ),
     })
-    .expect("generate JavaScript internal profile");
-    write_output(&output, &generated).expect("write JavaScript internal profile");
+    .expect("generate split JavaScript internal profile");
+    write_output(&output, &generated).expect("write split JavaScript internal profile");
     let older_output = generate_internal_javascript(InternalJavaScriptGenerateConfig {
         bundle_toml: older_bundle,
         out_dir: generated.clone(),
+        layout: split_layout(
+            domain_root.clone(),
+            contracts_root.clone(),
+            &older_namespace,
+        ),
     })
-    .expect("generate older JavaScript internal profile");
-    write_output(&older_output, &generated).expect("write older JavaScript internal profile");
+    .expect("generate split older JavaScript internal profile");
+    write_output(&older_output, &generated).expect("write split older JavaScript internal profile");
+    let ordinary_host_root: PathBuf = scratch.path().join("ordinary-host");
+    let ordinary_host = generate(GenerateConfig {
+        api_toml: api.clone(),
+        lang: Lang::JsQuickJs,
+        side: Side::Host,
+        layout: OutputLayout {
+            bindings: OutputDestination::Inline,
+            domain_types: OutputDestination::ImportOnly {
+                import: ValidatedImport::parse(
+                    Lang::JsQuickJs,
+                    to_file_url(&domain_root.join(&profile_namespace).join("domain/types.ts")),
+                )
+                .expect("valid ordinary host domain module URL"),
+            },
+            guest_contracts: OutputDestination::Omit,
+        },
+    })
+    .expect("generate split ordinary JavaScript host bindings");
+    write_output(&ordinary_host, &ordinary_host_root)
+        .expect("write split ordinary JavaScript host bindings");
     let profile_dir: PathBuf = output
         .files
         .iter()
@@ -151,6 +219,7 @@ fn generated_javascript_internal_profile_registers_and_dispatches() {
         &driver,
         format!(
             "import {{ openPolyplug, runtimeNew }} from \"{host_mod}\";\n\
+             import {{ GeneratedJsProfileContract }} from \"./ordinary-host/host/callers.ts\";\n\
              import {{ InternalProviders as OlderProviders, register as registerOlder }} from \"./older/internal.ts\";\n\
              import {{ InternalProviders, register }} from \"./profile/internal.ts\";\n\
              const lib = openPolyplug(Deno.env.get(\"POLYPLUG_SO\") ?? \"\");\n\
@@ -160,7 +229,7 @@ fn generated_javascript_internal_profile_registers_and_dispatches() {
              \x20       let retryRejected = false;\n\
              \x20       try {{ register(runtime, new InternalProviders({{ stateful_provider_generated_js_profile: () => {{ throw new Error(\"factory failure\"); }}, same_contract_provider_generated_js_profile: () => {{ throw new Error(\"factory failure\"); }} }})); }} catch {{ retryRejected = true; }}\n\
              \x20       if (!retryRejected) throw new Error(\"failed attempt did not surface\");\n\
-             \x20       registerOlder(runtime, new OlderProviders({{ old_provider_generated_js_profile: () => ({{ next: () => 0, scalar: value => value + 500, text: () => \"older\", accept: () => {{}}, list: () => [], fail: () => {{}} }}) }}));\n\
+             \x20       const olderRegistered = registerOlder(runtime, new OlderProviders({{ old_provider_generated_js_profile: () => ({{ next: () => 0, scalar: value => value + 500, text: () => \"older\", accept: () => {{}}, list: () => [], fail: () => {{}} }}) }}));\n\
              \x20       let checkedAccept = false;\n\
              \x20       const registered = register(runtime, new InternalProviders({{\n\
              \x20           stateful_provider_generated_js_profile: () => {{\n\
@@ -180,8 +249,11 @@ fn generated_javascript_internal_profile_registers_and_dispatches() {
              \x20           same_contract_provider_generated_js_profile: () => {{ let count = 0; return {{ next: () => {{ count += 1; return count; }}, scalar: value => value + 100, text: () => \"same contract\", accept: () => {{}}, list: () => [1], fail: () => {{}} }}; }},\n\
              \x20       }}));\n\
              \x20       if (registered.bundleId === 0n) throw new Error(\"missing canonical bundle id\");\n\
+             \x20       runtime.unloadBundle(olderRegistered.bundleId);\n\
              \x20       const caller = registered.stateful_provider_generated_js_profile;\n\
              \x20       const sameContractCaller = registered.same_contract_provider_generated_js_profile;\n\
+             \x20       const ordinaryCaller = GeneratedJsProfileContract.create(runtime);\n\
+             \x20       if (ordinaryCaller === null || ordinaryCaller.scalar(41) !== 42) throw new Error(\"ordinary split caller dispatch failed\");\n\
              \x20       if (caller.scalar(41) !== 42 || sameContractCaller.scalar(41) !== 141 || caller.text(\"ignored\") !== \"generated internal text\") throw new Error(\"exact committed caller dispatch failed\");\n\
              \x20       const values = new Uint32Array([3, 4]);\n\
              \x20       const item = {{ inner: {{ name: \"hello\" }}, payload: new Uint8Array([1, 2, 3]) }};\n\
@@ -198,6 +270,7 @@ fn generated_javascript_internal_profile_registers_and_dispatches() {
              \x20       let errorObserved = false; try {{ caller.fail(); }} catch {{ errorObserved = true; }}\n\
              \x20       if (!errorObserved) throw new Error(\"generated error did not propagate\");\n\
              \x20       caller.destroy();\n\
+             \x20       ordinaryCaller.destroy();\n\
              \x20       runtime.unloadBundle(registered.bundleId);\n\
              \x20       console.log(\"OK: generated JavaScript internal profile E2E\");\n\
              \x20   }} finally {{ runtime[Symbol.dispose](); }}\n\

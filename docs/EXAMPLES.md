@@ -10,7 +10,7 @@ same pipeline.
 
 ## The Pipeline API (`examples/api.toml`)
 
-Five plugin contracts, one host contract:
+Five guest contracts, one host contract:
 
 | Contract | Function | Input | Output |
 |---|---|---|---|
@@ -20,6 +20,10 @@ Five plugin contracts, one host contract:
 | `data.Reporter` | `report(StringView) → StringView` | transformed string | `"Report: NAME has value 'value (transformed)' with count 43"` |
 | `pipeline.Validator` | `validate(StringView) → StringView` | decoded string | `"VALID:name\|value\|42"` or `"INVALID:reason"` |
 | `host.logger` (host contract) | `log`, `log_with_level` | — | host-side console output |
+
+The authored TOML uses `[[guest_contract]]` because every pipeline stage is
+implemented by a guest plugin; `host.logger` uses `[[host_contract]]`. A legacy
+`[[plugin_contract]]` key is rejected rather than interpreted directionally.
 
 ---
 
@@ -56,6 +60,11 @@ bundle-identity-namespaced generated guest provider bindings plus generated host
 caller bindings. Supply implementation factories to the generated registrar; it
 returns the committed `BundleId` and typed callers. The calls, instances, and
 unload behavior are otherwise the same as for the external examples.
+
+The examples deliberately retain unified generated directories so each language
+is easy to inspect. Production applications may opt into shared DomainTypes and
+GuestContracts roots without changing the external/internal runtime behavior;
+see [Code generation and split output](CODE_GENERATION.md).
 
 ---
 

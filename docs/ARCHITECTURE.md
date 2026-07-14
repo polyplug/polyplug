@@ -119,6 +119,17 @@ If any stage fails, the transaction publishes nothing and generated bindings
 release their untransferred roots exactly once. A registration attempt consumes
 its supplied provider input; retry with fresh input.
 
+### Generated source layout is separate from runtime acquisition
+
+The source layout is an authoring concern, not a third acquisition path.
+`polyplugc` keeps the historical unified output by default and can opt into
+three semantic partitions: private **Bindings**, public application
+**DomainTypes**, and typed **GuestContracts**. Both external and internal
+profiles can emit declarations to shared roots or import them from another
+module/package; after compilation, they still enter the one registration
+transaction above. See [Code generation and split output](CODE_GENERATION.md)
+for flags, validation, and the multi-root write boundary.
+
 Rust, C++, C#, Python, Lua, and JavaScript generated provider bindings retain
 their factories, implementation objects, callback roots, and interface backing
 storage only after commit. The registered bundle is keyed by its canonical

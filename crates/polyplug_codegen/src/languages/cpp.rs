@@ -1,6 +1,6 @@
 //! C++ code generator — produces C++ headers from ABI items.
 //!
-//! Generates typed function pointer typedefs, correct Array<T> representations,
+//! Generates typed function pointer typedefs, correct `Array<T>` representations,
 //! and snake_case naming in the `polyplug` namespace per D-35.
 
 use std::io;

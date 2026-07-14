@@ -57,3 +57,10 @@ generate one internal profile with
 It supplies ordinary C# factories to generated guest provider bindings and
 receives generated host caller bindings from the committed handles; registration,
 calls, and unload then follow the same pipeline as an external plugin.
+
+## Shared generated declarations
+
+C# keeps the default unified output. A split project uses .NET namespaces such
+as `Common.Domain` and `Common.GuestContracts`; see the
+[split-output guide](../CODE_GENERATION.md#tested-specifier-forms-for-every-maintained-language)
+for the exact emit and ImportOnly commands.

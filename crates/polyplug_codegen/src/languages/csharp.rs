@@ -1,7 +1,7 @@
 //! C# code generator — produces C# bindings from ABI items.
 //!
 //! Emits `IntPtr` for all function pointer fields (blittable, no managed
-//! delegates in ABI structs), correct Array<T> representations, and
+//! delegates in ABI structs), correct `Array<T>` representations, and
 //! PascalCase naming per D-35.
 
 use std::io;

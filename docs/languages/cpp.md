@@ -55,3 +55,10 @@ generate one internal profile with
 It supplies ordinary C++ factories to generated guest provider bindings and
 receives generated host caller bindings from the committed handles; registration,
 calls, and unload then follow the same pipeline as an external plugin.
+
+## Shared generated declarations
+
+C++ keeps the default unified output. For a split project, emit or import
+DomainTypes as `guest/domain.hpp` and GuestContracts as
+`guest/guest_contracts.hpp`; the complete command and ownership rules are in
+the [split-output guide](../CODE_GENERATION.md#tested-specifier-forms-for-every-maintained-language).

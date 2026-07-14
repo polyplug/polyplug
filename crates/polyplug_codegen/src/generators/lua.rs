@@ -8,6 +8,9 @@ use super::collect_peer_contracts;
 use super::peer_min_version;
 
 use super::docs::write_luals_docs;
+use crate::OutputDestination;
+use crate::OutputLayout;
+use crate::OutputPartition;
 use crate::PolyplugcError;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
@@ -39,47 +42,133 @@ impl LuaGenerator {
         &self,
         ir: &ValidatedIr,
         bundle_name: &str,
+        layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
-        let bundle: &ResolvedBundle =
-            ir.bundle
-                .as_ref()
-                .ok_or_else(|| PolyplugcError::ValidationFailed {
-                    message: "internal Lua generation requires a bundle manifest".to_owned(),
-                })?;
-        let host_types: String = generate_lua_types_file(ir)?;
-        files.files.push(GeneratedFile {
-            path: PathBuf::from("host/types.lua"),
-            content: host_types,
-            force_regenerate: false,
-        });
-        files.files.push(GeneratedFile {
-            path: PathBuf::from("host/callers.lua"),
-            content: generate_lua_internal_host_callers_file(ir),
-            force_regenerate: false,
-        });
-        let types: String = generate_lua_types_file(ir)?;
-        let profile: String = generate_lua_internal_profile_file(ir, bundle, bundle_name)?;
-        files.files.push(GeneratedFile {
-            path: PathBuf::from("guest/types.lua"),
-            content: types,
-            force_regenerate: false,
-        });
-        files.files.push(GeneratedFile {
-            path: PathBuf::from("guest/internal.lua"),
-            content: profile,
-            force_regenerate: false,
-        });
-        files.files.push(GeneratedFile {
-            path: PathBuf::from("init.lua"),
-            content: format!(
-                "{}local source = debug.getinfo(1, \"S\").source\n\
-                 local root = assert(source:match(\"^@(.+)[/\\\\]init%.lua$\"), \"generated internal Lua bindings need a file path\")\n\
-                 return {{ guest = dofile(root .. \"/guest/internal.lua\"), host = dofile(root .. \"/host/callers.lua\") }}\n",
-                file_header()
-            ),
-            force_regenerate: true,
-        });
+        let split: bool = layout != &OutputLayout::unified();
+        let has_domain_types: bool = lua_has_domain_types(ir);
+        let guest_contracts_omitted: bool = matches!(
+            layout.destination(crate::OutputPartition::GuestContracts),
+            OutputDestination::Omit
+        );
+        let emit_guest_contracts = !matches!(
+            layout.destination(crate::OutputPartition::GuestContracts),
+            OutputDestination::ImportOnly { .. } | OutputDestination::Omit
+        );
+        if split {
+            let domain_module: LuaPartitionModule =
+                lua_partition_module(layout, OutputPartition::DomainTypes, "domain/types.lua");
+            let contracts_module: LuaPartitionModule = lua_partition_module(
+                layout,
+                OutputPartition::GuestContracts,
+                "guest/contracts.lua",
+            );
+            let contracts_domain_module: LuaPartitionModule =
+                lua_partition_module(layout, OutputPartition::DomainTypes, "../domain/types.lua");
+            if has_domain_types {
+                files.files.push(GeneratedFile {
+                    path: PathBuf::from("domain/types.lua"),
+                    content: generate_lua_domain_types_file(ir)?,
+                    force_regenerate: false,
+                    partition: OutputPartition::DomainTypes,
+                    references: Vec::new(),
+                });
+            }
+            if emit_guest_contracts {
+                files.files.push(GeneratedFile {
+                    path: PathBuf::from("guest/contracts.lua"),
+                    content: generate_lua_internal_guest_contracts_file(
+                        ir,
+                        has_domain_types.then_some(&contracts_domain_module),
+                    )?,
+                    force_regenerate: false,
+                    partition: OutputPartition::GuestContracts,
+                    references: has_domain_types
+                        .then_some(OutputPartition::DomainTypes)
+                        .into_iter()
+                        .collect(),
+                });
+            }
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("host/callers.lua"),
+                content: generate_lua_internal_host_callers_file(ir),
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
+            });
+            let bundle: &ResolvedBundle =
+                ir.bundle
+                    .as_ref()
+                    .ok_or_else(|| PolyplugcError::ValidationFailed {
+                        message: "internal Lua generation requires a bundle manifest".to_owned(),
+                    })?;
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/internal.lua"),
+                content: generate_lua_internal_profile_file_split(
+                    ir,
+                    bundle,
+                    bundle_name,
+                    has_domain_types.then_some(&domain_module),
+                    (!guest_contracts_omitted).then_some(&contracts_module),
+                )?,
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: {
+                    let mut references = has_domain_types
+                        .then_some(OutputPartition::DomainTypes)
+                        .into_iter()
+                        .collect::<Vec<_>>();
+                    if !guest_contracts_omitted {
+                        references.push(OutputPartition::GuestContracts);
+                    }
+                    references
+                },
+            });
+        } else {
+            let bundle: &ResolvedBundle =
+                ir.bundle
+                    .as_ref()
+                    .ok_or_else(|| PolyplugcError::ValidationFailed {
+                        message: "internal Lua generation requires a bundle manifest".to_owned(),
+                    })?;
+            let host_types: String = generate_lua_types_file(ir)?;
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("host/types.lua"),
+                content: host_types,
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
+            });
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("host/callers.lua"),
+                content: generate_lua_internal_host_callers_file(ir),
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
+            });
+            let types: String = generate_lua_types_file(ir)?;
+            let profile: String = generate_lua_internal_profile_file(ir, bundle, bundle_name)?;
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/types.lua"),
+                content: types,
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
+            });
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/internal.lua"),
+                content: profile,
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
+            });
+        }
+        files.files.push(GeneratedFile { path: PathBuf::from("init.lua"), content: format!(
+            "{}local source = debug.getinfo(1, \"S\").source\n\
+             local root = assert(source:match(\"^@(.+)[/\\\\]init%.lua$\"), \"generated internal Lua bindings need a file path\")\n\
+             return {{ guest = dofile(root .. \"/guest/internal.lua\"), host = dofile(root .. \"/host/callers.lua\") }}\n",
+            file_header()
+        ), force_regenerate: true, partition: OutputPartition::Bindings, references: Vec::new() });
         Ok(())
     }
 }
@@ -108,97 +197,318 @@ fn lua_require_block(groups: &[&[(&str, &str)]]) -> String {
     blocks.join("\n")
 }
 
+enum LuaPartitionModule {
+    Inline { relative_path: String },
+    External { module: String },
+}
+
+fn lua_has_domain_types(ir: &ValidatedIr) -> bool {
+    !ir.types.is_empty() || !ir.enums.is_empty()
+}
+
+fn lua_partition_module(
+    layout: &OutputLayout,
+    partition: crate::OutputPartition,
+    inline_relative_path: &str,
+) -> LuaPartitionModule {
+    match layout.destination(partition) {
+        OutputDestination::Inline | OutputDestination::Omit => LuaPartitionModule::Inline {
+            relative_path: inline_relative_path.to_owned(),
+        },
+        OutputDestination::Emit { import, .. } | OutputDestination::ImportOnly { import } => {
+            LuaPartitionModule::External {
+                module: import.as_str().to_owned(),
+            }
+        }
+    }
+}
+
+fn with_lua_partition_modules(
+    mut content: String,
+    modules: &[(&str, &LuaPartitionModule)],
+) -> String {
+    let external: Vec<(&str, &str)> = modules
+        .iter()
+        .filter_map(|(binding, module)| match module {
+            LuaPartitionModule::External { module } => Some((*binding, module.as_str())),
+            LuaPartitionModule::Inline { .. } => None,
+        })
+        .collect();
+    let inline: Vec<(&str, &str)> = modules
+        .iter()
+        .filter_map(|(binding, module)| match module {
+            LuaPartitionModule::Inline { relative_path } => {
+                Some((*binding, relative_path.as_str()))
+            }
+            LuaPartitionModule::External { .. } => None,
+        })
+        .collect();
+
+    let mut loaders = String::new();
+    if !external.is_empty() {
+        loaders.push_str(&lua_require_block(&[&external]));
+        loaders.push('\n');
+    }
+    if !inline.is_empty() {
+        loaders.push_str(
+            "local source = debug.getinfo(1, \"S\").source\n\
+             local directory = assert(source:match(\"^@(.+)[/\\\\][^/\\\\]+$\"), \"generated Lua bindings need a file path\")\n",
+        );
+        for (binding, relative_path) in inline {
+            loaders.push_str(&format!(
+                "local {binding} = dofile(directory .. \"/{relative_path}\")\n"
+            ));
+        }
+    }
+    content.insert_str(file_header().len(), &format!("{loaders}\n"));
+    content
+}
+
+fn lua_root_module_loader(binding: &str, module: &LuaPartitionModule) -> String {
+    match module {
+        LuaPartitionModule::Inline { relative_path } => {
+            format!("local {binding} = dofile(root .. \"/{relative_path}\")\n")
+        }
+        LuaPartitionModule::External { module } => {
+            format!("local {binding} = require({module:?})\n")
+        }
+    }
+}
+
 impl CodeGenerator for LuaGenerator {
     fn generate_host(
         &self,
         ir: &ValidatedIr,
+        layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
-        let types_lua: String = generate_lua_types_file(ir)?;
-        let callers_lua: String = generate_host_callers_file(ir);
-
-        files.files.push(GeneratedFile {
-            path: PathBuf::from("host/types.lua"),
-            content: types_lua,
-            force_regenerate: false,
-        });
-        files.files.push(GeneratedFile {
-            path: PathBuf::from("host/callers.lua"),
-            content: callers_lua,
-            force_regenerate: false,
-        });
-
-        // Emit host/contracts.lua if there are host contracts
-        if !ir.host_contracts.is_empty() {
-            let contracts_lua: String = generate_host_contracts_file(ir);
+        let split: bool = layout != &OutputLayout::unified();
+        let has_domain_types: bool = lua_has_domain_types(ir);
+        let domain_module: LuaPartitionModule =
+            lua_partition_module(layout, OutputPartition::DomainTypes, "types.lua");
+        if !split || has_domain_types {
             files.files.push(GeneratedFile {
-                path: PathBuf::from("host/contracts.lua"),
-                content: contracts_lua,
+                path: PathBuf::from("host/types.lua"),
+                content: if split {
+                    generate_lua_domain_types_file(ir)?
+                } else {
+                    generate_lua_types_file(ir)?
+                },
                 force_regenerate: false,
-            });
-            // Emit host/interface_factories.lua if there are host contracts
-            let interface_factories_lua: String = generate_lua_host_interface_factories_file(ir);
-            files.files.push(GeneratedFile {
-                path: PathBuf::from("host/interface_factories.lua"),
-                content: interface_factories_lua,
-                force_regenerate: false,
+                partition: if split {
+                    OutputPartition::DomainTypes
+                } else {
+                    OutputPartition::Bindings
+                },
+                references: Vec::new(),
             });
         }
+        let callers: String = if split {
+            let callers = generate_host_callers_file(ir);
+            with_lua_contract_arg_pack_cdefs(
+                if has_domain_types {
+                    with_lua_partition_modules(callers, &[("domain_types", &domain_module)])
+                } else {
+                    callers
+                },
+                ir,
+            )?
+        } else {
+            generate_host_callers_file(ir)
+        };
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("host/callers.lua"),
+            content: callers,
+            force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: has_domain_types
+                .then_some(OutputPartition::DomainTypes)
+                .into_iter()
+                .collect(),
+        });
 
+        if !ir.host_contracts.is_empty() {
+            let contracts = generate_host_contracts_file(ir);
+            let contracts: String = if split && has_domain_types {
+                with_lua_partition_modules(contracts, &[("domain_types", &domain_module)])
+            } else {
+                contracts
+            };
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("host/contracts.lua"),
+                content: contracts,
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: has_domain_types
+                    .then_some(OutputPartition::DomainTypes)
+                    .into_iter()
+                    .collect(),
+            });
+            let factories = generate_lua_host_interface_factories_file(ir);
+            let factories: String = if split && has_domain_types {
+                with_lua_partition_modules(factories, &[("domain_types", &domain_module)])
+            } else {
+                factories
+            };
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("host/interface_factories.lua"),
+                content: factories,
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: has_domain_types
+                    .then_some(OutputPartition::DomainTypes)
+                    .into_iter()
+                    .collect(),
+            });
+        }
         Ok(())
     }
 
     fn generate_guest(
         &self,
         ir: &ValidatedIr,
+        layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
-        let types_lua: String = generate_lua_types_file(ir)?;
-        let contracts_lua: String = generate_guest_contracts_file(ir)?;
-
-        files.files.push(GeneratedFile {
-            path: PathBuf::from("guest/types.lua"),
-            content: types_lua,
-            force_regenerate: false,
-        });
-        files.files.push(GeneratedFile {
-            path: PathBuf::from("guest/contracts.lua"),
-            content: contracts_lua,
-            force_regenerate: false,
-        });
+        let split: bool = layout != &OutputLayout::unified();
+        let has_domain_types: bool = lua_has_domain_types(ir);
+        let guest_contracts_omitted: bool = matches!(
+            layout.destination(crate::OutputPartition::GuestContracts),
+            OutputDestination::Omit
+        );
+        let emit_guest_contracts = !matches!(
+            layout.destination(crate::OutputPartition::GuestContracts),
+            OutputDestination::ImportOnly { .. } | OutputDestination::Omit
+        );
+        let domain_module: LuaPartitionModule =
+            lua_partition_module(layout, OutputPartition::DomainTypes, "types.lua");
+        let contracts_module: LuaPartitionModule =
+            lua_partition_module(layout, OutputPartition::GuestContracts, "contracts.lua");
+        if !split || has_domain_types {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/types.lua"),
+                content: if split {
+                    generate_lua_domain_types_file(ir)?
+                } else {
+                    generate_lua_types_file(ir)?
+                },
+                force_regenerate: false,
+                partition: if split {
+                    OutputPartition::DomainTypes
+                } else {
+                    OutputPartition::Bindings
+                },
+                references: Vec::new(),
+            });
+        }
+        if split {
+            if emit_guest_contracts {
+                files.files.push(GeneratedFile {
+                    path: PathBuf::from("guest/contracts.lua"),
+                    content: generate_lua_guest_contract_declarations_file(
+                        ir,
+                        has_domain_types.then_some(&domain_module),
+                    )?,
+                    force_regenerate: false,
+                    partition: OutputPartition::GuestContracts,
+                    references: has_domain_types
+                        .then_some(OutputPartition::DomainTypes)
+                        .into_iter()
+                        .collect(),
+                });
+            }
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/bindings.lua"),
+                content: generate_lua_guest_bindings_file(
+                    ir,
+                    has_domain_types.then_some(&domain_module),
+                    (!guest_contracts_omitted).then_some(&contracts_module),
+                )?,
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: {
+                    let mut references = has_domain_types
+                        .then_some(OutputPartition::DomainTypes)
+                        .into_iter()
+                        .collect::<Vec<_>>();
+                    if !guest_contracts_omitted {
+                        references.push(OutputPartition::GuestContracts);
+                    }
+                    references
+                },
+            });
+        } else {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/contracts.lua"),
+                content: generate_guest_contracts_file(ir)?,
+                force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
+            });
+        }
 
         if ir.bundle.is_some() {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("manifest.toml"),
                 content: generate_bundle_manifest_lua(ir),
                 force_regenerate: true,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
         }
 
         if !ir.host_contracts.is_empty() {
-            let host_contracts_lua: String = generate_guest_host_contracts_file(ir)?;
+            let host_contracts = generate_guest_host_contracts_file(ir)?;
+            let host_contracts: String = if split && has_domain_types {
+                with_lua_partition_modules(host_contracts, &[("domain_types", &domain_module)])
+            } else {
+                host_contracts
+            };
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/host_contracts.lua"),
-                content: host_contracts_lua,
+                content: host_contracts,
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: has_domain_types
+                    .then_some(OutputPartition::DomainTypes)
+                    .into_iter()
+                    .collect(),
             });
         }
 
-        // ── guest/peer_callers.lua ─────────────────────────────────────────────
         let peer_contracts: Vec<&ResolvedContract> = collect_peer_contracts(ir);
         if !peer_contracts.is_empty() {
-            let peer_callers_lua: String =
-                generate_lua_guest_peer_callers_file(ir, &peer_contracts);
+            let callers = generate_lua_guest_peer_callers_file(ir, &peer_contracts);
+            let callers: String = if split && has_domain_types {
+                with_lua_partition_modules(callers, &[("domain_types", &domain_module)])
+            } else {
+                callers
+            };
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/peer_callers.lua"),
-                content: peer_callers_lua,
+                content: callers,
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: has_domain_types
+                    .then_some(OutputPartition::DomainTypes)
+                    .into_iter()
+                    .collect(),
             });
         }
+        Ok(())
+    }
 
+    fn apply_output_layout(
+        &self,
+        _ir: &ValidatedIr,
+        _side: crate::Side,
+        _layout: &OutputLayout,
+        _files: &mut GeneratedFiles,
+    ) -> Result<(), PolyplugcError> {
         Ok(())
     }
 }
+
 fn generate_lua_internal_profile_file(
     ir: &ValidatedIr,
     bundle: &ResolvedBundle,
@@ -290,6 +600,44 @@ fn generate_lua_internal_profile_file(
     }
     out.push_str("    return result\nend\n\nreturn M\n");
     Ok(out)
+}
+fn generate_lua_internal_profile_file_split(
+    ir: &ValidatedIr,
+    bundle: &ResolvedBundle,
+    bundle_name: &str,
+    domain_module: Option<&LuaPartitionModule>,
+    contracts_module: Option<&LuaPartitionModule>,
+) -> Result<String, PolyplugcError> {
+    let mut out: String = generate_lua_internal_profile_file(ir, bundle, bundle_name)?;
+    let types_loader: &str = "local types = dofile(root .. \"/guest/types.lua\")\n";
+    let mut split_loaders: String = domain_module
+        .map(|module| lua_root_module_loader("types", module))
+        .unwrap_or_default();
+    if let Some(contracts_module) = contracts_module {
+        split_loaders.push_str(&lua_root_module_loader("guest_contracts", contracts_module));
+    }
+    if !out.contains(types_loader) {
+        return Err(PolyplugcError::ValidationFailed {
+            message: "Lua internal profile no longer has the expected domain loader".to_owned(),
+        });
+    }
+    out = out.replacen(types_loader, &split_loaders, 1);
+    if contracts_module.is_some() {
+        let providers_fn: &str = "function M.providers(values)\n\
+             \x20   if type(values) ~= \"table\" then error(\"providers must be a table\", 2) end\n\
+             \x20   return { _values = values, _consumed = false }\n\
+             end\n\n";
+        let split_providers_fn: &str =
+            "function M.providers(values)\n    return guest_contracts.providers(values)\nend\n\n";
+        if !out.contains(providers_fn) {
+            return Err(PolyplugcError::ValidationFailed {
+                message: "Lua internal profile no longer has the expected providers declaration"
+                    .to_owned(),
+            });
+        }
+        out = out.replacen(providers_fn, split_providers_fn, 1);
+    }
+    with_lua_contract_arg_pack_cdefs(out, ir)
 }
 
 fn lua_internal_providers<'a>(
@@ -710,6 +1058,17 @@ fn generate_bundle_manifest_lua(ir: &ValidatedIr) -> String {
 }
 
 fn generate_lua_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
+    generate_lua_types_file_with_contract_arg_packs(ir, true)
+}
+
+fn generate_lua_domain_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
+    generate_lua_types_file_with_contract_arg_packs(ir, false)
+}
+
+fn generate_lua_types_file_with_contract_arg_packs(
+    ir: &ValidatedIr,
+    include_contract_arg_packs: bool,
+) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(file_header());
     // Conditionally require the bit library for bitwise enum support (sorted
@@ -727,14 +1086,8 @@ fn generate_lua_types_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
         generate_lua_user_type(&mut out, ty, &ir.enums);
         out.push('\n');
     }
-    for contract in &ir.contracts {
-        let contract_struct: String = contract_name_to_struct(&contract.name);
-        for func in &contract.functions {
-            if needs_arg_pack(&func.params) {
-                emit_lua_arg_pack_struct(&mut out, &contract_struct, func, &ir.enums);
-                out.push('\n');
-            }
-        }
+    if include_contract_arg_packs {
+        out.push_str(&lua_contract_arg_pack_cdefs(ir));
     }
     out.push_str("]]) \n");
     // Emit enum tables (outside cdef — Lua tables, not C structs)
@@ -1038,6 +1391,279 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
     out.push('\n');
 
     out.push_str("return M\n");
+    Ok(out)
+}
+
+fn lua_guest_registrations(ir: &ValidatedIr) -> Vec<(&str, &ResolvedContract)> {
+    let mut registrations: Vec<(&str, &ResolvedContract)> = Vec::new();
+    if let Some(bundle) = &ir.bundle {
+        for plugin in &bundle.plugins {
+            for implementation in &plugin.implements {
+                if let Some(contract) = ir.contracts.iter().find(|contract| {
+                    implementation
+                        == &format!(
+                            "{}@{}.{}",
+                            contract.name, contract.version.major, contract.version.minor
+                        )
+                }) {
+                    registrations.push((plugin.name.as_str(), contract));
+                }
+            }
+        }
+    }
+    registrations
+}
+
+fn write_lua_guest_contract_declaration(
+    out: &mut String,
+    plugin_name: &str,
+    contract: &ResolvedContract,
+    enums: &[EnumDef],
+    factory_store: &str,
+) -> Result<(), PolyplugcError> {
+    let plugin_lower: String = plugin_name.to_lowercase().replace(['.', '-'], "_");
+    let provider: String = format!("{}Provider", contract_name_to_struct(&contract.name));
+    out.push_str(&format!(
+        "-- Guest contract: {plugin_name} ({}@{})\n",
+        contract.name, contract.version.major
+    ));
+    write_luals_docs(out, "", contract.docs.as_deref());
+    out.push_str(&format!("---@class {provider}\n"));
+    for function in &contract.functions {
+        let mut params = vec![format!("self: {provider}")];
+        params.extend(function.params.iter().map(|param| {
+            format!(
+                "{}: {}",
+                param.name,
+                lua_external_provider_param_annotation(&param.ty, enums)
+            )
+        }));
+        let returns: String = function
+            .returns
+            .as_ref()
+            .map(|ty| lua_external_provider_return_annotation(ty, enums))
+            .unwrap_or_else(|| "nil".to_owned());
+        out.push_str(&format!(
+            "---@field {} fun({}): {returns}\n",
+            function.name.replace('.', "_"),
+            params.join(", ")
+        ));
+    }
+    let setter: String = format!("set_{plugin_lower}_factory");
+    out.push_str(&format!(
+        "---@param factory fun(host_ptr: integer): {provider}\n\
+         ---@return nil\n\
+         function M.{setter}(factory)\n\
+             if type(factory) ~= \"function\" then error(\"{setter} requires a factory function\", 2) end\n\
+             {factory_store}[{plugin_name:?}] = factory\n\
+         end\n\n"
+    ));
+    Ok(())
+}
+
+fn generate_lua_guest_contract_declarations_file(
+    ir: &ValidatedIr,
+    domain_module: Option<&LuaPartitionModule>,
+) -> Result<String, PolyplugcError> {
+    let mut out: String = String::new();
+    out.push_str(file_header());
+    out.push_str("\nlocal M = { _factories = {} }\n\n");
+    if let Some(domain_module) = domain_module {
+        out = with_lua_partition_modules(out, &[("domain_types", domain_module)]);
+    }
+    for (plugin_name, contract) in lua_guest_registrations(ir) {
+        write_lua_guest_contract_declaration(
+            &mut out,
+            plugin_name,
+            contract,
+            &ir.enums,
+            "M._factories",
+        )?;
+    }
+    out.push_str("return M\n");
+    Ok(out)
+}
+
+fn generate_lua_guest_registration(
+    out: &mut String,
+    plugin_name: &str,
+    contract: &ResolvedContract,
+    enums: &[EnumDef],
+    types: &[ResolvedType],
+    factory_store: &str,
+) -> Result<(), PolyplugcError> {
+    let plugin_var: String = plugin_name.to_uppercase().replace(['.', '-'], "_");
+    let mut body: String = String::from("    local functions = {}\n");
+    for (index, function) in contract.functions.iter().enumerate() {
+        body.push_str(&format!(
+            "    functions[{index}] = function(instance, args_ptr, out_ptr, arena_ptr, arena_alloc)\n"
+        ));
+        emit_lua_guest_handler_body(&mut body, function, enums, &contract.name, types);
+        body.push_str("    end\n");
+    }
+    body.push_str(&format!(
+        "    registrations[{name:?}] = {{\n",
+        name = contract.name
+    ));
+    body.push_str(&format!(
+        "        contract_version = {},\n",
+        contract.version.major
+    ));
+    body.push_str(&format!("        plugin_name = {plugin_name:?},\n"));
+    body.push_str(&format!(
+        "        factory = {factory_store}[{plugin_name:?}],\n"
+    ));
+    body.push_str("        functions = functions,\n    }");
+    out.push_str(&render_lua_defn_fn(
+        &format!("M._register_{plugin_var}"),
+        vec!["registrations".to_owned()],
+        body,
+    )?);
+    out.push('\n');
+    Ok(())
+}
+
+fn generate_lua_guest_bindings_file(
+    ir: &ValidatedIr,
+    domain_module: Option<&LuaPartitionModule>,
+    contracts_module: Option<&LuaPartitionModule>,
+) -> Result<String, PolyplugcError> {
+    let registrations = lua_guest_registrations(ir);
+    let contracts_omitted: bool = contracts_module.is_none();
+    let factory_store: &str = if contracts_omitted {
+        "factories"
+    } else {
+        "contracts._factories"
+    };
+    let mut out: String = String::new();
+    out.push_str(file_header());
+    out.push_str(&lua_require_block(&[&[
+        ("ffi", "ffi"),
+        ("polyplug_guest", "polyplug_guest"),
+    ]]));
+    out.push_str("\nlocal M = {}\n");
+    if contracts_omitted {
+        out.push_str("local factories = {}\n");
+    }
+    out.push('\n');
+    let mut modules: Vec<(&str, &LuaPartitionModule)> = Vec::new();
+    if let Some(domain_module) = domain_module {
+        modules.push(("domain_types", domain_module));
+    }
+    if let Some(contracts_module) = contracts_module {
+        modules.push(("contracts", contracts_module));
+    }
+    out = with_lua_partition_modules(out, modules.as_slice());
+    out = with_lua_contract_arg_pack_cdefs(out, ir)?;
+    if contracts_omitted {
+        for (plugin_name, contract) in &registrations {
+            write_lua_guest_contract_declaration(
+                &mut out,
+                plugin_name,
+                contract,
+                &ir.enums,
+                factory_store,
+            )?;
+        }
+    }
+    for (plugin_name, contract) in &registrations {
+        generate_lua_guest_registration(
+            &mut out,
+            plugin_name,
+            contract,
+            &ir.enums,
+            &ir.types,
+            factory_store,
+        )?;
+    }
+    let mut body: String = String::new();
+    body.push_str("    if host_ptr == nil or ctx_ptr == nil then\n");
+    body.push_str("        return {}, { code = polyplug_guest.AbiErrorCode.Generic, message = \"null host or ctx pointer in polyplug_init\" }\n");
+    body.push_str("    end\n");
+    body.push_str("    local registrations = {}\n");
+    for (plugin_name, _) in &registrations {
+        let plugin_var: String = plugin_name.to_uppercase().replace(['.', '-'], "_");
+        let plugin_lower: String = plugin_name.to_lowercase().replace(['.', '-'], "_");
+        body.push_str(&format!(
+            "    if {factory_store}[{plugin_name:?}] == nil then\n\
+                 return {{}}, {{ code = polyplug_guest.AbiErrorCode.Generic, message = \"set_{plugin_lower}_factory(...) was not called at import time\" }}\n\
+             end\n\
+             M._register_{plugin_var}(registrations)\n"
+        ));
+    }
+    body.push_str("    return registrations, { code = polyplug_guest.AbiErrorCode.Ok }");
+    out.push_str(&render_lua_defn_fn(
+        "polyplug_init",
+        vec!["host_ptr".to_owned(), "ctx_ptr".to_owned()],
+        body,
+    )?);
+    if contracts_omitted {
+        out.push_str("\nreturn M\n");
+    } else {
+        out.push_str("\nreturn contracts\n");
+    }
+    Ok(out)
+}
+
+fn generate_lua_internal_guest_contracts_file(
+    ir: &ValidatedIr,
+    domain_module: Option<&LuaPartitionModule>,
+) -> Result<String, PolyplugcError> {
+    let mut out: String = String::new();
+    out.push_str(file_header());
+    out.push_str("\nlocal M = {}\n\n");
+    if let Some(domain_module) = domain_module {
+        out = with_lua_partition_modules(out, &[("domain_types", domain_module)]);
+    }
+    for contract in &ir.contracts {
+        write_luals_docs(&mut out, "", contract.docs.as_deref());
+        let provider: String = format!("{}Provider", contract_name_to_struct(&contract.name));
+        out.push_str(&format!("---@class {provider}\n"));
+        for function in &contract.functions {
+            let mut params = vec![format!("self: {provider}")];
+            params.extend(function.params.iter().map(|param| {
+                format!(
+                    "{}: {}",
+                    param.name,
+                    lua_internal_provider_param_annotation(&param.ty, &ir.enums)
+                )
+            }));
+            let returns: String = function
+                .returns
+                .as_ref()
+                .map(|ty| lua_internal_provider_return_annotation(ty, &ir.enums))
+                .unwrap_or_else(|| "nil".to_owned());
+            out.push_str(&format!(
+                "---@field {} fun({}): {returns}\n",
+                function.name.replace('.', "_"),
+                params.join(", ")
+            ));
+        }
+        out.push('\n');
+    }
+    let bundle: &ResolvedBundle =
+        ir.bundle
+            .as_ref()
+            .ok_or_else(|| PolyplugcError::ValidationFailed {
+                message: "internal Lua generation requires a bundle manifest".to_owned(),
+            })?;
+    out.push_str("---@class InternalProviderFactories\n");
+    for (plugin, contract) in lua_internal_providers(ir, bundle)? {
+        let field: String = lua_internal_provider_field(plugin, contract);
+        let provider: String = format!("{}Provider", contract_name_to_struct(&contract.name));
+        out.push_str(&format!(
+            "---@field {field} fun(host_ptr: lightuserdata): {provider}\n"
+        ));
+    }
+    out.push_str(
+        "---@param values InternalProviderFactories\n\
+         ---@return table\n\
+         function M.providers(values)\n\
+             if type(values) ~= \"table\" then error(\"providers must be a table\", 2) end\n\
+             return { _values = values, _consumed = false }\n\
+         end\n\n\
+         return M\n",
+    );
     Ok(out)
 }
 
@@ -2222,6 +2848,39 @@ fn emit_lua_arg_pack_struct(
     out.push_str(&format!("    }} {struct_name};\n"));
 }
 
+fn lua_contract_arg_pack_cdefs(ir: &ValidatedIr) -> String {
+    let mut out = String::new();
+    for contract in &ir.contracts {
+        let contract_struct: String = contract_name_to_struct(&contract.name);
+        for function in &contract.functions {
+            if needs_arg_pack(&function.params) {
+                emit_lua_arg_pack_struct(&mut out, &contract_struct, function, &ir.enums);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+fn with_lua_contract_arg_pack_cdefs(
+    mut content: String,
+    ir: &ValidatedIr,
+) -> Result<String, PolyplugcError> {
+    let cdefs: String = lua_contract_arg_pack_cdefs(ir);
+    if cdefs.is_empty() {
+        return Ok(content);
+    }
+    let marker: &str = "local M = {}";
+    let insertion: String = format!("{}cdef_guarded([[\n{}]])\n\n", cdef_guarded_block(), cdefs);
+    let Some(index) = content.find(marker) else {
+        return Err(PolyplugcError::ValidationFailed {
+            message: "generated Lua binding module must declare its exports".to_owned(),
+        });
+    };
+    content.insert_str(index, &insertion);
+    Ok(content)
+}
+
 fn arg_pack_struct_name(contract_struct: &str, fn_name: &str) -> String {
     let fn_pascal: String = fn_name
         .split('_')
@@ -2519,6 +3178,49 @@ fn lua_host_type_annotation(ty: &ResolvedTypeRef) -> String {
         ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "userdata".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "nil".to_owned(),
         ResolvedTypeRef::UserDefined(_) => "userdata".to_owned(),
+    }
+}
+
+fn lua_external_provider_param_annotation(ty: &ResolvedTypeRef, enums: &[EnumDef]) -> String {
+    if lua_enum_repr_c_type(ty, enums).is_some() {
+        return "number".to_owned();
+    }
+    match ty {
+        ResolvedTypeRef::Primitive(_) => "number".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "nil".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView | AbiBuiltin::Buffer | AbiBuiltin::Ptr)
+        | ResolvedTypeRef::UserDefined(_) => "userdata".to_owned(),
+    }
+}
+
+fn lua_external_provider_return_annotation(ty: &ResolvedTypeRef, enums: &[EnumDef]) -> String {
+    if lua_enum_repr_c_type(ty, enums).is_some() {
+        return "number".to_owned();
+    }
+    match ty {
+        ResolvedTypeRef::Primitive(_) => "number".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer | AbiBuiltin::Ptr) => "userdata".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "nil".to_owned(),
+        ResolvedTypeRef::UserDefined(_) => "table".to_owned(),
+    }
+}
+
+fn lua_internal_provider_param_annotation(ty: &ResolvedTypeRef, enums: &[EnumDef]) -> String {
+    if lua_enum_repr_c_type(ty, enums).is_some() {
+        "number".to_owned()
+    } else {
+        lua_host_type_annotation(ty)
+    }
+}
+
+fn lua_internal_provider_return_annotation(ty: &ResolvedTypeRef, enums: &[EnumDef]) -> String {
+    if lua_enum_repr_c_type(ty, enums).is_some() {
+        return "number".to_owned();
+    }
+    match ty {
+        ResolvedTypeRef::UserDefined(_) => "table".to_owned(),
+        _ => lua_host_type_annotation(ty),
     }
 }
 
@@ -4689,7 +5391,12 @@ mod tests {
         };
         let mut files = GeneratedFiles::default();
         LuaGenerator
-            .generate_internal_bundle(&ir, "lua-internal-profile", &mut files)
+            .generate_internal_bundle(
+                &ir,
+                "lua-internal-profile",
+                &OutputLayout::unified(),
+                &mut files,
+            )
             .expect("generate Lua internal profile");
         let profile = files
             .files
@@ -5189,6 +5896,32 @@ mod tests {
     }
 
     #[test]
+    fn lua_contract_arg_pack_cdefs_require_export_marker() {
+        let mut contract = enum_codec_contract();
+        contract.functions[0].params.push(ResolvedParam {
+            name: "quality".to_owned(),
+            ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+            docs: None,
+        });
+        let ir = ValidatedIr {
+            types: vec![],
+            enums: pixel_format_enums(),
+            contracts: vec![contract],
+            host_contracts: vec![],
+            bundle: None,
+        };
+
+        let error = with_lua_contract_arg_pack_cdefs("return {}".to_owned(), &ir)
+            .expect_err("missing export marker must fail generation");
+
+        assert!(matches!(
+            error,
+            PolyplugcError::ValidationFailed { message }
+                if message == "generated Lua binding module must declare its exports"
+        ));
+    }
+
+    #[test]
     fn lua_host_caller_enum_param_and_return_use_repr_slots() {
         let mut out: String = String::new();
         generate_host_contract_caller(&mut out, &enum_codec_contract(), &pixel_format_enums());
@@ -5470,6 +6203,86 @@ mod tests {
             out.contains("local out_ref = ffi.cast(\"Pair*\", ffi.cast(\"uintptr_t\", out_ptr))")
                 && out.contains("out_ref[0] = result"),
             "struct return must be written into out_ptr, not silently dropped: {out}"
+        );
+    }
+    #[test]
+    fn lua_provider_annotations_match_external_cdata_and_internal_ergonomics() {
+        let contract = ResolvedContract {
+            name: "shape.Plugin".to_owned(),
+            contract_id: 1,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![
+                ResolvedFunction {
+                    name: "transform".to_owned(),
+                    function_id: 0,
+                    params: vec![
+                        ResolvedParam {
+                            name: "label".to_owned(),
+                            ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                            docs: None,
+                        },
+                        ResolvedParam {
+                            name: "bytes".to_owned(),
+                            ty: ResolvedTypeRef::AbiType(AbiBuiltin::Buffer),
+                            docs: None,
+                        },
+                    ],
+                    returns: Some(ResolvedTypeRef::UserDefined("Envelope".to_owned())),
+                    docs: None,
+                    return_docs: None,
+                },
+                ResolvedFunction {
+                    name: "flush".to_owned(),
+                    function_id: 1,
+                    params: Vec::new(),
+                    returns: None,
+                    docs: None,
+                    return_docs: None,
+                },
+            ],
+            docs: None,
+        };
+        let mut declarations = String::new();
+        write_lua_guest_contract_declaration(
+            &mut declarations,
+            "shape.provider",
+            &contract,
+            &[],
+            "factories",
+        )
+        .expect("generate external provider declaration");
+        assert!(
+            declarations.contains(
+                "---@field transform fun(self: ShapePluginContractProvider, label: userdata, bytes: userdata): table"
+            ) && declarations.contains(
+                "---@field flush fun(self: ShapePluginContractProvider): nil"
+            ),
+            "external declarations must expose raw cdata params, table returns, and no-arg void calls: {declarations}"
+        );
+        assert_eq!(
+            lua_internal_provider_param_annotation(
+                &ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                &[]
+            ),
+            "string"
+        );
+        assert_eq!(
+            lua_internal_provider_param_annotation(
+                &ResolvedTypeRef::AbiType(AbiBuiltin::Buffer),
+                &[]
+            ),
+            "string"
+        );
+        assert_eq!(
+            lua_internal_provider_return_annotation(
+                &ResolvedTypeRef::UserDefined("Envelope".to_owned()),
+                &[]
+            ),
+            "table"
         );
     }
 }

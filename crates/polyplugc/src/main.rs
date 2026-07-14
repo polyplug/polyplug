@@ -18,8 +18,11 @@ use polyplug_codegen::InternalLuaGenerateConfig;
 use polyplug_codegen::InternalPythonGenerateConfig;
 use polyplug_codegen::InternalRustGenerateConfig;
 use polyplug_codegen::Lang;
+use polyplug_codegen::OutputDestination;
+use polyplug_codegen::OutputLayout;
 use polyplug_codegen::PolyplugcError;
 use polyplug_codegen::Side;
+use polyplug_codegen::ValidatedImport;
 use polyplug_codegen::WriteSummary;
 use polyplug_codegen::generate;
 use polyplug_codegen::generate_internal_cpp;
@@ -50,6 +53,13 @@ struct Cli {
     command: Command,
 }
 
+#[derive(Debug)]
+struct PartitionOutputArgs {
+    out: Option<PathBuf>,
+    import: Option<String>,
+    omit: bool,
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Generate code from an api.toml or bundle.toml.
@@ -74,6 +84,40 @@ enum Command {
         /// Output directory for generated files.
         #[arg(long, short = 'o', required = true)]
         out: PathBuf,
+
+        /// Separate root for application-owned domain types. Requires
+        /// `--domain-types-import` so bindings can reference the emitted module.
+        #[arg(long, requires = "domain_types_import")]
+        domain_types_out: Option<PathBuf>,
+
+        /// Language-specific import used by generated bindings for external domain
+        /// types.
+        #[arg(long)]
+        domain_types_import: Option<String>,
+
+        /// Do not emit application-owned domain types.
+        #[arg(
+            long,
+            conflicts_with_all = ["domain_types_out", "domain_types_import"]
+        )]
+        domain_types_omit: bool,
+
+        /// Separate root for guest contract declarations. Requires
+        /// `--guest-contracts-import` so bindings can reference the emitted module.
+        #[arg(long, requires = "guest_contracts_import")]
+        guest_contracts_out: Option<PathBuf>,
+
+        /// Language-specific import used by generated bindings for external guest
+        /// contracts.
+        #[arg(long)]
+        guest_contracts_import: Option<String>,
+
+        /// Do not emit guest contract declarations.
+        #[arg(
+            long,
+            conflicts_with_all = ["guest_contracts_out", "guest_contracts_import"]
+        )]
+        guest_contracts_omit: bool,
     },
 
     /// Validate an api.toml / bundle.toml, or an assembled bundle directory.
@@ -143,37 +187,62 @@ fn run(cli: Cli) -> Result<(), PolyplugcError> {
             internal,
             lang,
             out,
+            domain_types_out,
+            domain_types_import,
+            domain_types_omit,
+            guest_contracts_out,
+            guest_contracts_import,
+            guest_contracts_omit,
         } => {
+            let language: Lang = parse_lang(&lang)?;
+            let layout: OutputLayout = output_layout(
+                language,
+                PartitionOutputArgs {
+                    out: domain_types_out,
+                    import: domain_types_import,
+                    omit: domain_types_omit,
+                },
+                PartitionOutputArgs {
+                    out: guest_contracts_out,
+                    import: guest_contracts_import,
+                    omit: guest_contracts_omit,
+                },
+            )?;
             let output: GenerateOutput = if internal {
                 let bundle_toml: PathBuf =
                     bundle.ok_or_else(|| PolyplugcError::ValidationFailed {
                         message: "--internal requires --bundle".to_owned(),
                     })?;
-                match parse_lang(&lang)? {
+                match language {
                     Lang::Rust => generate_internal_rust(InternalRustGenerateConfig {
                         bundle_toml,
-                        out_dir: out.clone(),
+                        layout: layout.clone(),
                     })?,
                     Lang::Cpp => generate_internal_cpp(InternalCppGenerateConfig {
                         bundle_toml,
                         out_dir: out.clone(),
+                        layout: layout.clone(),
                     })?,
                     Lang::CSharp => generate_internal_csharp(InternalCSharpGenerateConfig {
                         bundle_toml,
                         out_dir: out.clone(),
+                        layout: layout.clone(),
                     })?,
                     Lang::Python => generate_internal_python(InternalPythonGenerateConfig {
                         bundle_toml,
                         out_dir: out.clone(),
+                        layout: layout.clone(),
                     })?,
                     Lang::Lua => generate_internal_lua(InternalLuaGenerateConfig {
                         bundle_toml,
                         out_dir: out.clone(),
+                        layout: layout.clone(),
                     })?,
                     Lang::JsQuickJs => {
                         generate_internal_javascript(InternalJavaScriptGenerateConfig {
                             bundle_toml,
                             out_dir: out.clone(),
+                            layout: layout.clone(),
                         })?
                     }
                 }
@@ -189,9 +258,9 @@ fn run(cli: Cli) -> Result<(), PolyplugcError> {
                 };
                 generate(GenerateConfig {
                     api_toml: manifest,
-                    lang: parse_lang(&lang)?,
+                    lang: language,
                     side,
-                    out_dir: out.clone(),
+                    layout: layout.clone(),
                 })?
             };
             write_files(&output, &out)?;
@@ -287,6 +356,47 @@ fn hex_encode(bytes: &[u8]) -> String {
         .join("")
 }
 
+fn output_layout(
+    lang: Lang,
+    domain_types: PartitionOutputArgs,
+    guest_contracts: PartitionOutputArgs,
+) -> Result<OutputLayout, PolyplugcError> {
+    Ok(OutputLayout {
+        bindings: OutputDestination::Inline,
+        domain_types: output_destination(lang, "--domain-types-out", domain_types)?,
+        guest_contracts: output_destination(lang, "--guest-contracts-out", guest_contracts)?,
+    })
+}
+
+fn output_destination(
+    lang: Lang,
+    out_flag: &str,
+    args: PartitionOutputArgs,
+) -> Result<OutputDestination, PolyplugcError> {
+    if args.omit {
+        if args.out.is_some() || args.import.is_some() {
+            return Err(PolyplugcError::ValidationFailed {
+                message: format!("{out_flag} cannot be combined with its omit flag"),
+            });
+        }
+        return Ok(OutputDestination::Omit);
+    }
+
+    match (args.out, args.import) {
+        (None, None) => Ok(OutputDestination::Inline),
+        (Some(_), None) => Err(PolyplugcError::ValidationFailed {
+            message: format!("{out_flag} requires its matching import flag"),
+        }),
+        (Some(root), Some(import)) => Ok(OutputDestination::Emit {
+            root,
+            import: ValidatedImport::parse(lang, import)?,
+        }),
+        (None, Some(import)) => Ok(OutputDestination::ImportOnly {
+            import: ValidatedImport::parse(lang, import)?,
+        }),
+    }
+}
+
 fn write_files(output: &GenerateOutput, out_dir: &Path) -> Result<(), PolyplugcError> {
     let summary: WriteSummary = write_output(output, out_dir)?;
     println!(
@@ -296,4 +406,134 @@ fn write_files(output: &GenerateOutput, out_dir: &Path) -> Result<(), PolyplugcE
         summary.unchanged
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::Lang;
+    use super::OutputDestination;
+    use super::PartitionOutputArgs;
+    use super::output_layout;
+
+    #[test]
+    fn output_layout_routes_emit_import_only_and_omit_for_every_language() {
+        let cases: [(Lang, &str, &str); 6] = [
+            (Lang::Rust, "shared::domain", "shared::guest_contracts"),
+            (Lang::Cpp, "guest/domain.hpp", "guest/guest_contracts.hpp"),
+            (Lang::CSharp, "Shared.Domain", "Shared.GuestContracts"),
+            (Lang::Python, "shared.domain", "shared.guest_contracts"),
+            (Lang::Lua, "shared.domain", "shared.guest_contracts"),
+            (
+                Lang::JsQuickJs,
+                "@test/javascript-domain",
+                "@test/javascript-contracts",
+            ),
+        ];
+
+        for (language, domain_import, guest_contracts_import) in cases {
+            let emitted = output_layout(
+                language,
+                PartitionOutputArgs {
+                    out: Some(PathBuf::from("domain")),
+                    import: Some(domain_import.to_owned()),
+                    omit: false,
+                },
+                PartitionOutputArgs {
+                    out: Some(PathBuf::from("guest_contracts")),
+                    import: Some(guest_contracts_import.to_owned()),
+                    omit: false,
+                },
+            )
+            .unwrap_or_else(|error| panic!("valid {} emitted layout: {error}", language.as_str()));
+            assert!(matches!(
+                emitted.domain_types,
+                OutputDestination::Emit { .. }
+            ));
+            assert!(matches!(
+                emitted.guest_contracts,
+                OutputDestination::Emit { .. }
+            ));
+
+            let imported = output_layout(
+                language,
+                PartitionOutputArgs {
+                    out: None,
+                    import: Some(domain_import.to_owned()),
+                    omit: false,
+                },
+                PartitionOutputArgs {
+                    out: None,
+                    import: Some(guest_contracts_import.to_owned()),
+                    omit: false,
+                },
+            )
+            .unwrap_or_else(|error| {
+                panic!("valid {} import-only layout: {error}", language.as_str())
+            });
+            assert!(matches!(
+                imported.domain_types,
+                OutputDestination::ImportOnly { .. }
+            ));
+            assert!(matches!(
+                imported.guest_contracts,
+                OutputDestination::ImportOnly { .. }
+            ));
+
+            let omitted = output_layout(
+                language,
+                PartitionOutputArgs {
+                    out: None,
+                    import: None,
+                    omit: true,
+                },
+                PartitionOutputArgs {
+                    out: None,
+                    import: None,
+                    omit: true,
+                },
+            )
+            .unwrap_or_else(|error| panic!("valid {} omitted layout: {error}", language.as_str()));
+            assert!(matches!(omitted.domain_types, OutputDestination::Omit));
+            assert!(matches!(omitted.guest_contracts, OutputDestination::Omit));
+
+            assert!(
+                output_layout(
+                    language,
+                    PartitionOutputArgs {
+                        out: Some(PathBuf::from("domain")),
+                        import: None,
+                        omit: false,
+                    },
+                    PartitionOutputArgs {
+                        out: None,
+                        import: None,
+                        omit: false,
+                    },
+                )
+                .is_err(),
+                "{} output roots must require imports",
+                language.as_str()
+            );
+            assert!(
+                output_layout(
+                    language,
+                    PartitionOutputArgs {
+                        out: None,
+                        import: Some("../outside".to_owned()),
+                        omit: false,
+                    },
+                    PartitionOutputArgs {
+                        out: None,
+                        import: None,
+                        omit: false,
+                    },
+                )
+                .is_err(),
+                "{} must reject invalid imports",
+                language.as_str()
+            );
+        }
+    }
 }

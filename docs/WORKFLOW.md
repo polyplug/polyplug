@@ -24,7 +24,7 @@ cross-compilation guide](CROSS_COMPILATION.md).
 ```text
 ┌─ 1. DESIGN ────────────────────────────────────────────────────────┐
 │  Write api.toml — the app's plugin API:                            │
-│    [[plugin_contract]]  what plugins must implement                │
+│    [[guest_contract]]  what plugins must implement                │
 │    [[host_contract]]    services the app offers back (host.*)      │
 │  Publish api.toml to plugin developers — it IS the contract.       │
 └────────────────────────────────────────────────────────────────────┘
@@ -58,6 +58,14 @@ cross-compilation guide](CROSS_COMPILATION.md).
 │  decoder.decode(input)?;               // single indirect call     │
 └────────────────────────────────────────────────────────────────────┘
 ```
+
+`[[guest_contract]]` is the required schema spelling; a legacy
+`[[plugin_contract]]` table fails with “`[[plugin_contract]]` is invalid; use
+`[[guest_contract]]` instead.” Rename its nested function tables too. The command
+above is the unified default. For a shared
+domain package or an application-internal provider crate, use the opt-in
+partition flags documented in [Code generation and split output](CODE_GENERATION.md);
+they do not change runtime acquisition or registration.
 
 Working reference hosts for all six languages live in `examples/hosts/`.
 

@@ -45,6 +45,7 @@ use polyplug_abi::StringView;
 use polyplug_codegen::GenerateConfig;
 use polyplug_codegen::GenerateOutput;
 use polyplug_codegen::Lang;
+use polyplug_codegen::OutputLayout;
 use polyplug_codegen::Side;
 
 use polyplug_lua::LuaLoader;
@@ -131,9 +132,9 @@ fn build_cpp_consumer(tmp: &Path) -> PathBuf {
         api_toml: bundle_toml_path,
         lang: Lang::Cpp,
         side: Side::Guest,
-        out_dir: gen_dir.clone(),
+        layout: OutputLayout::unified(),
     };
-    let output: GenerateOutput = cli_generate(&config).expect("polyplugc generate (cpp)");
+    let output: GenerateOutput = cli_generate(&config, &gen_dir).expect("polyplugc generate (cpp)");
     for file in &output.files {
         let file_path: PathBuf = gen_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {

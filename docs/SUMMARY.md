@@ -7,6 +7,7 @@
 - [Quick Start](QUICKSTART.md)
 - [Examples](EXAMPLES.md)
 - [Development Workflow](WORKFLOW.md)
+- [Code generation and split output](CODE_GENERATION.md)
 - [Linux-to-Windows MSVC Cross-Compilation](CROSS_COMPILATION.md)
 
 # How polyplug works

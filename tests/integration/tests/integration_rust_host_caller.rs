@@ -5,11 +5,13 @@ use core::ffi::c_void;
 use core::ptr;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering;
+use std::sync::Mutex;
 
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::Array;
+use polyplug_abi::Buffer;
 use polyplug_abi::CallArena;
 use polyplug_abi::DependencyInfo;
 use polyplug_abi::GuestContractHandle;
@@ -212,6 +214,8 @@ fn test_host_caller_reset_is_noop() {
 // after warmup, and a view stays valid until the next arena-backed call.
 
 static CALLER_ARENA_ALLOC_CALLS: AtomicU64 = AtomicU64::new(0);
+static CALLER_ARENA_FREE_CALLS: AtomicU64 = AtomicU64::new(0);
+static CALLER_ARENA_COUNTER_LOCK: Mutex<()> = Mutex::new(());
 
 unsafe extern "C" fn caller_counting_alloc(
     _this: *const HostApi,
@@ -231,6 +235,7 @@ unsafe extern "C" fn caller_counting_free(
     size: usize,
     align: usize,
 ) {
+    CALLER_ARENA_FREE_CALLS.fetch_add(1, Ordering::SeqCst);
     let layout: core::alloc::Layout =
         core::alloc::Layout::from_size_align(size, align).expect("valid layout");
     // SAFETY: ptr/size/align match the allocation made by caller_counting_alloc.
@@ -430,6 +435,54 @@ unsafe extern "C" fn echo_vm_call(
     }
 }
 
+unsafe extern "C" fn echo_buffer_vm_call(
+    _adapter_context: *mut c_void,
+    _loader_data: VmLoaderData,
+    _instance: GuestContractInstance,
+    _fn_id: u32,
+    args: *const (),
+    out: *mut (),
+    arena: *mut CallArena,
+    out_err: *mut AbiError,
+) {
+    let result_err: AbiError = (|| {
+        if arena.is_null() || args.is_null() || out.is_null() {
+            return AbiError {
+                code: AbiErrorCode::InvalidPointer as u32,
+                message: StringView::null(),
+            };
+        }
+        // SAFETY: args points to a valid StringView per the caller contract.
+        let input: &StringView = unsafe { &*(args as *const StringView) };
+        // SAFETY: arena is the per-caller CallArena, reset by the caller for this call.
+        let dst: *mut u8 = unsafe { (*arena).alloc(input.len, 1) };
+        if dst.is_null() {
+            return AbiError {
+                code: AbiErrorCode::Generic as u32,
+                message: StringView::null(),
+            };
+        }
+        // SAFETY: dst owns input.len bytes from the arena; input.ptr is valid for input.len.
+        unsafe { core::ptr::copy_nonoverlapping(input.ptr, dst, input.len) };
+        // SAFETY: out points to a valid Buffer slot per the caller contract.
+        unsafe {
+            core::ptr::write(
+                out as *mut Buffer,
+                Buffer {
+                    ptr: dst,
+                    len: input.len,
+                    cap: input.len,
+                },
+            );
+        }
+        AbiError::ok()
+    })();
+    if !out_err.is_null() {
+        // SAFETY: out_err is non-null (just checked) and writable per the ABI contract.
+        unsafe { out_err.write(result_err) };
+    }
+}
+
 const ARENA_BUF_LEN: usize = 512;
 
 /// Caller mirroring the generated `&mut self` arena caller for a VM contract.
@@ -486,6 +539,9 @@ fn test_host_caller_arena_reuses_buffer_across_calls() {
     use polyplug_abi::DispatchType;
     use polyplug_abi::Version;
     use polyplug_abi::VmDispatch;
+    let _counter_guard = CALLER_ARENA_COUNTER_LOCK
+        .lock()
+        .expect("acquire allocation counter lock");
 
     CALLER_ARENA_ALLOC_CALLS.store(0, Ordering::SeqCst);
 
@@ -559,6 +615,134 @@ fn test_host_caller_arena_reuses_buffer_across_calls() {
         CALLER_ARENA_ALLOC_CALLS.load(Ordering::SeqCst),
         0,
         "the 512-byte arena serves every 11-byte echo with zero host allocations"
+    );
+}
+
+#[test]
+fn split_host_vm_buffer_return_is_not_freed_as_native_allocation() {
+    use polyplug_abi::DispatchMechanisms;
+    use polyplug_abi::DispatchType;
+    use polyplug_abi::Version;
+    use polyplug_abi::VmDispatch;
+    let _counter_guard = CALLER_ARENA_COUNTER_LOCK
+        .lock()
+        .expect("acquire allocation counter lock");
+
+    CALLER_ARENA_ALLOC_CALLS.store(0, Ordering::SeqCst);
+    CALLER_ARENA_FREE_CALLS.store(0, Ordering::SeqCst);
+
+    let interface = GuestContractInterface {
+        contract_id: polyplug_utils::GuestContractId::from_u64(0),
+        contract_version: Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        },
+        dispatch_type: DispatchType::VirtualMachine,
+        adapter_context: ptr::null_mut(),
+        create_instance: vm_noop_create,
+        destroy_instance: vm_noop_destroy,
+        dispatch: DispatchMechanisms {
+            vm: VmDispatch {
+                call: echo_buffer_vm_call,
+                loader_data: VmLoaderData {
+                    data: core::ptr::null_mut(),
+                },
+            },
+        },
+    };
+    let host = counting_host();
+    let mut arena_backing = Box::new([0_u8; ARENA_BUF_LEN]);
+    let mut arena = CallArena::new(arena_backing.as_mut_slice(), &host);
+    let input_bytes = b"arena-backed buffer";
+    let input = StringView {
+        ptr: input_bytes.as_ptr(),
+        len: input_bytes.len(),
+    };
+    let mut out = Buffer {
+        ptr: ptr::null_mut(),
+        len: 0,
+        cap: 0,
+    };
+    let mut err = AbiError::ok();
+
+    // SAFETY: the VM interface, input, out-slot, and arena are valid for this call.
+    unsafe {
+        (interface.dispatch.vm.call)(
+            interface.adapter_context,
+            interface.dispatch.vm.loader_data,
+            GuestContractInstance::null(),
+            0,
+            &input as *const StringView as *const (),
+            &mut out as *mut Buffer as *mut (),
+            &mut arena,
+            &mut err,
+        );
+    }
+    assert_eq!(err.code, AbiErrorCode::Ok as u32, "VM call must succeed");
+    let returned_from_native = interface.dispatch_type == DispatchType::Native;
+    // SAFETY: the successful VM call stored `arena.alloc(input.len, 1)` in `out`,
+    // so it remains valid for `out.len` bytes until `arena.reset()`.
+    let bytes = unsafe { out.as_slice() }.to_vec();
+    if returned_from_native && !out.ptr.is_null() {
+        // SAFETY: this is intentionally the native-only branch generated for owned returns.
+        unsafe { (host.free)(&host, out.ptr, out.cap, 1) };
+    }
+
+    assert_eq!(bytes, input_bytes);
+    assert_eq!(
+        CALLER_ARENA_FREE_CALLS.load(Ordering::SeqCst),
+        0,
+        "VM return storage belongs to CallArena and must never reach HostApi::free"
+    );
+    arena.reset();
+    assert_eq!(
+        CALLER_ARENA_FREE_CALLS.load(Ordering::SeqCst),
+        0,
+        "resetting an inline arena must not free its backing through HostApi"
+    );
+}
+
+#[test]
+fn split_host_native_buffer_return_frees_exactly_one_host_allocation() {
+    let _counter_guard = CALLER_ARENA_COUNTER_LOCK
+        .lock()
+        .expect("acquire allocation counter lock");
+    CALLER_ARENA_ALLOC_CALLS.store(0, Ordering::SeqCst);
+    CALLER_ARENA_FREE_CALLS.store(0, Ordering::SeqCst);
+
+    let host = counting_host();
+    let source = b"native-owned buffer";
+    // SAFETY: the test host allocator is called with a valid non-zero layout.
+    let ptr = unsafe { (host.alloc)(&host, source.len(), 1) };
+    assert!(!ptr.is_null(), "test allocation must succeed");
+    // SAFETY: ptr is a source.len() allocation and source is valid for that length.
+    unsafe { core::ptr::copy_nonoverlapping(source.as_ptr(), ptr, source.len()) };
+    let out = Buffer {
+        ptr,
+        len: source.len(),
+        cap: source.len(),
+    };
+
+    let returned_from_native = true;
+    // SAFETY: `out` holds the live non-null `host.alloc` allocation with
+    // `len == source.len()` and is not freed until the native cleanup below.
+    let bytes = unsafe { out.as_slice() }.to_vec();
+    if returned_from_native && !out.ptr.is_null() {
+        // SAFETY: the native-return buffer was allocated by this HostApi.
+        unsafe { (host.free)(&host, out.ptr, out.cap, 1) };
+    }
+
+    assert_eq!(bytes, source);
+    assert_eq!(
+        CALLER_ARENA_ALLOC_CALLS.load(Ordering::SeqCst),
+        1,
+        "the native return must allocate through HostApi exactly once"
+    );
+    assert_eq!(
+        CALLER_ARENA_FREE_CALLS.load(Ordering::SeqCst),
+        1,
+        "the native-owned return must be released through HostApi exactly once"
     );
 }
 

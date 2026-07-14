@@ -10,6 +10,7 @@ pub mod rust;
 
 use crate::GenerateOutput;
 pub use crate::GeneratedFile;
+use crate::OutputLayout;
 use crate::PolyplugcError;
 use crate::ResolvedBundleFile;
 pub type GeneratedFiles = GenerateOutput;
@@ -150,6 +151,7 @@ pub trait CodeGenerator {
     fn generate_host(
         &self,
         ir: &ValidatedIr,
+        layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError>;
 
@@ -157,6 +159,16 @@ pub trait CodeGenerator {
     fn generate_guest(
         &self,
         ir: &ValidatedIr,
+        layout: &OutputLayout,
+        files: &mut GeneratedFiles,
+    ) -> Result<(), PolyplugcError>;
+
+    /// Apply this language's canonical output layout after ordinary generation.
+    fn apply_output_layout(
+        &self,
+        ir: &ValidatedIr,
+        side: crate::Side,
+        layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError>;
 }

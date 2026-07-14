@@ -5,7 +5,7 @@
 //! - Guest-side: extern "C" ABI wrappers + abstract base classes + interface statics
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::CALL_ARENA_BUF_LEN;
 use super::CodeGenerator;
@@ -16,7 +16,11 @@ use super::is_native_runtime;
 use super::peer_min_version;
 
 use super::docs::append_lines;
+use crate::OutputDestination;
+use crate::OutputLayout;
+use crate::OutputPartition;
 use crate::PolyplugcError;
+use crate::Side;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -78,6 +82,7 @@ impl CodeGenerator for CppGenerator {
     fn generate_host(
         &self,
         ir: &ValidatedIr,
+        _layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
         // ── File 1: types.hpp ────────────────────────────────────────────────
@@ -86,6 +91,8 @@ impl CodeGenerator for CppGenerator {
             path: PathBuf::from("host/types.hpp"),
             content: types_hpp,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
 
         // ── File 2: host_callers.hpp ─────────────────────────────────────────
@@ -94,6 +101,8 @@ impl CodeGenerator for CppGenerator {
             path: PathBuf::from("host/host_callers.hpp"),
             content: host_callers_hpp,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
 
         // ── File 3: manifest.toml ────────────────────────────────────────────
@@ -102,6 +111,8 @@ impl CodeGenerator for CppGenerator {
             path: PathBuf::from("manifest.toml"),
             content: manifest_toml,
             force_regenerate: true,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
 
         // ── File 4: host_contracts.hpp ───────────────────────────────────────
@@ -111,6 +122,8 @@ impl CodeGenerator for CppGenerator {
                 path: PathBuf::from("host/host_contracts.hpp"),
                 content: host_contracts_hpp,
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
         }
 
@@ -121,6 +134,8 @@ impl CodeGenerator for CppGenerator {
                 path: PathBuf::from("host/interface_factories.hpp"),
                 content: interface_factories_hpp,
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
         }
 
@@ -130,6 +145,7 @@ impl CodeGenerator for CppGenerator {
     fn generate_guest(
         &self,
         ir: &ValidatedIr,
+        _layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
         // ── File 1: types.hpp ────────────────────────────────────────────────
@@ -138,6 +154,8 @@ impl CodeGenerator for CppGenerator {
             path: PathBuf::from("guest/types.hpp"),
             content: types_hpp,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
 
         // ── File 2: contracts.hpp ────────────────────────────────────────────
@@ -146,6 +164,8 @@ impl CodeGenerator for CppGenerator {
             path: PathBuf::from("guest/contracts.hpp"),
             content: contracts_hpp,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
 
         // ── File 3: interfaces.hpp ──────────────────────────────────────────────
@@ -154,6 +174,8 @@ impl CodeGenerator for CppGenerator {
             path: PathBuf::from("guest/interfaces.hpp"),
             content: interfaces_hpp,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
 
         // ── File 4: init.hpp ─────────────────────────────────────────────────
@@ -162,6 +184,8 @@ impl CodeGenerator for CppGenerator {
             path: PathBuf::from("guest/init.hpp"),
             content: init_hpp,
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
 
         // --api: manifest emitted by generate_host(); --bundle: emit full discovery manifest
@@ -171,6 +195,8 @@ impl CodeGenerator for CppGenerator {
                 path: PathBuf::from("manifest.toml"),
                 content: manifest_toml,
                 force_regenerate: true,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
         }
         // When ir.bundle.is_none() (--api mode): NO manifest emitted here.
@@ -183,6 +209,8 @@ impl CodeGenerator for CppGenerator {
                 path: PathBuf::from("guest/host_contracts.hpp"),
                 content: host_contracts_hpp,
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
         }
 
@@ -194,11 +222,175 @@ impl CodeGenerator for CppGenerator {
                 path: PathBuf::from("guest/peer_callers.hpp"),
                 content: peer_callers_hpp,
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
         }
 
         Ok(())
     }
+    fn apply_output_layout(
+        &self,
+        ir: &ValidatedIr,
+        side: Side,
+        layout: &OutputLayout,
+        files: &mut GeneratedFiles,
+    ) -> Result<(), PolyplugcError> {
+        CppGenerator::apply_output_layout(self, ir, side, layout, files)
+    }
+}
+
+impl CppGenerator {
+    pub(crate) fn apply_output_layout(
+        &self,
+        ir: &ValidatedIr,
+        _side: Side,
+        layout: &OutputLayout,
+        files: &mut GeneratedFiles,
+    ) -> Result<(), PolyplugcError> {
+        if layout == &OutputLayout::unified() {
+            return Ok(());
+        }
+
+        let has_domain_types = cpp_has_domain_types(ir);
+        let mut domain_files: Vec<GeneratedFile> = Vec::new();
+        let guest_contract_include =
+            cpp_layout_include(&layout.guest_contracts, "guest_contracts.hpp");
+
+        for file in &mut files.files {
+            let is_types = file
+                .path
+                .file_name()
+                .is_some_and(|name| name == "types.hpp");
+            let is_guest_contracts = file.path == Path::new("guest/contracts.hpp");
+
+            if is_types {
+                let parent =
+                    file.path
+                        .parent()
+                        .ok_or_else(|| PolyplugcError::ValidationFailed {
+                            message: format!(
+                                "generated types path `{}` has no parent",
+                                file.path.display()
+                            ),
+                        })?;
+                let namespace = cpp_internal_namespace_from_types_header(&file.content);
+                let domain_include = has_domain_types
+                    .then(|| cpp_layout_include(&layout.domain_types, "domain.hpp"))
+                    .flatten();
+                let mut domain_content = generate_cpp_domain_hpp(ir)?;
+                let mut metadata_content =
+                    generate_cpp_binding_metadata_hpp(ir, domain_include.as_deref());
+                if let Some(namespace) = namespace {
+                    domain_content = namespace_cpp_internal_bindings(domain_content, &namespace);
+                    metadata_content =
+                        namespace_cpp_internal_bindings(metadata_content, &namespace);
+                }
+                domain_files.push(GeneratedFile {
+                    path: parent.join("domain.hpp"),
+                    content: domain_content,
+                    force_regenerate: false,
+                    partition: OutputPartition::DomainTypes,
+                    references: Vec::new(),
+                });
+                file.content = metadata_content;
+                file.partition = OutputPartition::Bindings;
+                file.references = has_domain_types
+                    .then_some(OutputPartition::DomainTypes)
+                    .into_iter()
+                    .collect();
+                continue;
+            }
+            if is_guest_contracts {
+                file.path = PathBuf::from("guest/guest_contracts.hpp");
+                file.partition = OutputPartition::GuestContracts;
+                file.references.clear();
+                let domain_include = if has_domain_types {
+                    cpp_guest_domain_include(layout, "domain.hpp", "guest/domain.hpp")
+                } else {
+                    Some("polyplug/abi.hpp".to_owned())
+                };
+                let host_domain_include = if has_domain_types {
+                    cpp_guest_domain_include(layout, "../host/domain.hpp", "host/domain.hpp")
+                } else {
+                    Some("polyplug/abi.hpp".to_owned())
+                };
+                let replaced_domain_include = cpp_replace_include(
+                    &mut file.content,
+                    &["types.hpp"],
+                    domain_include.as_deref(),
+                ) | cpp_replace_include(
+                    &mut file.content,
+                    &["../host/types.hpp"],
+                    host_domain_include.as_deref(),
+                );
+                if has_domain_types && replaced_domain_include {
+                    file.references.push(OutputPartition::DomainTypes);
+                }
+                continue;
+            }
+
+            let uses_guest_contracts = cpp_replace_include(
+                &mut file.content,
+                &["contracts.hpp"],
+                guest_contract_include.as_deref(),
+            );
+            if uses_guest_contracts {
+                file.references.push(OutputPartition::GuestContracts);
+            }
+        }
+        files.files.extend(domain_files);
+        Ok(())
+    }
+}
+
+fn cpp_internal_namespace_from_types_header(content: &str) -> Option<String> {
+    content.lines().find_map(|line| {
+        line.strip_prefix("namespace polyplug_generated::")
+            .and_then(|suffix| suffix.strip_suffix(" {"))
+            .map(str::to_owned)
+    })
+}
+
+fn cpp_has_domain_types(ir: &ValidatedIr) -> bool {
+    !ir.enums.is_empty() || !ir.types.is_empty()
+}
+
+fn cpp_guest_domain_include(
+    layout: &OutputLayout,
+    same_root_header: &str,
+    bindings_root_header: &str,
+) -> Option<String> {
+    match &layout.domain_types {
+        OutputDestination::Inline
+            if !matches!(&layout.guest_contracts, OutputDestination::Inline) =>
+        {
+            Some(bindings_root_header.to_owned())
+        }
+        destination => cpp_layout_include(destination, same_root_header),
+    }
+}
+
+fn generate_cpp_binding_metadata_hpp(ir: &ValidatedIr, domain_include: Option<&str>) -> String {
+    let mut out = String::new();
+    out.push_str(CPP_FILE_HEADER);
+    out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
+    out.push_str("#pragma once\n");
+    let local_includes = domain_include
+        .map(|header| vec![(header, false)])
+        .unwrap_or_default();
+    out.push_str(&cpp_include_block(&[&local_includes, &[("cstdint", true)]]));
+    out.push('\n');
+    out.push_str("namespace polyplug_generated {\n\n");
+    for contract in &ir.contracts {
+        let contract_upper = contract.name.to_uppercase().replace(['.', '-'], "_");
+        out.push_str(&format!(
+            "constexpr uint64_t {}_CONTRACT_ID = 0x{:016X};\n",
+            contract_upper, contract.contract_id
+        ));
+    }
+    out.push_str("\n}  // namespace polyplug_generated\n");
+    out
 }
 
 impl CppGenerator {
@@ -211,6 +403,7 @@ impl CppGenerator {
         &self,
         ir: &ValidatedIr,
         bundle_name: &str,
+        layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
         let bundle = ir
@@ -233,11 +426,15 @@ impl CppGenerator {
             path: PathBuf::from("host/types.hpp"),
             content: namespace_cpp_internal_bindings(generate_types_hpp(ir)?, &namespace),
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/host_callers.hpp"),
             content: namespace_cpp_internal_bindings(generate_host_callers_hpp(ir)?, &namespace),
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
         if !ir.host_contracts.is_empty() {
             files.files.push(GeneratedFile {
@@ -247,6 +444,8 @@ impl CppGenerator {
                     &namespace,
                 ),
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
             files.files.push(GeneratedFile {
                 path: PathBuf::from("host/interface_factories.hpp"),
@@ -255,6 +454,8 @@ impl CppGenerator {
                     &namespace,
                 ),
                 force_regenerate: false,
+                partition: OutputPartition::Bindings,
+                references: Vec::new(),
             });
         }
 
@@ -266,6 +467,8 @@ impl CppGenerator {
                 &namespace,
             ),
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/interfaces.hpp"),
@@ -274,6 +477,8 @@ impl CppGenerator {
                 &namespace,
             ),
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/internal_plugin.hpp"),
@@ -282,8 +487,10 @@ impl CppGenerator {
                 &namespace,
             ),
             force_regenerate: false,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
         });
-        Ok(())
+        self.apply_output_layout(ir, Side::Guest, layout, files)
     }
 }
 
@@ -307,6 +514,31 @@ fn namespace_cpp_internal_bindings(content: String, namespace: &str) -> String {
             "polyplug_plugin::",
             &format!("polyplug_generated::{namespace}::plugin::"),
         )
+}
+
+fn cpp_layout_include(destination: &OutputDestination, inline_header: &str) -> Option<String> {
+    match destination {
+        OutputDestination::Inline => Some(inline_header.to_owned()),
+        OutputDestination::Emit { import, .. } | OutputDestination::ImportOnly { import } => {
+            Some(import.as_str().to_owned())
+        }
+        OutputDestination::Omit => None,
+    }
+}
+
+fn cpp_replace_include(content: &mut String, headers: &[&str], replacement: Option<&str>) -> bool {
+    let mut replaced = false;
+    for header in headers {
+        let include = format!("#include \"{header}\"\n");
+        if content.contains(&include) {
+            let replacement = replacement
+                .map(|header| format!("#include \"{header}\"\n"))
+                .unwrap_or_default();
+            *content = content.replace(&include, &replacement);
+            replaced = true;
+        }
+    }
+    replaced
 }
 
 // ─── types.hpp generator ─────────────────────────────────────────────────────
@@ -342,6 +574,27 @@ fn generate_types_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
         generate_cpp_type(&mut out, ty);
     }
 
+    out.push_str("}  // namespace polyplug_generated\n");
+    Ok(out)
+}
+
+fn generate_cpp_domain_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
+    let mut out = String::new();
+    out.push_str(CPP_FILE_HEADER);
+    out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
+    out.push_str("#pragma once\n");
+    out.push_str(&cpp_include_block(&[
+        &[("polyplug/abi.hpp", false)],
+        &[("cstdint", true)],
+    ]));
+    out.push('\n');
+    out.push_str("namespace polyplug_generated {\n\n");
+    for e in &ir.enums {
+        generate_cpp_enum(&mut out, e)?;
+    }
+    for ty in &ir.types {
+        generate_cpp_type(&mut out, ty);
+    }
     out.push_str("}  // namespace polyplug_generated\n");
     Ok(out)
 }
@@ -4618,7 +4871,7 @@ mod tests {
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_host(&ir, &mut files)
+            .generate_host(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_host");
         // Now produces 3 files: types.hpp, host_callers.hpp, manifest.toml
         assert!(!files.files.is_empty());
@@ -4643,7 +4896,7 @@ mod tests {
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_guest(&ir, &mut files)
+            .generate_guest(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_guest");
         // Produces 4 files (bundle=None, so no manifest): types.hpp, contracts.hpp, interfaces.hpp, init.hpp
         assert_eq!(files.files.len(), 4);
@@ -5118,7 +5371,7 @@ mod tests {
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_host(&ir, &mut files)
+            .generate_host(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_host");
         let names: Vec<String> = files
             .files
@@ -5143,7 +5396,7 @@ mod tests {
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_host(&ir, &mut files)
+            .generate_host(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_host");
         let names: Vec<String> = files
             .files
@@ -5365,7 +5618,7 @@ mod tests {
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_guest(&ir, &mut files)
+            .generate_guest(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_guest");
         let names: Vec<String> = files
             .files
@@ -5390,7 +5643,7 @@ mod tests {
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_guest(&ir, &mut files)
+            .generate_guest(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_guest");
         let names: Vec<String> = files
             .files
@@ -5433,7 +5686,7 @@ mod tests {
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_host(&ir, &mut files)
+            .generate_host(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_host");
         let names: Vec<String> = files
             .files
@@ -5458,7 +5711,7 @@ mod tests {
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_host(&ir, &mut files)
+            .generate_host(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_host");
         let names: Vec<String> = files
             .files
@@ -5689,7 +5942,7 @@ mod tests {
         let generator: CppGenerator = CppGenerator;
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_guest(&ir, &mut files)
+            .generate_guest(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_guest");
 
         let names: Vec<String> = files
@@ -5780,7 +6033,7 @@ mod tests {
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_guest(&ir, &mut files)
+            .generate_guest(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_guest");
         let names: Vec<String> = files
             .files
@@ -5925,10 +6178,10 @@ mod tests {
 
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_host(&ir, &mut files)
+            .generate_host(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_host");
         generator
-            .generate_guest(&ir, &mut files)
+            .generate_guest(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_guest");
 
         let names: Vec<String> = files
@@ -5977,10 +6230,10 @@ mod tests {
 
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
-            .generate_host(&ir, &mut files)
+            .generate_host(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_host");
         generator
-            .generate_guest(&ir, &mut files)
+            .generate_guest(&ir, &OutputLayout::unified(), &mut files)
             .expect("generate_guest");
 
         // types.hpp IS namespace polyplug_generated — definitions stay unqualified.

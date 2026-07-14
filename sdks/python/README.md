@@ -28,6 +28,13 @@ uv tool install polyplugc      # or: pipx install polyplugc / cargo install poly
 polyplugc generate --bundle bundle.toml --lang python --out ./generated
 ```
 
+## Shared generated declarations
+
+The command remains unified by default. For a shared Python package, emit or
+import DomainTypes as `common.domain` and GuestContracts as
+`common.guest_contracts`; see the [canonical split-output guide][codegen].
+
+
 ## Host application
 
 ```python
@@ -124,3 +131,4 @@ deposited into any module namespace.
 [guest]: https://github.com/polyplug/polyplug/blob/main/docs/languages/python-guest.md
 [docs]: https://github.com/polyplug/polyplug/tree/main/docs
 [examples]: https://github.com/polyplug/polyplug/tree/main/examples
+[codegen]: https://github.com/polyplug/polyplug/blob/main/docs/CODE_GENERATION.md

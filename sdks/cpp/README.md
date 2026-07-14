@@ -34,6 +34,13 @@ cargo install polyplugc
 polyplugc generate --bundle bundle.toml --lang cpp --out ./generated
 ```
 
+## Shared generated declarations
+
+The command remains unified by default. For a shared C++ declaration target,
+emit or import DomainTypes as `guest/domain.hpp` and GuestContracts as
+`guest/guest_contracts.hpp`; see the [canonical split-output guide][codegen].
+
+
 ## Internal plugins
 
 Generate internal plugin bindings explicitly; the default command above remains
@@ -118,3 +125,4 @@ PipelineDecoderGuestContract* polyplug_create_decoder(const HostApi* host) {
 [guest]: https://github.com/polyplug/polyplug/blob/main/docs/languages/cpp-guest.md
 [docs]: https://github.com/polyplug/polyplug/tree/main/docs
 [examples]: https://github.com/polyplug/polyplug/tree/main/examples
+[codegen]: https://github.com/polyplug/polyplug/blob/main/docs/CODE_GENERATION.md

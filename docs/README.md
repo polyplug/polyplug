@@ -56,6 +56,9 @@ Within the trusted host-process boundary, polyplug guarantees:
   [Host Contracts](HOST_CONTRACTS.md) guide.
 - **Writing a plugin?** See [Plugin Interface Design](PLUGIN_INTERFACE_DESIGN.md) and the
   [Feature Guide](FEATURES.md).
+- **Sharing generated declarations?** Read [Code generation and split
+  output](CODE_GENERATION.md) for the unified default, partition ownership, and
+  exact six-language commands.
 - **Deploying to production?** Read [Debugging Native Crashes](DEBUGGING_NATIVE_CRASHES.md)
   and the [Trust Model](TRUST_MODEL.md).
 - **Going deep on the ABI?** [ABI Architecture](ABI_ARCHITECTURE.md),

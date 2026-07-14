@@ -34,20 +34,24 @@ page. To build from a checkout of this repo instead: `cargo build --release -p p
 ## Step 1 — Define the contract
 
 The contract file (`api.toml`) is the shared specification between app
-developers and plugin developers. It declares what plugins must implement
-(`[[plugin_contract]]`) and, optionally, what services the host offers back
-(`[[host_contract]]`).
+developers and plugin developers. Its table role is directional:
+`[[guest_contract]]` is implemented by a guest plugin and called by the host,
+whereas `[[host_contract]]` is implemented by the host and called by plugins.
+
+`plugin_contract` is not an alias: migrate its table and nested function tables
+to `guest_contract` before validation. The precise error is:
+“`[[plugin_contract]]` is invalid; use `[[guest_contract]]` instead.”
 
 Create a directory for the project and write `api.toml`:
 
 ```toml
 # api.toml
-[[plugin_contract]]
+[[guest_contract]]
 name = "greeter.Hello"
 version = "1.0.0"
 docs = "Greets a caller by name."
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "greet"
 docs = "Returns a greeting for the supplied name."
 params = [{ name = "name", type = "StringView", docs = "The name to greet." }]
@@ -103,6 +107,11 @@ field must be one of: `native`, `lua`, `python`, `js-quickjs`, `dotnet`.
 ```bash
 polyplugc generate --bundle bundle.toml --lang rust --out generated
 ```
+
+This is the unified default. When the application needs a shared domain crate
+or module, keep this command for the normal layout or opt into the exact
+split-output flags in [Code generation and split output](CODE_GENERATION.md);
+split output is never implied by the quick-start command.
 
 This writes six files into `generated/`:
 

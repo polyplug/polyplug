@@ -5,7 +5,7 @@
 use crate::Lang;
 use crate::ResolvedBundleFile;
 use crate::Side;
-use crate::generate_ir;
+use crate::generate::generate_ir;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedPlugin;
 use crate::ir::ValidatedIr;
@@ -27,11 +27,11 @@ name = "State"
 repr = "u32"
 variants = [{ name = "Ready", value = "1" }]
 
-[[plugin_contract]]
+[[guest_contract]]
 name = "sample.Docs"
 version = "1.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "query"
 params = [{ name = "address", type = "u64" }]
 return = "Record"
@@ -59,13 +59,13 @@ repr = "u32"
 docs = "Enum documentation."
 variants = [{ name = "Ready", value = "1", docs = "Variant documentation." }]
 
-[[plugin_contract]]
+[[guest_contract]]
 name = "sample.Docs"
 version = "1.0"
 docs = '''Plugin contract documentation. */
 Plugin contract documentation continues.'''
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "query"
 docs = '''Plugin function documentation with """ and C:\docs.'''
 params = [{ name = "address", type = "u64", docs = '''Plugin parameter documentation.

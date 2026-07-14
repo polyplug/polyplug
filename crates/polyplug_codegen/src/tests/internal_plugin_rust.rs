@@ -10,7 +10,8 @@ use std::path::PathBuf;
 
 use crate::{
     GenerateConfig, GenerateOutput, GeneratedFile, InternalRustGenerateConfig, Lang,
-    PolyplugcError, Side, generate, generate_internal_rust, write_output,
+    OutputDestination, OutputLayout, OutputPartition, PolyplugcError, Side, ValidatedImport,
+    generate, generate_internal_rust, write_output,
 };
 
 fn output_map(output: GenerateOutput) -> BTreeMap<PathBuf, String> {
@@ -24,7 +25,7 @@ fn output_map(output: GenerateOutput) -> BTreeMap<PathBuf, String> {
 fn write_api(path: &Path) {
     fs::write(
         path,
-        "[[plugin_contract]]\nname = \"platform.alpha\"\nversion = \"1.0\"\n\n[[plugin_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n\n[[plugin_contract]]\nname = \"platform.beta\"\nversion = \"1.0\"\n\n[[plugin_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n",
+        "[[types]]\nname = \"State\"\nfields = [{ name = \"value\", type = \"u32\" }]\n\n[[guest_contract]]\nname = \"platform.alpha\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n\n[[guest_contract]]\nname = \"platform.beta\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n",
     )
     .expect("write API TOML");
 }
@@ -49,7 +50,7 @@ fn unchanged_generate_config_literal_rejects_missing_external_acquisition_fields
         api_toml: bundle,
         lang: Lang::Rust,
         side: Side::Guest,
-        out_dir: temp.path().join("out"),
+        layout: OutputLayout::unified(),
     });
     assert!(matches!(
         result,
@@ -69,7 +70,7 @@ fn internal_rust_profile_accepts_artifactless_bundle_and_namespaces_both_binding
     let output = output_map(
         generate_internal_rust(InternalRustGenerateConfig {
             bundle_toml: bundle,
-            out_dir: temp.path().join("out"),
+            layout: OutputLayout::unified(),
         })
         .expect("generate internal Rust profile"),
     );
@@ -119,12 +120,12 @@ fn two_internal_bundles_with_distinct_apis_have_collision_free_namespaces() {
     let second_bundle = temp.path().join("second-bundle.toml");
     fs::write(
         &first_api,
-        "[[plugin_contract]]\nname = \"first.contract\"\nversion = \"1.0\"\n\n[[plugin_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n",
+        "[[guest_contract]]\nname = \"first.contract\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n",
     )
     .expect("write first API");
     fs::write(
         &second_api,
-        "[[plugin_contract]]\nname = \"second.contract\"\nversion = \"1.0\"\n\n[[plugin_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n",
+        "[[guest_contract]]\nname = \"second.contract\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n",
     )
     .expect("write second API");
     fs::write(
@@ -140,12 +141,12 @@ fn two_internal_bundles_with_distinct_apis_have_collision_free_namespaces() {
 
     let first = generate_internal_rust(InternalRustGenerateConfig {
         bundle_toml: first_bundle,
-        out_dir: temp.path().join("out"),
+        layout: OutputLayout::unified(),
     })
     .expect("generate first internal bundle");
     let second = generate_internal_rust(InternalRustGenerateConfig {
         bundle_toml: second_bundle,
-        out_dir: temp.path().join("out"),
+        layout: OutputLayout::unified(),
     })
     .expect("generate second internal bundle");
     let mut paths = HashSet::new();
@@ -169,13 +170,13 @@ fn two_internal_bundles_with_distinct_apis_have_collision_free_namespaces() {
 }
 
 #[test]
-fn internal_profile_preserves_provider_multiplicity_and_disambiguates_plugin_contract_symbols() {
+fn internal_profile_preserves_provider_multiplicity_and_disambiguates_guest_contract_symbols() {
     let temp = tempfile::tempdir().expect("create temporary directory");
     let api = temp.path().join("api.toml");
     let bundle = temp.path().join("bundle.toml");
     fs::write(
         &api,
-        "[[plugin_contract]]\nname = \"multi.alpha\"\nversion = \"1.0\"\n\n[[plugin_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n\n[[plugin_contract]]\nname = \"multi.beta\"\nversion = \"1.0\"\n\n[[plugin_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n",
+        "[[guest_contract]]\nname = \"multi.alpha\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n\n[[guest_contract]]\nname = \"multi.beta\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n",
     )
     .expect("write API");
     fs::write(
@@ -186,7 +187,7 @@ fn internal_profile_preserves_provider_multiplicity_and_disambiguates_plugin_con
     let output = output_map(
         generate_internal_rust(InternalRustGenerateConfig {
             bundle_toml: bundle,
-            out_dir: temp.path().join("out"),
+            layout: OutputLayout::unified(),
         })
         .expect("generate profile"),
     );
@@ -224,7 +225,7 @@ fn normalized_internal_namespace_includes_bundle_id_to_prevent_collisions() {
     let api = temp.path().join("api.toml");
     fs::write(
         &api,
-        "[[plugin_contract]]\nname = \"path.contract\"\nversion = \"1.0\"\n\n[[plugin_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n",
+        "[[guest_contract]]\nname = \"path.contract\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n",
     )
     .expect("write API");
     let first_bundle = temp.path().join("first.toml");
@@ -241,12 +242,12 @@ fn normalized_internal_namespace_includes_bundle_id_to_prevent_collisions() {
     .expect("write second bundle");
     let first = generate_internal_rust(InternalRustGenerateConfig {
         bundle_toml: first_bundle,
-        out_dir: temp.path().join("out"),
+        layout: OutputLayout::unified(),
     })
     .expect("generate first profile");
     let second = generate_internal_rust(InternalRustGenerateConfig {
         bundle_toml: second_bundle,
-        out_dir: temp.path().join("out"),
+        layout: OutputLayout::unified(),
     })
     .expect("generate second profile");
     let first_root = first
@@ -264,27 +265,36 @@ fn normalized_internal_namespace_includes_bundle_id_to_prevent_collisions() {
     assert_ne!(first_root, second_root);
     let mut combined = first.files;
     combined.extend(second.files);
-    write_output(&GenerateOutput { files: combined }, temp.path())
-        .expect("write distinct namespaces");
+    write_output(
+        &GenerateOutput::from_files(Lang::Rust, OutputLayout::unified(), combined),
+        temp.path(),
+    )
+    .expect("write distinct namespaces");
 }
 
 #[test]
 fn output_writer_rejects_duplicate_paths_before_writing() {
     let temp = tempfile::tempdir().expect("create temporary directory");
-    let output = GenerateOutput {
-        files: vec![
+    let output = GenerateOutput::from_files(
+        Lang::Rust,
+        OutputLayout::unified(),
+        vec![
             GeneratedFile {
                 path: Path::new("internal").join("same.rs"),
                 content: "first".to_owned(),
                 force_regenerate: false,
+                partition: crate::OutputPartition::Bindings,
+                references: Vec::new(),
             },
             GeneratedFile {
                 path: Path::new("internal").join("same.rs"),
                 content: "second".to_owned(),
                 force_regenerate: false,
+                partition: crate::OutputPartition::Bindings,
+                references: Vec::new(),
             },
         ],
-    };
+    );
 
     assert!(matches!(
         write_output(&output, temp.path()),
@@ -293,5 +303,70 @@ fn output_writer_rejects_duplicate_paths_before_writing() {
     assert!(
         !temp.path().join("internal").join("same.rs").exists(),
         "duplicate rejection must happen before any write"
+    );
+}
+
+#[test]
+fn internal_rust_layout_emits_declarations_and_rebinds_private_bindings() {
+    let temp = tempfile::tempdir().expect("create temporary directory");
+    let api = temp.path().join("api.toml");
+    let bundle = temp.path().join("bundle.toml");
+    write_api(&api);
+    write_internal_bundle(&bundle);
+    let layout = OutputLayout {
+        bindings: OutputDestination::Inline,
+        domain_types: OutputDestination::Emit {
+            root: temp.path().join("domain"),
+            import: ValidatedImport::parse(Lang::Rust, "common::domain")
+                .expect("valid domain import"),
+        },
+        guest_contracts: OutputDestination::Emit {
+            root: temp.path().join("contracts"),
+            import: ValidatedImport::parse(Lang::Rust, "common::contracts")
+                .expect("valid contract import"),
+        },
+    };
+    let output = generate_internal_rust(InternalRustGenerateConfig {
+        bundle_toml: bundle,
+        layout,
+    })
+    .expect("generate split internal Rust profile");
+
+    let domain = output
+        .files
+        .iter()
+        .find(|file| file.partition == OutputPartition::DomainTypes)
+        .expect("domain declaration file");
+    assert!(domain.content.contains("pub struct"));
+    let contracts = output
+        .files
+        .iter()
+        .find(|file| file.partition == OutputPartition::GuestContracts)
+        .expect("guest contract declaration file");
+    assert!(contracts.content.contains("pub trait"));
+    assert!(contracts.content.contains("common::domain"));
+    let bindings = output
+        .files
+        .iter()
+        .find(|file| {
+            file.partition == OutputPartition::Bindings
+                && file.path.ends_with(Path::new("guest/interfaces.rs"))
+        })
+        .expect("private adapter bindings");
+    assert!(bindings.content.contains("common::contracts"));
+    let fingerprint = |content: &str| {
+        content
+            .lines()
+            .find(|line| line.contains("INTERNAL_GENERATION_FINGERPRINT"))
+            .map(str::to_owned)
+            .expect("generation fingerprint")
+    };
+    assert_eq!(
+        fingerprint(&domain.content),
+        fingerprint(&contracts.content)
+    );
+    assert_eq!(
+        fingerprint(&contracts.content),
+        fingerprint(&bindings.content)
     );
 }

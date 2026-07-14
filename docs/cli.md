@@ -21,13 +21,23 @@ polyplugc generate [OPTIONS] --lang <LANG> --out <OUT>
 
 | Flag | Required | Description |
 |---|---|---|
-| `--api <API>` | one of `--api` / `--bundle` | Path to `api.toml`. Generates generated host caller bindings. |
-| `--bundle <BUNDLE>` | one of `--api` / `--bundle` | Path to `bundle.toml`. Without `--internal`, generates external plugin guest provider bindings, `polyplug_init`, dispatch shims, and `manifest.toml`. |
+| `--api <API>` | one of `--api` / `--bundle` | Path to `api.toml`. Generates host caller bindings. |
+| `--bundle <BUNDLE>` | one of `--api` / `--bundle` | Path to `bundle.toml`. Without `--internal`, generates ordinary external-plugin guest provider bindings, `polyplug_init`, dispatch shims, and `manifest.toml`. |
 | `--internal` | only with `--bundle` | Generates the explicit internal plugin profile: bundle-identity-namespaced generated guest provider bindings and generated host caller bindings. No bundle artifact is acquired or synthesized. |
-| `-l`, `--lang <LANG>` | yes | Target language: `rust`, `cpp`, `csharp`, `python`, `lua`, `js-quickjs`. |
-| `-o`, `--out <OUT>` | yes | Output directory for the generated files. |
+| `-l`, `--lang <LANG>` | yes | Target language: `rust`, `cpp`, `csharp`, `python`, `lua`, or `js-quickjs`. |
+| `-o`, `--out <OUT>` | yes | Primary output directory. Bindings stay here. Without layout flags, all partitions remain in this unified tree. |
+| `--domain-types-out <ROOT>` | paired with `--domain-types-import` | Emits the public DomainTypes partition under `ROOT`; generated consumers import the supplied specifier. |
+| `--domain-types-import <IMPORT>` | optional | With `--domain-types-out`, identifies emitted DomainTypes. Alone, selects ImportOnly: emit no DomainTypes and import an existing canonical package/module. |
+| `--domain-types-omit` | optional | Emits and references no DomainTypes. It conflicts with both DomainTypes flags. |
+| `--guest-contracts-out <ROOT>` | paired with `--guest-contracts-import` | Emits the GuestContracts declarations under `ROOT`; generated consumers import the supplied specifier. |
+| `--guest-contracts-import <IMPORT>` | optional | With `--guest-contracts-out`, identifies emitted GuestContracts. Alone, selects ImportOnly. |
+| `--guest-contracts-omit` | optional | Emits and references no GuestContracts. It conflicts with both GuestContracts flags. |
 
-The symbols each language emits are listed in [Generated names](generated-names.md).
+The default remains fully unified. Split output is opt-in; each language validates
+its import specifier before generation, and generation rejects a binding that
+references an omitted or unimportable partition. See [Code generation and split
+output](CODE_GENERATION.md) for the semantic partition model, all six accepted
+import forms, ordinary and internal commands, and multi-root write limits.
 
 ## validate
 

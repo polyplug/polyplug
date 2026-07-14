@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
+use core::{ptr, slice};
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
@@ -15,8 +16,9 @@ use polyplug_abi::LogLevel;
 use polyplug_abi::StringView;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
-use std::path::Path;
-use std::path::PathBuf;
+use std::env::temp_dir;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -65,7 +67,7 @@ fn create_runtime() -> Arc<Runtime> {
 }
 
 fn load_fixture(rt: &Runtime) -> Result<(), RuntimeError> {
-    rt.load_bundle(std::path::Path::new(PYTHON_PLUGIN))
+    rt.load_bundle(Path::new(PYTHON_PLUGIN))
 }
 
 fn get_vtable(rt: &Runtime) -> *const GuestContractInterface {
@@ -114,7 +116,7 @@ unsafe fn call_vm_function(
             fn_id,
             args,
             out,
-            core::ptr::null_mut(),
+            ptr::null_mut(),
             &mut err as *mut AbiError,
         )
     };
@@ -212,7 +214,7 @@ fn integration_python_version_string() {
         call_vm_function(
             vtable,
             2,
-            core::ptr::null::<()>(),
+            ptr::null::<()>(),
             &mut out_view as *mut StringView as *mut (),
         )
     };
@@ -253,7 +255,7 @@ fn integration_python_string_return_vm_null_arena() {
             call_vm_function(
                 vtable,
                 2,
-                core::ptr::null::<()>(),
+                ptr::null::<()>(),
                 &mut out_view as *mut StringView as *mut (),
             )
         };
@@ -263,7 +265,7 @@ fn integration_python_string_return_vm_null_arena() {
             "version must return Ok (iter {i})"
         );
         // SAFETY: Ok return guarantees out_view points at a valid UTF-8 buffer.
-        let bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_view.ptr, out_view.len) };
+        let bytes: &[u8] = unsafe { slice::from_raw_parts(out_view.ptr, out_view.len) };
         let version: &str = core::str::from_utf8(bytes).expect("version must be UTF-8");
         assert!(version.starts_with("1.0"), "version value (iter {i})");
     }
@@ -273,8 +275,8 @@ fn integration_python_string_return_vm_null_arena() {
 fn integration_python_exception_returns_abi_error() {
     skip_if_no_python!();
     // Create a temp bundle directory with manifest.toml and a Python script that raises an exception.
-    let tmp_dir: std::path::PathBuf = std::env::temp_dir().join("exception_test_bundle");
-    std::fs::create_dir_all(&tmp_dir).expect("create temp dir");
+    let tmp_dir: PathBuf = temp_dir().join("exception_test_bundle");
+    fs::create_dir_all(&tmp_dir).expect("create temp dir");
 
     // Write manifest.toml
     let manifest_content: String = format!(
@@ -291,7 +293,7 @@ provides = ["test.exception@1"]
 "#,
         polyplug_utils::bundle_id("exception_test")
     );
-    std::fs::write(tmp_dir.join("manifest.toml"), manifest_content).expect("write manifest");
+    fs::write(tmp_dir.join("manifest.toml"), manifest_content).expect("write manifest");
 
     // Write Python script that raises an exception in polyplug_init
     // The loader calls polyplug_init(host_interface, ctx) (self-passing pattern).
@@ -301,7 +303,7 @@ provides = ["test.exception@1"]
 def polyplug_init(host_interface, ctx):
     raise ValueError("test exception from polyplug_init")
 "#;
-    std::fs::write(tmp_dir.join("plugin.py"), plugin_content).expect("write plugin.py");
+    fs::write(tmp_dir.join("plugin.py"), plugin_content).expect("write plugin.py");
 
     let rt: Arc<Runtime> = create_runtime();
     let result: Result<(), RuntimeError> = rt.load_bundle(&tmp_dir);
@@ -325,7 +327,7 @@ def polyplug_init(host_interface, ctx):
     }
 
     // Cleanup
-    std::fs::remove_dir_all(&tmp_dir).ok();
+    fs::remove_dir_all(&tmp_dir).ok();
 }
 
 #[test]
@@ -343,7 +345,7 @@ fn integration_python_utf8_roundtrip() {
         call_vm_function(
             vtable,
             2,
-            core::ptr::null::<()>(),
+            ptr::null::<()>(),
             &mut out_view as *mut StringView as *mut (),
         )
     };
@@ -353,7 +355,7 @@ fn integration_python_utf8_roundtrip() {
         "version must return AbiErrorCode::Ok"
     );
     // SAFETY: out_view.ptr points to valid UTF-8 bytes for out_view.len bytes.
-    let version_bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_view.ptr, out_view.len) };
+    let version_bytes: &[u8] = unsafe { slice::from_raw_parts(out_view.ptr, out_view.len) };
     let version_str: &str = core::str::from_utf8(version_bytes).expect("version must be UTF-8");
     assert!(
         !version_str.is_empty(),
@@ -366,8 +368,8 @@ fn integration_python_utf8_roundtrip() {
 #[test]
 fn integration_python_version_too_old() {
     // Create a temp bundle directory to test version mismatch
-    let tmp_dir: std::path::PathBuf = std::env::temp_dir().join("version_test_bundle");
-    std::fs::create_dir_all(&tmp_dir).expect("create temp dir");
+    let tmp_dir: PathBuf = temp_dir().join("version_test_bundle");
+    fs::create_dir_all(&tmp_dir).expect("create temp dir");
 
     // Write manifest.toml
     let manifest_content: String = format!(
@@ -384,8 +386,8 @@ provides = ["test.version@1"]
 "#,
         polyplug_utils::bundle_id("version_test")
     );
-    std::fs::write(tmp_dir.join("manifest.toml"), manifest_content).expect("write manifest");
-    std::fs::write(tmp_dir.join("plugin.py"), b"# empty plugin").expect("write plugin.py");
+    fs::write(tmp_dir.join("manifest.toml"), manifest_content).expect("write manifest");
+    fs::write(tmp_dir.join("plugin.py"), b"# empty plugin").expect("write plugin.py");
 
     let rt: Arc<Runtime> = Runtime::builder()
         .loader(PythonLoader::new(PythonConfig {
@@ -412,7 +414,7 @@ provides = ["test.version@1"]
     }
 
     // Cleanup
-    std::fs::remove_dir_all(&tmp_dir).ok();
+    fs::remove_dir_all(&tmp_dir).ok();
 }
 
 #[test]
@@ -438,8 +440,8 @@ fn vendor_current_python_sdk(bundle_dir: &Path) {
     let site: PathBuf = bundle_dir.join("site-packages");
 
     let guest_dst: PathBuf = site.join("polyplug_guest");
-    std::fs::create_dir_all(&guest_dst).expect("create polyplug_guest dir");
-    std::fs::copy(
+    fs::create_dir_all(&guest_dst).expect("create polyplug_guest dir");
+    fs::copy(
         sdk_root
             .join("guest")
             .join("polyplug_guest")
@@ -450,19 +452,19 @@ fn vendor_current_python_sdk(bundle_dir: &Path) {
 
     let abi_src: PathBuf = sdk_root.join("polyplug_abi").join("polyplug_abi");
     let abi_dst: PathBuf = site.join("polyplug_abi");
-    std::fs::create_dir_all(&abi_dst).expect("create polyplug_abi dir");
+    fs::create_dir_all(&abi_dst).expect("create polyplug_abi dir");
     for name in ["__init__.py", "abi.py", "string_view_helper.py"] {
-        std::fs::copy(abi_src.join(name), abi_dst.join(name))
+        fs::copy(abi_src.join(name), abi_dst.join(name))
             .unwrap_or_else(|e| panic!("vendor polyplug_abi/{name}: {e}"));
     }
 
     // polyplug_abi.abi falls back to `from polyplug.abi.abi import *`, so the
     // canonical generated ABI module must be reachable as the `polyplug` package.
     let polyplug_abi_pkg: PathBuf = site.join("polyplug").join("abi");
-    std::fs::create_dir_all(&polyplug_abi_pkg).expect("create polyplug/abi dir");
-    std::fs::write(site.join("polyplug").join("__init__.py"), b"").expect("polyplug __init__");
-    std::fs::write(polyplug_abi_pkg.join("__init__.py"), b"").expect("polyplug/abi __init__");
-    std::fs::copy(
+    fs::create_dir_all(&polyplug_abi_pkg).expect("create polyplug/abi dir");
+    fs::write(site.join("polyplug").join("__init__.py"), b"").expect("polyplug __init__");
+    fs::write(polyplug_abi_pkg.join("__init__.py"), b"").expect("polyplug/abi __init__");
+    fs::copy(
         sdk_root.join("abi").join("abi.py"),
         polyplug_abi_pkg.join("abi.py"),
     )
@@ -477,7 +479,7 @@ fn vendor_current_python_sdk(bundle_dir: &Path) {
 /// graceful no-op).
 fn write_log_demo_bundle(tmp: &Path) -> PathBuf {
     let dir: PathBuf = tmp.join("log_demo_python");
-    std::fs::create_dir_all(&dir).expect("create log demo bundle dir");
+    fs::create_dir_all(&dir).expect("create log demo bundle dir");
 
     let id_val: u64 = polyplug_utils::bundle_id("log_demo_python");
     let manifest: String = format!(
@@ -492,7 +494,7 @@ fn write_log_demo_bundle(tmp: &Path) -> PathBuf {
          [function_count]\n\
          \"test.logdemo@1\" = 1\n",
     );
-    std::fs::write(dir.join("manifest.toml"), manifest).expect("write manifest.toml");
+    fs::write(dir.join("manifest.toml"), manifest).expect("write manifest.toml");
 
     let plugin_py: &str = "from polyplug_abi import bytes_as_view, to_str\n\
          from polyplug_guest import LogLevel, log, register_contract, AbiError, AbiErrorCode\n\
@@ -538,7 +540,7 @@ fn write_log_demo_bundle(tmp: &Path) -> PathBuf {
          \x20       plugin_name=\"logdemo\",\n\
          \x20   )\n\
          \x20   return registrations, AbiError(code=int(AbiErrorCode.Ok))\n";
-    std::fs::write(dir.join("logdemo.py"), plugin_py).expect("write logdemo.py");
+    fs::write(dir.join("logdemo.py"), plugin_py).expect("write logdemo.py");
 
     vendor_current_python_sdk(&dir);
     dir

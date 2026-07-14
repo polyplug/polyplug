@@ -1,6 +1,6 @@
-[[contract]]
+[[guest_contract]]
 name = "test.panic"
 version = "1.0.0"
 
-[[contract.functions]]
+[[guest_contract.functions]]
 name = "do_panic"

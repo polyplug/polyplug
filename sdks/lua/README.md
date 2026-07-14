@@ -30,6 +30,13 @@ cargo install polyplugc
 polyplugc generate --bundle bundle.toml --lang lua --out ./generated
 ```
 
+## Shared generated declarations
+
+The command remains unified by default. For a shared Lua module, emit or import
+DomainTypes as `common.domain` and GuestContracts as `common.guest_contracts`;
+see the [canonical split-output guide][codegen].
+
+
 ## Host application
 
 ```lua
@@ -125,3 +132,4 @@ return contracts
 [guest]: https://github.com/polyplug/polyplug/blob/main/docs/languages/lua-guest.md
 [docs]: https://github.com/polyplug/polyplug/tree/main/docs
 [examples]: https://github.com/polyplug/polyplug/tree/main/examples
+[codegen]: https://github.com/polyplug/polyplug/blob/main/docs/CODE_GENERATION.md

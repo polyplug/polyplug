@@ -19,7 +19,7 @@ use crate::ir::{
     AbiBuiltin, PrimitiveType, ResolvedContract, ResolvedFunction, ResolvedParam, ResolvedTypeRef,
     ValidatedIr, Version,
 };
-use crate::{GenerateConfig, GenerateOutput, GeneratedFile, Lang, Side};
+use crate::{GenerateConfig, GenerateOutput, GeneratedFile, Lang, OutputLayout, Side};
 use polyplug_utils::guest_contract_id as fnv_contract_id;
 use std::env;
 use std::ffi::OsStr;
@@ -87,7 +87,7 @@ fn generate_host_file(ir: ValidatedIr, lang: Lang, test_tag: &str, file_suffix: 
         api_toml: api_path,
         lang,
         side: Side::Host,
-        out_dir: tmp_dir.join("out"),
+        layout: OutputLayout::unified(),
     };
     let output: GenerateOutput = generate(config).expect("generate");
 
@@ -108,11 +108,11 @@ fn ir_to_api_toml(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     for contract in &ir.contracts {
         out.push_str(&format!(
-            "[[contract]]\nname = \"{}\"\nversion = \"{}.{}.{}\"\n\n",
+            "[[guest_contract]]\nname = \"{}\"\nversion = \"{}.{}.{}\"\n\n",
             contract.name, contract.version.major, contract.version.minor, contract.version.patch,
         ));
         for func in &contract.functions {
-            out.push_str("[[contract.functions]]\n");
+            out.push_str("[[guest_contract.functions]]\n");
             out.push_str(&format!("name = \"{}\"\n", func.name));
             if !func.params.is_empty() {
                 let params_inline: String = func

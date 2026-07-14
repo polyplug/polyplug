@@ -42,19 +42,19 @@ os.execute("mkdir -p " .. quote(generated_root))
 
 local first_api = generated_root .. "/first_api.toml"
 write_file(first_api, [=[
-[[plugin_contract]]
+[[guest_contract]]
 name = "profile.counter"
 version = "1.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "increment"
 return = "u32"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "value"
 return = "u32"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "text"
 return = "StringView"
 ]=])
@@ -77,27 +77,27 @@ write_file(second_api, [=[
 name = "SecondPayload"
 fields = [{ name = "count", type = "u32" }]
 
-[[plugin_contract]]
+[[guest_contract]]
 name = "profile.counter"
 version = "1.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "increment"
 return = "u32"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "value"
 return = "u32"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "text"
 return = "StringView"
 
-[[plugin_contract]]
+[[guest_contract]]
 name = "profile.extra"
 version = "1.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "metadata"
 return = "SecondPayload"
 ]=])

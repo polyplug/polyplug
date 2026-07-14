@@ -18,7 +18,11 @@ use tempfile::tempdir;
 use crate::GenerateConfig;
 use crate::GenerateOutput;
 use crate::Lang;
+use crate::OutputDestination;
+use crate::OutputLayout;
+use crate::OutputPartition;
 use crate::Side;
+use crate::ValidatedImport;
 use crate::generate;
 use crate::write_output;
 
@@ -158,7 +162,7 @@ fn current_generated_disk_bytes_match_compatibility_baseline() {
                 api_toml,
                 lang,
                 side,
-                out_dir: temp.path().join("unused-by-generate"),
+                layout: OutputLayout::unified(),
             })
             .unwrap_or_else(|error| {
                 panic!("generate {} {}: {error}", lang.as_str(), side_name(side))
@@ -186,6 +190,136 @@ fn current_generated_disk_bytes_match_compatibility_baseline() {
         "generated disk bytes or classification changed. Update the reviewed baseline only for intended compatibility changes:\n{}",
         format_entries(&actual)
     );
+}
+
+#[test]
+fn rust_caller_layouts_keep_unified_baseline_and_split_canonical_types() {
+    let temp = tempdir().expect("create output directory");
+    let api_path = fixture_path("api.toml");
+    let bundle_path = fixture_path("bundle.toml");
+
+    let unified_guest = generate(GenerateConfig {
+        api_toml: bundle_path.clone(),
+        lang: Lang::Rust,
+        side: Side::Guest,
+        layout: OutputLayout::unified(),
+    })
+    .expect("generate unified Rust guest");
+    let unified_guest_entries = write_entries(
+        unified_guest,
+        &temp.path().join("unified-guest"),
+        Lang::Rust,
+        "guest",
+        |_| "canonical",
+        "unified Rust guest",
+    );
+    assert_eq!(
+        unified_guest_entries
+            .iter()
+            .find(|entry| entry.path == "guest/peer_callers.rs")
+            .expect("unified Rust peer callers")
+            .sha256,
+        "4ee3e749f180b50910041e994dba8b5084ae8ad8d2f4051ab77a5886eeead178",
+        "unified Rust peer caller bytes are a compatibility contract"
+    );
+
+    let unified_host = generate(GenerateConfig {
+        api_toml: api_path.clone(),
+        lang: Lang::Rust,
+        side: Side::Host,
+        layout: OutputLayout::unified(),
+    })
+    .expect("generate unified Rust host");
+    let unified_host_entries = write_entries(
+        unified_host,
+        &temp.path().join("unified-host"),
+        Lang::Rust,
+        "host",
+        |_| "canonical",
+        "unified Rust host",
+    );
+    assert_eq!(
+        unified_host_entries
+            .iter()
+            .find(|entry| entry.path == "host/host_callers.rs")
+            .expect("unified Rust host callers")
+            .sha256,
+        "b5f532fb23aa5ab5f5143cd78ffeb73b0c2f467ecc9927966e6bdec33bfb73cd",
+        "unified Rust host caller bytes are a compatibility contract"
+    );
+
+    let guest_layout = OutputLayout {
+        bindings: OutputDestination::Inline,
+        domain_types: OutputDestination::ImportOnly {
+            import: ValidatedImport::parse(Lang::Rust, "common::domain")
+                .expect("valid domain import"),
+        },
+        guest_contracts: OutputDestination::ImportOnly {
+            import: ValidatedImport::parse(Lang::Rust, "common::guest_contracts")
+                .expect("valid guest-contract import"),
+        },
+    };
+    let split_guest = generate(GenerateConfig {
+        api_toml: bundle_path,
+        lang: Lang::Rust,
+        side: Side::Guest,
+        layout: guest_layout,
+    })
+    .expect("generate split Rust guest");
+    let peer_callers = split_guest
+        .files
+        .iter()
+        .find(|file| file.path == Path::new("guest/peer_callers.rs"))
+        .expect("split Rust peer callers")
+        .content
+        .as_str();
+    for required in [
+        "use super::types::*;",
+        "pub fn snapshot(&mut self) -> Result<common::domain::Payload, PeerCallError>",
+        "self.arena.reset();",
+        "Ok(common::domain::Payload",
+    ] {
+        assert!(
+            peer_callers.contains(required),
+            "split Rust peer caller must preserve canonical domain values and arena ownership: {required}"
+        );
+    }
+    assert!(
+        !peer_callers.contains("use common::domain::*;"),
+        "peer callers must keep ABI types unambiguous while using canonical domain paths"
+    );
+
+    let split_host = generate(GenerateConfig {
+        api_toml: api_path,
+        lang: Lang::Rust,
+        side: Side::Host,
+        layout: OutputLayout {
+            bindings: OutputDestination::Inline,
+            domain_types: OutputDestination::ImportOnly {
+                import: ValidatedImport::parse(Lang::Rust, "common::domain")
+                    .expect("valid domain import"),
+            },
+            guest_contracts: OutputDestination::Omit,
+        },
+    })
+    .expect("generate split Rust host");
+    let host_callers = split_host
+        .files
+        .iter()
+        .find(|file| file.path == Path::new("host/host_callers.rs"))
+        .expect("split Rust host callers")
+        .content
+        .as_str();
+    for required in [
+        "payload: &common::domain::Payload",
+        "bytes: Vec<u8>",
+        "Buffer { ptr: (bytes).as_ptr().cast_mut(), len: (bytes).len(), cap: (bytes).len() }",
+    ] {
+        assert!(
+            host_callers.contains(required),
+            "split Rust host caller must lower canonical ownership safely: {required}"
+        );
+    }
 }
 
 #[test]
@@ -254,7 +388,7 @@ fn reset_templates_separate_destructive_lifecycle_from_dispatch_revalidation() {
             api_toml: api_path.clone(),
             lang: *lang,
             side: Side::Host,
-            out_dir: PathBuf::new(),
+            layout: OutputLayout::unified(),
         })
         .unwrap_or_else(|error| panic!("generate {} host callers: {error}", lang.as_str()));
         let callers = output
@@ -342,7 +476,7 @@ fn caller_revalidation_invalidation_is_terminal_in_every_host_template() {
             api_toml: api_path.clone(),
             lang: *lang,
             side: Side::Host,
-            out_dir: PathBuf::new(),
+            layout: OutputLayout::unified(),
         })
         .unwrap_or_else(|error| panic!("generate {} host callers: {error}", lang.as_str()));
         let callers = output
@@ -356,6 +490,73 @@ fn caller_revalidation_invalidation_is_terminal_in_every_host_template() {
                 callers.content.contains(fragment),
                 "{} terminal invalidation must emit `{fragment}`",
                 lang.as_str()
+            );
+        }
+    }
+}
+
+#[test]
+fn every_language_accepts_and_emits_the_canonical_split_layout() {
+    let temporary_root = tempdir().expect("create split-layout root");
+    let expectations: [(Lang, &str, &str); 6] = [
+        (Lang::Rust, "shared::domain", "shared::guest_contracts"),
+        (Lang::Cpp, "guest/domain.hpp", "guest/guest_contracts.hpp"),
+        (Lang::CSharp, "Shared.Domain", "Shared.GuestContracts"),
+        (Lang::Python, "shared.domain", "shared.guest_contracts"),
+        (Lang::Lua, "shared.domain", "shared.guest_contracts"),
+        (
+            Lang::JsQuickJs,
+            "@test/javascript-domain",
+            "@test/javascript-contracts",
+        ),
+    ];
+
+    for (language, domain_import, guest_contracts_import) in expectations {
+        let layout = OutputLayout {
+            bindings: OutputDestination::Inline,
+            domain_types: OutputDestination::Emit {
+                root: temporary_root.path().join(language.as_str()).join("domain"),
+                import: ValidatedImport::parse(language, domain_import).unwrap_or_else(|error| {
+                    panic!("valid {} domain import: {error}", language.as_str())
+                }),
+            },
+            guest_contracts: OutputDestination::Emit {
+                root: temporary_root
+                    .path()
+                    .join(language.as_str())
+                    .join("guest_contracts"),
+                import: ValidatedImport::parse(language, guest_contracts_import).unwrap_or_else(
+                    |error| panic!("valid {} guest-contract import: {error}", language.as_str()),
+                ),
+            },
+        };
+        let output = generate(GenerateConfig {
+            api_toml: fixture_path("api.toml"),
+            lang: language,
+            side: Side::Guest,
+            layout,
+        })
+        .unwrap_or_else(|error| {
+            panic!(
+                "{} must support the canonical split layout: {error}",
+                language.as_str()
+            )
+        });
+
+        for partition in [
+            OutputPartition::Bindings,
+            OutputPartition::DomainTypes,
+            OutputPartition::GuestContracts,
+        ] {
+            assert!(
+                output.files.iter().any(|file| file.partition == partition),
+                "{} guest output must contain {}",
+                language.as_str(),
+                match partition {
+                    OutputPartition::Bindings => "bindings",
+                    OutputPartition::DomainTypes => "domain types",
+                    OutputPartition::GuestContracts => "guest contracts",
+                }
             );
         }
     }

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use polyplug_codegen::GenerateConfig;
 use polyplug_codegen::Lang;
+use polyplug_codegen::OutputLayout;
 use polyplug_codegen::Side;
 use polyplug_codegen::generate;
 use polyplug_codegen::write_output;
@@ -17,11 +18,11 @@ mod cli_support;
 use cli_support::cli_generate;
 
 const API_TOML: &str = r#"
-[[plugin_contract]]
+[[guest_contract]]
 name = "pipeline.Decoder"
 version = "1.0.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "decode"
 params = [{ name = "input", type = "StringView" }]
 return = "StringView"
@@ -56,7 +57,7 @@ fn public_library_writer_matches_cli_bytes() {
         api_toml: bundle_path.clone(),
         lang: Lang::Rust,
         side: Side::Guest,
-        out_dir: library_dir.clone(),
+        layout: OutputLayout::unified(),
     };
     let library_output = generate(library_config).expect("generate through public library");
     write_output(&library_output, &library_dir).expect("write through public library");
@@ -65,9 +66,10 @@ fn public_library_writer_matches_cli_bytes() {
         api_toml: bundle_path,
         lang: Lang::Rust,
         side: Side::Guest,
-        out_dir: cli_dir.clone(),
+        layout: OutputLayout::unified(),
     };
-    cli_generate(&cli_config).expect("generate through CLI");
+    let cli_output = cli_generate(&cli_config).expect("generate through CLI");
+    write_output(&cli_output, &cli_dir).expect("write CLI output through public library");
 
     let library_files = output_bytes(&library_dir);
     let cli_files = output_bytes(&cli_dir);

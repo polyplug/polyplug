@@ -33,7 +33,7 @@ use polyplug_abi::VmLoaderData;
 use polyplug_abi::ffi as abi_ffi;
 
 use polyplug_abi::string_view_null;
-use polyplug_codegen::{GenerateConfig, Lang, Side};
+use polyplug_codegen::{GenerateConfig, Lang, OutputLayout, Side};
 use polyplug_utils::BundleId;
 
 mod cli_support;
@@ -70,7 +70,7 @@ fn generate_rust_bindings(api_toml: &Path, out_dir: &Path, side: Side) {
         api_toml: api_toml.to_path_buf(),
         lang: Lang::Rust,
         side,
-        out_dir: out_dir.to_path_buf(),
+        layout: OutputLayout::unified(),
     };
 
     let output = cli_generate(&config).expect("polyplugc::generate failed");

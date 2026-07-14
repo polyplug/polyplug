@@ -3,10 +3,12 @@
 #![allow(clippy::expect_used)]
 
 use crate::{
-    GenerateConfig, GenerateOutput, InternalCSharpGenerateConfig, Lang, Side, generate,
-    generate_internal_csharp, write_output,
+    GenerateConfig, GenerateOutput, InternalCSharpGenerateConfig, Lang, OutputDestination,
+    OutputLayout, OutputPartition, Side, ValidatedImport, generate, generate_internal_csharp,
+    write_output,
 };
 use core::iter::once;
+use core::slice::from_ref;
 use polyplug_utils::bundle_id;
 use std::collections::{BTreeMap, HashSet};
 use std::env::consts::OS;
@@ -95,36 +97,36 @@ fields = [
   {{ name = "entries", type = "Array<Inner>" }},
 ]
 
-[[plugin_contract]]
+[[guest_contract]]
 name = "{contract_name}"
 version = "1.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "scalar"
 params = [{{ name = "left", type = "u32" }}, {{ name = "right", type = "u32" }}]
 return = "u32"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "text"
 params = [{{ name = "label", type = "StringView" }}, {{ name = "mode", type = "Mode" }}]
 return = "StringView"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "buffer"
 params = [{{ name = "bytes", type = "Buffer" }}]
 return = "Buffer"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "nested"
 params = [{{ name = "value", type = "Inner" }}]
 return = "Envelope"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "array"
 params = [{{ name = "values", type = "Array<Inner>" }}]
 return = "Array<Inner>"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "fail"
 "#
         ),
@@ -166,6 +168,7 @@ fn internal_csharp_profile_uses_identity_namespaces_and_typed_registration() {
         generate_internal_csharp(InternalCSharpGenerateConfig {
             bundle_toml: bundle,
             out_dir: temp.path().join("out"),
+            layout: Default::default(),
         })
         .expect("generate C# internal profile"),
     );
@@ -227,7 +230,7 @@ fn external_csharp_generation_emits_no_internal_profile_files() {
         api_toml: api,
         lang: Lang::CSharp,
         side: Side::Guest,
-        out_dir: temp.path().join("out"),
+        layout: OutputLayout::unified(),
     })
     .expect("generate external C# guest bindings");
 
@@ -276,11 +279,13 @@ fn two_internal_csharp_profiles_with_different_apis_compile_together() {
     let first = generate_internal_csharp(InternalCSharpGenerateConfig {
         bundle_toml: first_bundle,
         out_dir: temp.path().join("out"),
+        layout: Default::default(),
     })
     .expect("generate first internal C# profile");
     let second = generate_internal_csharp(InternalCSharpGenerateConfig {
         bundle_toml: second_bundle,
         out_dir: temp.path().join("out"),
+        layout: Default::default(),
     })
     .expect("generate second internal C# profile");
     let mut paths = HashSet::new();
@@ -294,7 +299,11 @@ fn two_internal_csharp_profiles_with_different_apis_compile_together() {
     let mut files = first.files;
     files.extend(second.files);
     let source = temp.path().join("source");
-    write_output(&GenerateOutput { files }, &source).expect("write generated C# profiles");
+    write_output(
+        &GenerateOutput::from_files(Lang::CSharp, OutputLayout::unified(), files),
+        &source,
+    )
+    .expect("write generated C# profiles");
 
     let root = workspace_root();
     let abi = root.join("sdks/csharp/abi/Polyplug.Abi.csproj");
@@ -349,11 +358,49 @@ fn generated_internal_csharp_profile_registers_and_dispatches_real_runtime_shape
         "[bundle]\nname = \"profilee2e\"\nversion = \"1.0\"\napi = \"api.toml\"\n\n[[plugin]]\nname = \"first\"\nimplements = [\"profile.Contract@1.0\"]\n\n[[plugin]]\nname = \"second\"\nimplements = [\"profile.Contract@1.0\"]\n",
     )
     .expect("write same-contract multi-provider internal bundle TOML");
+    let namespace = format!(
+        "Polyplug.Generated.Internal.Bundleprofilee2e{:016X}",
+        bundle_id("profilee2e")
+    );
+    let domain_root = temp.path().join("domain");
+    let contracts_root = temp.path().join("contracts");
+    let layout = OutputLayout {
+        bindings: OutputDestination::Inline,
+        domain_types: OutputDestination::Emit {
+            root: domain_root.clone(),
+            import: ValidatedImport::parse(Lang::CSharp, format!("{namespace}.DomainTypes"))
+                .expect("valid internal domain namespace"),
+        },
+        guest_contracts: OutputDestination::Emit {
+            root: contracts_root.clone(),
+            import: ValidatedImport::parse(Lang::CSharp, format!("{namespace}.GuestContracts"))
+                .expect("valid internal guest-contract namespace"),
+        },
+    };
     let output = generate_internal_csharp(InternalCSharpGenerateConfig {
         bundle_toml: bundle,
         out_dir: temp.path().join("out"),
+        layout,
     })
     .expect("generate executable C# internal profile");
+    assert!(output.files.iter().any(|file| {
+        file.partition == OutputPartition::DomainTypes
+            && file
+                .content
+                .contains(&format!("namespace {namespace}.DomainTypes;"))
+    }));
+    assert!(output.files.iter().any(|file| {
+        file.partition == OutputPartition::GuestContracts
+            && file
+                .content
+                .contains(&format!("namespace {namespace}.GuestContracts;"))
+    }));
+    assert!(
+        output
+            .files
+            .iter()
+            .all(|file| !file.path.ends_with(Path::new("guest/Contracts.cs")))
+    );
     let source = temp.path().join("source");
     write_output(&output, &source).expect("write executable C# profile");
 
@@ -361,10 +408,6 @@ fn generated_internal_csharp_profile_registers_and_dispatches_real_runtime_shape
     let abi = root.join("sdks/csharp/abi/Polyplug.Abi.csproj");
     let guest = root.join("sdks/csharp/guest/Polyplug.Guest.csproj");
     let host = root.join("sdks/csharp/host/Polyplug.Host.csproj");
-    let namespace = format!(
-        "Polyplug.Generated.Internal.Bundleprofilee2e{:016X}",
-        bundle_id("profilee2e")
-    );
     fs::write(
         source.join("Program.cs"),
         format!(
@@ -375,31 +418,32 @@ using Polyplug.Guest;
 using Polyplug.Host;
 
 using Generated = {namespace};
-using Guest = {namespace}.Guest;
+using Contracts = {namespace}.GuestContracts;
+using Domain = {namespace}.DomainTypes;
 using Host = {namespace}.Host;
 
-sealed class ProviderFirst(nint host) : Guest.IProfileContractGuestContract
+sealed class ProviderFirst(nint host) : Contracts.IProfileContractGuestContract
 {{
     private readonly nint _host = host;
     private uint _calls;
 
     public uint Scalar(uint left, uint right) => left + right + _calls++;
-    public StringView Text(StringView label, Guest.Mode mode) => PolyplugHost.AllocString(_host, "ok");
+    public StringView Text(StringView label, Domain.Mode mode) => PolyplugHost.AllocString(_host, "ok");
     public Polyplug.Abi.Buffer Buffer(Polyplug.Abi.Buffer bytes) => bytes;
-    public Guest.Envelope Nested(ref Guest.Inner value) => default;
-    public Guest.ArrayOf_Inner Array(ref Guest.ArrayOf_Inner values) => values;
+    public Domain.Envelope Nested(ref Domain.Inner value) => default;
+    public Domain.ArrayOf_Inner Array(ref Domain.ArrayOf_Inner values) => values;
     public void Fail() => throw new GuestException(7, "expected");
 }}
 
-sealed class ProviderSecond : Guest.IProfileContractGuestContract
+sealed class ProviderSecond : Contracts.IProfileContractGuestContract
 {{
     private uint _calls;
 
     public uint Scalar(uint left, uint right) => left + right + _calls++;
-    public StringView Text(StringView label, Guest.Mode mode) => default;
+    public StringView Text(StringView label, Domain.Mode mode) => default;
     public Polyplug.Abi.Buffer Buffer(Polyplug.Abi.Buffer bytes) => bytes;
-    public Guest.Envelope Nested(ref Guest.Inner value) => default;
-    public Guest.ArrayOf_Inner Array(ref Guest.ArrayOf_Inner values) => values;
+    public Domain.Envelope Nested(ref Domain.Inner value) => default;
+    public Domain.ArrayOf_Inner Array(ref Domain.ArrayOf_Inner values) => values;
     public void Fail() => throw new GuestException(7, "expected");
 }}
 
@@ -422,7 +466,7 @@ static class Program
                 throw new InvalidOperationException("committed handles did not preserve independent same-contract providers");
             var text = new Host.ProfileContractContractTextArgs {{
                 Label = default,
-                Mode = Host.Mode.Ready,
+                Mode = Domain.Mode.Ready,
             }};
             if (caller.Text(text).Len != 2)
                 throw new InvalidOperationException("string dispatch failed");
@@ -491,6 +535,28 @@ static class Program
         ),
     )
     .expect("write C# internal profile executable");
+    let internal_root =
+        Path::new("internal").join(format!("profilee2e-{:016x}", bundle_id("profilee2e")));
+    let domain_project = domain_root.join("Domain.csproj");
+    write_split_project(
+        &domain_project,
+        "net10.0",
+        None,
+        &[domain_root
+            .join(&internal_root)
+            .join("domain/DomainTypes.cs")],
+        from_ref(&abi),
+    );
+    let contracts_project = contracts_root.join("Contracts.csproj");
+    write_split_project(
+        &contracts_project,
+        "net10.0",
+        None,
+        &[contracts_root
+            .join(&internal_root)
+            .join("guest/GuestContracts.cs")],
+        &[abi.clone(), guest.clone(), domain_project.clone()],
+    );
     let project = source.join("Profiles.csproj");
     fs::write(
         &project,
@@ -507,12 +573,16 @@ static class Program
     <ProjectReference Include="{}" />
     <ProjectReference Include="{}" />
     <ProjectReference Include="{}" />
+    <ProjectReference Include="{}" />
+    <ProjectReference Include="{}" />
   </ItemGroup>
 </Project>
 "#,
             abi.display(),
             guest.display(),
             host.display(),
+            domain_project.display(),
+            contracts_project.display(),
         ),
     )
     .expect("write C# internal profile executable project");
@@ -530,6 +600,240 @@ static class Program
     assert!(
         output.status.success(),
         "generated C# profile must register and dispatch against the real runtime\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+fn write_split_project(
+    path: &Path,
+    target_framework: &str,
+    output_type: Option<&str>,
+    compile: &[PathBuf],
+    references: &[PathBuf],
+) {
+    let output_type = output_type
+        .map(|value| format!("    <OutputType>{value}</OutputType>\n"))
+        .unwrap_or_default();
+    let compile_items = compile
+        .iter()
+        .map(|file| format!("    <Compile Include=\"{}\" />", file.display()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let references = references
+        .iter()
+        .map(|project| format!("    <ProjectReference Include=\"{}\" />", project.display()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(
+        path,
+        format!(
+            r#"<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+{output_type}    <TargetFramework>{target_framework}</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+{compile_items}
+  </ItemGroup>
+  <ItemGroup>
+{references}
+  </ItemGroup>
+</Project>
+"#
+        ),
+    )
+    .expect("write split C# project");
+}
+
+#[test]
+fn partitioned_csharp_outputs_compile_and_run_against_external_domain_packages() {
+    let temp = tempfile::tempdir().expect("create C# split-output fixture");
+    let api = temp.path().join("api.toml");
+    write_api(&api, "shape.Contract");
+
+    let bindings_root = temp.path().join("bindings");
+    let domain_root = temp.path().join("domain");
+    let contracts_root = temp.path().join("contracts");
+    let domain_import =
+        ValidatedImport::parse(Lang::CSharp, "Split.DomainTypes").expect("valid domain namespace");
+    let contracts_import = ValidatedImport::parse(Lang::CSharp, "Split.GuestContracts")
+        .expect("valid guest-contract namespace");
+    let guest_layout = OutputLayout {
+        bindings: OutputDestination::Inline,
+        domain_types: OutputDestination::Emit {
+            root: domain_root.clone(),
+            import: domain_import.clone(),
+        },
+        guest_contracts: OutputDestination::Emit {
+            root: contracts_root.clone(),
+            import: contracts_import.clone(),
+        },
+    };
+    let host_layout = OutputLayout {
+        bindings: OutputDestination::Inline,
+        domain_types: OutputDestination::ImportOnly {
+            import: domain_import,
+        },
+        guest_contracts: OutputDestination::Omit,
+    };
+    let guest = generate(GenerateConfig {
+        api_toml: api.clone(),
+        lang: Lang::CSharp,
+        side: Side::Guest,
+        layout: guest_layout,
+    })
+    .expect("generate split C# guest bindings");
+    let host = generate(GenerateConfig {
+        api_toml: api,
+        lang: Lang::CSharp,
+        side: Side::Host,
+        layout: host_layout,
+    })
+    .expect("generate split C# host bindings");
+
+    let domain = guest
+        .files
+        .iter()
+        .find(|file| file.partition == OutputPartition::DomainTypes)
+        .expect("generated C# domain types");
+    assert!(domain.content.contains("namespace Split.DomainTypes;"));
+    assert!(domain.content.contains("public struct Envelope"));
+    let contracts = guest
+        .files
+        .iter()
+        .find(|file| file.partition == OutputPartition::GuestContracts)
+        .expect("generated C# guest contracts");
+    assert!(
+        contracts
+            .content
+            .contains("namespace Split.GuestContracts;")
+    );
+    assert!(contracts.content.contains("using Split.DomainTypes;"));
+    assert!(guest.files.iter().all(|file| {
+        file.path != Path::new("guest/Contracts.cs")
+            && !(file.path == Path::new("guest/Types.cs")
+                && file.content.contains("public struct Envelope"))
+    }));
+    let interfaces = guest
+        .files
+        .iter()
+        .find(|file| file.path == Path::new("guest/Interfaces.cs"))
+        .expect("guest ABI bindings");
+    assert!(interfaces.content.contains("using Split.DomainTypes;"));
+    assert!(interfaces.content.contains("using Split.GuestContracts;"));
+    assert!(
+        interfaces
+            .references
+            .contains(&OutputPartition::DomainTypes)
+    );
+    assert!(
+        interfaces
+            .references
+            .contains(&OutputPartition::GuestContracts)
+    );
+    let callers = host
+        .files
+        .iter()
+        .find(|file| file.path == Path::new("host/Callers.cs"))
+        .expect("host ABI callers");
+    assert!(callers.content.contains("using Split.DomainTypes;"));
+
+    write_output(&guest, &bindings_root).expect("write split guest bindings");
+    write_output(&host, &bindings_root).expect("write split host bindings");
+    let root = workspace_root();
+    let abi = root.join("sdks/csharp/abi/Polyplug.Abi.csproj");
+    let guest_sdk = root.join("sdks/csharp/guest/Polyplug.Guest.csproj");
+    let host_sdk = root.join("sdks/csharp/host/Polyplug.Host.csproj");
+    let domain_project = domain_root.join("Domain.csproj");
+    write_split_project(
+        &domain_project,
+        "net10.0",
+        None,
+        &[domain_root.join("guest/DomainTypes.cs")],
+        from_ref(&abi),
+    );
+    let contracts_project = contracts_root.join("Contracts.csproj");
+    write_split_project(
+        &contracts_project,
+        "net10.0",
+        None,
+        &[contracts_root.join("guest/GuestContracts.cs")],
+        &[abi.clone(), guest_sdk.clone(), domain_project.clone()],
+    );
+    let program = bindings_root.join("Program.cs");
+    fs::write(
+        &program,
+        r#"using System;
+using System.Reflection;
+using Domain = Split.DomainTypes;
+using Contracts = Split.GuestContracts;
+
+sealed class Provider : Contracts.IShapeContractGuestContract
+{
+    private uint _calls;
+
+    public uint Scalar(uint left, uint right) => left + right + _calls++;
+    public Polyplug.Abi.StringView Text(Polyplug.Abi.StringView label, Domain.Mode mode) => default;
+    public Polyplug.Abi.Buffer Buffer(Polyplug.Abi.Buffer bytes) => bytes;
+    public Domain.Envelope Nested(ref Domain.Inner value) =>
+        new() { inner = value, entries = default };
+    public Domain.ArrayOf_Inner Array(ref Domain.ArrayOf_Inner values) => values;
+    public void Fail() { }
+}
+
+static class Program
+{
+    static int Main()
+    {
+        var provider = new Provider();
+        if (provider.Scalar(1, 2) != 3 || provider.Scalar(1, 2) != 4)
+            return 1;
+        var nested = typeof(Contracts.IShapeContractGuestContract)
+            .GetMethod(nameof(Contracts.IShapeContractGuestContract.Nested))!;
+        if (nested.ReturnType != typeof(Domain.Envelope)
+            || nested.GetParameters()[0].ParameterType.GetElementType() != typeof(Domain.Inner))
+            return 2;
+        _ = provider.Nested(ref UnsafeDefault<Domain.Inner>.Value);
+        return 0;
+    }
+}
+
+static class UnsafeDefault<T> where T : struct
+{
+    public static T Value;
+}
+"#,
+    )
+    .expect("write C# split-output driver");
+    let binding_project = bindings_root.join("Bindings.csproj");
+    write_split_project(
+        &binding_project,
+        "net10.0",
+        Some("Exe"),
+        &[
+            bindings_root.join("guest/Types.cs"),
+            bindings_root.join("guest/Interfaces.cs"),
+            bindings_root.join("guest/Init.cs"),
+            bindings_root.join("host/Types.cs"),
+            bindings_root.join("host/Callers.cs"),
+            program,
+        ],
+        &[abi, guest_sdk, host_sdk, domain_project, contracts_project],
+    );
+    let output = Command::new("dotnet")
+        .args(["run", "--nologo", "--verbosity", "quiet"])
+        .arg("--project")
+        .arg(&binding_project)
+        .current_dir(&bindings_root)
+        .output()
+        .expect("compile and run split C# projects");
+    assert!(
+        output.status.success(),
+        "split C# projects must compile and run with canonical external types\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );

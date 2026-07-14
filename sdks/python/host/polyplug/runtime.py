@@ -626,7 +626,7 @@ class Runtime:
         with self._internal_plugin_lock:
             host: int = self._ensure_host()
             reserve = getattr(bundle, "_reserve_transfer", None)
-            contracts_for = getattr(bundle, "_internal_plugin_contracts", None)
+            contracts_for = getattr(bundle, "_internal_guest_contracts", None)
             if not all(callable(method) for method in (reserve, contracts_for)):
                 raise TypeError("bundle must be generated internal-plugin provider input")
 

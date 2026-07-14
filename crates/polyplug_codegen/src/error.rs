@@ -333,7 +333,7 @@ impl fmt::Display for PolyplugcError {
             } => {
                 write!(
                     f,
-                    "duplicate contract name `{name}`: contract names must be unique across both [[plugin_contract]] and [[host_contract]]"
+                    "duplicate contract name `{name}`: contract names must be unique across both [[guest_contract]] and [[host_contract]]"
                 )?;
                 if let Some(loc) = first_defined_at {
                     write!(f, " (first defined at {loc})")?;

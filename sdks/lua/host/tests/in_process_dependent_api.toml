@@ -1,7 +1,7 @@
-[[plugin_contract]]
+[[guest_contract]]
 name = "state.dependent"
 version = "1.0.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "value"
 return = "u32"

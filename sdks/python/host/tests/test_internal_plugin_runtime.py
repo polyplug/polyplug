@@ -53,7 +53,7 @@ class _InternalPlugin:
             raise RuntimeError("internal-plugin provider input has already been consumed")
         self.transferred = True
 
-    def _internal_plugin_contracts(self):
+    def _internal_guest_contracts(self):
         return self._contracts
 
 

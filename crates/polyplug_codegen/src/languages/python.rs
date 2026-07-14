@@ -1,7 +1,7 @@
 //! Python code generator — produces Python ctypes bindings from ABI items.
 //!
 //! Generates typed CFUNCTYPE typedefs for function pointer fields,
-//! correct Array<T> representations, and idiomatic Python naming.
+//! correct `Array<T>` representations, and idiomatic Python naming.
 
 use std::io;
 

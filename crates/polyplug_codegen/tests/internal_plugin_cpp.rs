@@ -13,8 +13,9 @@ use std::process::Command;
 use std::process::Output;
 
 use polyplug_codegen::{
-    GenerateConfig, InternalCppGenerateConfig, Lang, Side, generate, generate_internal_cpp,
-    write_output,
+    GenerateConfig, GenerateOutput, InternalCppGenerateConfig, Lang, OutputDestination,
+    OutputLayout, OutputPartition, PolyplugcError, Side, ValidatedImport, generate,
+    generate_internal_cpp, write_output,
 };
 use tempfile::TempDir;
 
@@ -217,25 +218,25 @@ fields = [
   {{ name = "mode", type = "Mode" }},
 ]
 
-[[plugin_contract]]
+[[guest_contract]]
 name = "{contract}"
 version = "1.0"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "metadata"
 return = "Envelope"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "read"
 params = [{{ name = "address", type = "u64" }}, {{ name = "size", type = "u32" }}]
 return = "Buffer"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "write"
 params = [{{ name = "address", type = "u64" }}, {{ name = "bytes", type = "Buffer" }}]
 return = "u32"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "inspect"
 params = [
   {{ name = "label", type = "StringView" }},
@@ -244,7 +245,7 @@ params = [
 ]
 return = "StringView"
 
-[[plugin_contract.functions]]
+[[guest_contract.functions]]
 name = "take_inner"
 params = [{{ name = "inner", type = "Inner" }}]
 return = "u32"
@@ -252,6 +253,71 @@ return = "u32"
         ),
     )
     .expect("write API fixture");
+}
+
+fn write_primitive_api(path: &Path, contract: &str) {
+    fs::write(
+        path,
+        format!(
+            r#"
+[[guest_contract]]
+name = "{contract}"
+version = "1.0"
+
+[[guest_contract.functions]]
+name = "increment"
+params = [{{ name = "value", type = "u32" }}]
+return = "u32"
+"#
+        ),
+    )
+    .expect("write primitive API fixture");
+}
+
+fn write_abi_only_api(path: &Path, contract: &str) {
+    fs::write(
+        path,
+        format!(
+            r#"
+[[guest_contract]]
+name = "{contract}"
+version = "1.0"
+
+[[guest_contract.functions]]
+name = "transform"
+params = [
+  {{ name = "label", type = "StringView" }},
+  {{ name = "bytes", type = "Buffer" }},
+]
+return = "Buffer"
+"#
+        ),
+    )
+    .expect("write ABI-only API fixture");
+}
+
+fn primitive_internal_output(
+    temp: &TempDir,
+    name: &str,
+    contract: &str,
+    layout: OutputLayout,
+) -> GenerateOutput {
+    let api = temp.path().join(format!("{name}.toml"));
+    let bundle = temp.path().join(format!("{name}.bundle.toml"));
+    write_primitive_api(&api, contract);
+    write_bundle(
+        &bundle,
+        &format!("{name}.toml"),
+        name,
+        &format!("{name}.provider"),
+        contract,
+    );
+    generate_internal_cpp(InternalCppGenerateConfig {
+        bundle_toml: bundle,
+        out_dir: temp.path().join("out"),
+        layout,
+    })
+    .expect("generate primitive internal C++ profile")
 }
 
 fn write_bundle(path: &Path, api: &str, bundle_name: &str, plugin_name: &str, contract: &str) {
@@ -264,7 +330,16 @@ fn write_bundle(path: &Path, api: &str, bundle_name: &str, plugin_name: &str, co
     .expect("write internal bundle fixture");
 }
 
-fn internal_output(temp: &TempDir, name: &str, contract: &str) -> polyplug_codegen::GenerateOutput {
+fn internal_output(temp: &TempDir, name: &str, contract: &str) -> GenerateOutput {
+    internal_output_with_layout(temp, name, contract, OutputLayout::unified())
+}
+
+fn internal_output_with_layout(
+    temp: &TempDir,
+    name: &str,
+    contract: &str,
+    layout: OutputLayout,
+) -> GenerateOutput {
     let api = temp.path().join(format!("{name}.toml"));
     let bundle = temp.path().join(format!("{name}.bundle.toml"));
     write_api(&api, contract);
@@ -278,8 +353,834 @@ fn internal_output(temp: &TempDir, name: &str, contract: &str) -> polyplug_codeg
     generate_internal_cpp(InternalCppGenerateConfig {
         bundle_toml: bundle,
         out_dir: temp.path().join("out"),
+        layout,
     })
     .expect("generate internal C++ profile")
+}
+
+#[cfg(not(windows))]
+#[test]
+fn partitioned_cpp_outputs_use_external_domain_and_contract_headers() {
+    let temp = TempDir::new().expect("create partitioned C++ fixture");
+    let api = temp.path().join("api.toml");
+    let bundle = temp.path().join("bundle.toml");
+    write_api(&api, "platform.Plugin");
+    write_bundle(
+        &bundle,
+        "api.toml",
+        "external_cpp",
+        "external.provider",
+        "platform.Plugin",
+    );
+    let bundle_source = fs::read_to_string(&bundle).expect("read external C++ bundle");
+    fs::write(
+        &bundle,
+        bundle_source.replacen(
+            "[bundle]\n",
+            "[bundle]\nloader = \"python\"\nfile = \"external_cpp.py\"\n",
+            1,
+        ),
+    )
+    .expect("add external C++ loader metadata");
+
+    let domain_root = temp.path().join("domain");
+    let contracts_root = temp.path().join("contracts");
+    let domain_import =
+        ValidatedImport::parse(Lang::Cpp, "guest/domain.hpp").expect("valid domain include");
+    let contracts_import = ValidatedImport::parse(Lang::Cpp, "guest/guest_contracts.hpp")
+        .expect("valid guest contracts include");
+    let guest_layout = OutputLayout {
+        bindings: OutputDestination::Inline,
+        domain_types: OutputDestination::Emit {
+            root: domain_root.clone(),
+            import: domain_import.clone(),
+        },
+        guest_contracts: OutputDestination::Emit {
+            root: contracts_root.clone(),
+            import: contracts_import.clone(),
+        },
+    };
+    let host_layout = OutputLayout {
+        bindings: OutputDestination::Inline,
+        domain_types: OutputDestination::ImportOnly {
+            import: domain_import,
+        },
+        guest_contracts: OutputDestination::Omit,
+    };
+
+    let guest = generate(GenerateConfig {
+        api_toml: bundle,
+        lang: Lang::Cpp,
+        side: Side::Guest,
+        layout: guest_layout,
+    })
+    .expect("generate partitioned C++ guest bindings");
+    let host = generate(GenerateConfig {
+        api_toml: api,
+        lang: Lang::Cpp,
+        side: Side::Host,
+        layout: host_layout,
+    })
+    .expect("generate host bindings against external domain headers");
+    assert!(guest.files.iter().any(|file| {
+        file.partition == OutputPartition::DomainTypes && file.path == Path::new("guest/domain.hpp")
+    }));
+    assert!(guest.files.iter().any(|file| {
+        file.partition == OutputPartition::GuestContracts
+            && file.path == Path::new("guest/guest_contracts.hpp")
+    }));
+    let domain = guest
+        .files
+        .iter()
+        .find(|file| file.partition == OutputPartition::DomainTypes)
+        .expect("guest domain header");
+    assert!(!domain.content.contains("CONTRACT_ID"));
+    let guest_metadata = guest
+        .files
+        .iter()
+        .find(|file| file.path == Path::new("guest/types.hpp"))
+        .expect("guest binding metadata");
+    assert!(
+        guest_metadata
+            .content
+            .contains("PLATFORM_PLUGIN_CONTRACT_ID")
+    );
+    assert_eq!(
+        guest_metadata.references,
+        vec![OutputPartition::DomainTypes]
+    );
+    let host_metadata = host
+        .files
+        .iter()
+        .find(|file| file.path == Path::new("host/types.hpp"))
+        .expect("host binding metadata");
+    assert!(
+        host_metadata
+            .content
+            .contains("#include \"guest/domain.hpp\"")
+    );
+    assert_eq!(host_metadata.references, vec![OutputPartition::DomainTypes]);
+    let contracts = guest
+        .files
+        .iter()
+        .find(|file| file.partition == OutputPartition::GuestContracts)
+        .expect("guest provider contracts");
+    assert!(contracts.content.contains("#include \"guest/domain.hpp\""));
+    let interfaces = guest
+        .files
+        .iter()
+        .find(|file| file.path == Path::new("guest/interfaces.hpp"))
+        .expect("guest ABI bindings");
+
+    assert!(
+        interfaces
+            .content
+            .contains("#include \"guest/guest_contracts.hpp\"")
+    );
+    let bindings_root = temp.path().join("bindings");
+    write_output(&guest, &bindings_root).expect("write partitioned guest bindings");
+    write_output(&host, &bindings_root).expect("write partitioned host bindings");
+    let guest_syntax = bindings_root.join("guest_bindings_syntax.cpp");
+    fs::write(
+        &guest_syntax,
+        "#include \"guest/init.hpp\"\nint main() { return 0; }\n",
+    )
+    .expect("write external guest bindings syntax check");
+    let root = workspace_root();
+    let guest_compile = Command::new("g++")
+        .args(["-std=c++20", "-fsyntax-only"])
+        .arg(&guest_syntax)
+        .arg("-I")
+        .arg(&bindings_root)
+        .arg("-I")
+        .arg(&domain_root)
+        .arg("-I")
+        .arg(&contracts_root)
+        .arg("-I")
+        .arg(root.join("sdks/cpp/host"))
+        .arg("-I")
+        .arg(root.join("sdks/cpp/guest"))
+        .arg("-I")
+        .arg(root.join("sdks/cpp/abi"))
+        .output()
+        .expect("syntax-check partitioned external C++ guest bindings");
+    assert!(
+        guest_compile.status.success(),
+        "partitioned external C++ guest bindings did not compile:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&guest_compile.stdout),
+        String::from_utf8_lossy(&guest_compile.stderr),
+    );
+    let driver = bindings_root.join("partitioned.cpp");
+    fs::write(
+        &driver,
+        r#"
+#include <cstdint>
+
+#include "host/host_callers.hpp"
+#include "guest/guest_contracts.hpp"
+
+namespace domain = polyplug_generated;
+
+class Provider final : public polyplug_plugin::PlatformPluginGuestContract {
+public:
+    domain::Envelope metadata() override {
+        return domain::Envelope{
+            domain::Inner{},
+            domain::ArrayOf_Inner{},
+            domain::Mode::Ready,
+        };
+    }
+
+    Buffer read(uint64_t, uint32_t) override {
+        return Buffer{};
+    }
+
+    uint32_t write(uint64_t, Buffer) override {
+        return ++writes_;
+    }
+
+    StringView inspect(StringView, const domain::Mode& mode,
+                       const domain::ArrayOf_Inner& entries) override {
+        if (mode != domain::Mode::Ready || entries.len != 0U) {
+            return StringView{};
+        }
+        static constexpr uint8_t ok[] = {'o', 'k'};
+        return StringView{ok, 2U};
+    }
+
+    uint32_t take_inner(const domain::Inner&) override {
+        return writes_;
+    }
+
+private:
+    uint32_t writes_ = 0U;
+};
+
+int main() {
+    Provider provider;
+    auto envelope = provider.metadata();
+    if (envelope.mode != domain::Mode::Ready) return 1;
+    if (provider.write(0U, Buffer{}) != 1U) return 2;
+    domain::ArrayOf_Inner entries{};
+    if (provider.inspect(StringView{}, domain::Mode::Ready, entries).len != 2U) return 3;
+    return provider.take_inner(envelope.inner) == 1U ? 0 : 4;
+}
+"#,
+    )
+    .expect("write partitioned C++ driver");
+
+    let root = workspace_root();
+    let runtime_dir = build_polyplug_runtime(&root);
+    let executable = bindings_root.join("partitioned");
+    let compile = Command::new("g++")
+        .args(["-std=c++20"])
+        .arg(&driver)
+        .arg("-I")
+        .arg(&bindings_root)
+        .arg("-I")
+        .arg(&domain_root)
+        .arg("-I")
+        .arg(&contracts_root)
+        .arg("-I")
+        .arg(root.join("sdks/cpp/host"))
+        .arg("-I")
+        .arg(root.join("sdks/cpp/abi"))
+        .arg("-L")
+        .arg(&runtime_dir)
+        .arg("-lpolyplug")
+        .arg(format!("-Wl,-rpath,{}", runtime_dir.display()))
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("compile partitioned C++ driver");
+    assert!(
+        compile.status.success(),
+        "partitioned C++ driver did not compile:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr),
+    );
+    let execution = run_cpp_runtime_driver(&executable, &runtime_dir);
+    assert!(
+        execution.status.success(),
+        "partitioned C++ driver failed with {:?}:\nstdout: {}\nstderr: {}",
+        execution.status.code(),
+        String::from_utf8_lossy(&execution.stdout),
+        String::from_utf8_lossy(&execution.stderr),
+    );
+}
+
+#[test]
+fn cpp_layout_rejects_omitted_required_domain_types() {
+    let temp = TempDir::new().expect("create omitted-domain C++ fixture");
+    let api = temp.path().join("api.toml");
+    write_api(&api, "platform.Plugin");
+    let error = match generate(GenerateConfig {
+        api_toml: api,
+        lang: Lang::Cpp,
+        side: Side::Host,
+        layout: OutputLayout {
+            bindings: OutputDestination::Inline,
+            domain_types: OutputDestination::Omit,
+            guest_contracts: OutputDestination::Omit,
+        },
+    }) {
+        Err(error) => error,
+        Ok(_) => panic!("host binding metadata requires the domain partition"),
+    };
+    assert!(
+        matches!(error, PolyplugcError::ValidationFailed { ref message }
+            if message.contains("references omitted domain types partition")),
+        "unexpected omission error: {error}"
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn primitive_cpp_host_omits_domain_types_and_runs() {
+    let temp = TempDir::new().expect("create primitive C++ host fixture");
+    let api = temp.path().join("primitive.toml");
+    write_primitive_api(&api, "math.Counter");
+    let layout = OutputLayout {
+        bindings: OutputDestination::Inline,
+        domain_types: OutputDestination::Omit,
+        guest_contracts: OutputDestination::Omit,
+    };
+    let output = generate(GenerateConfig {
+        api_toml: api,
+        lang: Lang::Cpp,
+        side: Side::Host,
+        layout,
+    })
+    .expect("primitive C++ host may omit domain declarations");
+    let metadata = output
+        .files
+        .iter()
+        .find(|file| file.path == Path::new("host/types.hpp"))
+        .expect("host binding metadata");
+    assert!(
+        metadata.references.is_empty() && !metadata.content.contains("domain.hpp"),
+        "primitive metadata must not depend on domain declarations: {metadata:?}"
+    );
+    let generated = temp.path().join("generated");
+    write_output(&output, &generated).expect("write primitive C++ host bindings");
+    assert!(
+        !generated.join("host/domain.hpp").exists(),
+        "omitted domain partition must not be written"
+    );
+    let driver = generated.join("primitive_host.cpp");
+    fs::write(
+        &driver,
+        r#"
+#include "host/types.hpp"
+#include "host/host_callers.hpp"
+
+int main() {
+    return polyplug_generated::MATH_COUNTER_CONTRACT_ID == 0U ? 1 : 0;
+}
+"#,
+    )
+    .expect("write primitive C++ host driver");
+    let root = workspace_root();
+    let executable = generated.join("primitive_host");
+    let compile = Command::new("g++")
+        .args(["-std=c++20", "-Werror"])
+        .arg(&driver)
+        .arg("-I")
+        .arg(&generated)
+        .arg("-I")
+        .arg(root.join("sdks/cpp/host"))
+        .arg("-I")
+        .arg(root.join("sdks/cpp/abi"))
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("compile primitive C++ host driver");
+    assert!(
+        compile.status.success(),
+        "primitive C++ host driver did not compile:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr),
+    );
+    let execution = Command::new(&executable)
+        .output()
+        .expect("run primitive C++ host driver");
+    assert!(
+        execution.status.success(),
+        "primitive C++ host driver failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&execution.stdout),
+        String::from_utf8_lossy(&execution.stderr),
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn primitive_internal_cpp_profile_omits_domain_types_and_runs() {
+    let temp = TempDir::new().expect("create primitive internal C++ fixture");
+    let name = "primitive_cpp_omit_internal";
+    let output = primitive_internal_output(
+        &temp,
+        name,
+        "math.Counter",
+        OutputLayout {
+            bindings: OutputDestination::Inline,
+            domain_types: OutputDestination::Omit,
+            guest_contracts: OutputDestination::Inline,
+        },
+    );
+    let metadata = output
+        .files
+        .iter()
+        .find(|file| file.path.ends_with(Path::new("host/types.hpp")))
+        .expect("internal host metadata");
+    assert!(
+        metadata.references.is_empty() && !metadata.content.contains("domain.hpp"),
+        "primitive internal metadata must not depend on domain declarations: {metadata:?}"
+    );
+    let internal_header = output
+        .files
+        .iter()
+        .find(|file| file.path.ends_with(Path::new("guest/internal_plugin.hpp")))
+        .expect("internal plugin header");
+    let bindings = internal_header
+        .content
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("namespace ")
+                .and_then(|value| value.strip_suffix("::internal_plugin {"))
+        })
+        .expect("bundle-specific bindings namespace");
+    let generated = temp.path().join("generated");
+    write_output(&output, &generated).expect("write primitive internal C++ bindings");
+    assert!(
+        !generated.join("domain").exists(),
+        "omitted domain partition must not be written"
+    );
+    let driver = generated.join("primitive_internal.cpp");
+    fs::write(
+        &driver,
+        r#"
+#include "INTERNAL_HEADER"
+
+namespace bindings = BINDINGS;
+
+class Provider final : public bindings::plugin::MathCounterGuestContract {
+public:
+    uint32_t increment(uint32_t value) override {
+        return value + 1U;
+    }
+};
+
+int main() {
+    return Provider{}.increment(41U) == 42U ? 0 : 1;
+}
+"#
+        .replace("INTERNAL_HEADER", &internal_header.path.to_string_lossy())
+        .replace("BINDINGS", bindings),
+    )
+    .expect("write primitive internal C++ driver");
+    let root = workspace_root();
+    let executable = generated.join("primitive_internal");
+    let compile = Command::new("g++")
+        .args(["-std=c++20", "-Werror"])
+        .arg(&driver)
+        .arg("-I")
+        .arg(&generated)
+        .arg("-I")
+        .arg(root.join("sdks/cpp/host"))
+        .arg("-I")
+        .arg(root.join("sdks/cpp/guest"))
+        .arg("-I")
+        .arg(root.join("sdks/cpp/abi"))
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("compile primitive internal C++ driver");
+    assert!(
+        compile.status.success(),
+        "primitive internal C++ driver did not compile:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr),
+    );
+    let execution = Command::new(&executable)
+        .output()
+        .expect("run primitive internal C++ driver");
+    assert!(
+        execution.status.success(),
+        "primitive internal C++ driver failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&execution.stdout),
+        String::from_utf8_lossy(&execution.stderr),
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn abi_only_cpp_guest_contracts_omit_domain_types_compile() {
+    let temp = TempDir::new().expect("create ABI-only C++ guest fixture");
+    let api = temp.path().join("abi_only.toml");
+    write_abi_only_api(&api, "storage.Blob");
+    let output = generate(GenerateConfig {
+        api_toml: api,
+        lang: Lang::Cpp,
+        side: Side::Guest,
+        layout: OutputLayout {
+            bindings: OutputDestination::Inline,
+            domain_types: OutputDestination::Omit,
+            guest_contracts: OutputDestination::Inline,
+        },
+    })
+    .expect("generate ABI-only C++ guest bindings");
+    let contracts = output
+        .files
+        .iter()
+        .find(|file| file.partition == OutputPartition::GuestContracts)
+        .expect("ABI-only guest contracts");
+    assert!(
+        contracts.references.is_empty(),
+        "ABI-only guest contracts must not reference domain types: {contracts:?}"
+    );
+    assert!(
+        contracts.content.contains("#include \"polyplug/abi.hpp\"")
+            && !contracts.content.contains("types.hpp")
+            && !contracts.content.contains("domain.hpp"),
+        "ABI-only guest contracts must include only ABI declarations: {}",
+        contracts.content
+    );
+    let generated = temp.path().join("generated");
+    write_output(&output, &generated).expect("write ABI-only C++ guest bindings");
+    let driver = generated.join("abi_only_guest.cpp");
+    fs::write(
+        &driver,
+        r#"
+#include "guest/guest_contracts.hpp"
+
+class Provider final : public polyplug_plugin::StorageBlobGuestContract {
+public:
+    Buffer transform(StringView, Buffer bytes) override {
+        return bytes;
+    }
+};
+
+int main() {
+    return Provider{}.transform(StringView{}, Buffer{}).len == 0U ? 0 : 1;
+}
+"#,
+    )
+    .expect("write ABI-only C++ guest driver");
+    let root = workspace_root();
+    let compile = Command::new("g++")
+        .args(["-std=c++20", "-Werror", "-fsyntax-only"])
+        .arg(&driver)
+        .arg("-I")
+        .arg(&generated)
+        .arg("-I")
+        .arg(root.join("sdks/cpp/guest"))
+        .arg("-I")
+        .arg(root.join("sdks/cpp/abi"))
+        .output()
+        .expect("syntax-check ABI-only C++ guest contracts");
+    assert!(
+        compile.status.success(),
+        "ABI-only C++ guest contracts did not compile:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr),
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn declaration_free_internal_cpp_inline_domain_emit_contracts_prefixed_compile() {
+    let temp = TempDir::new().expect("create declaration-free internal C++ fixture");
+    let name = "abi_only_cpp_internal";
+    let namespace = format!("internal/{name}-{:016x}", polyplug_utils::bundle_id(name));
+    let api = temp.path().join("abi_only_internal.toml");
+    let bundle = temp.path().join("abi_only_internal.bundle.toml");
+    write_abi_only_api(&api, "storage.Blob");
+    write_bundle(
+        &bundle,
+        "abi_only_internal.toml",
+        name,
+        "abi_only_internal.provider",
+        "storage.Blob",
+    );
+    let generated = temp.path().join("generated");
+    let contracts_root = generated.join("contracts");
+    let output = generate_internal_cpp(InternalCppGenerateConfig {
+        bundle_toml: bundle,
+        out_dir: temp.path().join("out"),
+        layout: OutputLayout {
+            bindings: OutputDestination::Inline,
+            domain_types: OutputDestination::Inline,
+            guest_contracts: OutputDestination::Emit {
+                root: contracts_root.clone(),
+                import: ValidatedImport::parse(
+                    Lang::Cpp,
+                    format!("contracts/{namespace}/guest/guest_contracts.hpp"),
+                )
+                .expect("valid prefixed guest contracts include"),
+            },
+        },
+    })
+    .expect("generate declaration-free internal C++ profile");
+    let contracts = output
+        .files
+        .iter()
+        .find(|file| file.partition == OutputPartition::GuestContracts)
+        .expect("declaration-free internal guest contracts");
+    assert!(
+        contracts.references.is_empty(),
+        "declaration-free contracts must not reference domain types: {contracts:?}"
+    );
+    assert!(
+        contracts.content.contains("#include \"polyplug/abi.hpp\"")
+            && !contracts.content.contains("types.hpp")
+            && !contracts.content.contains("domain.hpp"),
+        "declaration-free contracts must include only ABI declarations: {}",
+        contracts.content
+    );
+    let interfaces = output
+        .files
+        .iter()
+        .find(|file| file.path.ends_with(Path::new("guest/interfaces.hpp")))
+        .expect("internal ABI bindings");
+    assert!(
+        interfaces
+            .content
+            .contains(&format!("contracts/{namespace}/guest/guest_contracts.hpp")),
+        "internal interfaces must retain the prefixed guest-contract import: {}",
+        interfaces.content
+    );
+    let internal_header = output
+        .files
+        .iter()
+        .find(|file| file.path.ends_with(Path::new("guest/internal_plugin.hpp")))
+        .expect("internal plugin header");
+    let bindings = internal_header
+        .content
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("namespace ")
+                .and_then(|value| value.strip_suffix("::internal_plugin {"))
+        })
+        .expect("bundle-specific bindings namespace");
+    write_output(&output, &generated).expect("write declaration-free internal C++ bindings");
+    let driver = generated.join("declaration_free_internal.cpp");
+    fs::write(
+        &driver,
+        r#"
+#include "INTERNAL_HEADER"
+
+namespace bindings = BINDINGS;
+
+class Provider final : public bindings::plugin::StorageBlobGuestContract {
+public:
+    Buffer transform(StringView, Buffer bytes) override {
+        return bytes;
+    }
+};
+
+int main() {
+    return Provider{}.transform(StringView{}, Buffer{}).len == 0U ? 0 : 1;
+}
+"#
+        .replace("INTERNAL_HEADER", &internal_header.path.to_string_lossy())
+        .replace("BINDINGS", bindings),
+    )
+    .expect("write declaration-free internal C++ driver");
+    let root = workspace_root();
+    let compile = Command::new("g++")
+        .args(["-std=c++20", "-Werror", "-fsyntax-only"])
+        .arg(&driver)
+        .arg("-I")
+        .arg(&generated)
+        .arg("-I")
+        .arg(&contracts_root)
+        .arg("-I")
+        .arg(root.join("sdks/cpp/host"))
+        .arg("-I")
+        .arg(root.join("sdks/cpp/guest"))
+        .arg("-I")
+        .arg(root.join("sdks/cpp/abi"))
+        .output()
+        .expect("syntax-check declaration-free internal C++ bindings");
+    assert!(
+        compile.status.success(),
+        "declaration-free internal C++ bindings did not compile:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr),
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn partitioned_internal_cpp_profile_registers_dispatches_and_unloads() {
+    let temp = TempDir::new().expect("create partitioned internal C++ fixture");
+    let name = "cpp_partitioned_internal";
+    let namespace = format!("internal/{name}-{:016x}", polyplug_utils::bundle_id(name));
+    let generated = temp.path().join("generated");
+    let layout = OutputLayout {
+        bindings: OutputDestination::Inline,
+        domain_types: OutputDestination::Emit {
+            root: generated.join("domain"),
+            import: ValidatedImport::parse(
+                Lang::Cpp,
+                format!("domain/{namespace}/host/domain.hpp"),
+            )
+            .expect("valid internal domain include"),
+        },
+        guest_contracts: OutputDestination::Emit {
+            root: generated.join("contracts"),
+            import: ValidatedImport::parse(
+                Lang::Cpp,
+                format!("contracts/{namespace}/guest/guest_contracts.hpp"),
+            )
+            .expect("valid internal guest contracts include"),
+        },
+    };
+    let output = internal_output_with_layout(&temp, name, "platform.Plugin", layout);
+    let internal_header_path = Path::new("guest/internal_plugin.hpp");
+    let internal_header = output
+        .files
+        .iter()
+        .find(|file| file.path.ends_with(internal_header_path))
+        .expect("internal plugin header");
+    let domain = output
+        .files
+        .iter()
+        .find(|file| file.partition == OutputPartition::DomainTypes)
+        .expect("internal domain header");
+    assert!(!domain.content.contains("CONTRACT_ID"));
+    let metadata = output
+        .files
+        .iter()
+        .find(|file| file.path.ends_with(Path::new("host/types.hpp")))
+        .expect("internal binding metadata");
+    assert!(metadata.content.contains("PLATFORM_PLUGIN_CONTRACT_ID"));
+    assert_eq!(metadata.references, vec![OutputPartition::DomainTypes]);
+    let contracts = output
+        .files
+        .iter()
+        .find(|file| file.partition == OutputPartition::GuestContracts)
+        .expect("internal guest contracts");
+    assert_eq!(contracts.references, vec![OutputPartition::DomainTypes]);
+    let interfaces = output
+        .files
+        .iter()
+        .find(|file| file.path.ends_with(Path::new("guest/interfaces.hpp")))
+        .expect("internal ABI bindings");
+    assert!(
+        interfaces
+            .content
+            .contains("contracts/internal/cpp_partitioned_internal-")
+    );
+    write_output(&output, &generated).expect("write partitioned internal C++ profile");
+
+    let bindings = internal_header
+        .content
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("namespace ")
+                .and_then(|value| value.strip_suffix("::internal_plugin {"))
+        })
+        .expect("bundle-specific bindings namespace");
+    let driver = generated.join("partitioned_internal.cpp");
+    fs::write(
+        &driver,
+        r#"
+#include <cstdint>
+#include <memory>
+
+#include "INTERNAL_HEADER"
+
+namespace bindings = BINDINGS;
+
+class Provider final : public bindings::plugin::PlatformPluginGuestContract {
+public:
+    bindings::Envelope metadata() override {
+        return bindings::Envelope{
+            bindings::Inner{},
+            bindings::ArrayOf_Inner{},
+            bindings::Mode::Ready,
+        };
+    }
+
+    Buffer read(uint64_t, uint32_t) override {
+        return Buffer{};
+    }
+
+    uint32_t write(uint64_t, Buffer) override {
+        return ++writes_;
+    }
+
+    StringView inspect(StringView, const bindings::Mode& mode,
+                       const bindings::ArrayOf_Inner& entries) override {
+        if (mode != bindings::Mode::Ready || entries.len != 0U) {
+            return StringView{};
+        }
+        static constexpr uint8_t ok[] = {'o', 'k'};
+        return StringView{ok, 2U};
+    }
+
+    uint32_t take_inner(const bindings::Inner&) override {
+        return writes_;
+    }
+
+private:
+    uint32_t writes_ = 0U;
+};
+
+int main() {
+    auto runtime = polyplug::Runtime::builder().build();
+    uint64_t bundle_id = 0U;
+    {
+        auto registration = bindings::internal_plugin::register_internal_plugin(
+            runtime,
+            [](const HostApi*) { return std::make_unique<Provider>(); });
+        bundle_id = registration.internal_plugin_id;
+        if (registration.cpp_partitioned_internal_provider_platform_plugin.write(0U, Buffer{}) != 1U) {
+            return 1;
+        }
+        bindings::ArrayOf_Inner entries{};
+        if (registration.cpp_partitioned_internal_provider_platform_plugin.inspect(
+                StringView{}, bindings::Mode::Ready, entries).len != 2U) {
+            return 2;
+        }
+        auto envelope = registration.cpp_partitioned_internal_provider_platform_plugin.metadata();
+        if (registration.cpp_partitioned_internal_provider_platform_plugin.take_inner(envelope.inner) != 1U) {
+            return 3;
+        }
+    }
+    runtime.unload_bundle(bundle_id);
+    return 0;
+}
+"#
+        .replace("INTERNAL_HEADER", &internal_header.path.to_string_lossy())
+        .replace("BINDINGS", bindings),
+    )
+    .expect("write partitioned internal C++ driver");
+    let root = workspace_root();
+    let runtime_dir = build_polyplug_runtime(&root);
+    let executable = runtime_driver_path(&generated, "partitioned_internal");
+    let compile = compile_cpp_runtime_driver(
+        &driver,
+        &generated,
+        &root,
+        &runtime_dir,
+        "partitioned_internal",
+    );
+    assert!(
+        compile.status.success(),
+        "partitioned internal C++ driver did not compile:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr),
+    );
+    let execution = run_cpp_runtime_driver(&executable, &runtime_dir);
+    assert!(
+        execution.status.success(),
+        "partitioned internal C++ driver failed with {:?}:\nstdout: {}\nstderr: {}",
+        execution.status.code(),
+        String::from_utf8_lossy(&execution.stdout),
+        String::from_utf8_lossy(&execution.stderr),
+    );
 }
 
 #[test]
@@ -367,7 +1268,7 @@ fn internal_cpp_profile_is_opt_in_artifactless_and_typed() {
         api_toml: external_bundle,
         lang: Lang::Cpp,
         side: Side::Guest,
-        out_dir: temp.path().join("external"),
+        layout: OutputLayout::unified(),
     })
     .expect("generate external C++ bindings");
     assert!(
@@ -598,7 +1499,7 @@ fn internal_cpp_profile_binds_exact_handles_and_rolls_back_failed_factories() {
     let api = temp.path().join("shared.toml");
     fs::write(
         &api,
-        "[[plugin_contract]]\nname = \"shared.Guest\"\nversion = \"1.0\"\n\n[[plugin_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n",
+        "[[guest_contract]]\nname = \"shared.Guest\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n",
     )
     .expect("write shared API");
     let older_bundle = temp.path().join("older.toml");
@@ -616,11 +1517,13 @@ fn internal_cpp_profile_binds_exact_handles_and_rolls_back_failed_factories() {
     let older = generate_internal_cpp(InternalCppGenerateConfig {
         bundle_toml: older_bundle,
         out_dir: temp.path().join("generated"),
+        layout: Default::default(),
     })
     .expect("generate older profile");
     let current = generate_internal_cpp(InternalCppGenerateConfig {
         bundle_toml: current_bundle,
         out_dir: temp.path().join("generated"),
+        layout: Default::default(),
     })
     .expect("generate current profile");
     let generated = temp.path().join("generated");
