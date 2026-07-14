@@ -1365,7 +1365,7 @@ fn generate_rust_domain_enum(out: &mut String, enum_def: &EnumDef) -> Result<(),
     let needs_domain_projection = enum_def
         .langs
         .rust()
-        .is_some_and(|rules| rules.serde.is_some())
+        .is_some_and(|rules| rules.serde.is_some() || !rules.derives.is_empty())
         || enum_def.variants.iter().any(|variant| {
             variant
                 .langs
@@ -1533,11 +1533,15 @@ fn local_rust_enum_discriminant_expr(variants: &[EnumVariant], expression: &str)
     result
 }
 
-fn merge_rust_derives(mandatory: &[&str], rules: &LanguageRules) -> Vec<String> {
-    let mut derives: Vec<String> = mandatory
+fn mandatory_rust_derives(mandatory: &[&str]) -> Vec<String> {
+    mandatory
         .iter()
         .map(|derive| (*derive).to_owned())
-        .collect();
+        .collect()
+}
+
+fn merge_rust_derives(mandatory: &[&str], rules: &LanguageRules) -> Vec<String> {
+    let mut derives = mandatory_rust_derives(mandatory);
     if let Some(rules) = rules.rust() {
         for derive in &rules.derives {
             if !derives.contains(derive) {
@@ -3557,22 +3561,20 @@ fn emit_arg_pack_struct(
         fields,
         Vec::new(),
         copyable,
-        &[],
     )?);
     Ok(())
 }
 
-/// Render a `#[repr(C)] #[derive(Debug, Clone, Copy)]` struct via langprint's Rust
-/// StructRenderer. `attributes_before_derives` reproduces polyplugc's `#[repr(C)]`
-/// then `#[derive(...)]` order (rustfmt does not reorder attributes). rustfmt on
-/// write canonicalizes everything else, so this is byte-identical.
+/// Render a `#[repr(C)]` struct with only mandatory ABI derives via langprint's
+/// Rust `StructRenderer`. `attributes_before_derives` reproduces polyplugc's
+/// `#[repr(C)]` then `#[derive(...)]` order (rustfmt does not reorder attributes).
+/// rustfmt on write canonicalizes everything else, so this is byte-identical.
 fn render_rust_repr_c_struct(
     name: &str,
     docs: Vec<String>,
     fields: Vec<(String, String, Option<String>, Vec<String>)>,
     attributes: Vec<String>,
     copyable: bool,
-    user_derives: &[String],
 ) -> Result<String, PolyplugcError> {
     let rust_fields: Vec<RustField> = fields
         .into_iter()
@@ -3598,23 +3600,11 @@ fn render_rust_repr_c_struct(
         generic_args: Vec::new(),
         fields: rust_fields,
         methods: Vec::new(),
-        derives: {
-            let mandatory = if copyable {
-                ["Debug", "Clone", "Copy"].as_slice()
-            } else {
-                ["Debug"].as_slice()
-            };
-            let mut derives = mandatory
-                .iter()
-                .map(|derive| (*derive).to_owned())
-                .collect::<Vec<_>>();
-            for derive in user_derives {
-                if !derives.contains(derive) {
-                    derives.push(derive.clone());
-                }
-            }
-            derives
-        },
+        derives: mandatory_rust_derives(if copyable {
+            &["Debug", "Clone", "Copy"]
+        } else {
+            &["Debug"]
+        }),
         attributes: {
             let mut all: Vec<String> = vec!["repr(C)".to_owned()];
             all.extend(attributes);
@@ -4631,18 +4621,12 @@ fn generate_rust_type(
         .fields
         .iter()
         .all(|f: &ResolvedField| rust_type_ref_is_copy(&f.ty, types, enums));
-    let user_derives = ty
-        .langs
-        .rust()
-        .map(|rules| rules.derives.as_slice())
-        .unwrap_or_default();
     out.push_str(&render_rust_repr_c_struct(
         &ty.name,
         docs,
         fields,
         rust_attributes(&ty.langs),
         copyable,
-        user_derives,
     )?);
     // Array wrappers (`ArrayOf_T`, from desugaring `Array<T>`) get a typed
     // read accessor so the host reads their `items`/`len` back as a `&[T]`
@@ -4842,7 +4826,7 @@ fn render_rust_enum_with_attributes(e: &EnumDef, repr_str: &str) -> String {
     emit_rust_attributes(&mut out, "", CustomizableNode::Enum, &e.langs);
     let repr = format!("repr({repr_str})");
     emit_rust_generated_attributes(&mut out, "", CustomizableNode::Enum, &[&repr]);
-    let derives = merge_rust_derives(&["Debug", "Clone", "Copy", "PartialEq", "Eq"], &e.langs);
+    let derives = mandatory_rust_derives(&["Debug", "Clone", "Copy", "PartialEq", "Eq"]);
     emit_rust_derive(&mut out, CustomizableNode::Enum, &derives);
     out.push_str(&format!("pub enum {} {{\n", e.name));
     for variant in &e.variants {
@@ -4886,7 +4870,7 @@ fn render_rust_enum_decl(e: &EnumDef, repr_str: &str) -> Result<String, Polyplug
         visibility: RustVisibility::Pub,
         variants,
         repr: Some(repr_str.to_owned()),
-        derives: merge_rust_derives(&["Debug", "Clone", "Copy", "PartialEq", "Eq"], &e.langs),
+        derives: mandatory_rust_derives(&["Debug", "Clone", "Copy", "PartialEq", "Eq"]),
         docs: {
             let mut docs = vec![format!("Enum `{}` (repr {})", e.name, repr_str)];
             append_lines(&mut docs, e.docs.as_deref());

@@ -402,7 +402,7 @@ booleans are `false`, and optional scalar values are absent.
 | Key | TOML type | Default | Applicable node | Generated effect |
 | --- | --- | --- | --- | --- |
 | `attributes` | string array | `[]` | Every customizable node | The normal LangPrint Rust attributes. |
-| `derives` | string array | `[]` | API root, type, field, enum, enum variant, guest/host contract, function, or parameter; consumed for `[[types]]` and `[[enum]]` declarations | Ordered, duplicate-suppressed entries appended to generated `derive(...)` lists. |
+| `derives` | string array | `[]` | API root, type, field, enum, enum variant, guest/host contract, function, or parameter; consumed for `[[types]]` and `[[enum]]` domain projections | Ordered, duplicate-suppressed entries appended to generated domain `derive(...)` lists. |
 | `serde` | string | absent | `[[enum]]` only | Selects an enum serialization policy. |
 | `primary_name` | string | absent | `[[enum.variants]]` only | The primary human-readable name for dual serde. |
 | `aliases` | string array | `[]` | `[[enum.variants]]` only | Additional accepted human-readable names for dual serde. |
@@ -421,11 +421,12 @@ derives = ["serde::Serialize", "serde::Deserialize"]
 ```
 
 The generator keeps its mandatory derives and appends each distinct authored
-derive. Ordinary domain structs start with `Debug`, `Clone`, and `PartialEq`;
-ordinary domain enums start with `Debug`, `Clone`, `Copy`, `PartialEq`, and
-`Eq`. A tagged projection deliberately starts without `Copy`/`Eq`, because its
-payload can be non-copy or floating-point. The ABI-flat generated declarations
-also retain their ABI-required derives.
+derive to domain projections only. Ordinary domain structs start with `Debug`,
+`Clone`, and `PartialEq`; ordinary domain enums start with `Debug`, `Clone`,
+`Copy`, `PartialEq`, and `Eq`. A tagged projection deliberately starts without
+`Copy`/`Eq`, because its payload can be non-copy or floating-point. ABI-flat
+generated declarations retain only their ABI-required derives and never receive
+authored semantic derives.
 
 ### Enum names, defaults, and dual serde
 

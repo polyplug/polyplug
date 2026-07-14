@@ -751,20 +751,20 @@ fn generated_empty_internal_rust_bindings_compile_without_declaration_modules() 
 }
 
 #[test]
-fn generated_internal_rust_nested_peer_buffer_caller_compiles_and_runs() {
+fn generated_internal_rust_unified_and_split_semantic_derives_compile_with_abi_only_mirrors() {
     let temp: TempDir = tempfile::tempdir().expect("create temporary directory");
     let api = temp.path().join("api.toml");
     let bundle = temp.path().join("bundle.toml");
     fs::write(
         &api,
-        "[[types]]\nname = \"Inner\"\nfields = [{ name = \"payload\", type = \"Buffer\" }]\n\n[[types]]\nname = \"Envelope\"\nfields = [{ name = \"inner\", type = \"Inner\" }]\n\n[[guest_contract]]\nname = \"peer.buffer\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"echo\"\nparams = [{ name = \"value\", type = \"Envelope\" }]\nreturn = \"Envelope\"\n",
+        "[[types]]\nname = \"SemanticPayload\"\nlangs = { rust = { derives = [\"serde::Serialize\", \"serde::Deserialize\"], attributes = [\"allow(dead_code)\"] } }\nfields = [{ name = \"name\", type = \"StringView\" }, { name = \"payload\", type = \"Buffer\" }, { name = \"values\", type = \"Array<u32>\" }]\n\n[[types]]\nname = \"Inner\"\nfields = [{ name = \"payload\", type = \"Buffer\" }]\n\n[[types]]\nname = \"Envelope\"\nfields = [{ name = \"inner\", type = \"Inner\" }]\n\n[[guest_contract]]\nname = \"peer.buffer\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"echo\"\nparams = [{ name = \"value\", type = \"Envelope\" }]\nreturn = \"Envelope\"\n",
     )
     .expect("write nested peer API TOML");
     let api_text = fs::read_to_string(&api).expect("read nested peer API TOML");
     fs::write(
         &api,
         format!(
-            "{api_text}\n[[enum]]\nname = \"ValueTag\"\nrepr = \"u32\"\n\n[[enum.variants]]\nname = \"Number\"\nvalue = \"1\"\n\n[[enum.variants]]\nname = \"Enabled\"\nvalue = \"2\"\n\n[[types]]\nname = \"Value\"\nlangs = {{ rust = {{ tagged_enum = {{ tag_field = \"tag\", variants = [{{ tag = \"Number\", name = \"Number\", payload = \"number\" }}, {{ tag = \"Enabled\", name = \"Enabled\", payload = \"enabled\" }}] }} }} }}\nfields = [{{ name = \"tag\", type = \"ValueTag\" }}, {{ name = \"number\", type = \"u32\" }}, {{ name = \"enabled\", type = \"bool\" }}]\n\n[[guest_contract.functions]]\nname = \"scalar\"\nparams = [{{ name = \"value\", type = \"Value\" }}]\nreturn = \"Value\"\n"
+            "{api_text}\n[[enum]]\nname = \"ValueTag\"\nrepr = \"u32\"\nlangs = {{ rust = {{ derives = [\"serde::Serialize\", \"serde::Deserialize\"] }} }}\n\n[[enum.variants]]\nname = \"Number\"\nvalue = \"1\"\n\n[[enum.variants]]\nname = \"Enabled\"\nvalue = \"2\"\n\n[[types]]\nname = \"Value\"\nlangs = {{ rust = {{ derives = [\"serde::Serialize\", \"serde::Deserialize\"], tagged_enum = {{ tag_field = \"tag\", variants = [{{ tag = \"Number\", name = \"Number\", payload = \"number\" }}, {{ tag = \"Enabled\", name = \"Enabled\", payload = \"enabled\" }}] }} }} }}\nfields = [{{ name = \"tag\", type = \"ValueTag\" }}, {{ name = \"number\", type = \"u32\" }}, {{ name = \"enabled\", type = \"bool\" }}]\n\n[[guest_contract.functions]]\nname = \"scalar\"\nparams = [{{ name = \"value\", type = \"Value\" }}]\nreturn = \"Value\"\n"
         ),
     )
     .expect("add scalar tagged projection");
@@ -774,9 +774,14 @@ fn generated_internal_rust_nested_peer_buffer_caller_compiles_and_runs() {
     )
     .expect("write nested peer bundle TOML");
     let declarations_root = temp.path().join("declarations");
+    let unified = generate_internal_rust(InternalRustGenerateConfig {
+        bundle_toml: bundle.clone(),
+        layout: OutputLayout::unified(),
+    })
+    .expect("generate unified semantic Rust bindings");
 
     let generated = generate_internal_rust(InternalRustGenerateConfig {
-        bundle_toml: bundle,
+        bundle_toml: bundle.clone(),
         layout: OutputLayout {
             bindings: OutputDestination::Inline,
             domain_types: OutputDestination::Emit {
@@ -791,6 +796,37 @@ fn generated_internal_rust_nested_peer_buffer_caller_compiles_and_runs() {
         },
     })
     .expect("generate nested peer Rust bindings");
+    let domain = generated
+        .files
+        .iter()
+        .find(|file| file.path.ends_with("guest/domain.rs"))
+        .expect("domain declarations")
+        .content
+        .as_str();
+    assert!(
+        domain.contains(
+            "#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]\n#[allow(dead_code)]\npub struct SemanticPayload"
+        )
+            && domain.contains(
+                "#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]\npub enum ValueTag"
+            )
+            && domain.contains(
+                "#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]\npub enum Value"
+            ),
+        "semantic derives must remain on ordinary and tagged domain projections: {domain}"
+    );
+    for abi_types in generated.files.iter().filter(|file| {
+        file.path.ends_with("host/types.rs") || file.path.ends_with("guest/types.rs")
+    }) {
+        assert!(
+            abi_types.content.contains(
+                "#[repr(C)]\n#[allow(dead_code)]\n#[derive(Debug)]\npub struct SemanticPayload"
+            ) && !abi_types.content.contains("serde::Serialize"),
+            "ABI mirrors must retain mandatory derives and raw attributes without semantic derives: {}",
+            abi_types.path.display()
+        );
+    }
+
     let peer_callers = generated
         .files
         .iter()
@@ -837,18 +873,39 @@ fn generated_internal_rust_nested_peer_buffer_caller_compiles_and_runs() {
     let guest_contracts_module_path = declarations_root
         .join(&generated_root)
         .join("guest/guest_contracts.rs");
+    let consumer_manifest = format!(
+        "[package]\nname = \"nested_peer_buffer_consumer\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\npolyplug = {{ path = \"{}\" }}\npolyplug_abi = {{ path = \"{}\" }}\npolyplug_common = {{ path = \"{}\" }}\npolyplug_guest = {{ path = \"{}\" }}\npolyplug_utils = {{ path = \"{}\" }}\nserde = {{ version = \"1\", features = [\"derive\"] }}\n\n[workspace]\n",
+        cargo_path("crates/polyplug"),
+        cargo_path("crates/polyplug_abi"),
+        cargo_path("crates/polyplug_common"),
+        cargo_path("sdks/rust/guest"),
+        cargo_path("crates/polyplug_utils"),
+    );
+    fs::write(crate_root.join("Cargo.toml"), &consumer_manifest)
+        .expect("write split consumer Cargo.toml");
+    let unified_root = temp.path().join("unified-consumer");
+    let unified_source_dir = unified_root.join("src");
+    fs::create_dir_all(&unified_source_dir).expect("create unified consumer source directory");
+    write_output(&unified, &unified_source_dir).expect("write unified Rust bindings");
+    let unified_module_path = unified_source_dir.join(&generated_root).join("mod.rs");
+    fs::write(unified_root.join("Cargo.toml"), &consumer_manifest)
+        .expect("write unified consumer Cargo.toml");
     fs::write(
-        crate_root.join("Cargo.toml"),
-        format!(
-            "[package]\nname = \"nested_peer_buffer_consumer\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\npolyplug = {{ path = \"{}\" }}\npolyplug_abi = {{ path = \"{}\" }}\npolyplug_common = {{ path = \"{}\" }}\npolyplug_guest = {{ path = \"{}\" }}\npolyplug_utils = {{ path = \"{}\" }}\n\n[workspace]\n",
-            cargo_path("crates/polyplug"),
-            cargo_path("crates/polyplug_abi"),
-            cargo_path("crates/polyplug_common"),
-            cargo_path("sdks/rust/guest"),
-            cargo_path("crates/polyplug_utils"),
-        ),
+        unified_source_dir.join("main.rs"),
+        format!("#[path = {unified_module_path:?}]\nmod generated;\nfn main() {{}}\n"),
     )
-    .expect("write consumer Cargo.toml");
+    .expect("write unified consumer source");
+    let unified_check = Command::new("cargo")
+        .arg("check")
+        .current_dir(&unified_root)
+        .output()
+        .expect("check unified semantic Rust bindings");
+    assert!(
+        unified_check.status.success(),
+        "unified host and guest bindings with semantic derives did not compile:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&unified_check.stdout),
+        String::from_utf8_lossy(&unified_check.stderr),
+    );
     fs::write(
         source_dir.join("main.rs"),
         format!(
