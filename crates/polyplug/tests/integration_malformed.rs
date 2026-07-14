@@ -16,6 +16,12 @@ use polyplug_abi::AbiErrorCode;
 use polyplug_abi::HostApi;
 use polyplug_utils::bundle_id;
 
+mod common;
+
+use common::register_native_loader;
+
+const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
+
 fn load_bundle_path(host: *const HostApi, dir: &str) -> AbiError {
     let bytes: &[u8] = dir.as_bytes();
     let mut err: AbiError = AbiError::ok();
@@ -106,6 +112,51 @@ fn test_missing_init_symbol() {
         msg.contains("polyplug_init") || msg.contains("symbol") || msg.contains("init"),
         "error message should mention missing symbol, got: {}",
         msg
+    );
+    // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
+    assert!(unsafe { polyplug_runtime_destroy(host) });
+}
+
+#[test]
+fn test_loader_accepts_abi_v2() {
+    // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
+    let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
+    assert!(!host.is_null());
+    // SAFETY: host was returned by polyplug_runtime_create.
+    unsafe { register_native_loader(host) };
+    let rc: AbiError = load_bundle_path(host, TEST_PLUGIN_DIR);
+    assert_eq!(
+        rc.code,
+        AbiErrorCode::Ok as u32,
+        "ABI-v2 plugin must load successfully"
+    );
+    // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
+    assert!(unsafe { polyplug_runtime_destroy(host) });
+}
+
+#[test]
+fn test_loader_rejects_abi_v1_before_symbol_validation() {
+    let dir: &str = env!("OLD_ABI_PLUGIN_DIR");
+    // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
+    let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
+    assert!(!host.is_null());
+    // SAFETY: host was returned by polyplug_runtime_create.
+    unsafe { register_native_loader(host) };
+    let rc: AbiError = load_bundle_path(host, dir);
+    assert_ne!(
+        rc.code,
+        AbiErrorCode::Ok as u32,
+        "ABI-v1 plugin must be rejected"
+    );
+    let mut buf: [u8; 256] = [0u8; 256];
+    // SAFETY: buf is writable and host is valid.
+    let n: usize = unsafe { ((*host).get_last_error)(host, buf.as_mut_ptr(), buf.len()) };
+    let msg: &str = str::from_utf8(&buf[..n]).expect("last_error is valid utf8");
+    assert!(
+        msg.contains("ABI version mismatch")
+            && msg.contains("expected=2")
+            && msg.contains("found=1"),
+        "v1 rejection must report the exact ABI mismatch, got: {msg}"
     );
     // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
     assert!(unsafe { polyplug_runtime_destroy(host) });

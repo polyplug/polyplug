@@ -16,8 +16,8 @@
 
 use crate::generate;
 use crate::ir::{
-    AbiBuiltin, PrimitiveType, ResolvedContract, ResolvedFunction, ResolvedParam, ResolvedTypeRef,
-    ValidatedIr, Version,
+    AbiBuiltin, LanguageRules, PrimitiveType, ResolvedContract, ResolvedFunction, ResolvedParam,
+    ResolvedTypeRef, ValidatedIr, Version,
 };
 use crate::{GenerateConfig, GenerateOutput, GeneratedFile, Lang, OutputLayout, Side};
 use polyplug_utils::guest_contract_id as fnv_contract_id;
@@ -43,9 +43,11 @@ fn make_ir(contract_name: &str, functions: Vec<ResolvedFunction>) -> ValidatedIr
             },
             functions,
             docs: None,
+            langs: LanguageRules::default(),
         }],
         host_contracts: vec![],
         bundle: None,
+        langs: LanguageRules::default(),
     }
 }
 
@@ -62,6 +64,8 @@ fn make_fn(
         returns,
         docs: None,
         return_docs: None,
+        langs: LanguageRules::default(),
+        return_langs: LanguageRules::default(),
     }
 }
 
@@ -70,6 +74,7 @@ fn sv_param(name: &str) -> ResolvedParam {
         name: name.to_owned(),
         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
         docs: None,
+        langs: LanguageRules::default(),
     }
 }
 
@@ -169,11 +174,13 @@ fn mixed_arena_ir(contract_name: &str) -> ValidatedIr {
                         name: "a".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                         docs: None,
+                        langs: LanguageRules::default(),
                     },
                     ResolvedParam {
                         name: "b".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                         docs: None,
+                        langs: LanguageRules::default(),
                     },
                 ],
                 Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
@@ -194,11 +201,13 @@ fn scalar_only_ir(contract_name: &str) -> ValidatedIr {
                     name: "a".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 ResolvedParam {
                     name: "b".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),

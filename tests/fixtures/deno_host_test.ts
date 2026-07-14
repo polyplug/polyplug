@@ -68,11 +68,11 @@ skipUnlessNative("find_guest_contract_returns_valid_handle", () => {
     } finally { lib.close(); }
 });
 
-skipUnlessNative("find_all_guest_contracts_24_byte_array_return", () => {
-    // The ABI returns `Array` BY VALUE (items ptr + len + align = 24 bytes).
-    // This exercises the real sret path: one matching handle expected, and the
-    // host must stay functional afterwards (a narrowed return type corrupts
-    // adjacent memory).
+skipUnlessNative("find_all_guest_contracts_trailing_array_out_pointer", () => {
+    // The ABI writes the caller-owned `Array` through a trailing out pointer.
+    // This exercises the real out-pointer path: one matching handle is written,
+    // an unmatched query writes an empty array, and the host remains functional
+    // after both calls.
     const lib = openPolyplug(POLYPLUG_SO);
     try {
         const rt = runtimeNew(lib);
@@ -80,11 +80,17 @@ skipUnlessNative("find_all_guest_contracts_24_byte_array_return", () => {
             registerNativeLoader(rt);
             rt.loadBundle(TEST_PLUGIN_DIR);
             const handles = rt.findAllGuestContracts(TEST_ADD_CONTRACT_ID);
-            if (handles.length !== 1) throw new Error(`Expected 1 handle, got ${handles.length}`);
+            if (handles.length !== 1) {
+                throw new Error(`Expected trailing out array length 1, got ${handles.length}`);
+            }
             const none = rt.findAllGuestContracts(0xDEADBEEFn);
-            if (none.length !== 0) throw new Error(`Expected 0 handles, got ${none.length}`);
+            if (none.length !== 0) {
+                throw new Error(`Expected empty trailing out array, got ${none.length} handles`);
+            }
             const handle = rt.findGuestContract(TEST_ADD_CONTRACT_ID);
-            if (handle === NULL_HANDLE) throw new Error("host corrupted after find_all sret");
+            if (handle === NULL_HANDLE) {
+                throw new Error("host corrupted after find_all trailing out-pointer calls");
+            }
         } finally { rt[Symbol.dispose](); }
     } finally { lib.close(); }
 });

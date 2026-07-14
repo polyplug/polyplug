@@ -13,6 +13,10 @@
 #![allow(clippy::expect_used)]
 
 use core::mem::{align_of, offset_of, size_of};
+use polyplug_abi::plugin::{
+    BundleDescriptorView, OwnedPluginDescriptorView, RegisteredContractDescriptorView,
+    RuntimeIntrospection,
+};
 use polyplug_abi::{AbiError, Buffer, GuestContractHandle, StringView};
 
 // ─── Category 1: Primitive Types (6 tests) ─────────────────────────────────────
@@ -160,6 +164,40 @@ fn layout_plugin_handle_fields_and_size() {
         offset_of!(GuestContractHandle, generation),
         4,
         "GuestContractHandle.generation must be at offset 4"
+    );
+}
+
+#[test]
+fn layout_introspection_descriptors_match_nested_abi_layout() {
+    assert_eq!(size_of::<BundleDescriptorView>(), 56);
+    assert_eq!(offset_of!(BundleDescriptorView, name), 8);
+    assert_eq!(offset_of!(BundleDescriptorView, version), 32);
+    assert_eq!(offset_of!(BundleDescriptorView, runtime), 44);
+    assert_eq!(offset_of!(BundleDescriptorView, source_kind), 48);
+
+    assert_eq!(size_of::<OwnedPluginDescriptorView>(), 64);
+    assert_eq!(offset_of!(OwnedPluginDescriptorView, name), 0);
+    assert_eq!(offset_of!(OwnedPluginDescriptorView, contract_name), 24);
+    assert_eq!(offset_of!(OwnedPluginDescriptorView, version), 48);
+
+    assert_eq!(size_of::<RegisteredContractDescriptorView>(), 88);
+    assert_eq!(offset_of!(RegisteredContractDescriptorView, handle), 0);
+    assert_eq!(offset_of!(RegisteredContractDescriptorView, bundle_id), 8);
+    assert_eq!(
+        offset_of!(RegisteredContractDescriptorView, contract_id),
+        16
+    );
+    assert_eq!(offset_of!(RegisteredContractDescriptorView, plugin), 24);
+
+    assert_eq!(size_of::<RuntimeIntrospection>(), 24);
+    assert_eq!(offset_of!(RuntimeIntrospection, get_bundle_descriptor), 0);
+    assert_eq!(
+        offset_of!(RuntimeIntrospection, list_registered_guest_contracts),
+        8
+    );
+    assert_eq!(
+        offset_of!(RuntimeIntrospection, get_registered_contract_descriptor),
+        16
     );
 }
 

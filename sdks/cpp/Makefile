@@ -29,10 +29,11 @@ FIXTURES_DIR = $(abspath ../../tests/fixtures)
 
 .PHONY: test clean
 
-test: $(BUILD_DIR)/test_layout.o $(BUILD_DIR)/test_signature_policy_config $(BUILD_DIR)/test_internal_plugin_runtime $(BUILD_DIR)/test_reload_runtime
+test: $(BUILD_DIR)/test_layout.o $(BUILD_DIR)/test_signature_policy_config $(BUILD_DIR)/test_internal_plugin_runtime $(BUILD_DIR)/test_runtime_introspection $(BUILD_DIR)/test_reload_runtime
 	@echo "OK: abi/test_layout.cpp compiled - all ABI layout static_asserts hold"
 	$(BUILD_DIR)/test_signature_policy_config
 	$(BUILD_DIR)/test_internal_plugin_runtime
+	$(BUILD_DIR)/test_runtime_introspection
 	$(BUILD_DIR)/test_reload_runtime
 
 $(BUILD_DIR)/test_layout.o: abi/test_layout.cpp | $(BUILD_DIR)
@@ -46,6 +47,11 @@ $(BUILD_DIR)/test_signature_policy_config: host/test_signature_policy_config.cpp
 # Internal-plugin registration transaction test — supplies a deterministic HostApi
 # table, so it verifies C++ Runtime ownership without a native runtime library.
 $(BUILD_DIR)/test_internal_plugin_runtime: host/test_internal_plugin_runtime.cpp | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -Ihost $< -o $@
+
+# Descriptor snapshots use a deterministic HostApi/introspection table, including
+# legacy null-table and zero-length caller-frees coverage without native libraries.
+$(BUILD_DIR)/test_runtime_introspection: host/test_runtime_introspection.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -Ihost $< -o $@
 
 $(BUILD_DIR)/test_reload_runtime: host/test_reload_runtime.cpp | $(BUILD_DIR)

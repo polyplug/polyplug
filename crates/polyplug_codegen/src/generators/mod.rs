@@ -1,5 +1,6 @@
 //! Generators — CodeGenerator trait and language dispatch.
 
+pub(crate) mod attributes;
 pub mod cpp;
 pub mod csharp;
 pub(crate) mod docs;

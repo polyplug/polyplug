@@ -3,8 +3,121 @@
 //! The IR is produced by the parser, validated (type resolution, contract IDs),
 //! and then consumed by code generators.
 
+use crate::Lang;
 use crate::PolyplugcError;
 use crate::ResolvedBundleFile;
+
+/// Attribute contents selected for one target language.
+///
+/// The strings intentionally exclude language syntax (such as `#[...]` or
+/// `@...`); generators add that syntax when they begin consuming these rules.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LanguageAttributes {
+    pub attributes: Vec<String>,
+}
+
+/// Rust-specific semantic rules attached to an authored API node.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RustLanguageRules {
+    pub attributes: Vec<String>,
+    pub derives: Vec<String>,
+    pub serde: Option<RustEnumSerdePolicy>,
+    pub primary_name: Option<String>,
+    pub aliases: Vec<String>,
+    pub default: bool,
+    pub empty_sequence_as_null: bool,
+    pub tagged_enum: Option<RustTaggedEnum>,
+}
+
+/// The serialization representation selected for an authored enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RustEnumSerdePolicy {
+    HumanNameBinaryDiscriminant,
+}
+
+/// A Rust-domain tagged-enum projection of an ABI-flat authored type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RustTaggedEnum {
+    pub tag_field: String,
+    pub variants: Vec<RustTaggedEnumVariant>,
+}
+
+/// One tag-to-domain-variant mapping.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RustTaggedEnumVariant {
+    pub tag: String,
+    pub name: String,
+    pub payload: Option<String>,
+    pub default: bool,
+}
+
+/// Per-language customization rules attached to an authored API node.
+///
+/// A struct rather than a map keeps supported languages closed and makes a new
+/// [`Lang`] variant a compile-time migration through [`Self::for_lang`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LanguageRules {
+    pub rust: Option<LanguageAttributes>,
+    pub rust_semantics: Option<RustLanguageRules>,
+    pub cpp: Option<LanguageAttributes>,
+    pub csharp: Option<LanguageAttributes>,
+    pub python: Option<LanguageAttributes>,
+    pub lua: Option<LanguageAttributes>,
+    pub javascript: Option<LanguageAttributes>,
+}
+
+impl LanguageRules {
+    /// Return the rules for `lang`, if that language has an explicit entry.
+    pub fn for_lang(&self, lang: Lang) -> Option<&LanguageAttributes> {
+        match lang {
+            Lang::Rust => self.rust.as_ref(),
+            Lang::Cpp => self.cpp.as_ref(),
+            Lang::CSharp => self.csharp.as_ref(),
+            Lang::Python => self.python.as_ref(),
+            Lang::Lua => self.lua.as_ref(),
+            Lang::JsQuickJs => self.javascript.as_ref(),
+        }
+    }
+
+    pub fn rust(&self) -> Option<&RustLanguageRules> {
+        self.rust_semantics.as_ref()
+    }
+}
+
+/// The closed set of authored API nodes that may own [`LanguageRules`].
+///
+/// Lowering uses this enum for validation diagnostics, so a new customizable
+/// node must be added to the exhaustive [`Self::label`] match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomizableNode {
+    Api,
+    Type,
+    Field,
+    Enum,
+    EnumVariant,
+    GuestContract,
+    HostContract,
+    Function,
+    Param,
+    Return,
+}
+
+impl CustomizableNode {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Api => "API root",
+            Self::Type => "type",
+            Self::Field => "field",
+            Self::Enum => "enum",
+            Self::EnumVariant => "enum variant",
+            Self::GuestContract => "guest contract",
+            Self::HostContract => "host contract",
+            Self::Function => "function",
+            Self::Param => "parameter",
+            Self::Return => "return",
+        }
+    }
+}
 
 // ─── Version ─────────────────────────────────────────────────────────────
 
@@ -226,6 +339,8 @@ pub struct EnumVariant {
     pub value: String,
     /// Optional human-readable documentation.
     pub docs: Option<String>,
+    /// Per-language rules for this enum variant.
+    pub langs: LanguageRules,
 }
 
 /// A fully validated enum definition.
@@ -237,6 +352,8 @@ pub struct EnumDef {
     pub variants: Vec<EnumVariant>,
     /// Optional human-readable documentation.
     pub docs: Option<String>,
+    /// Per-language rules for this enum.
+    pub langs: LanguageRules,
 }
 
 // ─── IR Structs ────────────────────────────────────────────────────────────────
@@ -248,6 +365,8 @@ pub struct ResolvedType {
     pub fields: Vec<ResolvedField>,
     /// Optional human-readable documentation.
     pub docs: Option<String>,
+    /// Per-language rules for this type.
+    pub langs: LanguageRules,
 }
 
 #[derive(Debug, Clone)]
@@ -256,6 +375,8 @@ pub struct ResolvedField {
     pub ty: ResolvedTypeRef,
     /// Optional human-readable documentation.
     pub docs: Option<String>,
+    /// Per-language rules for this field.
+    pub langs: LanguageRules,
 }
 
 /// A resolved function parameter.
@@ -265,6 +386,8 @@ pub struct ResolvedParam {
     pub ty: ResolvedTypeRef,
     /// Optional human-readable documentation.
     pub docs: Option<String>,
+    /// Per-language rules for this parameter.
+    pub langs: LanguageRules,
 }
 
 #[derive(Debug)]
@@ -278,6 +401,10 @@ pub struct ResolvedFunction {
     pub docs: Option<String>,
     /// Optional documentation for the return value, including a `void` return.
     pub return_docs: Option<String>,
+    /// Per-language rules for the function itself.
+    pub langs: LanguageRules,
+    /// Per-language rules for the function return value.
+    pub return_langs: LanguageRules,
 }
 
 #[derive(Debug)]
@@ -289,6 +416,8 @@ pub struct ResolvedContract {
     pub functions: Vec<ResolvedFunction>,
     /// Optional human-readable documentation.
     pub docs: Option<String>,
+    /// Per-language rules for this guest contract.
+    pub langs: LanguageRules,
 }
 
 /// A resolved host contract definition.
@@ -305,6 +434,8 @@ pub struct ResolvedHostContract {
     pub functions: Vec<ResolvedFunction>,
     /// Optional human-readable documentation.
     pub docs: Option<String>,
+    /// Per-language rules for this host contract.
+    pub langs: LanguageRules,
 }
 
 #[derive(Debug)]
@@ -354,6 +485,8 @@ pub struct ValidatedIr {
     pub contracts: Vec<ResolvedContract>,
     pub host_contracts: Vec<ResolvedHostContract>,
     pub bundle: Option<ResolvedBundle>,
+    /// Per-language rules for the API root.
+    pub langs: LanguageRules,
 }
 
 // ─── Type Resolution ──────────────────────────────────────────────────────────────

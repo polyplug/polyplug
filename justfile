@@ -423,6 +423,10 @@ test-host-lua:
     elif command -v luajit >/dev/null 2>&1; then \
         cd {{sdks_dir}}/lua/host/tests && luajit test_native_resolution.lua && \
         luajit test_reload_notification.lua && \
+        c++ -std=c++17 -shared -fPIC runtime_introspection_fixture.cpp \
+            -o /tmp/polyplug-runtime-introspection-fixture.so && \
+        POLYPLUG_LUA_INTROSPECTION_FIXTURE=/tmp/polyplug-runtime-introspection-fixture.so \
+        luajit test_runtime_introspection.lua && \
         POLYPLUG_LIB="${POLYPLUG_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug.so}" \
         POLYPLUG_NATIVE_LIB="${POLYPLUG_NATIVE_LIB:-$(pwd)/../../../../target/{{profile}}/libpolyplug_native.so}" \
         luajit test_reload_runtime.lua && \

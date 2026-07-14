@@ -1219,8 +1219,7 @@ dependencies = [
 [[package]]
 name = "langprint"
 version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bd87f78519d42dfc158700fd0d1abbc0139265badc5ca035fb5525e8f231abb"
+source = "git+https://github.com/corrm/langprint.git?rev=9f9e38a80334f2e39e4ff78443de1e90fd6d932f#9f9e38a80334f2e39e4ff78443de1e90fd6d932f"
 dependencies = [
  "thiserror",
 ]
@@ -1495,6 +1494,10 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "old_abi_plugin"
+version = "0.1.0"
 
 [[package]]
 name = "once_cell"

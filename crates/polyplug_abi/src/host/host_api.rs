@@ -39,20 +39,17 @@ use crate::{
 ///
 /// Contains an opaque runtime pointer and function pointers for guest calls.
 /// All functions use self-passing pattern (receive HostApi pointer as first parameter).
-/// `HostApi` contains an opaque runtime pointer, callback table, and one reserved pointer.
-/// Producers set every callback to a valid function and set `reserved` to null.
-///
-/// # Who provides
-/// The runtime creates this struct and passes it to `polyplug_init()`.
-/// The struct is allocated using `Box::leak()` for `'static` lifetime.
+/// `HostApi` contains an opaque runtime pointer, callback table, and one
+/// introspection-table pointer.
 ///
 /// # Nullability
 /// Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
 /// is the sole producer of this struct and populates all 21 callbacks at
 /// creation. Consumers never construct or mutate a `HostApi`. Only the
 /// `runtime` pointer can become null (it is swapped to null by
-/// `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
-/// is a null placeholder by contract.
+/// `polyplug_runtime_destroy`). `reserved` points to
+/// [`RuntimeIntrospection`](crate::plugin::RuntimeIntrospection) for current
+/// runtimes and is null only for an older ABI producer.
 ///
 /// # Who calls
 /// Guest (plugin) code calls these functions to interact with the runtime.
@@ -142,21 +139,15 @@ pub struct HostApi {
     ) -> GuestContractHandle,
     /// Find all guest contracts matching contract_id and minimum version.
     ///
-    /// Returns an Array of GuestContractHandle. Caller must free via `host->free`.
-    /// Use when multiple implementations of the same contract may exist.
-    ///
-    /// # Arguments
-    /// - `this`: HostApi pointer (self-passing)
-    /// - `contract_id`: Contract identifier hash
-    /// - `min_version`: Minimum version required
-    ///
-    /// # Returns
-    /// Array of GuestContractHandle. Caller owns and must free.
+    /// Writes a caller-owned Array of GuestContractHandle into `out_handles`.
+    /// The caller frees a non-null result through `host->free`; an empty result is
+    /// `Array::empty()`. The explicit out parameter avoids aggregate return ABI lowering.
     pub find_all_guest_contracts: unsafe extern "C" fn(
         this: *const HostApi,
         contract_id: u64,
         min_version: u32,
-    ) -> Array<GuestContractHandle>,
+        out_handles: *mut Array<GuestContractHandle>,
+    ),
     /// Resolve a GuestContractHandle to a GuestContractInterface pointer.
     ///
     /// Returns null if the handle is invalid or contract was unloaded.
@@ -206,29 +197,24 @@ pub struct HostApi {
         contract_id: u64,
         min_version: u32,
     ) -> *const HostContractInterface,
-    /// List all loaded bundles.
+    /// List all loaded bundles into caller-provided `out_bundles`.
     ///
-    /// Returns an Array of BundleId. Caller must free via `host->free`.
-    /// Bundle IDs are stable for the lifetime of the runtime.
-    ///
-    /// # Arguments
-    /// - `this`: HostApi pointer (self-passing)
-    ///
-    /// # Returns
-    /// Array of BundleId. Caller owns and must free.
-    pub list_bundles: unsafe extern "C" fn(this: *const HostApi) -> Array<BundleId>,
-    /// Get dependencies for the calling bundle.
+    /// A non-null output receives a caller-owned array, freed through `host->free`.
+    /// An empty result is `Array::empty()`. The explicit output avoids aggregate-return
+    /// ABI lowering.
+    pub list_bundles: unsafe extern "C" fn(this: *const HostApi, out_bundles: *mut Array<BundleId>),
+    /// Get dependencies for the calling bundle into caller-provided `out_dependencies`.
     ///
     /// Uses bundle_id from current BundleInitContext (TLS) to look up declared deps.
-    /// Returns an Array of DependencyInfo. Caller must free via `host->free`.
+    /// A non-null output receives a caller-owned array, freed through `host->free`.
+    /// An empty result is `Array::empty()`. The explicit output avoids aggregate-return
+    /// ABI lowering.
     ///
     /// # Arguments
     /// - `this`: HostApi pointer (self-passing)
-    ///
-    /// # Returns
-    /// Array of DependencyInfo. Caller owns and must free.
-    /// Returns empty array if called outside bundle init context.
-    pub get_dependencies: unsafe extern "C" fn(this: *const HostApi) -> Array<DependencyInfo>,
+    /// - `out_dependencies`: result array or null
+    pub get_dependencies:
+        unsafe extern "C" fn(this: *const HostApi, out_dependencies: *mut Array<DependencyInfo>),
     /// Load a plugin bundle from a path.
     ///
     /// Host applications call this to load a bundle at runtime.
@@ -421,7 +407,8 @@ pub struct HostApi {
     /// # Returns
     /// The current registry revision, or zero when `this` is null.
     pub registry_revision: unsafe extern "C" fn(this: *const HostApi) -> u64,
-    /// Reserved. Producers must set this to null; consumers must not read it.
+    /// Optional pointer to a [`RuntimeIntrospection`](crate::plugin::RuntimeIntrospection)
+    /// table. A null pointer denotes a runtime built by an older ABI producer.
     pub reserved: *const c_void,
 }
 

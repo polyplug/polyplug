@@ -103,6 +103,26 @@ auto rt = polyplug::Runtime::builder()
 `Required` rejects unsigned or tampered bundles; pin specific keys with
 `.trusted_keys({...})`. See the [Trust Model](../TRUST_MODEL.md).
 
+### Inspect loaded bundles and contracts
+
+`rt.bundle_descriptors()` returns copied `LoadedBundleDescriptor` snapshots;
+`rt.registered_contract_descriptors()` returns copied ownership snapshots for
+live guest-contract handles:
+
+```cpp
+for (const auto& bundle : rt.bundle_descriptors()) {
+    std::cout << bundle.name << " source=" << static_cast<unsigned>(bundle.source_kind) << "\n";
+}
+const auto contracts = rt.registered_contract_descriptors();
+```
+
+`source_kind` is the ABI-safe projection of Rust `BundleOrigin`: `Internal`,
+`Path`, `Code`, or `Bytes`. It is metadata only—code and byte payloads are not
+returned. Both calls report the current loaded/registered runtime snapshot, not
+whether an application has enabled a plugin or invoked a contract
+`initialize` method. That policy belongs to the application; see
+[Runtime lifecycle is not application enablement](../ARCHITECTURE.md#runtime-lifecycle-is-not-application-enablement).
+
 ## 4. Register a host contract (optional)
 
 If your `api.toml` defines a host contract (a service the host provides to

@@ -62,6 +62,18 @@ impl Lang {
             Lang::JsQuickJs => "js-quickjs",
         }
     }
+
+    /// Canonical `api.toml` key for language-specific customization.
+    pub const fn schema_key(self) -> &'static str {
+        match self {
+            Self::Rust => "rust",
+            Self::Cpp => "cpp",
+            Self::CSharp => "csharp",
+            Self::Python => "python",
+            Self::Lua => "lua",
+            Self::JsQuickJs => "javascript",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -95,14 +95,26 @@ impl BundleLoader for ProbeLoader {
 
         // Probe the enumeration API for both contracts. The declared one must be
         // enumerable; the undeclared one must come back empty during init.
-        // SAFETY: host_abi is a valid HostApi from the runtime.
-        let declared_all: Array<GuestContractHandle> = unsafe {
-            ((*host_abi).find_all_guest_contracts)(host_abi, self.declared_contract_id, 0_u32)
-        };
-        // SAFETY: host_abi is a valid HostApi from the runtime.
-        let undeclared_all: Array<GuestContractHandle> = unsafe {
-            ((*host_abi).find_all_guest_contracts)(host_abi, self.undeclared_contract_id, 0_u32)
-        };
+        let mut declared_all: Array<GuestContractHandle> = Array::empty();
+        // SAFETY: host_abi is valid and `declared_all` is a writable output slot.
+        unsafe {
+            ((*host_abi).find_all_guest_contracts)(
+                host_abi,
+                self.declared_contract_id,
+                0_u32,
+                &raw mut declared_all,
+            );
+        }
+        let mut undeclared_all: Array<GuestContractHandle> = Array::empty();
+        // SAFETY: host_abi is valid and `undeclared_all` is a writable output slot.
+        unsafe {
+            ((*host_abi).find_all_guest_contracts)(
+                host_abi,
+                self.undeclared_contract_id,
+                0_u32,
+                &raw mut undeclared_all,
+            );
+        }
         let declared_all_len: usize = declared_all.len;
         let undeclared_all_len: usize = undeclared_all.len;
 

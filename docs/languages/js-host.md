@@ -112,6 +112,25 @@ const rt = runtimeNew(lib, {
 `Required` rejects unsigned or tampered bundles. See the
 [Trust Model](../TRUST_MODEL.md).
 
+### Inspect loaded bundles and contracts
+
+The JavaScript runtime returns immutable copied snapshots:
+
+```ts
+for (const bundle of rt.bundleDescriptors()) {
+  console.log(bundle.name, bundle.sourceKind);
+}
+const contracts = rt.registeredContractDescriptors();
+```
+
+`sourceKind` is the payload-free SDK projection of Rust `BundleOrigin`:
+`Internal`, `Path`, `Code`, or `Bytes`. It never reveals programmatically
+supplied source or byte payloads. Both methods report only current
+loaded/registered runtime state; they do not model application-level
+enabled/disabled policy or invoke a contract `initialize` operation. Keep that
+policy in the application; see
+[Runtime lifecycle is not application enablement](../ARCHITECTURE.md#runtime-lifecycle-is-not-application-enablement).
+
 ## 4. Register a host contract (optional)
 
 If your `api.toml` defines a host contract (a service the host provides to

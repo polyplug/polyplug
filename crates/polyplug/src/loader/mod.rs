@@ -9,7 +9,7 @@ pub mod manifest;
 pub mod scanner;
 
 pub use bundle_loader::BundleLoader;
-pub use bundle_source::BundleSource;
+pub use bundle_source::{BundleOrigin, BundleSource};
 // Manifest schema types (`ManifestData`, `ManifestDependency`,
 // `RawManifestDependency`) live in `polyplug_common`; import them from there.
 // Only the runtime-side filesystem reader is re-exported here.

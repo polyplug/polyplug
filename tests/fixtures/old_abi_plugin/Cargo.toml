@@ -1,0 +1,11 @@
+[package]
+name    = "old_abi_plugin"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]

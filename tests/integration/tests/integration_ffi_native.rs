@@ -133,9 +133,11 @@ fn test_native_loader_ffi_workflow() {
     assert!(!vtable.is_null(), "resolve_guest_contract returned null");
 
     // 4. Find all providers and free the returned array via the host allocator.
-    // SAFETY: host is valid.
-    let all: Array<GuestContractHandle> =
-        unsafe { ((*host).find_all_guest_contracts)(host, contract_id, 0) };
+    let mut all: Array<GuestContractHandle> = Array::empty();
+    // SAFETY: host is valid and `all` is a writable output slot.
+    unsafe {
+        ((*host).find_all_guest_contracts)(host, contract_id, 0, &raw mut all);
+    }
     assert!(all.len >= 1, "expected at least one provider for test.add");
     assert!(!all.items.is_null(), "provider array must be allocated");
     // SAFETY: `all` was allocated by the host allocator; free with matching size/align.

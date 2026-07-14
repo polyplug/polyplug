@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 /// Where a bundle's executable artifact comes from.
 ///
-/// `BundleSource` is **host-internal**: it never crosses the C ABI and is not part
-/// of the frozen ABI surface. It is threaded through [`BundleLoader::load`] so a
-/// loader can serve a bundle from an on-disk directory, from in-memory VM source
-/// text, or from raw artifact bytes.
+/// Loaders receive this value while acquiring an executable artifact. Loaded bundle
+/// descriptors retain only its payload-free [`BundleOrigin`] for host introspection.
+/// `Internal` has no executable artifact because generated bindings register its
+/// providers directly.
 ///
 /// [`BundleLoader::load`]: crate::loader::BundleLoader::load
 ///
@@ -28,6 +28,8 @@ use std::path::PathBuf;
 /// resolved relative to a bundle directory.
 #[derive(Debug, Clone)]
 pub enum BundleSource {
+    /// Providers registered directly by generated bindings in the host process.
+    Internal,
     /// A bundle directory on disk. The loader resolves the plugin file relative to
     /// this directory using the manifest's `file` field (path-based loading).
     Path(PathBuf),
@@ -39,14 +41,64 @@ pub enum BundleSource {
     Bytes(Vec<u8>),
 }
 
+/// Payload-free origin metadata retained by loaded bundle descriptors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BundleOrigin {
+    Internal,
+    Path(PathBuf),
+    Code,
+    Bytes,
+}
+
 impl BundleSource {
-    /// A short, stable label identifying the variant, for diagnostics and error
-    /// messages (`"path"`, `"code"`, or `"bytes"`).
+    /// Return payload-free origin metadata suitable for public introspection.
+    pub fn origin(&self) -> BundleOrigin {
+        match self {
+            BundleSource::Internal => BundleOrigin::Internal,
+            BundleSource::Path(path) => BundleOrigin::Path(path.clone()),
+            BundleSource::Code(_) => BundleOrigin::Code,
+            BundleSource::Bytes(_) => BundleOrigin::Bytes,
+        }
+    }
+
+    /// A short, stable label identifying the variant for diagnostics and
+    /// introspection (`"internal"`, `"path"`, `"code"`, or `"bytes"`).
     pub fn kind(&self) -> &'static str {
         match self {
+            BundleSource::Internal => "internal",
             BundleSource::Path(_) => "path",
             BundleSource::Code(_) => "code",
             BundleSource::Bytes(_) => "bytes",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BundleOrigin, BundleSource};
+    use std::path::PathBuf;
+
+    #[test]
+    fn origin_retains_only_path_metadata() {
+        let path: PathBuf = "/bundles/example".into();
+        assert_eq!(
+            BundleSource::Path(path.clone()).origin(),
+            BundleOrigin::Path(path)
+        );
+        assert_eq!(BundleSource::Internal.origin(), BundleOrigin::Internal);
+
+        let code = BundleSource::Code("private source text".to_owned());
+        let code_origin = code.origin();
+        assert_eq!(code_origin, BundleOrigin::Code);
+        assert!(!format!("{code_origin:?}").contains("private source text"));
+        assert!(matches!(code, BundleSource::Code(source) if source == "private source text"));
+
+        let bytes = BundleSource::Bytes(vec![0x50, 0x50, 0x4C, 0x47]);
+        let bytes_origin = bytes.origin();
+        assert_eq!(bytes_origin, BundleOrigin::Bytes);
+        assert!(!format!("{bytes_origin:?}").contains("80, 80, 76, 71"));
+        assert!(
+            matches!(bytes, BundleSource::Bytes(payload) if payload == [0x50, 0x50, 0x4C, 0x47])
+        );
     }
 }

@@ -119,6 +119,25 @@ class GuestContractHandle(ctypes.Structure):
 assert ctypes.sizeof(GuestContractHandle) == 8, f"GuestContractHandle expected 8 bytes, got {ctypes.sizeof(GuestContractHandle)}"
 
 
+_runtime_introspection_get_bundle_descriptor_t = ctypes.CFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p)
+_runtime_introspection_list_registered_guest_contracts_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
+_runtime_introspection_get_registered_contract_descriptor_t = ctypes.CFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, GuestContractHandle, ctypes.c_void_p)
+class RuntimeIntrospection(ctypes.Structure):
+    """ `HostApi::reserved` points to this table for current runtimes. Its address is
+     stable for the runtime lifetime; SDKs must treat a null `reserved` pointer as
+     unsupported. A successful descriptor callback transfers its string allocations
+     to the caller; a failed callback transfers no allocation.
+    """
+    _fields_ = [
+        ("get_bundle_descriptor", _runtime_introspection_get_bundle_descriptor_t),
+        ("list_registered_guest_contracts", _runtime_introspection_list_registered_guest_contracts_t),
+        ("get_registered_contract_descriptor", _runtime_introspection_get_registered_contract_descriptor_t),
+    ]
+
+# Expected size: 24 bytes
+assert ctypes.sizeof(RuntimeIntrospection) == 24, f"RuntimeIntrospection expected 24 bytes, got {ctypes.sizeof(RuntimeIntrospection)}"
+
+
 class Array(ctypes.Structure):
     """ FFI-safe array with caller-frees ownership model.
 
@@ -295,6 +314,18 @@ class DispatchType(enum.IntEnum):
     VirtualMachine = 1
 
 
+class BundleSourceKind(enum.IntEnum):
+    """ The retained origin of a loaded bundle.
+
+     This is metadata only: a `Code` or `Bytes` origin never exposes the artifact
+     payload through the ABI.
+    """
+    Internal = 0
+    Path = 1
+    Code = 2
+    Bytes = 3
+
+
 class Compatibility(enum.IntEnum):
     """ How strictly version compatibility is enforced when resolving plugins."""
     Strict = 0
@@ -365,7 +396,7 @@ class ParseVersionError(enum.IntEnum):
     """ABI enum."""
     InvalidFormat = 0
     InvalidInt = 1
-POLYPLUG_ABI_VERSION: int = 1
+POLYPLUG_ABI_VERSION: int = 2
 
 
 _vm_dispatch_call_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, VmLoaderData, GuestContractInstance, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
@@ -388,12 +419,12 @@ _host_api_register_guest_contract_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ct
 _host_api_alloc_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
 _host_api_free_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
 _host_api_find_guest_contract_t = ctypes.CFUNCTYPE(GuestContractHandle, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
-_host_api_find_all_guest_contracts_t = ctypes.CFUNCTYPE(Array, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
+_host_api_find_all_guest_contracts_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_void_p)
 _host_api_resolve_guest_contract_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, GuestContractHandle)
 _host_api_get_host_contract_t = ctypes.CFUNCTYPE(HostContractInstance, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
 _host_api_resolve_host_contract_interface_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
-_host_api_list_bundles_t = ctypes.CFUNCTYPE(Array, ctypes.c_void_p)
-_host_api_get_dependencies_t = ctypes.CFUNCTYPE(Array, ctypes.c_void_p)
+_host_api_list_bundles_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
+_host_api_get_dependencies_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
 _host_api_load_bundle_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p)
 _host_api_reload_bundle_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p)
 _host_api_register_host_contract_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
@@ -410,20 +441,17 @@ class HostApi(ctypes.Structure):
 
      Contains an opaque runtime pointer and function pointers for guest calls.
      All functions use self-passing pattern (receive HostApi pointer as first parameter).
-     `HostApi` contains an opaque runtime pointer, callback table, and one reserved pointer.
-     Producers set every callback to a valid function and set `reserved` to null.
-
-     # Who provides
-     The runtime creates this struct and passes it to `polyplug_init()`.
-     The struct is allocated using `Box::leak()` for `'static` lifetime.
+     `HostApi` contains an opaque runtime pointer, callback table, and one
+     introspection-table pointer.
 
      # Nullability
      Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
      is the sole producer of this struct and populates all 21 callbacks at
      creation. Consumers never construct or mutate a `HostApi`. Only the
      `runtime` pointer can become null (it is swapped to null by
-     `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
-     is a null placeholder by contract.
+     `polyplug_runtime_destroy`). `reserved` points to
+     [`RuntimeIntrospection`](crate::plugin::RuntimeIntrospection) for current
+     runtimes and is null only for an older ABI producer.
 
      # Who calls
      Guest (plugin) code calls these functions to interact with the runtime.
@@ -473,6 +501,60 @@ class HostApi(ctypes.Structure):
 
 # Expected size: 184 bytes
 assert ctypes.sizeof(HostApi) == 184, f"HostApi expected 184 bytes, got {ctypes.sizeof(HostApi)}"
+
+
+class BundleDescriptorView(ctypes.Structure):
+    """ Caller-owned ABI descriptor of one loaded bundle.
+
+     `name` is allocated through `HostApi::alloc`. The successful callback transfers
+     ownership to the caller, which must release a non-null buffer through
+     `HostApi::free(host, name.items, name.len, name.align)` exactly once.
+    """
+    _fields_ = [
+        ("id", ctypes.c_uint64),
+        ("name", ctypes.c_void_p),
+        ("name_len", ctypes.c_size_t),
+        ("name__align", ctypes.c_size_t),
+        ("version", Version),
+        ("runtime", ctypes.c_uint32),
+        ("source_kind", ctypes.c_uint32),
+    ]
+
+# Expected size: 56 bytes
+assert ctypes.sizeof(BundleDescriptorView) == 56, f"BundleDescriptorView expected 56 bytes, got {ctypes.sizeof(BundleDescriptorView)}"
+
+
+class OwnedPluginDescriptorView(ctypes.Structure):
+    """ Caller-owned ABI descriptor for a registered provider.
+
+     Each non-null string buffer is allocated through `HostApi::alloc` and must be
+     released through `HostApi::free` with its exact `len` and `align` exactly once.
+    """
+    _fields_ = [
+        ("name", ctypes.c_void_p),
+        ("name_len", ctypes.c_size_t),
+        ("name__align", ctypes.c_size_t),
+        ("contract_name", ctypes.c_void_p),
+        ("contract_name_len", ctypes.c_size_t),
+        ("contract_name__align", ctypes.c_size_t),
+        ("version", Version),
+    ]
+
+# Expected size: 64 bytes
+assert ctypes.sizeof(OwnedPluginDescriptorView) == 64, f"OwnedPluginDescriptorView expected 64 bytes, got {ctypes.sizeof(OwnedPluginDescriptorView)}"
+
+
+class RegisteredContractDescriptorView(ctypes.Structure):
+    """ Caller-owned ABI descriptor of one registered guest-contract provider."""
+    _fields_ = [
+        ("handle", GuestContractHandle),
+        ("bundle_id", ctypes.c_uint64),
+        ("contract_id", ctypes.c_uint64),
+        ("plugin", OwnedPluginDescriptorView),
+    ]
+
+# Expected size: 88 bytes
+assert ctypes.sizeof(RegisteredContractDescriptorView) == 88, f"RegisteredContractDescriptorView expected 88 bytes, got {ctypes.sizeof(RegisteredContractDescriptorView)}"
 
 
 class BundleInitContext(ctypes.Structure):

@@ -240,20 +240,17 @@ public struct GuestContractInterface
 ///
 ///  Contains an opaque runtime pointer and function pointers for guest calls.
 ///  All functions use self-passing pattern (receive HostApi pointer as first parameter).
-///  `HostApi` contains an opaque runtime pointer, callback table, and one reserved pointer.
-///  Producers set every callback to a valid function and set `reserved` to null.
-///
-///  # Who provides
-///  The runtime creates this struct and passes it to `polyplug_init()`.
-///  The struct is allocated using `Box::leak()` for `'static` lifetime.
+///  `HostApi` contains an opaque runtime pointer, callback table, and one
+///  introspection-table pointer.
 ///
 ///  # Nullability
 ///  Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
 ///  is the sole producer of this struct and populates all 21 callbacks at
 ///  creation. Consumers never construct or mutate a `HostApi`. Only the
 ///  `runtime` pointer can become null (it is swapped to null by
-///  `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
-///  is a null placeholder by contract.
+///  `polyplug_runtime_destroy`). `reserved` points to
+///  [`RuntimeIntrospection`](crate::plugin::RuntimeIntrospection) for current
+///  runtimes and is null only for an older ABI producer.
 ///
 ///  # Who calls
 ///  Guest (plugin) code calls these functions to interact with the runtime.
@@ -335,16 +332,9 @@ public struct HostApi
     public IntPtr FindGuestContract;
     ///  Find all guest contracts matching contract_id and minimum version.
     ///
-    ///  Returns an Array of GuestContractHandle. Caller must free via `host->free`.
-    ///  Use when multiple implementations of the same contract may exist.
-    ///
-    ///  # Arguments
-    ///  - `this`: HostApi pointer (self-passing)
-    ///  - `contract_id`: Contract identifier hash
-    ///  - `min_version`: Minimum version required
-    ///
-    ///  # Returns
-    ///  Array of GuestContractHandle. Caller owns and must free.
+    ///  Writes a caller-owned Array of GuestContractHandle into `out_handles`.
+    ///  The caller frees a non-null result through `host->free`; an empty result is
+    ///  `Array::empty()`. The explicit out parameter avoids aggregate return ABI lowering.
     public IntPtr FindAllGuestContracts;
     ///  Resolve a GuestContractHandle to a GuestContractInterface pointer.
     ///
@@ -384,28 +374,22 @@ public struct HostApi
     ///  # Returns
     ///  Pointer to HostContractInterface, or null if invalid/not found.
     public IntPtr ResolveHostContractInterface;
-    ///  List all loaded bundles.
+    ///  List all loaded bundles into caller-provided `out_bundles`.
     ///
-    ///  Returns an Array of BundleId. Caller must free via `host->free`.
-    ///  Bundle IDs are stable for the lifetime of the runtime.
-    ///
-    ///  # Arguments
-    ///  - `this`: HostApi pointer (self-passing)
-    ///
-    ///  # Returns
-    ///  Array of BundleId. Caller owns and must free.
+    ///  A non-null output receives a caller-owned array, freed through `host->free`.
+    ///  An empty result is `Array::empty()`. The explicit output avoids aggregate-return
+    ///  ABI lowering.
     public IntPtr ListBundles;
-    ///  Get dependencies for the calling bundle.
+    ///  Get dependencies for the calling bundle into caller-provided `out_dependencies`.
     ///
     ///  Uses bundle_id from current BundleInitContext (TLS) to look up declared deps.
-    ///  Returns an Array of DependencyInfo. Caller must free via `host->free`.
+    ///  A non-null output receives a caller-owned array, freed through `host->free`.
+    ///  An empty result is `Array::empty()`. The explicit output avoids aggregate-return
+    ///  ABI lowering.
     ///
     ///  # Arguments
     ///  - `this`: HostApi pointer (self-passing)
-    ///
-    ///  # Returns
-    ///  Array of DependencyInfo. Caller owns and must free.
-    ///  Returns empty array if called outside bundle init context.
+    ///  - `out_dependencies`: result array or null
     public IntPtr GetDependencies;
     ///  Load a plugin bundle from a path.
     ///
@@ -568,7 +552,8 @@ public struct HostApi
     ///  # Returns
     ///  The current registry revision, or zero when `this` is null.
     public IntPtr RegistryRevision;
-    ///  Reserved. Producers must set this to null; consumers must not read it.
+    ///  Optional pointer to a [`RuntimeIntrospection`](crate::plugin::RuntimeIntrospection)
+    ///  table. A null pointer denotes a runtime built by an older ABI producer.
     public IntPtr Reserved;
 }
 
@@ -723,6 +708,87 @@ public struct GuestContractHandle
 }
 
 /// Expected size: 8 bytes
+
+///  Caller-owned ABI descriptor of one loaded bundle.
+///
+///  `name` is allocated through `HostApi::alloc`. The successful callback transfers
+///  ownership to the caller, which must release a non-null buffer through
+///  `HostApi::free(host, name.items, name.len, name.align)` exactly once.
+[StructLayout(LayoutKind.Sequential, Size = 56)]
+public struct BundleDescriptorView
+{
+    ///  Stable bundle identity.
+    public ulong Id;
+    ///  Human-readable bundle name.
+    public IntPtr Name;
+    public nuint NameLen;
+    public nuint NameAlign;
+    ///  Semantic bundle version.
+    public Version Version;
+    ///  Runtime language selected for the bundle.
+    public SupportedLanguage Runtime;
+    ///  Retained bundle origin.
+    public BundleSourceKind SourceKind;
+}
+
+/// Expected size: 56 bytes
+
+///  Caller-owned ABI descriptor for a registered provider.
+///
+///  Each non-null string buffer is allocated through `HostApi::alloc` and must be
+///  released through `HostApi::free` with its exact `len` and `align` exactly once.
+[StructLayout(LayoutKind.Sequential, Size = 64)]
+public struct OwnedPluginDescriptorView
+{
+    ///  Human-readable provider name.
+    public IntPtr Name;
+    public nuint NameLen;
+    public nuint NameAlign;
+    ///  Full guest-contract name.
+    public IntPtr ContractName;
+    public nuint ContractNameLen;
+    public nuint ContractNameAlign;
+    ///  Provider version.
+    public Version Version;
+}
+
+/// Expected size: 64 bytes
+
+///  Caller-owned ABI descriptor of one registered guest-contract provider.
+[StructLayout(LayoutKind.Sequential, Size = 88)]
+public struct RegisteredContractDescriptorView
+{
+    ///  Stable handle for the live registration.
+    public GuestContractHandle Handle;
+    ///  Bundle that owns the registration.
+    public ulong BundleId;
+    ///  Canonical guest-contract identity.
+    public ulong ContractId;
+    ///  Canonical provider descriptor with caller-owned string buffers.
+    public OwnedPluginDescriptorView Plugin;
+}
+
+/// Expected size: 88 bytes
+
+///  `HostApi::reserved` points to this table for current runtimes. Its address is
+///  stable for the runtime lifetime; SDKs must treat a null `reserved` pointer as
+///  unsupported. A successful descriptor callback transfers its string allocations
+///  to the caller; a failed callback transfers no allocation.
+[StructLayout(LayoutKind.Sequential, Size = 24)]
+public struct RuntimeIntrospection
+{
+    ///  Copy a loaded bundle descriptor into `out_descriptor`.
+    public IntPtr GetBundleDescriptor;
+    ///  Write stable handles for all live guest-contract registrations into `out_handles`.
+    ///
+    ///  A non-null `out_handles` receives an owned array; an empty result is
+    ///  `Array::empty()`. This explicit output avoids aggregate-return lowering.
+    public IntPtr ListRegisteredGuestContracts;
+    ///  Copy a live guest-contract ownership descriptor into `out_descriptor`.
+    public IntPtr GetRegisteredContractDescriptor;
+}
+
+/// Expected size: 24 bytes
 
 ///  Context passed to every guest `polyplug_init()` function.
 ///
@@ -1142,6 +1208,22 @@ public enum DispatchType : uint
     VirtualMachine = 1,
 }
 
+///  The retained origin of a loaded bundle.
+///
+///  This is metadata only: a `Code` or `Bytes` origin never exposes the artifact
+///  payload through the ABI.
+public enum BundleSourceKind : uint
+{
+    ///  Providers registered directly by generated bindings in the host process.
+    Internal = 0,
+    ///  An on-disk bundle directory.
+    Path = 1,
+    ///  In-memory source text.
+    Code = 2,
+    ///  In-memory artifact bytes.
+    Bytes = 3,
+}
+
 ///  How strictly version compatibility is enforced when resolving plugins.
 public enum Compatibility : uint
 {
@@ -1273,7 +1355,7 @@ public struct DispatchMechanisms
 /// ABI constants for polyplug.
 public static class AbiConstants
 {
-    public const uint POLYPLUG_ABI_VERSION = 1u;
+    public const uint POLYPLUG_ABI_VERSION = 2u;
 }
 
 // ─── Helper Methods (embedded by the build script) ───

@@ -76,12 +76,9 @@ M.SignaturePolicy = {
     Required = tonumber(ffi.C.SignaturePolicy_Required),
 }
 
--- Exact FFI signature used for HostApi.find_all_guest_contracts. The return
--- type is the ABI `Array` struct BY VALUE (24 bytes: items ptr + len size_t +
--- align size_t) — asserted against the generated ABI layout in
--- tests/test_reload_notification.lua. Never narrow this to a smaller struct:
--- the callee writes the full 24-byte sret.
-M.FIND_ALL_FN_SIGNATURE = "Array(*)(const HostApi*, uint64_t, uint32_t)"
+-- HostApi.find_all_guest_contracts writes its 24-byte Array through a trailing
+-- out parameter, avoiding aggregate-return ABI lowering on every target.
+M.FIND_ALL_FN_SIGNATURE = "void(*)(const HostApi*, uint64_t, uint32_t, Array*)"
 
 -- ─── Cached HostApi function-pointer ctypes ─────────────────────────────────────
 -- LuaJIT does NOT intern anonymous function-pointer types: every
@@ -100,6 +97,15 @@ local UNLOAD_BUNDLE_FN_T = ffi.typeof("void(*)(const HostApi*, uint64_t, AbiErro
 local FIND_GUEST_CONTRACT_FN_T = ffi.typeof("GuestContractHandle(*)(const HostApi*, uint64_t, uint32_t)")
 local FIND_ALL_FN_T = ffi.typeof(M.FIND_ALL_FN_SIGNATURE)
 local HOST_FREE_FN_T = ffi.typeof("void(*)(const HostApi*, void*, size_t, size_t)")
+local LIST_BUNDLES_FN_T = ffi.typeof("void(*)(const HostApi*, Array*)")
+local GET_BUNDLE_DESCRIPTOR_FN_T = ffi.typeof(
+    "uint8_t(*)(const HostApi*, uint64_t, BundleDescriptorView*)"
+)
+local LIST_REGISTERED_GUEST_CONTRACTS_FN_T = ffi.typeof("void(*)(const HostApi*, Array*)")
+local GET_REGISTERED_CONTRACT_DESCRIPTOR_FN_T = ffi.typeof(
+    "uint8_t(*)(const HostApi*, GuestContractHandle, RegisteredContractDescriptorView*)"
+)
+local RUNTIME_INTROSPECTION_PTR_T = ffi.typeof("const RuntimeIntrospection*")
 local RESOLVE_GUEST_CONTRACT_FN_T = ffi.typeof("const GuestContractInterface*(*)(const HostApi*, GuestContractHandle)")
 local REGISTER_HOST_CONTRACT_FN_T = ffi.typeof(
     "void(*)(const HostApi*, const HostContractInterface*, AbiError*)"
@@ -544,33 +550,198 @@ end
 -- @return table              Array of GuestContractHandle cdata (index + generation).
 function M.Runtime:find_all_guest_contracts(contract_id, min_version, cap)
     cap = cap or 64
-    -- Cast function pointer and call with self-passing pattern.
-    -- Returns the ABI `Array` struct BY VALUE: #[repr(C)] { items: *mut T,
-    -- len: usize, align: usize } = 24 bytes. Declaring anything smaller makes
-    -- the SysV sret write past the buffer LuaJIT allocates for the return
-    -- value (memory corruption). The element type is GuestContractHandle
-    -- (#[repr(C)] { index: u32, generation: u32 } = 8 bytes / stride 8).
+    -- The runtime writes the ABI Array through an explicit trailing out parameter.
     local fn = ffi.cast(FIND_ALL_FN_T, self._host_struct.find_all_guest_contracts)
-    local arr = fn(self._host, contract_id, min_version)
+    local out = ffi.new("Array[1]")
+    fn(self._host, contract_id, min_version, out)
+    local arr = out[0]
     local result = {}
-    -- arr.len is a size_t cdata (uint64_t); math.min on cdata errors, so
-    -- convert to a Lua number first.
     local len = tonumber(arr.len)
     local items = ffi.cast("GuestContractHandle*", arr.items)
     if items ~= nil then
         for i = 0, math.min(len, cap) - 1 do
-            table.insert(result, items[i])
+            local copied = ffi.new("GuestContractHandle")
+            copied.index = items[i].index
+            copied.generation = items[i].generation
+            table.insert(result, copied)
         end
     end
-    -- Free the array via HostApi.free using the runtime's allocation size and
-    -- alignment: size = len * sizeof(GuestContractHandle), align = arr.align.
-    if arr.items ~= nil and len > 0 then
+    if arr.items ~= nil then
         local elem_size = ffi.sizeof("GuestContractHandle")
         local free_fn = ffi.cast(HOST_FREE_FN_T, self._host_struct.free)
         free_fn(self._host, arr.items, len * elem_size, arr.align)
     end
     return result
 end
+local function copy_version(version)
+    return {
+        major = tonumber(version.major),
+        minor = tonumber(version.minor),
+        patch = tonumber(version.patch),
+    }
+end
+
+local function copy_handle(handle)
+    return {
+        index = tonumber(handle.index),
+        generation = tonumber(handle.generation),
+    }
+end
+
+local function introspection_table(host_struct)
+    if host_struct.reserved == nil then
+        return nil
+    end
+    return ffi.cast(RUNTIME_INTROSPECTION_PTR_T, host_struct.reserved)
+end
+
+local function free_owned_array(runtime, array, element_size)
+    if array.items ~= nil then
+        local free_fn = ffi.cast(HOST_FREE_FN_T, runtime._host_struct.free)
+        free_fn(runtime._host, array.items, tonumber(array.len) * element_size, array.align)
+    end
+end
+
+local function copy_owned_array(runtime, array, element_size, copy)
+    local ok, result = xpcall(copy, debug.traceback)
+    free_owned_array(runtime, array, element_size)
+    if not ok then
+        error(result, 0)
+    end
+    return result
+end
+
+local function copy_owned_descriptor_strings(runtime, name, contract_name)
+    local ok, result = xpcall(function()
+        local copy = function(value)
+            if value.items == nil or tonumber(value.len) == 0 then
+                return ""
+            end
+            return ffi.string(value.items, tonumber(value.len))
+        end
+        return {
+            name = copy(name),
+            contract_name = copy(contract_name),
+        }
+    end, debug.traceback)
+    free_owned_array(runtime, name, 1)
+    free_owned_array(runtime, contract_name, 1)
+    if not ok then
+        error(result, 0)
+    end
+    return result
+end
+
+--- Snapshot loaded bundle descriptors with copied, released metadata.
+---
+--- Returns an empty table when the runtime predates metadata introspection or
+--- has no loaded bundles.
+--- @return table[]  `{ id, name, version, runtime, source_kind }` descriptors.
+function M.Runtime:bundle_descriptors()
+    local introspection = introspection_table(self._host_struct)
+    if introspection == nil or introspection.get_bundle_descriptor == nil
+        or self._host_struct.list_bundles == nil then
+        return {}
+    end
+
+    local list_bundles = ffi.cast(LIST_BUNDLES_FN_T, self._host_struct.list_bundles)
+    local get_descriptor = ffi.cast(
+        GET_BUNDLE_DESCRIPTOR_FN_T, introspection.get_bundle_descriptor
+    )
+    local bundle_out = ffi.new("Array[1]")
+    list_bundles(self._host, bundle_out)
+    local bundle_ids = bundle_out[0]
+    return copy_owned_array(self, bundle_ids, ffi.sizeof("uint64_t"), function()
+        local descriptors = {}
+        local ids = ffi.cast("uint64_t*", bundle_ids.items)
+        if ids == nil then
+            return descriptors
+        end
+        for index = 0, tonumber(bundle_ids.len) - 1 do
+            local view = ffi.new("BundleDescriptorView[1]")
+            if get_descriptor(self._host, ids[index], view) ~= 0 then
+                local name = {
+                    items = view[0].name,
+                    len = view[0].name_len,
+                    align = view[0].name__align,
+                }
+                local copied_name = copy_owned_array(self, name, 1, function()
+                    if name.items == nil or tonumber(name.len) == 0 then
+                        return ""
+                    end
+                    return ffi.string(name.items, tonumber(name.len))
+                end)
+                descriptors[#descriptors + 1] = {
+                    id = view[0].id,
+                    name = copied_name,
+                    version = copy_version(view[0].version),
+                    runtime = tonumber(view[0].runtime),
+                    source_kind = tonumber(view[0].source_kind),
+                }
+            end
+        end
+        return descriptors
+    end)
+end
+
+--- Snapshot registered guest-contract descriptors with copied, released metadata.
+---
+--- Returns an empty table when the runtime predates metadata introspection or
+--- has no registered guest contracts.
+--- @return table[]  `{ handle, bundle_id, contract_id, plugin }` descriptors.
+function M.Runtime:registered_contract_descriptors()
+    local introspection = introspection_table(self._host_struct)
+    if introspection == nil or introspection.list_registered_guest_contracts == nil
+        or introspection.get_registered_contract_descriptor == nil then
+        return {}
+    end
+
+    local list_contracts = ffi.cast(
+        LIST_REGISTERED_GUEST_CONTRACTS_FN_T,
+        introspection.list_registered_guest_contracts
+    )
+    local get_descriptor = ffi.cast(
+        GET_REGISTERED_CONTRACT_DESCRIPTOR_FN_T,
+        introspection.get_registered_contract_descriptor
+    )
+    local handles_out = ffi.new("Array[1]")
+    list_contracts(self._host, handles_out)
+    local handles = handles_out[0]
+    return copy_owned_array(self, handles, ffi.sizeof("GuestContractHandle"), function()
+        local descriptors = {}
+        local items = ffi.cast("GuestContractHandle*", handles.items)
+        if items == nil then
+            return descriptors
+        end
+        for index = 0, tonumber(handles.len) - 1 do
+            local view = ffi.new("RegisteredContractDescriptorView[1]")
+            if get_descriptor(self._host, items[index], view) ~= 0 then
+                local plugin = view[0].plugin
+                local strings = copy_owned_descriptor_strings(self, {
+                    items = plugin.name,
+                    len = plugin.name_len,
+                    align = plugin.name__align,
+                }, {
+                    items = plugin.contract_name,
+                    len = plugin.contract_name_len,
+                    align = plugin.contract_name__align,
+                })
+                descriptors[#descriptors + 1] = {
+                    handle = copy_handle(view[0].handle),
+                    bundle_id = view[0].bundle_id,
+                    contract_id = view[0].contract_id,
+                    plugin = {
+                        name = strings.name,
+                        contract_name = strings.contract_name,
+                        version = copy_version(view[0].plugin.version),
+                    },
+                }
+            end
+        end
+        return descriptors
+    end)
+end
+
 
 --- Resolve a guest contract handle to a GuestContractInterface pointer.
 -- Calls through HostApi.resolve_guest_contract field. The returned cdata

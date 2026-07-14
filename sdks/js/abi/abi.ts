@@ -274,20 +274,17 @@ export const GUEST_CONTRACT_INTERFACE_SIZE: number = 64;
  *
  *  Contains an opaque runtime pointer and function pointers for guest calls.
  *  All functions use self-passing pattern (receive HostApi pointer as first parameter).
- *  `HostApi` contains an opaque runtime pointer, callback table, and one reserved pointer.
- *  Producers set every callback to a valid function and set `reserved` to null.
- *
- *  # Who provides
- *  The runtime creates this struct and passes it to `polyplug_init()`.
- *  The struct is allocated using `Box::leak()` for `'static` lifetime.
+ *  `HostApi` contains an opaque runtime pointer, callback table, and one
+ *  introspection-table pointer.
  *
  *  # Nullability
  *  Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
  *  is the sole producer of this struct and populates all 21 callbacks at
  *  creation. Consumers never construct or mutate a `HostApi`. Only the
  *  `runtime` pointer can become null (it is swapped to null by
- *  `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
- *  is a null placeholder by contract.
+ *  `polyplug_runtime_destroy`). `reserved` points to
+ *  [`RuntimeIntrospection`](crate::plugin::RuntimeIntrospection) for current
+ *  runtimes and is null only for an older ABI producer.
  *
  *  # Who calls
  *  Guest (plugin) code calls these functions to interact with the runtime.
@@ -379,16 +376,9 @@ export interface HostApi {
     /**
      *  Find all guest contracts matching contract_id and minimum version.
      *
-     *  Returns an Array of GuestContractHandle. Caller must free via `host->free`.
-     *  Use when multiple implementations of the same contract may exist.
-     *
-     *  # Arguments
-     *  - `this`: HostApi pointer (self-passing)
-     *  - `contract_id`: Contract identifier hash
-     *  - `min_version`: Minimum version required
-     *
-     *  # Returns
-     *  Array of GuestContractHandle. Caller owns and must free.
+     *  Writes a caller-owned Array of GuestContractHandle into `out_handles`.
+     *  The caller frees a non-null result through `host->free`; an empty result is
+     *  `Array::empty()`. The explicit out parameter avoids aggregate return ABI lowering.
      */
     find_all_guest_contracts: number;
     /**
@@ -436,30 +426,24 @@ export interface HostApi {
      */
     resolve_host_contract_interface: number;
     /**
-     *  List all loaded bundles.
+     *  List all loaded bundles into caller-provided `out_bundles`.
      *
-     *  Returns an Array of BundleId. Caller must free via `host->free`.
-     *  Bundle IDs are stable for the lifetime of the runtime.
-     *
-     *  # Arguments
-     *  - `this`: HostApi pointer (self-passing)
-     *
-     *  # Returns
-     *  Array of BundleId. Caller owns and must free.
+     *  A non-null output receives a caller-owned array, freed through `host->free`.
+     *  An empty result is `Array::empty()`. The explicit output avoids aggregate-return
+     *  ABI lowering.
      */
     list_bundles: number;
     /**
-     *  Get dependencies for the calling bundle.
+     *  Get dependencies for the calling bundle into caller-provided `out_dependencies`.
      *
      *  Uses bundle_id from current BundleInitContext (TLS) to look up declared deps.
-     *  Returns an Array of DependencyInfo. Caller must free via `host->free`.
+     *  A non-null output receives a caller-owned array, freed through `host->free`.
+     *  An empty result is `Array::empty()`. The explicit output avoids aggregate-return
+     *  ABI lowering.
      *
      *  # Arguments
      *  - `this`: HostApi pointer (self-passing)
-     *
-     *  # Returns
-     *  Array of DependencyInfo. Caller owns and must free.
-     *  Returns empty array if called outside bundle init context.
+     *  - `out_dependencies`: result array or null
      */
     get_dependencies: number;
     /**
@@ -645,7 +629,10 @@ export interface HostApi {
      *  The current registry revision, or zero when `this` is null.
      */
     registry_revision: number;
-    /**  Reserved. Producers must set this to null; consumers must not read it. */
+    /**
+     *  Optional pointer to a [`RuntimeIntrospection`](crate::plugin::RuntimeIntrospection)
+     *  table. A null pointer denotes a runtime built by an older ABI producer.
+     */
     reserved: bigint;
 }
 
@@ -855,6 +842,108 @@ export interface GuestContractHandle {
 export const GUEST_CONTRACT_HANDLE_INDEX_OFFSET: number = 0;
 export const GUEST_CONTRACT_HANDLE_GENERATION_OFFSET: number = 4;
 export const GUEST_CONTRACT_HANDLE_SIZE: number = 8;
+
+/**
+ *  Caller-owned ABI descriptor of one loaded bundle.
+ *
+ *  `name` is allocated through `HostApi::alloc`. The successful callback transfers
+ *  ownership to the caller, which must release a non-null buffer through
+ *  `HostApi::free(host, name.items, name.len, name.align)` exactly once.
+ */
+export interface BundleDescriptorView {
+    /**  Stable bundle identity. */
+    id: bigint;
+    /**  Human-readable bundle name. */
+    name: number;
+    name_len: number;
+    name__align: number;
+    /**  Semantic bundle version. */
+    version: Version;
+    /**  Runtime language selected for the bundle. */
+    runtime: SupportedLanguage;
+    /**  Retained bundle origin. */
+    source_kind: BundleSourceKind;
+}
+
+export const BUNDLE_DESCRIPTOR_VIEW_ID_OFFSET: number = 0;
+export const BUNDLE_DESCRIPTOR_VIEW_NAME_OFFSET: number = 8;
+export const BUNDLE_DESCRIPTOR_VIEW_NAME_LEN_OFFSET: number = 16;
+export const BUNDLE_DESCRIPTOR_VIEW_NAME_ALIGN_OFFSET: number = 24;
+export const BUNDLE_DESCRIPTOR_VIEW_VERSION_OFFSET: number = 32;
+export const BUNDLE_DESCRIPTOR_VIEW_RUNTIME_OFFSET: number = 44;
+export const BUNDLE_DESCRIPTOR_VIEW_SOURCE_KIND_OFFSET: number = 48;
+export const BUNDLE_DESCRIPTOR_VIEW_SIZE: number = 56;
+
+/**
+ *  Caller-owned ABI descriptor for a registered provider.
+ *
+ *  Each non-null string buffer is allocated through `HostApi::alloc` and must be
+ *  released through `HostApi::free` with its exact `len` and `align` exactly once.
+ */
+export interface OwnedPluginDescriptorView {
+    /**  Human-readable provider name. */
+    name: number;
+    name_len: number;
+    name__align: number;
+    /**  Full guest-contract name. */
+    contract_name: number;
+    contract_name_len: number;
+    contract_name__align: number;
+    /**  Provider version. */
+    version: Version;
+}
+
+export const OWNED_PLUGIN_DESCRIPTOR_VIEW_NAME_OFFSET: number = 0;
+export const OWNED_PLUGIN_DESCRIPTOR_VIEW_NAME_LEN_OFFSET: number = 8;
+export const OWNED_PLUGIN_DESCRIPTOR_VIEW_NAME_ALIGN_OFFSET: number = 16;
+export const OWNED_PLUGIN_DESCRIPTOR_VIEW_CONTRACT_NAME_OFFSET: number = 24;
+export const OWNED_PLUGIN_DESCRIPTOR_VIEW_CONTRACT_NAME_LEN_OFFSET: number = 32;
+export const OWNED_PLUGIN_DESCRIPTOR_VIEW_CONTRACT_NAME_ALIGN_OFFSET: number = 40;
+export const OWNED_PLUGIN_DESCRIPTOR_VIEW_VERSION_OFFSET: number = 48;
+export const OWNED_PLUGIN_DESCRIPTOR_VIEW_SIZE: number = 64;
+
+/**  Caller-owned ABI descriptor of one registered guest-contract provider. */
+export interface RegisteredContractDescriptorView {
+    /**  Stable handle for the live registration. */
+    handle: GuestContractHandle;
+    /**  Bundle that owns the registration. */
+    bundle_id: bigint;
+    /**  Canonical guest-contract identity. */
+    contract_id: bigint;
+    /**  Canonical provider descriptor with caller-owned string buffers. */
+    plugin: OwnedPluginDescriptorView;
+}
+
+export const REGISTERED_CONTRACT_DESCRIPTOR_VIEW_HANDLE_OFFSET: number = 0;
+export const REGISTERED_CONTRACT_DESCRIPTOR_VIEW_BUNDLE_ID_OFFSET: number = 8;
+export const REGISTERED_CONTRACT_DESCRIPTOR_VIEW_CONTRACT_ID_OFFSET: number = 16;
+export const REGISTERED_CONTRACT_DESCRIPTOR_VIEW_PLUGIN_OFFSET: number = 24;
+export const REGISTERED_CONTRACT_DESCRIPTOR_VIEW_SIZE: number = 88;
+
+/**
+ *  `HostApi::reserved` points to this table for current runtimes. Its address is
+ *  stable for the runtime lifetime; SDKs must treat a null `reserved` pointer as
+ *  unsupported. A successful descriptor callback transfers its string allocations
+ *  to the caller; a failed callback transfers no allocation.
+ */
+export interface RuntimeIntrospection {
+    /**  Copy a loaded bundle descriptor into `out_descriptor`. */
+    get_bundle_descriptor: number;
+    /**
+     *  Write stable handles for all live guest-contract registrations into `out_handles`.
+     *
+     *  A non-null `out_handles` receives an owned array; an empty result is
+     *  `Array::empty()`. This explicit output avoids aggregate-return lowering.
+     */
+    list_registered_guest_contracts: number;
+    /**  Copy a live guest-contract ownership descriptor into `out_descriptor`. */
+    get_registered_contract_descriptor: number;
+}
+
+export const RUNTIME_INTROSPECTION_GET_BUNDLE_DESCRIPTOR_OFFSET: number = 0;
+export const RUNTIME_INTROSPECTION_LIST_REGISTERED_GUEST_CONTRACTS_OFFSET: number = 8;
+export const RUNTIME_INTROSPECTION_GET_REGISTERED_CONTRACT_DESCRIPTOR_OFFSET: number = 16;
+export const RUNTIME_INTROSPECTION_SIZE: number = 24;
 
 /**
  *  Context passed to every guest `polyplug_init()` function.
@@ -1349,6 +1438,23 @@ export const enum DispatchType {
     VirtualMachine = 1,
 }
 
+/**
+ *  The retained origin of a loaded bundle.
+ *
+ *  This is metadata only: a `Code` or `Bytes` origin never exposes the artifact
+ *  payload through the ABI.
+ */
+export const enum BundleSourceKind {
+    /**  Providers registered directly by generated bindings in the host process. */
+    Internal = 0,
+    /**  An on-disk bundle directory. */
+    Path = 1,
+    /**  In-memory source text. */
+    Code = 2,
+    /**  In-memory artifact bytes. */
+    Bytes = 3,
+}
+
 /**  How strictly version compatibility is enforced when resolving plugins. */
 export const enum Compatibility {
     /**  Exact major match and minor >= required. */
@@ -1479,7 +1585,7 @@ export type DispatchMechanisms =
     | { vm: VmDispatch }
 ;
 
-export const POLYPLUG_ABI_VERSION: number = 1;
+export const POLYPLUG_ABI_VERSION: number = 2;
 
 
 // ─── Helper Methods (embedded by the build script) ───

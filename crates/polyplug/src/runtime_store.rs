@@ -19,7 +19,6 @@ use core::str;
 use core::sync::atomic::{AtomicU64, Ordering};
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread;
 use std::thread::ThreadId;
@@ -37,6 +36,7 @@ use polyplug_common::ManifestData;
 use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::RegistryError;
+use crate::loader::{BundleOrigin, BundleSource};
 use crate::logger::{LoggerHandle, RecoverPoisoned, RecoveringGuard};
 use crate::runtime::current_os_thread_id;
 
@@ -141,6 +141,7 @@ unsafe extern "C" fn stateless_destroy_instance(
 /// Bundle metadata stored in RuntimeStore.
 ///
 /// Provides complete bundle information for introspection and dependency resolution.
+#[derive(Debug, Clone)]
 pub struct BundleDescriptor {
     /// Bundle ID — computed from name via BundleId::new().
     pub id: BundleId,
@@ -150,8 +151,8 @@ pub struct BundleDescriptor {
     pub version: Version,
     /// Runtime language — determines which BundleLoader handles this bundle.
     pub runtime: SupportedLanguage,
-    /// Path to bundle directory or library file.
-    pub file_path: PathBuf,
+    /// Payload-free origin retained for the loaded bundle's full lifetime.
+    pub origin: BundleOrigin,
     /// Bundle-level dependencies (replaces contract-level).
     pub dependencies: Vec<BundleDependency>,
 }
@@ -161,6 +162,7 @@ pub struct BundleDescriptor {
 /// Parsed from manifest.toml `dependencies` array entries like:
 /// - `"image-decoder"` -> { name: "image-decoder", min_version: None }
 /// - `"image-decoder@1.0"` -> { name: "image-decoder", min_version: Some(Version::new(1, 0, 0)) }
+#[derive(Debug, Clone)]
 pub struct BundleDependency {
     /// Dependency bundle name.
     pub name: String,
@@ -221,6 +223,19 @@ pub struct OwnedPluginDescriptor {
     pub version: Version,
 }
 
+/// Stable registry ownership metadata for one live guest-contract registration.
+#[derive(Debug, Clone)]
+pub struct RegisteredContractDescriptor {
+    /// The live handle that identifies this registration.
+    pub handle: GuestContractHandle,
+    /// The canonical contract identifier declared by the interface.
+    pub contract_id: GuestContractId,
+    /// The loaded bundle that registered this contract.
+    pub bundle_id: BundleId,
+    /// The provider's owned plugin descriptor.
+    pub plugin: OwnedPluginDescriptor,
+}
+
 /// Live plugin registration data.
 pub(crate) struct PluginEntry {
     /// Plugin metadata — owned so no borrowed `StringView`s are retained.
@@ -267,6 +282,7 @@ unsafe impl Send for PreparedGuestContract {}
 pub(crate) struct PreparedBundleRegistration {
     manifest: ManifestData,
     runtime: SupportedLanguage,
+    source: BundleSource,
     contracts: Vec<PreparedGuestContract>,
     resident: Option<InternalPluginResident>,
 }
@@ -278,8 +294,13 @@ unsafe impl Send for PreparedBundleRegistration {}
 impl PreparedBundleRegistration {
     pub(crate) fn into_parts(
         self,
-    ) -> (ManifestData, SupportedLanguage, Vec<PreparedGuestContract>) {
-        (self.manifest, self.runtime, self.contracts)
+    ) -> (
+        ManifestData,
+        SupportedLanguage,
+        BundleSource,
+        Vec<PreparedGuestContract>,
+    ) {
+        (self.manifest, self.runtime, self.source, self.contracts)
     }
 
     pub(crate) fn take_resident(&mut self) -> Option<InternalPluginResident> {
@@ -572,7 +593,12 @@ impl RuntimeStore {
     }
 
     /// Begin staging one loader-backed bundle on the current thread.
-    pub(crate) fn begin_prepared_bundle(&self, manifest: ManifestData, runtime: SupportedLanguage) {
+    pub(crate) fn begin_prepared_bundle(
+        &self,
+        manifest: ManifestData,
+        runtime: SupportedLanguage,
+        source: BundleSource,
+    ) {
         let thread_id: ThreadId = thread::current().id();
         let mut prepared: RecoveringGuard<
             MutexGuard<'_, HashMap<ThreadId, Vec<PreparedBundleRegistration>>>,
@@ -586,6 +612,7 @@ impl RuntimeStore {
             .push(PreparedBundleRegistration {
                 manifest,
                 runtime,
+                source,
                 contracts: Vec::new(),
                 resident: None,
             });
@@ -1032,7 +1059,7 @@ impl RuntimeStore {
                         patch: 0,
                     },
                     runtime: SupportedLanguage::Rust,
-                    file_path: PathBuf::new(),
+                    origin: BundleOrigin::Internal,
                     dependencies: Vec::new(),
                 },
             });
@@ -1621,6 +1648,8 @@ impl RuntimeStore {
         &self,
         bundle_id: BundleId,
         old_slots: &[u32],
+        replacement_descriptor: BundleDescriptor,
+        replacement_contract_dependencies: HashSet<GuestContractId>,
     ) -> Result<(), RegistryError> {
         let mut data: RecoveringGuard<RwLockWriteGuard<'_, RuntimeStoreData>> =
             self.data.write().recover_poisoned(self.logger, "store");
@@ -1674,20 +1703,40 @@ impl RuntimeStore {
                 }
             };
 
-            // Move the new interface into the old slot, dropping the old interface
-            // Arc. The published snapshot owns its clone until reclaimed, so an
-            // in-flight reader holding a pinned guard stays valid and the memory is
-            // freed once no snapshot references it.
+            // Move the replacement descriptor and interface as one committed unit. The
+            // old slot's stable handle now identifies the replacement provider, so its
+            // introspection metadata must change with its dispatch interface.
+            let new_slot: &PluginSlot = data
+                .slots
+                .get(new_idx as usize)
+                .ok_or(RegistryError::InvalidHandle { index: new_idx })?;
+            if new_slot.entry.is_none() || new_slot.interface.is_none() {
+                return Err(RegistryError::InvalidHandle { index: new_idx });
+            }
+            let old_slot: &PluginSlot = data
+                .slots
+                .get(old_idx as usize)
+                .ok_or(RegistryError::InvalidHandle { index: old_idx })?;
+            if old_slot.entry.is_none() || old_slot.interface.is_none() {
+                return Err(RegistryError::InvalidHandle { index: old_idx });
+            }
+            let new_entry: PluginEntry = data.slots[new_idx as usize]
+                .entry
+                .take()
+                .ok_or(RegistryError::InvalidHandle { index: new_idx })?;
             let new_interface: Arc<GuestContractInterface> = data.slots[new_idx as usize]
                 .interface
                 .take()
                 .ok_or(RegistryError::InvalidHandle { index: new_idx })?;
-            if let Some(old_interface) = data.slots[old_idx as usize]
+            let old_entry: Option<PluginEntry> =
+                data.slots[old_idx as usize].entry.replace(new_entry);
+            let old_interface: Option<Arc<GuestContractInterface>> = data.slots[old_idx as usize]
                 .interface
-                .replace(new_interface)
-            {
-                let _old: Arc<GuestContractInterface> = old_interface;
-            }
+                .replace(new_interface);
+            let _old_entry: PluginEntry =
+                old_entry.ok_or(RegistryError::InvalidHandle { index: old_idx })?;
+            let _old_interface: Arc<GuestContractInterface> =
+                old_interface.ok_or(RegistryError::InvalidHandle { index: old_idx })?;
 
             // Vacate the now-orphaned new slot. Its interface Arc was already moved
             // out into the old slot above, so there is nothing to drop here. Bump the
@@ -1728,6 +1777,18 @@ impl RuntimeStore {
                 }
             }
         }
+        // The descriptor shares the same published snapshot as the reconciled
+        // interfaces, so introspection never observes replacement dispatch with
+        // stale bundle metadata.
+        let bundle_data: &mut BundleData =
+            data.bundle_data
+                .get_mut(&bundle_id)
+                .ok_or(RegistryError::MissingBundleMetadata {
+                    bundle_id: bundle_id.id(),
+                })?;
+        bundle_data.descriptor = replacement_descriptor;
+        data.bundle_declared_deps
+            .insert(bundle_id, replacement_contract_dependencies);
 
         self.publish(&data);
 
@@ -1736,33 +1797,40 @@ impl RuntimeStore {
 
     /// Return the owned descriptor for the plugin registered at `handle`'s slot.
     ///
-    /// Exposes the registry's owned copy of the plugin's `PluginDescriptor` (name,
-    /// contract_name, version) for introspection. Returns `None` if the handle is
-    /// out of bounds, its slot is vacant, or the handle is stale (its generation no
-    /// longer matches the slot's). The generation check is what prevents a handle
-    /// minted against a vacated slot from observing the descriptor of a later
-    /// occupant after the slot index is recycled. The returned data is owned (no
-    /// borrowed `StringView`s), so it stays valid independently of the plugin's
-    /// transient init-time buffers.
+    /// Returns `None` if the handle is out of bounds, vacant, or stale.
     pub fn get_guest_contract_descriptor(
         &self,
         handle: GuestContractHandle,
     ) -> Option<OwnedPluginDescriptor> {
+        self.get_registered_contract_descriptor(handle)
+            .map(|descriptor: RegisteredContractDescriptor| descriptor.plugin)
+    }
+
+    /// Return the complete ownership descriptor for a live guest-contract handle.
+    pub fn get_registered_contract_descriptor(
+        &self,
+        handle: GuestContractHandle,
+    ) -> Option<RegisteredContractDescriptor> {
         let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
             self.data.read().recover_poisoned(self.logger, "store");
         if handle.is_null() {
             return None;
         }
-        let slot_idx: usize = handle.index as usize;
-        let slot: &PluginSlot = data.slots.get(slot_idx)?;
-        // Reject stale handles: a recycled slot carries a bumped generation, so a
-        // handle minted against the prior occupant must not see the new one.
+        let slot: &PluginSlot = data.slots.get(handle.index as usize)?;
         if handle.generation != slot.generation {
             return None;
         }
-        slot.entry
-            .as_ref()
-            .map(|entry: &PluginEntry| entry.descriptor.clone())
+        let entry: &PluginEntry = slot.entry.as_ref()?;
+        let interface: &GuestContractInterface = slot.interface.as_deref()?;
+        data.guest_contract_index
+            .get(&interface.contract_id)
+            .filter(|indices| indices.contains(&handle.index))?;
+        Some(RegisteredContractDescriptor {
+            handle,
+            contract_id: interface.contract_id,
+            bundle_id: entry.bundle_id,
+            plugin: entry.descriptor.clone(),
+        })
     }
 
     /// Find all slot indices that were registered by `bundle_id`.
@@ -1909,7 +1977,7 @@ impl RuntimeStore {
         bundle_name: String,
         version: Version,
         runtime: SupportedLanguage,
-        file_path: PathBuf,
+        origin: BundleOrigin,
         dependencies: Vec<BundleDependency>,
     ) -> Result<(), RegistryError> {
         let mut data: RecoveringGuard<RwLockWriteGuard<'_, RuntimeStoreData>> =
@@ -1920,7 +1988,7 @@ impl RuntimeStore {
             bundle_data.descriptor.name = bundle_name.clone();
             bundle_data.descriptor.version = version;
             bundle_data.descriptor.runtime = runtime;
-            bundle_data.descriptor.file_path = file_path;
+            bundle_data.descriptor.origin = origin;
             bundle_data.descriptor.dependencies = dependencies;
         } else {
             // Bundle has no plugins yet, create entry with empty plugin_slots
@@ -1933,7 +2001,7 @@ impl RuntimeStore {
                         name: bundle_name.clone(),
                         version,
                         runtime,
-                        file_path,
+                        origin,
                         dependencies,
                     },
                 },
@@ -2009,36 +2077,122 @@ impl RuntimeStore {
         Ok(slot_indices.len() as u32)
     }
 
-    /// List all loaded bundle IDs.
+    /// List all loaded bundle IDs in stable identity order.
     pub fn list_bundles(&self) -> Vec<BundleId> {
         let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
             self.data.read().recover_poisoned(self.logger, "store");
-        data.bundle_data.keys().copied().collect::<Vec<BundleId>>()
+        let mut bundle_ids: Vec<BundleId> = data.bundle_data.keys().copied().collect();
+        bundle_ids.sort_by_key(|bundle_id: &BundleId| bundle_id.id());
+        bundle_ids
+    }
+
+    /// Snapshot every loaded bundle descriptor in stable bundle-ID order.
+    pub fn bundle_descriptors(&self) -> Vec<BundleDescriptor> {
+        let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
+        let mut descriptors: Vec<BundleDescriptor> = data
+            .bundle_data
+            .values()
+            .map(|bundle_data: &BundleData| bundle_data.descriptor.clone())
+            .collect();
+        descriptors.sort_by_key(|descriptor: &BundleDescriptor| descriptor.id.id());
+        descriptors
+    }
+
+    /// List stable handles for all currently registered guest contracts.
+    pub fn list_registered_guest_contracts(&self) -> Vec<GuestContractHandle> {
+        let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
+        data.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                let interface: &GuestContractInterface = slot.interface.as_deref()?;
+                data.guest_contract_index
+                    .get(&interface.contract_id)
+                    .filter(|indices| indices.contains(&(index as u32)))?;
+                slot.entry.as_ref()?;
+                Some(GuestContractHandle {
+                    index: index as u32,
+                    generation: slot.generation,
+                })
+            })
+            .collect()
+    }
+
+    /// Snapshot every live guest-contract registration in stable handle order.
+    pub fn registered_contract_descriptors(&self) -> Vec<RegisteredContractDescriptor> {
+        let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
+        data.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                let entry: &PluginEntry = slot.entry.as_ref()?;
+                let interface: &GuestContractInterface = slot.interface.as_deref()?;
+                data.guest_contract_index
+                    .get(&interface.contract_id)
+                    .filter(|indices| indices.contains(&(index as u32)))?;
+                Some(RegisteredContractDescriptor {
+                    handle: GuestContractHandle {
+                        index: index as u32,
+                        generation: slot.generation,
+                    },
+                    contract_id: interface.contract_id,
+                    bundle_id: entry.bundle_id,
+                    plugin: entry.descriptor.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Get bundle metadata by bundle ID.
     pub fn get_bundle_descriptor(&self, bundle_id: BundleId) -> Option<BundleDescriptor> {
         let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
             self.data.read().recover_poisoned(self.logger, "store");
-        data.bundle_data.get(&bundle_id).map(|bd: &BundleData| {
-            // Clone descriptor fields manually since BundleDescriptor doesn't derive Clone
-            BundleDescriptor {
-                id: bd.descriptor.id,
-                name: bd.descriptor.name.clone(),
-                version: bd.descriptor.version,
-                runtime: bd.descriptor.runtime,
-                file_path: bd.descriptor.file_path.clone(),
-                dependencies: bd
-                    .descriptor
-                    .dependencies
-                    .iter()
-                    .map(|d| BundleDependency {
-                        name: d.name.clone(),
-                        min_version: d.min_version,
-                    })
-                    .collect(),
-            }
-        })
+        data.bundle_data
+            .get(&bundle_id)
+            .map(|bundle_data: &BundleData| bundle_data.descriptor.clone())
+    }
+
+    /// Apply `f` to a loaded descriptor while the registry read lock keeps its
+    /// borrowed strings stable. Intended for FFI views that callers copy
+    /// immediately.
+    pub fn with_bundle_descriptor<R>(
+        &self,
+        bundle_id: BundleId,
+        f: impl FnOnce(&BundleDescriptor) -> R,
+    ) -> Option<R> {
+        let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
+        data.bundle_data
+            .get(&bundle_id)
+            .map(|bundle_data: &BundleData| f(&bundle_data.descriptor))
+    }
+
+    /// Apply `f` to a published live registration while the registry read lock keeps its
+    /// owned descriptor source stable. The callback must copy any data it exports before
+    /// returning; pending reload slots are never visible through this API.
+    pub(crate) fn with_registered_contract_descriptor<R>(
+        &self,
+        handle: GuestContractHandle,
+        f: impl FnOnce(&PluginEntry, &GuestContractInterface) -> R,
+    ) -> Option<R> {
+        if handle.is_null() {
+            return None;
+        }
+        let data: RecoveringGuard<RwLockReadGuard<'_, RuntimeStoreData>> =
+            self.data.read().recover_poisoned(self.logger, "store");
+        let slot: &PluginSlot = data.slots.get(handle.index as usize)?;
+        if slot.generation != handle.generation {
+            return None;
+        }
+        let entry: &PluginEntry = slot.entry.as_ref()?;
+        let interface: &GuestContractInterface = slot.interface.as_deref()?;
+        data.guest_contract_index
+            .get(&interface.contract_id)
+            .filter(|indices| indices.contains(&handle.index))?;
+        Some(f(entry, interface))
     }
 
     /// Get all BundleIds for a given bundle name (multi-version support).
@@ -2133,6 +2287,7 @@ mod tests {
         DispatchMechanisms, DispatchType, GuestContractInstance, GuestContractInterface, HostApi,
         NativeDispatch, PluginDescriptor, StringView, SupportedLanguage, Version,
     };
+    use std::path::Path;
     use std::sync::Arc;
 
     use crate::runtime::current_os_thread_id;
@@ -2193,6 +2348,17 @@ mod tests {
         }
     }
 
+    fn apply_test_reload_swap(
+        registry: &RuntimeStore,
+        bundle_id: BundleId,
+        old_slots: &[u32],
+    ) -> Result<(), RegistryError> {
+        let descriptor: BundleDescriptor = registry
+            .get_bundle_descriptor(bundle_id)
+            .expect("registered bundle must have a descriptor");
+        registry.apply_reload_swap(bundle_id, old_slots, descriptor, HashSet::new())
+    }
+
     #[test]
     fn prepared_registration_is_atomic_when_a_contract_is_invalid() {
         let registry: RuntimeStore = RuntimeStore::new();
@@ -2230,7 +2396,7 @@ mod tests {
                 patch: 0,
             },
             runtime: SupportedLanguage::Rust,
-            file_path: PathBuf::new(),
+            origin: BundleOrigin::Internal,
             dependencies: Vec::new(),
         };
         let revision_before: u64 = registry.current_revision();
@@ -2243,7 +2409,7 @@ mod tests {
                 patch: 0,
             },
             runtime: SupportedLanguage::Rust,
-            file_path: PathBuf::new(),
+            origin: BundleOrigin::Internal,
             dependencies: Vec::new(),
         };
         let rejected: Result<Vec<GuestContractHandle>, RegistryError> = registry
@@ -2617,7 +2783,7 @@ mod tests {
                     patch: 0,
                 },
                 SupportedLanguage::Rust,
-                PathBuf::from("/test"),
+                BundleOrigin::Path("/test".into()),
                 Vec::new(),
             )
             .expect("metadata registration should succeed");
@@ -2656,7 +2822,7 @@ mod tests {
                     patch: 3,
                 },
                 SupportedLanguage::Python,
-                PathBuf::from("/path/to/bundle"),
+                BundleOrigin::Path("/path/to/bundle".into()),
                 vec![BundleDependency {
                     name: "dep-bundle".to_string(),
                     min_version: Some(Version {
@@ -2695,7 +2861,7 @@ mod tests {
                     patch: 0,
                 },
                 SupportedLanguage::Rust,
-                PathBuf::new(),
+                BundleOrigin::Internal,
                 Vec::new(),
             )
             .expect("metadata registration should succeed");
@@ -2767,15 +2933,63 @@ mod tests {
         );
 
         // Reconcile: swap and close the window.
-        registry
-            .apply_reload_swap(bundle_id, &old_slots)
-            .expect("apply_reload_swap");
+        apply_test_reload_swap(&registry, bundle_id, &old_slots).expect("apply_reload_swap");
 
         assert_eq!(
             registry.find_all_guest_contracts(contract_id, 0, &mut out),
             1,
             "exactly one provider after reload"
         );
+    }
+
+    #[test]
+    fn reload_pending_slots_are_absent_from_introspection_snapshots() {
+        const CID: u64 = 0x1111_2222_3333_5555_u64;
+        let registry: RuntimeStore = RuntimeStore::new();
+        let bundle_id: BundleId = BundleId::from_u64(0xAAAB_u64);
+        let first: GuestContractInterface = mock_interface(CID);
+        // SAFETY: `first` remains alive through this test.
+        let published: GuestContractHandle = unsafe {
+            registry.register_guest_contract(
+                make_descriptor("before-reload", "reload.metadata"),
+                &first,
+                "reload.metadata".to_owned(),
+                bundle_id,
+            )
+        }
+        .expect("initial registration");
+        let old_slots: Vec<u32> = registry.get_bundle_plugin_slots(bundle_id);
+
+        registry.begin_reload(bundle_id);
+        let replacement: GuestContractInterface = mock_interface(CID);
+        // SAFETY: `replacement` remains alive through this test.
+        let pending: GuestContractHandle = unsafe {
+            registry.register_guest_contract(
+                make_descriptor("after-reload", "reload.metadata"),
+                &replacement,
+                "reload.metadata".to_owned(),
+                bundle_id,
+            )
+        }
+        .expect("pending registration");
+
+        assert_eq!(registry.list_registered_guest_contracts(), vec![published]);
+        assert!(
+            registry
+                .get_registered_contract_descriptor(pending)
+                .is_none(),
+            "a pending slot must not be introspectable"
+        );
+        let before: Vec<RegisteredContractDescriptor> = registry.registered_contract_descriptors();
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].plugin.name, "before-reload");
+
+        apply_test_reload_swap(&registry, bundle_id, &old_slots).expect("reload swap");
+
+        let after: Vec<RegisteredContractDescriptor> = registry.registered_contract_descriptors();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].handle, published);
+        assert_eq!(after[0].plugin.name, "after-reload");
     }
 
     /// Item 8: when the reloaded version drops a previously-provided contract,
@@ -2807,8 +3021,7 @@ mod tests {
         // Begin a reload that registers NO new slot for this contract (it is dropped).
         registry.begin_reload(bundle_id);
         // apply_reload_swap must succeed (dropped-contract teardown), not error.
-        registry
-            .apply_reload_swap(bundle_id, &old_slots)
+        apply_test_reload_swap(&registry, bundle_id, &old_slots)
             .expect("apply_reload_swap must not fail when a contract is dropped");
 
         let mut out: [GuestContractHandle; 4] = [GuestContractHandle::null(); 4];
@@ -2924,9 +3137,7 @@ mod tests {
         );
 
         // Swap: the new interface moves into the old slot; the new slot is vacated.
-        registry
-            .apply_reload_swap(bundle_id, &old_slots)
-            .expect("apply_reload_swap");
+        apply_test_reload_swap(&registry, bundle_id, &old_slots).expect("apply_reload_swap");
 
         // Recycle the vacated index with a brand-new registration.
         let recycle_bundle: BundleId = BundleId::from_u64(0x8889);
@@ -3058,6 +3269,116 @@ mod tests {
             matches!(result, Err(RegistryError::StaleHandle { .. })),
             "resolve after unload must report StaleHandle, got {result:?}"
         );
+    }
+
+    #[test]
+    fn descriptor_snapshots_copy_all_origins_and_registration_ownership() {
+        let registry: RuntimeStore = RuntimeStore::new();
+        let bundle_ids: [BundleId; 4] = [
+            BundleId::from_u64(10),
+            BundleId::from_u64(20),
+            BundleId::from_u64(30),
+            BundleId::from_u64(40),
+        ];
+        let sources: [BundleSource; 4] = [
+            BundleSource::Internal,
+            BundleSource::Path("/bundles/path".into()),
+            BundleSource::Code("inline bundle code".to_owned()),
+            BundleSource::Bytes(vec![0x50, 0x50, 0x4C, 0x47]),
+        ];
+        let origins: Vec<BundleOrigin> = sources.iter().map(BundleSource::origin).collect();
+        let contract_ids: [u64; 4] = [101, 102, 103, 104];
+        let interfaces: Vec<GuestContractInterface> =
+            contract_ids.iter().copied().map(mock_interface).collect();
+
+        for index in 0..bundle_ids.len() {
+            let bundle_id: BundleId = bundle_ids[index];
+            let contract_id: u64 = contract_ids[index];
+            let name: &'static str = match index {
+                0 => "internal-provider",
+                1 => "path-provider",
+                2 => "code-provider",
+                3 => "bytes-provider",
+                _ => unreachable!("source array has exactly four entries"),
+            };
+            let contract_name: &'static str = match index {
+                0 => "example.internal",
+                1 => "example.path",
+                2 => "example.code",
+                3 => "example.bytes",
+                _ => unreachable!("source array has exactly four entries"),
+            };
+            // SAFETY: the store copies the interface and descriptor for the snapshot.
+            unsafe {
+                registry.register_guest_contract(
+                    make_descriptor(name, contract_name),
+                    &interfaces[index],
+                    contract_name.to_owned(),
+                    bundle_id,
+                )
+            }
+            .expect("contract registration succeeds");
+            registry
+                .register_bundle_metadata(
+                    bundle_id,
+                    name.to_owned(),
+                    Version {
+                        major: 1,
+                        minor: 2,
+                        patch: 3,
+                    },
+                    SupportedLanguage::Rust,
+                    origins[index].clone(),
+                    Vec::new(),
+                )
+                .expect("bundle metadata registration succeeds");
+            assert_eq!(
+                registry
+                    .find(GuestContractId::from_u64(contract_id), 0)
+                    .expect("contract is discoverable")
+                    .index,
+                index as u32
+            );
+        }
+
+        let bundles: Vec<BundleDescriptor> = registry.bundle_descriptors();
+        assert_eq!(bundles.len(), 4);
+        assert!(matches!(&bundles[0].origin, BundleOrigin::Internal));
+        assert!(
+            matches!(&bundles[1].origin, BundleOrigin::Path(path) if path == Path::new("/bundles/path"))
+        );
+        assert!(matches!(&bundles[2].origin, BundleOrigin::Code));
+        assert!(matches!(&bundles[3].origin, BundleOrigin::Bytes));
+        assert!(!format!("{:?}", bundles[2]).contains("inline bundle code"));
+        assert!(!format!("{:?}", bundles[3]).contains("80, 80, 76, 71"));
+
+        let contracts: Vec<RegisteredContractDescriptor> =
+            registry.registered_contract_descriptors();
+        assert_eq!(contracts.len(), 4);
+        for (index, contract) in contracts.iter().enumerate() {
+            assert_eq!(contract.handle.index, index as u32);
+            assert_eq!(contract.bundle_id, bundle_ids[index]);
+            assert_eq!(
+                contract.contract_id,
+                GuestContractId::from_u64(contract_ids[index])
+            );
+            assert_eq!(contract.plugin.name, bundles[index].name);
+        }
+
+        for bundle_id in bundle_ids {
+            registry
+                .invalidate_bundle(bundle_id)
+                .expect("bundle unload invalidates its descriptor");
+        }
+        assert!(registry.bundle_descriptors().is_empty());
+        assert!(registry.registered_contract_descriptors().is_empty());
+        assert_eq!(bundles[1].name, "path-provider");
+        assert!(matches!(&bundles[3].origin, BundleOrigin::Bytes));
+        assert_eq!(contracts[2].plugin.name, "code-provider");
+
+        let empty: RuntimeStore = RuntimeStore::new();
+        assert!(empty.bundle_descriptors().is_empty());
+        assert!(empty.registered_contract_descriptors().is_empty());
     }
 
     unsafe extern "C" fn count_resident_release(context: *mut c_void) {

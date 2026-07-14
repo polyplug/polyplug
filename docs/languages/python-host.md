@@ -139,6 +139,25 @@ config.signature_policy = SignaturePolicy.Required.value
 `Required` rejects unsigned or tampered bundles. See the
 [Trust Model](../TRUST_MODEL.md).
 
+### Inspect loaded bundles and contracts
+
+The Python host exposes copied snapshots through `bundle_descriptors()` and
+`registered_contract_descriptors()`:
+
+```python
+for bundle in rt.bundle_descriptors():
+    print(bundle.name, bundle.source_kind)
+contracts = rt.registered_contract_descriptors()
+```
+
+`source_kind` is the payload-free SDK projection of Rust `BundleOrigin`:
+`Internal`, `Path`, `Code`, or `Bytes`. It never returns programmatically
+supplied source or bytes. These results describe the current
+loaded/registered runtime state, rather than an application-owned per-plugin
+enabled flag or a call to a contract `initialize` operation. Keep that policy
+in the application; see
+[Runtime lifecycle is not application enablement](../ARCHITECTURE.md#runtime-lifecycle-is-not-application-enablement).
+
 ## 4. Register a host contract (optional)
 
 If your `api.toml` defines a host contract (a service the host provides to

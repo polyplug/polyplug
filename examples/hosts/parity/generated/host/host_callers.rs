@@ -8,7 +8,9 @@
 #![allow(clippy::pedantic)]
 #![allow(clippy::nursery)]
 
+use core::error::Error;
 use core::ffi::c_void;
+use std::fmt;
 use std::sync::Arc;
 
 use polyplug::Runtime;
@@ -33,7 +35,7 @@ use super::types::*;
 const CALL_ARENA_BUF_LEN: usize = 512;
 
 /// Host-side error type for contract calls.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ContractError {
     /// ABI error code (non-zero).
     pub code: AbiErrorCode,
@@ -50,6 +52,18 @@ impl ContractError {
         }
     }
 }
+
+impl fmt::Display for ContractError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ContractError(code={}, message={})",
+            self.code, self.message
+        )
+    }
+}
+
+impl Error for ContractError {}
 
 /// Host caller for contract `pipeline.Decoder` (id=0xE1D7DE773BE6E7F7)
 ///
@@ -163,33 +177,38 @@ impl PipelineDecoderContract {
         let host: *const HostApi = self.host();
         // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
         let host_api: &HostApi = unsafe { &*host };
-        // If the registry changed under us, the cached interface/instance are stale
-        // (a reload/unload reclaimed their backing). revalidate() abandons the dead
-        // instance and builds a fresh one on the current interface — exactly the
-        // fresh instance reset() promises — so defer to it and skip the unsafe destroy.
-        if self.live_revision() != self.cached_revision {
-            self.revalidate();
-            return;
-        }
-        if !self.instance.data.is_null() {
-            // SAFETY: instance was created by create_guest_instance on this interface and is
-            // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
-            unsafe {
-                (host_api.destroy_guest_instance)(host, self.interface, self.instance);
+        let revision = self.live_revision();
+        let interface = if revision != self.cached_revision || self.interface.is_null() {
+            // Revalidation for dispatch preserves a same-interface instance, but reset
+            // is destructive. Resolve once to distinguish that case from a replacement.
+            // SAFETY: the retained runtime owns `host`, and this handle is resolved only through its registry.
+            let interface = unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
+            if interface.is_null() {
+                self.interface = core::ptr::null();
+                self.instance = GuestContractInstance::null();
+                self.cached_revision = revision;
+                return;
             }
-        }
-        let mut new_instance: GuestContractInstance = GuestContractInstance::null();
-        // SAFETY: interface is valid for this wrapper; create_guest_instance writes the new
-        // instance through the out-param.
-        unsafe {
-            (host_api.create_guest_instance)(
-                host,
-                self.interface,
-                core::ptr::null(),
-                &mut new_instance,
-            );
+            if interface == self.interface && !self.instance.data.is_null() {
+                // SAFETY: this instance was created for the still-current resolved interface through this live runtime.
+                unsafe { (host_api.destroy_guest_instance)(host, self.interface, self.instance) };
+            }
+            interface
+        } else {
+            if !self.instance.data.is_null() {
+                // SAFETY: this instance was created for the cached interface through this live runtime.
+                unsafe { (host_api.destroy_guest_instance)(host, self.interface, self.instance) };
+            }
+            self.interface
         };
+        let mut new_instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: `interface` is currently resolved by the retained runtime and `new_instance` is writable.
+        unsafe {
+            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut new_instance);
+        };
+        self.interface = interface;
         self.instance = new_instance;
+        self.cached_revision = self.live_revision();
     }
 
     /// Re-resolve the cached interface after the registry changed under us.
@@ -199,11 +218,13 @@ impl PipelineDecoderContract {
     /// handle still resolves — to the new interface; an unload vacated the slot,
     /// so it resolves to null and `false` is returned (the contract is gone).
     ///
-    /// The old instance is ABANDONED, never destroyed: after a reload its
-    /// interface — and the guest-side state that interface created — is already
-    /// epoch-reclaimed, so calling the dead interface's `destroy_instance` would
-    /// be undefined behaviour. The runtime reclaims the old instance's backing as
-    /// part of the reload, then a fresh instance is created on the new interface.
+    /// If an unrelated registry change left the resolved interface unchanged, the
+    /// caller keeps its instance and only refreshes the cached revision. Otherwise
+    /// the old instance is ABANDONED, never destroyed: after a reload its interface
+    /// and the guest-side state it created are already epoch-reclaimed, so calling
+    /// the dead interface's `destroy_instance` would be undefined behaviour. The
+    /// runtime reclaims the old instance's backing as part of the reload, then a
+    /// fresh instance is created on the new interface.
     fn revalidate(&mut self) -> bool {
         let host: *const HostApi = self.host();
         // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
@@ -212,7 +233,14 @@ impl PipelineDecoderContract {
         let interface: *const GuestContractInterface =
             unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
         if interface.is_null() {
+            self.interface = core::ptr::null();
+            self.instance = GuestContractInstance::null();
+            self.cached_revision = self.live_revision();
             return false;
+        }
+        if interface == self.interface {
+            self.cached_revision = self.live_revision();
+            return true;
         }
         let mut instance: GuestContractInstance = GuestContractInstance::null();
         // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.
@@ -238,7 +266,9 @@ impl PipelineDecoderContract {
         // Compare the current acquire-synchronized registry revision before using
         // the cached interface. A change re-resolves before direct dispatch, so a
         // reclaimed interface is never used.
-        if self.live_revision() != self.cached_revision && !self.revalidate() {
+        if self.interface.is_null()
+            || (self.live_revision() != self.cached_revision && !self.revalidate())
+        {
             return Err(ContractError::new(AbiErrorCode::NotFound));
         }
         let input_val: StringView = input;
@@ -336,12 +366,15 @@ impl Drop for PipelineDecoderContract {
         let host: *const HostApi = self.host();
         // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
         let host_api: &HostApi = unsafe { &*host };
-        // If the registry changed since we resolved, the cached interface and instance
-        // are stale — a reload/unload reclaimed their backing — so calling the dead
-        // interface's destroy would be UB; the reload/unload already reclaimed the
-        // instance, so skip the destroy entirely.
+        // A revision can belong to an unrelated bundle. Resolve once to distinguish
+        // that case from reload/unload: only the same interface may destroy this
+        // still-live instance; a different or missing interface was reclaimed.
         if self.live_revision() != self.cached_revision {
-            return;
+            // SAFETY: the retained runtime owns `host`, and this refresh resolves only its retained handle.
+            let current = unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
+            if current != self.interface {
+                return;
+            }
         }
         if !self.instance.data.is_null() {
             // SAFETY: instance was created by create_guest_instance and is valid.
@@ -464,33 +497,38 @@ impl DataTransformerContract {
         let host: *const HostApi = self.host();
         // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
         let host_api: &HostApi = unsafe { &*host };
-        // If the registry changed under us, the cached interface/instance are stale
-        // (a reload/unload reclaimed their backing). revalidate() abandons the dead
-        // instance and builds a fresh one on the current interface — exactly the
-        // fresh instance reset() promises — so defer to it and skip the unsafe destroy.
-        if self.live_revision() != self.cached_revision {
-            self.revalidate();
-            return;
-        }
-        if !self.instance.data.is_null() {
-            // SAFETY: instance was created by create_guest_instance on this interface and is
-            // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
-            unsafe {
-                (host_api.destroy_guest_instance)(host, self.interface, self.instance);
+        let revision = self.live_revision();
+        let interface = if revision != self.cached_revision || self.interface.is_null() {
+            // Revalidation for dispatch preserves a same-interface instance, but reset
+            // is destructive. Resolve once to distinguish that case from a replacement.
+            // SAFETY: the retained runtime owns `host`, and this handle is resolved only through its registry.
+            let interface = unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
+            if interface.is_null() {
+                self.interface = core::ptr::null();
+                self.instance = GuestContractInstance::null();
+                self.cached_revision = revision;
+                return;
             }
-        }
-        let mut new_instance: GuestContractInstance = GuestContractInstance::null();
-        // SAFETY: interface is valid for this wrapper; create_guest_instance writes the new
-        // instance through the out-param.
-        unsafe {
-            (host_api.create_guest_instance)(
-                host,
-                self.interface,
-                core::ptr::null(),
-                &mut new_instance,
-            );
+            if interface == self.interface && !self.instance.data.is_null() {
+                // SAFETY: this instance was created for the still-current resolved interface through this live runtime.
+                unsafe { (host_api.destroy_guest_instance)(host, self.interface, self.instance) };
+            }
+            interface
+        } else {
+            if !self.instance.data.is_null() {
+                // SAFETY: this instance was created for the cached interface through this live runtime.
+                unsafe { (host_api.destroy_guest_instance)(host, self.interface, self.instance) };
+            }
+            self.interface
         };
+        let mut new_instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: `interface` is currently resolved by the retained runtime and `new_instance` is writable.
+        unsafe {
+            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut new_instance);
+        };
+        self.interface = interface;
         self.instance = new_instance;
+        self.cached_revision = self.live_revision();
     }
 
     /// Re-resolve the cached interface after the registry changed under us.
@@ -500,11 +538,13 @@ impl DataTransformerContract {
     /// handle still resolves — to the new interface; an unload vacated the slot,
     /// so it resolves to null and `false` is returned (the contract is gone).
     ///
-    /// The old instance is ABANDONED, never destroyed: after a reload its
-    /// interface — and the guest-side state that interface created — is already
-    /// epoch-reclaimed, so calling the dead interface's `destroy_instance` would
-    /// be undefined behaviour. The runtime reclaims the old instance's backing as
-    /// part of the reload, then a fresh instance is created on the new interface.
+    /// If an unrelated registry change left the resolved interface unchanged, the
+    /// caller keeps its instance and only refreshes the cached revision. Otherwise
+    /// the old instance is ABANDONED, never destroyed: after a reload its interface
+    /// and the guest-side state it created are already epoch-reclaimed, so calling
+    /// the dead interface's `destroy_instance` would be undefined behaviour. The
+    /// runtime reclaims the old instance's backing as part of the reload, then a
+    /// fresh instance is created on the new interface.
     fn revalidate(&mut self) -> bool {
         let host: *const HostApi = self.host();
         // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
@@ -513,7 +553,14 @@ impl DataTransformerContract {
         let interface: *const GuestContractInterface =
             unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
         if interface.is_null() {
+            self.interface = core::ptr::null();
+            self.instance = GuestContractInstance::null();
+            self.cached_revision = self.live_revision();
             return false;
+        }
+        if interface == self.interface {
+            self.cached_revision = self.live_revision();
+            return true;
         }
         let mut instance: GuestContractInstance = GuestContractInstance::null();
         // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.
@@ -534,7 +581,9 @@ impl DataTransformerContract {
         // Compare the current acquire-synchronized registry revision before using
         // the cached interface. A change re-resolves before direct dispatch, so a
         // reclaimed interface is never used.
-        if self.live_revision() != self.cached_revision && !self.revalidate() {
+        if self.interface.is_null()
+            || (self.live_revision() != self.cached_revision && !self.revalidate())
+        {
             return Err(ContractError::new(AbiErrorCode::NotFound));
         }
         let input_val: StringView = input;
@@ -632,12 +681,15 @@ impl Drop for DataTransformerContract {
         let host: *const HostApi = self.host();
         // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
         let host_api: &HostApi = unsafe { &*host };
-        // If the registry changed since we resolved, the cached interface and instance
-        // are stale — a reload/unload reclaimed their backing — so calling the dead
-        // interface's destroy would be UB; the reload/unload already reclaimed the
-        // instance, so skip the destroy entirely.
+        // A revision can belong to an unrelated bundle. Resolve once to distinguish
+        // that case from reload/unload: only the same interface may destroy this
+        // still-live instance; a different or missing interface was reclaimed.
         if self.live_revision() != self.cached_revision {
-            return;
+            // SAFETY: the retained runtime owns `host`, and this refresh resolves only its retained handle.
+            let current = unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
+            if current != self.interface {
+                return;
+            }
         }
         if !self.instance.data.is_null() {
             // SAFETY: instance was created by create_guest_instance and is valid.
@@ -760,33 +812,38 @@ impl PipelineEncoderContract {
         let host: *const HostApi = self.host();
         // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
         let host_api: &HostApi = unsafe { &*host };
-        // If the registry changed under us, the cached interface/instance are stale
-        // (a reload/unload reclaimed their backing). revalidate() abandons the dead
-        // instance and builds a fresh one on the current interface — exactly the
-        // fresh instance reset() promises — so defer to it and skip the unsafe destroy.
-        if self.live_revision() != self.cached_revision {
-            self.revalidate();
-            return;
-        }
-        if !self.instance.data.is_null() {
-            // SAFETY: instance was created by create_guest_instance on this interface and is
-            // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
-            unsafe {
-                (host_api.destroy_guest_instance)(host, self.interface, self.instance);
+        let revision = self.live_revision();
+        let interface = if revision != self.cached_revision || self.interface.is_null() {
+            // Revalidation for dispatch preserves a same-interface instance, but reset
+            // is destructive. Resolve once to distinguish that case from a replacement.
+            // SAFETY: the retained runtime owns `host`, and this handle is resolved only through its registry.
+            let interface = unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
+            if interface.is_null() {
+                self.interface = core::ptr::null();
+                self.instance = GuestContractInstance::null();
+                self.cached_revision = revision;
+                return;
             }
-        }
-        let mut new_instance: GuestContractInstance = GuestContractInstance::null();
-        // SAFETY: interface is valid for this wrapper; create_guest_instance writes the new
-        // instance through the out-param.
-        unsafe {
-            (host_api.create_guest_instance)(
-                host,
-                self.interface,
-                core::ptr::null(),
-                &mut new_instance,
-            );
+            if interface == self.interface && !self.instance.data.is_null() {
+                // SAFETY: this instance was created for the still-current resolved interface through this live runtime.
+                unsafe { (host_api.destroy_guest_instance)(host, self.interface, self.instance) };
+            }
+            interface
+        } else {
+            if !self.instance.data.is_null() {
+                // SAFETY: this instance was created for the cached interface through this live runtime.
+                unsafe { (host_api.destroy_guest_instance)(host, self.interface, self.instance) };
+            }
+            self.interface
         };
+        let mut new_instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: `interface` is currently resolved by the retained runtime and `new_instance` is writable.
+        unsafe {
+            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut new_instance);
+        };
+        self.interface = interface;
         self.instance = new_instance;
+        self.cached_revision = self.live_revision();
     }
 
     /// Re-resolve the cached interface after the registry changed under us.
@@ -796,11 +853,13 @@ impl PipelineEncoderContract {
     /// handle still resolves — to the new interface; an unload vacated the slot,
     /// so it resolves to null and `false` is returned (the contract is gone).
     ///
-    /// The old instance is ABANDONED, never destroyed: after a reload its
-    /// interface — and the guest-side state that interface created — is already
-    /// epoch-reclaimed, so calling the dead interface's `destroy_instance` would
-    /// be undefined behaviour. The runtime reclaims the old instance's backing as
-    /// part of the reload, then a fresh instance is created on the new interface.
+    /// If an unrelated registry change left the resolved interface unchanged, the
+    /// caller keeps its instance and only refreshes the cached revision. Otherwise
+    /// the old instance is ABANDONED, never destroyed: after a reload its interface
+    /// and the guest-side state it created are already epoch-reclaimed, so calling
+    /// the dead interface's `destroy_instance` would be undefined behaviour. The
+    /// runtime reclaims the old instance's backing as part of the reload, then a
+    /// fresh instance is created on the new interface.
     fn revalidate(&mut self) -> bool {
         let host: *const HostApi = self.host();
         // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
@@ -809,7 +868,14 @@ impl PipelineEncoderContract {
         let interface: *const GuestContractInterface =
             unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
         if interface.is_null() {
+            self.interface = core::ptr::null();
+            self.instance = GuestContractInstance::null();
+            self.cached_revision = self.live_revision();
             return false;
+        }
+        if interface == self.interface {
+            self.cached_revision = self.live_revision();
+            return true;
         }
         let mut instance: GuestContractInstance = GuestContractInstance::null();
         // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.
@@ -830,7 +896,9 @@ impl PipelineEncoderContract {
         // Compare the current acquire-synchronized registry revision before using
         // the cached interface. A change re-resolves before direct dispatch, so a
         // reclaimed interface is never used.
-        if self.live_revision() != self.cached_revision && !self.revalidate() {
+        if self.interface.is_null()
+            || (self.live_revision() != self.cached_revision && !self.revalidate())
+        {
             return Err(ContractError::new(AbiErrorCode::NotFound));
         }
         let input_val: StringView = input;
@@ -928,12 +996,15 @@ impl Drop for PipelineEncoderContract {
         let host: *const HostApi = self.host();
         // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
         let host_api: &HostApi = unsafe { &*host };
-        // If the registry changed since we resolved, the cached interface and instance
-        // are stale — a reload/unload reclaimed their backing — so calling the dead
-        // interface's destroy would be UB; the reload/unload already reclaimed the
-        // instance, so skip the destroy entirely.
+        // A revision can belong to an unrelated bundle. Resolve once to distinguish
+        // that case from reload/unload: only the same interface may destroy this
+        // still-live instance; a different or missing interface was reclaimed.
         if self.live_revision() != self.cached_revision {
-            return;
+            // SAFETY: the retained runtime owns `host`, and this refresh resolves only its retained handle.
+            let current = unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
+            if current != self.interface {
+                return;
+            }
         }
         if !self.instance.data.is_null() {
             // SAFETY: instance was created by create_guest_instance and is valid.
@@ -1056,33 +1127,38 @@ impl DataReporterContract {
         let host: *const HostApi = self.host();
         // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
         let host_api: &HostApi = unsafe { &*host };
-        // If the registry changed under us, the cached interface/instance are stale
-        // (a reload/unload reclaimed their backing). revalidate() abandons the dead
-        // instance and builds a fresh one on the current interface — exactly the
-        // fresh instance reset() promises — so defer to it and skip the unsafe destroy.
-        if self.live_revision() != self.cached_revision {
-            self.revalidate();
-            return;
-        }
-        if !self.instance.data.is_null() {
-            // SAFETY: instance was created by create_guest_instance on this interface and is
-            // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
-            unsafe {
-                (host_api.destroy_guest_instance)(host, self.interface, self.instance);
+        let revision = self.live_revision();
+        let interface = if revision != self.cached_revision || self.interface.is_null() {
+            // Revalidation for dispatch preserves a same-interface instance, but reset
+            // is destructive. Resolve once to distinguish that case from a replacement.
+            // SAFETY: the retained runtime owns `host`, and this handle is resolved only through its registry.
+            let interface = unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
+            if interface.is_null() {
+                self.interface = core::ptr::null();
+                self.instance = GuestContractInstance::null();
+                self.cached_revision = revision;
+                return;
             }
-        }
-        let mut new_instance: GuestContractInstance = GuestContractInstance::null();
-        // SAFETY: interface is valid for this wrapper; create_guest_instance writes the new
-        // instance through the out-param.
-        unsafe {
-            (host_api.create_guest_instance)(
-                host,
-                self.interface,
-                core::ptr::null(),
-                &mut new_instance,
-            );
+            if interface == self.interface && !self.instance.data.is_null() {
+                // SAFETY: this instance was created for the still-current resolved interface through this live runtime.
+                unsafe { (host_api.destroy_guest_instance)(host, self.interface, self.instance) };
+            }
+            interface
+        } else {
+            if !self.instance.data.is_null() {
+                // SAFETY: this instance was created for the cached interface through this live runtime.
+                unsafe { (host_api.destroy_guest_instance)(host, self.interface, self.instance) };
+            }
+            self.interface
         };
+        let mut new_instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: `interface` is currently resolved by the retained runtime and `new_instance` is writable.
+        unsafe {
+            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut new_instance);
+        };
+        self.interface = interface;
         self.instance = new_instance;
+        self.cached_revision = self.live_revision();
     }
 
     /// Re-resolve the cached interface after the registry changed under us.
@@ -1092,11 +1168,13 @@ impl DataReporterContract {
     /// handle still resolves — to the new interface; an unload vacated the slot,
     /// so it resolves to null and `false` is returned (the contract is gone).
     ///
-    /// The old instance is ABANDONED, never destroyed: after a reload its
-    /// interface — and the guest-side state that interface created — is already
-    /// epoch-reclaimed, so calling the dead interface's `destroy_instance` would
-    /// be undefined behaviour. The runtime reclaims the old instance's backing as
-    /// part of the reload, then a fresh instance is created on the new interface.
+    /// If an unrelated registry change left the resolved interface unchanged, the
+    /// caller keeps its instance and only refreshes the cached revision. Otherwise
+    /// the old instance is ABANDONED, never destroyed: after a reload its interface
+    /// and the guest-side state it created are already epoch-reclaimed, so calling
+    /// the dead interface's `destroy_instance` would be undefined behaviour. The
+    /// runtime reclaims the old instance's backing as part of the reload, then a
+    /// fresh instance is created on the new interface.
     fn revalidate(&mut self) -> bool {
         let host: *const HostApi = self.host();
         // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
@@ -1105,7 +1183,14 @@ impl DataReporterContract {
         let interface: *const GuestContractInterface =
             unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
         if interface.is_null() {
+            self.interface = core::ptr::null();
+            self.instance = GuestContractInstance::null();
+            self.cached_revision = self.live_revision();
             return false;
+        }
+        if interface == self.interface {
+            self.cached_revision = self.live_revision();
+            return true;
         }
         let mut instance: GuestContractInstance = GuestContractInstance::null();
         // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.
@@ -1126,7 +1211,9 @@ impl DataReporterContract {
         // Compare the current acquire-synchronized registry revision before using
         // the cached interface. A change re-resolves before direct dispatch, so a
         // reclaimed interface is never used.
-        if self.live_revision() != self.cached_revision && !self.revalidate() {
+        if self.interface.is_null()
+            || (self.live_revision() != self.cached_revision && !self.revalidate())
+        {
             return Err(ContractError::new(AbiErrorCode::NotFound));
         }
         let input_val: StringView = input;
@@ -1224,12 +1311,15 @@ impl Drop for DataReporterContract {
         let host: *const HostApi = self.host();
         // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
         let host_api: &HostApi = unsafe { &*host };
-        // If the registry changed since we resolved, the cached interface and instance
-        // are stale — a reload/unload reclaimed their backing — so calling the dead
-        // interface's destroy would be UB; the reload/unload already reclaimed the
-        // instance, so skip the destroy entirely.
+        // A revision can belong to an unrelated bundle. Resolve once to distinguish
+        // that case from reload/unload: only the same interface may destroy this
+        // still-live instance; a different or missing interface was reclaimed.
         if self.live_revision() != self.cached_revision {
-            return;
+            // SAFETY: the retained runtime owns `host`, and this refresh resolves only its retained handle.
+            let current = unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
+            if current != self.interface {
+                return;
+            }
         }
         if !self.instance.data.is_null() {
             // SAFETY: instance was created by create_guest_instance and is valid.
@@ -1352,33 +1442,38 @@ impl PipelineValidatorContract {
         let host: *const HostApi = self.host();
         // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
         let host_api: &HostApi = unsafe { &*host };
-        // If the registry changed under us, the cached interface/instance are stale
-        // (a reload/unload reclaimed their backing). revalidate() abandons the dead
-        // instance and builds a fresh one on the current interface — exactly the
-        // fresh instance reset() promises — so defer to it and skip the unsafe destroy.
-        if self.live_revision() != self.cached_revision {
-            self.revalidate();
-            return;
-        }
-        if !self.instance.data.is_null() {
-            // SAFETY: instance was created by create_guest_instance on this interface and is
-            // valid; destroy_guest_instance is an ABI function pointer safe to call with them.
-            unsafe {
-                (host_api.destroy_guest_instance)(host, self.interface, self.instance);
+        let revision = self.live_revision();
+        let interface = if revision != self.cached_revision || self.interface.is_null() {
+            // Revalidation for dispatch preserves a same-interface instance, but reset
+            // is destructive. Resolve once to distinguish that case from a replacement.
+            // SAFETY: the retained runtime owns `host`, and this handle is resolved only through its registry.
+            let interface = unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
+            if interface.is_null() {
+                self.interface = core::ptr::null();
+                self.instance = GuestContractInstance::null();
+                self.cached_revision = revision;
+                return;
             }
-        }
-        let mut new_instance: GuestContractInstance = GuestContractInstance::null();
-        // SAFETY: interface is valid for this wrapper; create_guest_instance writes the new
-        // instance through the out-param.
-        unsafe {
-            (host_api.create_guest_instance)(
-                host,
-                self.interface,
-                core::ptr::null(),
-                &mut new_instance,
-            );
+            if interface == self.interface && !self.instance.data.is_null() {
+                // SAFETY: this instance was created for the still-current resolved interface through this live runtime.
+                unsafe { (host_api.destroy_guest_instance)(host, self.interface, self.instance) };
+            }
+            interface
+        } else {
+            if !self.instance.data.is_null() {
+                // SAFETY: this instance was created for the cached interface through this live runtime.
+                unsafe { (host_api.destroy_guest_instance)(host, self.interface, self.instance) };
+            }
+            self.interface
         };
+        let mut new_instance: GuestContractInstance = GuestContractInstance::null();
+        // SAFETY: `interface` is currently resolved by the retained runtime and `new_instance` is writable.
+        unsafe {
+            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut new_instance);
+        };
+        self.interface = interface;
         self.instance = new_instance;
+        self.cached_revision = self.live_revision();
     }
 
     /// Re-resolve the cached interface after the registry changed under us.
@@ -1388,11 +1483,13 @@ impl PipelineValidatorContract {
     /// handle still resolves — to the new interface; an unload vacated the slot,
     /// so it resolves to null and `false` is returned (the contract is gone).
     ///
-    /// The old instance is ABANDONED, never destroyed: after a reload its
-    /// interface — and the guest-side state that interface created — is already
-    /// epoch-reclaimed, so calling the dead interface's `destroy_instance` would
-    /// be undefined behaviour. The runtime reclaims the old instance's backing as
-    /// part of the reload, then a fresh instance is created on the new interface.
+    /// If an unrelated registry change left the resolved interface unchanged, the
+    /// caller keeps its instance and only refreshes the cached revision. Otherwise
+    /// the old instance is ABANDONED, never destroyed: after a reload its interface
+    /// and the guest-side state it created are already epoch-reclaimed, so calling
+    /// the dead interface's `destroy_instance` would be undefined behaviour. The
+    /// runtime reclaims the old instance's backing as part of the reload, then a
+    /// fresh instance is created on the new interface.
     fn revalidate(&mut self) -> bool {
         let host: *const HostApi = self.host();
         // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
@@ -1401,7 +1498,14 @@ impl PipelineValidatorContract {
         let interface: *const GuestContractInterface =
             unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
         if interface.is_null() {
+            self.interface = core::ptr::null();
+            self.instance = GuestContractInstance::null();
+            self.cached_revision = self.live_revision();
             return false;
+        }
+        if interface == self.interface {
+            self.cached_revision = self.live_revision();
+            return true;
         }
         let mut instance: GuestContractInstance = GuestContractInstance::null();
         // SAFETY: interface is freshly resolved and valid; create_guest_instance writes the new instance.
@@ -1422,7 +1526,9 @@ impl PipelineValidatorContract {
         // Compare the current acquire-synchronized registry revision before using
         // the cached interface. A change re-resolves before direct dispatch, so a
         // reclaimed interface is never used.
-        if self.live_revision() != self.cached_revision && !self.revalidate() {
+        if self.interface.is_null()
+            || (self.live_revision() != self.cached_revision && !self.revalidate())
+        {
             return Err(ContractError::new(AbiErrorCode::NotFound));
         }
         let input_val: StringView = input;
@@ -1520,12 +1626,15 @@ impl Drop for PipelineValidatorContract {
         let host: *const HostApi = self.host();
         // SAFETY: self.runtime owns the HostApi allocation for this caller's lifetime.
         let host_api: &HostApi = unsafe { &*host };
-        // If the registry changed since we resolved, the cached interface and instance
-        // are stale — a reload/unload reclaimed their backing — so calling the dead
-        // interface's destroy would be UB; the reload/unload already reclaimed the
-        // instance, so skip the destroy entirely.
+        // A revision can belong to an unrelated bundle. Resolve once to distinguish
+        // that case from reload/unload: only the same interface may destroy this
+        // still-live instance; a different or missing interface was reclaimed.
         if self.live_revision() != self.cached_revision {
-            return;
+            // SAFETY: the retained runtime owns `host`, and this refresh resolves only its retained handle.
+            let current = unsafe { (host_api.resolve_guest_contract)(host, self.handle) };
+            if current != self.interface {
+                return;
+            }
         }
         if !self.instance.data.is_null() {
             // SAFETY: instance was created by create_guest_instance and is valid.

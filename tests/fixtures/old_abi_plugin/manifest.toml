@@ -1,0 +1,11 @@
+id = 5404051454752981515
+name = "old_abi_plugin"
+version = "1.0"
+loader = "native"
+
+[file]
+linux.x86_64   = "libold_abi_plugin.so"
+linux.aarch64  = "libold_abi_plugin.so"
+macos.x86_64   = "libold_abi_plugin.dylib"
+macos.aarch64  = "libold_abi_plugin.dylib"
+windows.x86_64 = "old_abi_plugin.dll"

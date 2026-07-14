@@ -43,6 +43,27 @@ aggregate for the registration attempt; only a successful commit transfers it
 to the runtime. Thus failure releases the attempt once, while a retry provides
 a fresh aggregate.
 
+## Loaded registry state versus application policy
+
+The runtime's state is binary at the bundle level: a committed bundle is loaded
+and its registered guest contracts are eligible for lookup; after a successful
+unload, the bundle and registrations are invalidated. Snapshot
+`bundle_descriptors` and `registered_contract_descriptors` report this live
+runtime state, not application intent.
+
+Application code owns a separate per-plugin policy. A typical application may
+retain a loaded bundle while `enabled == false`, refrain from making calls, and
+later set its own flag before explicitly calling a contract-defined
+`initialize` operation. If the contract has an `uninitialize` operation, that
+is likewise application behavior. Polyplug does not add an enabled/disabled
+state to contracts and does not call those operations as a side effect of load,
+reload, or unload.
+
+Changing the application flag is not sufficient for unload. It merely stops
+the application's planned work; the application must still quiesce every
+caller and destroy every instance before it asks the runtime to invalidate the
+bundle.
+
 ## Drain before unload
 
 Before requesting unload, the application must stop initiating new calls for

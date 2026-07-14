@@ -13,15 +13,19 @@ use super::GeneratedFiles;
 use super::collect_peer_contracts;
 use super::peer_min_version;
 
+use super::attributes::render_attributes;
 use super::docs::write_jsdoc;
+use crate::Lang;
 use crate::OutputDestination;
 use crate::OutputLayout;
 use crate::OutputPartition;
 use crate::PolyplugcError;
 use crate::Side;
 use crate::ir::AbiBuiltin;
+use crate::ir::CustomizableNode;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
+use crate::ir::LanguageRules;
 use crate::ir::PrimitiveType;
 use crate::ir::ReprType;
 use crate::ir::ResolvedBundle;
@@ -42,6 +46,35 @@ use langprint::renderers::{EnumRenderer, FunctionRenderer};
 use langprint::{ImportEntry, ImportSet, TargetLanguage};
 use polyplug_utils::guest_contract_id;
 use std::io;
+
+fn js_attribute_lines(node: CustomizableNode, rules: &LanguageRules, indent: &str) -> String {
+    render_attributes(Lang::JsQuickJs, node, rules)
+        .into_iter()
+        .map(|attribute| format!("{indent}{attribute}\n"))
+        .collect()
+}
+
+fn emit_js_attributes(
+    out: &mut String,
+    node: CustomizableNode,
+    rules: &LanguageRules,
+    indent: &str,
+) {
+    out.push_str(&js_attribute_lines(node, rules, indent));
+}
+
+fn emit_js_function_attributes(out: &mut String, function: &ResolvedFunction, indent: &str) {
+    emit_js_attributes(out, CustomizableNode::Function, &function.langs, indent);
+    for param in &function.params {
+        emit_js_attributes(out, CustomizableNode::Param, &param.langs, indent);
+    }
+    emit_js_attributes(
+        out,
+        CustomizableNode::Return,
+        &function.return_langs,
+        indent,
+    );
+}
 
 /// A JS/TS named import `import {{ {name} }} from '{source}'`.
 fn js_named(name: &str, source: &str) -> ImportEntry {
@@ -542,6 +575,33 @@ fn substitute_variant_refs_js(declared_variants: &[EnumVariant], expr: &str) -> 
     result
 }
 
+fn with_js_enum_variant_attributes(rendered: String, e: &EnumDef) -> String {
+    if e.variants.iter().all(|variant| {
+        js_attribute_lines(CustomizableNode::EnumVariant, &variant.langs, "").is_empty()
+    }) {
+        return rendered;
+    }
+
+    let mut output = String::new();
+    for line in rendered.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if let Some(variant) = e.variants.iter().find(|variant| {
+            trimmed
+                .strip_prefix(&variant.name)
+                .is_some_and(|suffix| suffix.starts_with(" =") || suffix.starts_with(": "))
+        }) {
+            let indent = &line[..line.len() - trimmed.len()];
+            output.push_str(&js_attribute_lines(
+                CustomizableNode::EnumVariant,
+                &variant.langs,
+                indent,
+            ));
+        }
+        output.push_str(line);
+    }
+    output
+}
+
 fn generate_js_quickjs_enum(out: &mut String, e: &EnumDef) -> Result<(), PolyplugcError> {
     let doc: String = if e.bitflag {
         format!("@bitflag Enum {}", e.name)
@@ -561,6 +621,7 @@ fn generate_js_quickjs_enum(out: &mut String, e: &EnumDef) -> Result<(), Polyplu
             ));
         }
     }
+    emit_js_attributes(out, CustomizableNode::Enum, &e.langs, "");
     if !docs.is_empty() {
         write_jsdoc(out, "", Some(&docs.join("\n")), &[], None);
     }
@@ -583,18 +644,21 @@ fn generate_js_quickjs_enum(out: &mut String, e: &EnumDef) -> Result<(), Polyplu
         ..JsBackend::default()
     };
     let mut indent_level: i32 = 0;
-    let rendered: String = backend
-        .render_enum(
-            &js_enum,
-            None::<&str>,
-            None::<&str>,
-            None,
-            &mut indent_level,
-        )
-        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
-            path: "types.ts".to_owned(),
-            source,
-        })?;
+    let rendered: String = with_js_enum_variant_attributes(
+        backend
+            .render_enum(
+                &js_enum,
+                None::<&str>,
+                None::<&str>,
+                None,
+                &mut indent_level,
+            )
+            .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+                path: "types.ts".to_owned(),
+                source,
+            })?,
+        e,
+    );
     out.push_str(&rendered);
     // Golden separates each enum from the following declaration with a blank line;
     // the renderer ends the companion `type` line with a single newline.
@@ -608,6 +672,7 @@ fn generate_types_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
          // DO NOT EDIT BY HAND\n\
          // Runtime: js-quickjs\n\n",
     );
+    emit_js_attributes(&mut out, CustomizableNode::Api, &ir.langs, "");
     for e in &ir.enums {
         generate_js_quickjs_enum(&mut out, e)?;
     }
@@ -627,6 +692,7 @@ fn generate_domain_types_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> 
          // DO NOT EDIT BY HAND\n\
          // Runtime: js-quickjs\n\n",
     );
+    emit_js_attributes(&mut out, CustomizableNode::Api, &ir.langs, "");
     for e in &ir.enums {
         generate_js_quickjs_enum(&mut out, e)?;
     }
@@ -651,6 +717,7 @@ fn generate_guest_contract_declarations_ts(
     if !imports.is_empty() {
         out.push('\n');
     }
+    emit_js_attributes(&mut out, CustomizableNode::Api, &ir.langs, "");
     for contract in &ir.contracts {
         render_guest_contract_types(&mut out, contract);
     }
@@ -743,6 +810,7 @@ fn insert_js_type_imports(
 }
 
 fn render_resolved_type(out: &mut String, type_def: &ResolvedType) {
+    emit_js_attributes(out, CustomizableNode::Type, &type_def.langs, "");
     write_jsdoc(out, "", type_def.docs.as_deref(), &[], None);
     out.push_str(&format!("export interface {} {{\n", type_def.name));
     for field in &type_def.fields {
@@ -753,6 +821,7 @@ fn render_resolved_type(out: &mut String, type_def: &ResolvedType) {
 
 fn render_resolved_field(out: &mut String, field: &ResolvedField) {
     let ts_t: String = ts_type_ref(&field.ty);
+    emit_js_attributes(out, CustomizableNode::Field, &field.langs, "    ");
     write_jsdoc(out, "    ", field.docs.as_deref(), &[], None);
     out.push_str(&format!("    readonly {}: {};\n", field.name, ts_t));
 }
@@ -770,6 +839,7 @@ fn render_contract_types_with_surface(
     contract: &ResolvedContract,
     guest_provider_surface: bool,
 ) {
+    emit_js_attributes(out, CustomizableNode::GuestContract, &contract.langs, "");
     write_jsdoc(out, "", contract.docs.as_deref(), &[], None);
     for func in &contract.functions {
         let params: String = func
@@ -784,6 +854,7 @@ fn render_contract_types_with_surface(
             .iter()
             .map(|param| (param.name.as_str(), param.docs.as_deref()))
             .collect();
+        emit_js_function_attributes(out, func, "");
         write_jsdoc(
             out,
             "",
@@ -1948,6 +2019,7 @@ fn generate_callers_ts_with_direct_handles(
          // DO NOT EDIT BY HAND\n\
          // Runtime: js (Deno host callers over the polyplug Deno FFI SDK)\n\n",
     );
+    emit_js_attributes(&mut out, CustomizableNode::Api, &ir.langs, "");
 
     // The host callers run under Deno against the polyplug Deno FFI host SDK.
     // They resolve a contract via the runtime, decode the raw
@@ -2025,6 +2097,7 @@ fn generate_host_caller_class_quickjs(
     let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
     let contract_id_const: String = format!("{}_CONTRACT_ID", contract_upper);
 
+    emit_js_attributes(out, CustomizableNode::GuestContract, &contract.langs, "");
     if let Some(docs) = contract.docs.as_deref() {
         let caller_docs: String = format!(
             "Host caller for contract `{}` over the Deno FFI SDK.\n\n{docs}",
@@ -2211,6 +2284,7 @@ fn generate_host_caller_method_deno(
         None => "void".to_owned(),
     };
 
+    emit_js_function_attributes(out, func, "    ");
     if func.docs.is_some()
         || func.params.iter().any(|param| param.docs.is_some())
         || func.return_docs.is_some()
@@ -2861,6 +2935,7 @@ fn generate_ts_host_interface_method(out: &mut String, func: &ResolvedFunction) 
         .iter()
         .map(|param| (param.name.as_str(), param.docs.as_deref()))
         .collect();
+    emit_js_function_attributes(out, func, "    ");
     write_jsdoc(
         out,
         "    ",
@@ -2877,6 +2952,7 @@ fn generate_ts_host_interface_method(out: &mut String, func: &ResolvedFunction) 
 /// Generate the interface definition for one host contract.
 fn generate_ts_host_contract_interface(out: &mut String, contract: &ResolvedHostContract) {
     let iface_name: String = host_contract_name_to_ts_interface(&contract.name);
+    emit_js_attributes(out, CustomizableNode::HostContract, &contract.langs, "");
     out.push_str(&format!(
         "/**\n * Host interface for contract `{}` (id=0x{:016X})\n * Hosts implement this interface to provide functionality to plugins.\n */\n",
         contract.name, contract.contract_id
@@ -2899,6 +2975,7 @@ fn generate_host_contracts_ts(ir: &ValidatedIr) -> String {
          // DO NOT EDIT BY HAND\n\
          // Runtime: js-quickjs (host-side interfaces)\n\n",
     );
+    emit_js_attributes(&mut out, CustomizableNode::Api, &ir.langs, "");
 
     for contract in &ir.host_contracts {
         generate_ts_host_contract_interface(&mut out, contract);
@@ -3015,6 +3092,7 @@ fn generate_ts_guest_host_contract_caller(
     let contract_id_lo: u32 = (contract.contract_id & 0xFFFFFFFF) as u32;
     let contract_id_hi: u32 = (contract.contract_id >> 32) as u32;
 
+    emit_js_attributes(out, CustomizableNode::HostContract, &contract.langs, "");
     if let Some(docs) = contract.docs.as_deref() {
         let caller_docs: String = format!(
             "Guest caller for host contract `{}` (id=0x{:016X})\n\n{docs}",
@@ -3124,6 +3202,7 @@ fn generate_ts_guest_host_contract_method(
         })
         .collect::<Vec<JsParameter>>();
     let mut jsdoc: String = String::new();
+    emit_js_function_attributes(&mut jsdoc, func, "");
     let documented_params: Vec<(&str, Option<&str>)> = func
         .params
         .iter()
@@ -4627,6 +4706,7 @@ fn generate_guest_host_contracts_ts(ir: &ValidatedIr) -> Result<String, Polyplug
          // DO NOT EDIT BY HAND\n\
          // Runtime: js-quickjs (guest-side callers)\n\n",
     );
+    emit_js_attributes(&mut out, CustomizableNode::Api, &ir.langs, "");
 
     let type_imports: BTreeSet<String> = collect_ts_guest_host_contract_type_imports(ir);
     if !type_imports.is_empty() {
@@ -4885,6 +4965,7 @@ fn generate_guest_peer_callers_ts(
          // DO NOT EDIT BY HAND\n\
          // Runtime: js-quickjs (guest-side peer callers)\n\n",
     );
+    emit_js_attributes(&mut out, CustomizableNode::Api, &ir.langs, "");
 
     // Collect user-defined type imports needed by peer method signatures.
     let mut type_imports: BTreeSet<String> = BTreeSet::new();
@@ -4930,6 +5011,7 @@ fn generate_ts_peer_caller_class(
     let contract_id_lo: u32 = (contract.contract_id & 0xFFFF_FFFF) as u32;
     let contract_id_hi: u32 = (contract.contract_id >> 32) as u32;
 
+    emit_js_attributes(out, CustomizableNode::GuestContract, &contract.langs, "");
     out.push_str(&format!(
         "/**\n * Peer caller for guest contract `{}` (id=0x{:016X})\n *\n\
          * Dispatches through the threaded `bridge.dispatchPeer` primitive.\n\
@@ -5096,6 +5178,7 @@ fn generate_ts_peer_caller_method(
             .join(", ")
     };
 
+    emit_js_function_attributes(out, func, "    ");
     out.push_str(&format!("    /** Call peer `{}` */\n", func.name));
     out.push_str(&format!(
         "    {}({}): {} {{\n",
@@ -5158,11 +5241,249 @@ mod tests {
     use crate::ResolvedBundleFile;
     use crate::ir::ResolvedDependency;
     use crate::ir::Version;
+    use crate::ir::{LanguageAttributes, LanguageRules};
     use crate::{Lang, OutputDestination, OutputPartition, ValidatedImport};
     use std::fs;
     use std::path::Path;
     use std::process::Command;
     use tempfile::tempdir;
+
+    fn js_attribute_rules(attribute: &str) -> LanguageRules {
+        LanguageRules {
+            javascript: Some(LanguageAttributes {
+                attributes: vec![attribute.to_owned()],
+            }),
+            ..LanguageRules::default()
+        }
+    }
+
+    fn js_semantic_attribute_ir() -> ValidatedIr {
+        let function = || ResolvedFunction {
+            name: "measure".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "sample".to_owned(),
+                ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                docs: None,
+                langs: js_attribute_rules("param_marker"),
+            }],
+            returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            docs: None,
+            return_docs: None,
+            langs: js_attribute_rules("function_marker"),
+            return_langs: js_attribute_rules("return_marker"),
+        };
+
+        ValidatedIr {
+            types: vec![ResolvedType {
+                name: "Packet".to_owned(),
+                fields: vec![ResolvedField {
+                    name: "count".to_owned(),
+                    ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    docs: None,
+                    langs: js_attribute_rules("field_marker"),
+                }],
+                docs: None,
+                langs: js_attribute_rules("type_marker"),
+            }],
+            enums: vec![EnumDef {
+                name: "Status".to_owned(),
+                repr: ReprType::U32,
+                bitflag: false,
+                variants: vec![EnumVariant {
+                    name: "Ready".to_owned(),
+                    value: "1".to_owned(),
+                    docs: None,
+                    langs: js_attribute_rules("variant_marker"),
+                }],
+                docs: None,
+                langs: js_attribute_rules("enum_marker"),
+            }],
+            contracts: vec![ResolvedContract {
+                name: "sample.measure".to_owned(),
+                contract_id: 0x10,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![function()],
+                docs: None,
+                langs: js_attribute_rules("guest_marker"),
+            }],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.measure".to_owned(),
+                contract_id: 0x11,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                singleton: false,
+                functions: vec![function()],
+                docs: None,
+                langs: js_attribute_rules("host_marker"),
+            }],
+            bundle: None,
+            langs: js_attribute_rules("api_marker"),
+        }
+    }
+
+    #[test]
+    fn js_attributes_cover_public_semantic_surfaces_in_unified_and_split_outputs() {
+        let ir = js_semantic_attribute_ir();
+
+        let types = generate_types_ts(&ir).expect("render unified types");
+        for marker in [
+            "api_marker",
+            "type_marker",
+            "field_marker",
+            "enum_marker",
+            "variant_marker",
+            "guest_marker",
+            "function_marker",
+            "param_marker",
+            "return_marker",
+        ] {
+            assert!(
+                types.contains(marker),
+                "unified types must retain the `{marker}` semantic marker: {types}"
+            );
+        }
+        assert!(
+            types.find("function_marker") < types.find("param_marker")
+                && types.find("param_marker") < types.find("return_marker"),
+            "function, parameter, and return metadata must remain in authored order: {types}"
+        );
+
+        let host_callers = generate_callers_ts(&ir).expect("render host callers");
+        assert!(
+            host_callers.contains("guest_marker")
+                && host_callers.contains("function_marker")
+                && host_callers.contains("param_marker")
+                && host_callers.contains("return_marker"),
+            "host callers must project guest contract metadata: {host_callers}"
+        );
+
+        let host_contracts = generate_host_contracts_ts(&ir);
+        assert!(
+            host_contracts.contains("host_marker")
+                && host_contracts.contains("function_marker")
+                && host_contracts.contains("param_marker")
+                && host_contracts.contains("return_marker"),
+            "host contract interfaces must project semantic metadata: {host_contracts}"
+        );
+
+        let guest_host = generate_guest_host_contracts_ts(&ir).expect("render guest host callers");
+        assert!(
+            guest_host.contains("host_marker")
+                && guest_host.contains("function_marker")
+                && guest_host.contains("param_marker")
+                && guest_host.contains("return_marker"),
+            "guest host callers must project host contract metadata: {guest_host}"
+        );
+
+        let mut peer = String::new();
+        generate_ts_peer_caller_class(&mut peer, &ir.contracts[0], 0, &ir)
+            .expect("render peer caller");
+        assert!(
+            peer.contains("guest_marker")
+                && peer.contains("function_marker")
+                && peer.contains("param_marker")
+                && peer.contains("return_marker"),
+            "peer callers must project guest contract metadata: {peer}"
+        );
+
+        let host_factories =
+            generate_js_host_interface_factories_ts(&ir).expect("render ABI host factories");
+        assert!(
+            !host_factories.contains("_marker"),
+            "semantic JSDoc must not decorate ABI interface objects or wrapper glue: {host_factories}"
+        );
+
+        let layout = OutputLayout {
+            bindings: OutputDestination::Inline,
+            domain_types: OutputDestination::Emit {
+                root: PathBuf::from("domain"),
+                import: ValidatedImport::parse(Lang::JsQuickJs, "./domain/types.ts")
+                    .expect("valid JavaScript domain import"),
+            },
+            guest_contracts: OutputDestination::Emit {
+                root: PathBuf::from("contracts"),
+                import: ValidatedImport::parse(Lang::JsQuickJs, "./contracts.ts")
+                    .expect("valid JavaScript contracts import"),
+            },
+        };
+        let generator = JsQuickjsGenerator;
+        let mut split_guest = GeneratedFiles::default();
+        generator
+            .generate_guest(&ir, &layout, &mut split_guest)
+            .expect("generate split guest");
+        let split_domain = split_guest
+            .files
+            .iter()
+            .find(|file| file.path.as_path() == Path::new("guest/types.ts"))
+            .expect("split domain types");
+        let split_contracts = split_guest
+            .files
+            .iter()
+            .find(|file| file.path.as_path() == Path::new("guest/contracts.ts"))
+            .expect("split guest contracts");
+        assert!(
+            split_domain.content.contains("type_marker")
+                && split_domain.content.contains("field_marker")
+                && split_domain.content.contains("enum_marker")
+                && split_domain.content.contains("variant_marker")
+                && split_contracts.content.contains("guest_marker")
+                && split_contracts.content.contains("function_marker")
+                && split_contracts.content.contains("param_marker")
+                && split_contracts.content.contains("return_marker"),
+            "split output must retain domain and guest contract metadata:\ndomain={}\ncontracts={}",
+            split_domain.content,
+            split_contracts.content
+        );
+
+        let temp = tempdir().expect("temporary Deno project");
+        fs::write(temp.path().join("types.ts"), &types).expect("write generated types");
+        let check = Command::new("deno")
+            .args(["check", "--quiet", "types.ts"])
+            .current_dir(temp.path())
+            .output()
+            .expect("run generated types Deno check");
+        assert!(
+            check.status.success(),
+            "semantic JSDoc must typecheck: {}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+    }
+
+    #[test]
+    fn empty_js_rules_preserve_generated_bytes() {
+        let ir = |langs| ValidatedIr {
+            types: Vec::new(),
+            enums: Vec::new(),
+            contracts: Vec::new(),
+            host_contracts: Vec::new(),
+            bundle: None,
+            langs,
+        };
+        let default = ir(LanguageRules::default());
+        let explicit_empty = ir(LanguageRules {
+            javascript: Some(LanguageAttributes::default()),
+            ..LanguageRules::default()
+        });
+
+        assert_eq!(
+            generate_types_ts(&default).expect("render default types"),
+            generate_types_ts(&explicit_empty).expect("render explicit empty rules"),
+            "an explicit empty JavaScript rule must preserve generated bytes"
+        );
+        assert_eq!(
+            generate_callers_ts(&default).expect("render default callers"),
+            generate_callers_ts(&explicit_empty).expect("render explicit empty rules"),
+            "an explicit empty JavaScript rule must preserve caller bytes"
+        );
+    }
 
     #[test]
     fn generate_js_quickjs_enum_non_bitflag() {
@@ -5175,14 +5496,17 @@ mod tests {
                     name: "Unknown".to_owned(),
                     value: "0".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 EnumVariant {
                     name: "Rgba8".to_owned(),
                     value: "1".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_js_quickjs_enum(&mut out, &e).expect("render enum");
@@ -5208,14 +5532,17 @@ mod tests {
                     name: "None".to_owned(),
                     value: "0".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 EnumVariant {
                     name: "Compressed".to_owned(),
                     value: "1".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_js_quickjs_enum(&mut out, &e).expect("render enum");
@@ -5308,10 +5635,13 @@ mod tests {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 },
                 ResolvedFunction {
                     name: "logf".to_owned(),
@@ -5321,19 +5651,24 @@ mod tests {
                             name: "level".to_owned(),
                             ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                             docs: None,
+                            langs: LanguageRules::default(),
                         },
                         ResolvedParam {
                             name: "format".to_owned(),
                             ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                             docs: None,
+                            langs: LanguageRules::default(),
                         },
                     ],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_ts_host_contract_interface(&mut out, &contract);
@@ -5373,14 +5708,19 @@ mod tests {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String = generate_host_contracts_ts(&ir);
         assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
@@ -5421,10 +5761,14 @@ mod tests {
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5450,6 +5794,7 @@ mod tests {
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5531,10 +5876,13 @@ mod tests {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 },
                 ResolvedFunction {
                     name: "logf".to_owned(),
@@ -5544,19 +5892,24 @@ mod tests {
                             name: "level".to_owned(),
                             ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                             docs: None,
+                            langs: LanguageRules::default(),
                         },
                         ResolvedParam {
                             name: "format".to_owned(),
                             ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                             docs: None,
+                            langs: LanguageRules::default(),
                         },
                     ],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_ts_guest_host_contract_caller(&mut out, &contract, &wrapper_ir(vec![], vec![]))
@@ -5628,12 +5981,16 @@ mod tests {
                     name: "path".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_ts_guest_host_contract_caller(&mut out, &contract, &wrapper_ir(vec![], vec![]))
@@ -5672,14 +6029,19 @@ mod tests {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String =
             generate_guest_host_contracts_ts(&ir).expect("generate guest host contracts");
@@ -5721,10 +6083,14 @@ mod tests {
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5754,8 +6120,10 @@ mod tests {
                 name: "Debug".to_owned(),
                 value: "0".to_owned(),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_js_quickjs_enum(&mut out, &e).expect("render enum");
@@ -5793,14 +6161,19 @@ mod tests {
                         name: "level".to_owned(),
                         ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String =
             generate_guest_host_contracts_ts(&ir).expect("generate guest host contracts");
@@ -5833,14 +6206,19 @@ mod tests {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String =
             generate_guest_host_contracts_ts(&ir).expect("generate guest host contracts");
@@ -5859,6 +6237,7 @@ mod tests {
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5893,6 +6272,7 @@ mod tests {
                 },
                 functions: vec![],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             host_contracts: vec![],
             bundle: Some(ResolvedBundle {
@@ -5913,6 +6293,7 @@ mod tests {
                 }],
                 needs_reinit_on_dep_reload: false,
             }),
+            langs: LanguageRules::default(),
         };
         let generator: JsQuickjsGenerator = JsQuickjsGenerator;
         let mut files: GeneratedFiles = GeneratedFiles::default();
@@ -5980,12 +6361,16 @@ mod tests {
                     name: "key".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_ts_guest_host_contract_caller(&mut out, &contract, &wrapper_ir(vec![], vec![]))
@@ -6028,8 +6413,11 @@ mod tests {
                 returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_ts_guest_host_contract_caller(&mut out, &contract, &wrapper_ir(vec![], vec![]))
@@ -6060,9 +6448,11 @@ mod tests {
                 },
                 functions: vec![],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let generator: JsQuickjsGenerator = JsQuickjsGenerator;
         let mut files: GeneratedFiles = GeneratedFiles::default();
@@ -6096,12 +6486,16 @@ mod tests {
                     name: "args".to_owned(),
                     ty: ResolvedTypeRef::UserDefined("AddArgs".to_owned()),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         ValidatedIr {
             types: vec![ResolvedType {
@@ -6111,14 +6505,17 @@ mod tests {
                         name: "a".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                         docs: None,
+                        langs: LanguageRules::default(),
                     },
                     ResolvedField {
                         name: "b".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                         docs: None,
+                        langs: LanguageRules::default(),
                     },
                 ],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             enums: vec![],
             contracts: vec![contract],
@@ -6141,6 +6538,7 @@ mod tests {
                 dependencies: vec![],
                 needs_reinit_on_dep_reload: false,
             }),
+            langs: LanguageRules::default(),
         }
     }
 
@@ -6348,12 +6746,16 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("canonical provider di
                     name: "value".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         ValidatedIr {
             types: vec![],
@@ -6378,6 +6780,7 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("canonical provider di
                 dependencies: vec![],
                 needs_reinit_on_dep_reload: false,
             }),
+            langs: LanguageRules::default(),
         }
     }
 
@@ -6499,6 +6902,7 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         }
     }
 
@@ -6513,6 +6917,7 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
             },
             functions,
             docs: None,
+            langs: LanguageRules::default(),
         }
     }
 
@@ -6544,16 +6949,20 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                     name: "a".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 ResolvedParam {
                     name: "b".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         }]);
         let ir: ValidatedIr = wrapper_ir(vec![], vec![]);
         let out: String = render_wrapper(&contract, &ir);
@@ -6587,16 +6996,20 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                     name: "count".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 ResolvedParam {
                     name: "message".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             returns: None,
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         }]);
         let ir: ValidatedIr = wrapper_ir(vec![], vec![]);
         let out: String = render_wrapper(&contract, &ir);
@@ -6615,10 +7028,13 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                 name: "input".to_owned(),
                 ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         }]);
         let ir: ValidatedIr = wrapper_ir(vec![], vec![]);
         let out: String = render_wrapper(&contract, &ir);
@@ -6667,14 +7083,17 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                     name: "a".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 ResolvedField {
                     name: "b".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         }];
         let contract: ResolvedContract = wrapper_contract(vec![ResolvedFunction {
             name: "add".to_owned(),
@@ -6683,10 +7102,13 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                 name: "args".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("AddArgs".to_owned()),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         }]);
         let ir: ValidatedIr = wrapper_ir(types, vec![]);
         let out: String = render_wrapper(&contract, &ir);
@@ -6713,14 +7135,17 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                         name: "a".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                         docs: None,
+                        langs: LanguageRules::default(),
                     },
                     ResolvedField {
                         name: "b".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                         docs: None,
+                        langs: LanguageRules::default(),
                     },
                 ],
                 docs: None,
+                langs: LanguageRules::default(),
             },
             ResolvedType {
                 name: "Boxed".to_owned(),
@@ -6729,14 +7154,17 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                         name: "tag".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
                         docs: None,
+                        langs: LanguageRules::default(),
                     },
                     ResolvedField {
                         name: "inner".to_owned(),
                         ty: ResolvedTypeRef::UserDefined("Inner".to_owned()),
                         docs: None,
+                        langs: LanguageRules::default(),
                     },
                 ],
                 docs: None,
+                langs: LanguageRules::default(),
             },
         ];
         let contract: ResolvedContract = wrapper_contract(vec![ResolvedFunction {
@@ -6746,10 +7174,13 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                 name: "o".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("Boxed".to_owned()),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             returns: Some(ResolvedTypeRef::UserDefined("Boxed".to_owned())),
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         }]);
         let ir: ValidatedIr = wrapper_ir(types, vec![]);
         let out: String = render_wrapper(&contract, &ir);
@@ -6786,10 +7217,13 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                 name: "factor".to_owned(),
                 ty: ResolvedTypeRef::Primitive(PrimitiveType::F64),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::F64)),
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         }]);
         let ir: ValidatedIr = wrapper_ir(vec![], vec![]);
         let out: String = render_wrapper(&contract, &ir);
@@ -6813,8 +7247,10 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                 name: "Info".to_owned(),
                 value: "1".to_owned(),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         }];
         let contract: ResolvedContract = wrapper_contract(vec![ResolvedFunction {
             name: "set_level".to_owned(),
@@ -6823,10 +7259,13 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                 name: "level".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             returns: None,
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         }]);
         let ir: ValidatedIr = wrapper_ir(vec![], enums);
         let out: String = render_wrapper(&contract, &ir);
@@ -6845,6 +7284,8 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
             returns: None,
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         }]);
         let ir: ValidatedIr = wrapper_ir(vec![], vec![]);
         let out: String = render_wrapper(&contract, &ir);
@@ -6870,8 +7311,10 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                 name: "Info".to_owned(),
                 value: "1".to_owned(),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         }];
         let func: ResolvedFunction = ResolvedFunction {
             name: "log_with_level".to_owned(),
@@ -6881,16 +7324,20 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                     name: "level".to_owned(),
                     ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 ResolvedParam {
                     name: "message".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             returns: None,
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         emit_ts_guest_host_contract_args_setup(&mut out, &func, &wrapper_ir(vec![], enums))
@@ -6916,8 +7363,10 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                 name: "Rgba8".to_owned(),
                 value: "1".to_owned(),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         }]
     }
 
@@ -6930,10 +7379,13 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                 name: "fmt".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("PixelFormat".to_owned()),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             returns: None,
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         emit_ts_guest_host_contract_args_setup(
@@ -6983,8 +7435,10 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                 name: "A".to_owned(),
                 value: "1".to_owned(),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         }];
         let func: ResolvedFunction = ResolvedFunction {
             name: "set_flags".to_owned(),
@@ -6993,10 +7447,13 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                 name: "flags".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("BigFlags".to_owned()),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             returns: None,
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         };
         let ir: ValidatedIr = wrapper_ir(vec![], enums);
         let mut out: String = String::new();
@@ -7033,14 +7490,17 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                     name: "a".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 ResolvedField {
                     name: "b".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         }];
         let ir: ValidatedIr = wrapper_ir(types, vec![]);
         let func: ResolvedFunction = ResolvedFunction {
@@ -7050,10 +7510,13 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                 name: "args".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("Pair".to_owned()),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             returns: Some(ResolvedTypeRef::UserDefined("Pair".to_owned())),
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         };
 
         // PARAM: allocate the struct's C size and pack each field — no NaN.
@@ -7105,14 +7568,17 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                     name: "name".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 ResolvedField {
                     name: "code".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         }];
         let ir: ValidatedIr = wrapper_ir(types, vec![]);
         let func: ResolvedFunction = ResolvedFunction {
@@ -7122,10 +7588,13 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                 name: "args".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("Holder".to_owned()),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             returns: None,
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         emit_ts_guest_host_contract_args_setup(&mut out, &func, &ir).expect("args setup");
@@ -7157,14 +7626,17 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                         name: "a".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                         docs: None,
+                        langs: LanguageRules::default(),
                     },
                     ResolvedField {
                         name: "b".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::I64),
                         docs: None,
+                        langs: LanguageRules::default(),
                     },
                 ],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             enums: vec![EnumDef {
                 name: "Color".to_owned(),
@@ -7174,8 +7646,10 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                     name: "Red".to_owned(),
                     value: "1".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             contracts: vec![ResolvedContract {
                 name: "test.shapes".to_owned(),
@@ -7194,26 +7668,32 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                                 name: "n".to_owned(),
                                 ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                                 docs: None,
+                                langs: LanguageRules::default(),
                             },
                             ResolvedParam {
                                 name: "big".to_owned(),
                                 ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
                                 docs: None,
+                                langs: LanguageRules::default(),
                             },
                             ResolvedParam {
                                 name: "c".to_owned(),
                                 ty: ResolvedTypeRef::UserDefined("Color".to_owned()),
                                 docs: None,
+                                langs: LanguageRules::default(),
                             },
                             ResolvedParam {
                                 name: "s".to_owned(),
                                 ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                                 docs: None,
+                                langs: LanguageRules::default(),
                             },
                         ],
                         returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
                         docs: None,
                         return_docs: None,
+                        langs: LanguageRules::default(),
+                        return_langs: LanguageRules::default(),
                     },
                     ResolvedFunction {
                         name: "take_struct".to_owned(),
@@ -7222,10 +7702,13 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                             name: "p".to_owned(),
                             ty: ResolvedTypeRef::UserDefined("Pair".to_owned()),
                             docs: None,
+                            langs: LanguageRules::default(),
                         }],
                         returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
                         docs: None,
                         return_docs: None,
+                        langs: LanguageRules::default(),
+                        return_langs: LanguageRules::default(),
                     },
                     ResolvedFunction {
                         name: "get_struct".to_owned(),
@@ -7234,6 +7717,8 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                         returns: Some(ResolvedTypeRef::UserDefined("Pair".to_owned())),
                         docs: None,
                         return_docs: None,
+                        langs: LanguageRules::default(),
+                        return_langs: LanguageRules::default(),
                     },
                     ResolvedFunction {
                         name: "get_color".to_owned(),
@@ -7242,12 +7727,16 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                         returns: Some(ResolvedTypeRef::UserDefined("Color".to_owned())),
                         docs: None,
                         return_docs: None,
+                        langs: LanguageRules::default(),
+                        return_langs: LanguageRules::default(),
                     },
                 ],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         }
     }
 
@@ -7359,14 +7848,17 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                             name: "a".to_owned(),
                             ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                             docs: None,
+                            langs: LanguageRules::default(),
                         },
                         ResolvedField {
                             name: "b".to_owned(),
                             ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                             docs: None,
+                            langs: LanguageRules::default(),
                         },
                     ],
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 ResolvedType {
                     name: "Boxed".to_owned(),
@@ -7375,14 +7867,17 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                             name: "tag".to_owned(),
                             ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
                             docs: None,
+                            langs: LanguageRules::default(),
                         },
                         ResolvedField {
                             name: "inner".to_owned(),
                             ty: ResolvedTypeRef::UserDefined("Inner".to_owned()),
                             docs: None,
+                            langs: LanguageRules::default(),
                         },
                     ],
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             enums: vec![],
@@ -7402,10 +7897,13 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                             name: "o".to_owned(),
                             ty: ResolvedTypeRef::UserDefined("Boxed".to_owned()),
                             docs: None,
+                            langs: LanguageRules::default(),
                         }],
                         returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
                         docs: None,
                         return_docs: None,
+                        langs: LanguageRules::default(),
+                        return_langs: LanguageRules::default(),
                     },
                     ResolvedFunction {
                         name: "get_box".to_owned(),
@@ -7414,12 +7912,16 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                         returns: Some(ResolvedTypeRef::UserDefined("Boxed".to_owned())),
                         docs: None,
                         return_docs: None,
+                        langs: LanguageRules::default(),
+                        return_langs: LanguageRules::default(),
                     },
                 ],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String = generate_callers_ts(&ir).expect("generate Deno callers");
 
@@ -7496,26 +7998,32 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                                 name: "n".to_owned(),
                                 ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                                 docs: None,
+                                langs: LanguageRules::default(),
                             },
                             ResolvedParam {
                                 name: "big".to_owned(),
                                 ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
                                 docs: None,
+                                langs: LanguageRules::default(),
                             },
                             ResolvedParam {
                                 name: "c".to_owned(),
                                 ty: ResolvedTypeRef::UserDefined("Color".to_owned()),
                                 docs: None,
+                                langs: LanguageRules::default(),
                             },
                             ResolvedParam {
                                 name: "s".to_owned(),
                                 ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                                 docs: None,
+                                langs: LanguageRules::default(),
                             },
                         ],
                         returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
                         docs: None,
                         return_docs: None,
+                        langs: LanguageRules::default(),
+                        return_langs: LanguageRules::default(),
                     },
                     ResolvedFunction {
                         name: "take_struct".to_owned(),
@@ -7524,10 +8032,13 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                             name: "p".to_owned(),
                             ty: ResolvedTypeRef::UserDefined("Pair".to_owned()),
                             docs: None,
+                            langs: LanguageRules::default(),
                         }],
                         returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
                         docs: None,
                         return_docs: None,
+                        langs: LanguageRules::default(),
+                        return_langs: LanguageRules::default(),
                     },
                     ResolvedFunction {
                         name: "take_buffer".to_owned(),
@@ -7536,10 +8047,13 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                             name: "b".to_owned(),
                             ty: ResolvedTypeRef::AbiType(AbiBuiltin::Buffer),
                             docs: None,
+                            langs: LanguageRules::default(),
                         }],
                         returns: None,
                         docs: None,
                         return_docs: None,
+                        langs: LanguageRules::default(),
+                        return_langs: LanguageRules::default(),
                     },
                     ResolvedFunction {
                         name: "get_struct".to_owned(),
@@ -7548,11 +8062,15 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                         returns: Some(ResolvedTypeRef::UserDefined("Pair".to_owned())),
                         docs: None,
                         return_docs: None,
+                        langs: LanguageRules::default(),
+                        return_langs: LanguageRules::default(),
                     },
                 ],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         }
     }
 
@@ -7638,6 +8156,7 @@ if (result !== 0 || slots.get(32) !== 42) throw new Error("primitive provider di
                 dependencies: vec![],
                 needs_reinit_on_dep_reload: false,
             }),
+            langs: LanguageRules::default(),
         };
         let init: String = generate_init_ts(&ir);
         let index: String = generate_index_ts(&ir);

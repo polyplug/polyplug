@@ -987,6 +987,10 @@ const KNOWN_SIZES: &[(&str, usize)] = &[
     ("NativeDispatch", 16),
     ("VmDispatch", 16),
     ("VmLoaderData", 8),
+    ("BundleDescriptorView", 56),
+    ("OwnedPluginDescriptorView", 64),
+    ("RegisteredContractDescriptorView", 88),
+    ("RuntimeIntrospection", 24),
 ];
 
 /// Populate `size_hint` fields on `AbiStruct` entries using the known size table.
@@ -2290,6 +2294,25 @@ mod tests {
             abi_types.structs[2].size_hint, None,
             "Unknown struct should have no size hint"
         );
+    }
+
+    #[test]
+    fn test_nested_introspection_descriptor_size_hints() {
+        let expected: [(&str, usize); 4] = [
+            ("BundleDescriptorView", 56),
+            ("OwnedPluginDescriptorView", 64),
+            ("RegisteredContractDescriptorView", 88),
+            ("RuntimeIntrospection", 24),
+        ];
+        for (name, size) in expected {
+            assert_eq!(
+                KNOWN_SIZES.iter().find_map(
+                    |(known_name, known_size)| (*known_name == name).then_some(*known_size)
+                ),
+                Some(size),
+                "{name} must retain its canonical ABI size hint"
+            );
+        }
     }
 
     /// Test that C++ output contains static_assert for structs with size hints.

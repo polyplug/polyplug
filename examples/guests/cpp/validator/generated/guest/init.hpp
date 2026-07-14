@@ -13,7 +13,7 @@
 #define POLYPLUG_ENTRYPOINT_EXPORT __attribute__((visibility("default")))
 #endif
 
-extern "C" POLYPLUG_ENTRYPOINT_EXPORT uint32_t polyplug_abi_version() { return 1U; }
+extern "C" POLYPLUG_ENTRYPOINT_EXPORT uint32_t polyplug_abi_version() { return 2U; }
 
 extern "C" POLYPLUG_ENTRYPOINT_EXPORT AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx) {
     if (!host || !ctx) {

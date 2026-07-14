@@ -226,9 +226,11 @@ fn host_find_all_array_len_matches_live_providers_and_frees() {
         .expect("invalidate bundle_b");
 
     // Invoke the HostApi callback exactly as a guest/host would.
-    // SAFETY: host is a valid HostApi pointer from polyplug_runtime_create.
-    let array: Array<GuestContractHandle> =
-        unsafe { ((*host).find_all_guest_contracts)(host, CID, 0) };
+    let mut array: Array<GuestContractHandle> = Array::empty();
+    // SAFETY: host is valid and `array` is a writable output slot.
+    unsafe {
+        ((*host).find_all_guest_contracts)(host, CID, 0, &raw mut array);
+    }
 
     assert_eq!(
         array.len, 2,

@@ -110,9 +110,13 @@ unsafe extern "C" fn noop_find_all_guest_contracts(
     this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> Array<GuestContractHandle> {
+    out_handles: *mut Array<GuestContractHandle>,
+) {
     let _ = this;
-    Array::empty()
+    if !out_handles.is_null() {
+        // SAFETY: the caller provided a non-null output slot.
+        unsafe { out_handles.write(Array::empty()) };
+    }
 }
 
 /// No-op resolve_guest_contract callback.
@@ -135,15 +139,24 @@ unsafe extern "C" fn noop_get_host_contract(
 }
 
 /// No-op list_bundles callback.
-unsafe extern "C" fn noop_list_bundles(this: *const HostApi) -> Array<BundleId> {
+unsafe extern "C" fn noop_list_bundles(this: *const HostApi, out_bundles: *mut Array<BundleId>) {
     let _ = this;
-    Array::empty()
+    if !out_bundles.is_null() {
+        // SAFETY: the caller provided a non-null output slot.
+        unsafe { out_bundles.write(Array::empty()) };
+    }
 }
 
 /// No-op get_dependencies callback.
-unsafe extern "C" fn noop_get_dependencies(this: *const HostApi) -> Array<DependencyInfo> {
+unsafe extern "C" fn noop_get_dependencies(
+    this: *const HostApi,
+    out_dependencies: *mut Array<DependencyInfo>,
+) {
     let _ = this;
-    Array::empty()
+    if !out_dependencies.is_null() {
+        // SAFETY: the caller provided a non-null output slot.
+        unsafe { out_dependencies.write(Array::empty()) };
+    }
 }
 
 /// No-op resolve_host_contract_interface callback.
@@ -254,7 +267,7 @@ fn test_load_and_abi_version() {
 
     // SAFETY: symbol was just resolved and is a valid C function pointer.
     let version: u32 = unsafe { abi_version_fn() };
-    assert_eq!(version, 1, "polyplug_abi_version() must return 1");
+    assert_eq!(version, 2, "polyplug_abi_version() must return 2");
 
     // Leak the library — interface pointers must remain valid.
     mem::forget(library);

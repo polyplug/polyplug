@@ -16,5 +16,6 @@ import "../host/tests/host_contract_provider_test.ts";
 import "../host/tests/internal_plugin_bundle_test.ts";
 import "../host/tests/internal_plugin_bundle_builder_test.ts";
 import "../host/tests/internal_plugin_runtime_test.ts";
+import "../host/tests/runtime_introspection_test.ts";
 import "../host/tests/guest_adapter_context_test.ts";
 import "../host/tests/reload_runtime_test.ts";

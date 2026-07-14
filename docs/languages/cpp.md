@@ -5,6 +5,8 @@ through a header-only binding. As a guest it compiles to a native `cdylib`
 (`.so` / `.dylib` / `.dll`), and host and plugin share the same ABI types. For
 measured overhead, see [Performance](../PERFORMANCE.md).
 
+Define the shared contract with the [`api.toml` schema reference](../API_TOML.md), including C++-specific `langs.cpp` attribute bodies.
+
 ## Install
 
 **CLI** — generates host callers and guest glue from an `api.toml` contract:

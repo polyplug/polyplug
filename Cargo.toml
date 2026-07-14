@@ -12,6 +12,7 @@ members = [
     "tests/fixtures/reload_plugin_v2",
     "tests/fixtures/depender_plugin",
     "tests/fixtures/no_init_plugin",
+    "tests/fixtures/old_abi_plugin",
     "tests/fixtures/register_fail_plugin",
     "tests/fixtures/cross_caller_plugin",
     "tests/fixtures/cross_target_plugin",
@@ -68,10 +69,9 @@ serde_json = { version = "1.0" }
 syn = { version = "2", features = ["full", "parsing", "extra-traits"] }
 quote = "1"
 
-# Cross-language FORM emitter (co-developed sibling crate). Pinned to the crates.io
-# release carrying the import-model extension (TS type/reexport/namespace variants +
-# grouped Python froms) that routes python/js generator imports through ImportSet.
-langprint = { version = "0.2.3" }
+# Cross-language FORM emitter (co-developed sibling crate). Pinned to the
+# attribute-rendering revision consumed by the generators.
+langprint = { git = "https://github.com/corrm/langprint.git", rev = "9f9e38a80334f2e39e4ff78443de1e90fd6d932f" }
 
 # Dynamic loading
 libloading = { version = "0.9" }

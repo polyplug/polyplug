@@ -16,7 +16,7 @@
  * ABI version constant. All plugins must return this from polyplug_abi_version().
  * @type {number}
  */
-export const POLYPLUG_ABI_VERSION = 1;
+export const POLYPLUG_ABI_VERSION = 2;
 
 /**
  * ABI error codes — returned by all ABI functions.

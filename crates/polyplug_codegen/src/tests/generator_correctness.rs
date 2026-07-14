@@ -14,8 +14,8 @@
 
 use crate::generate;
 use crate::ir::{
-    AbiBuiltin, PrimitiveType, ResolvedContract, ResolvedField, ResolvedFunction, ResolvedParam,
-    ResolvedTypeRef, ValidatedIr, Version,
+    AbiBuiltin, LanguageRules, PrimitiveType, ResolvedContract, ResolvedField, ResolvedFunction,
+    ResolvedParam, ResolvedTypeRef, ValidatedIr, Version,
 };
 use crate::{GenerateConfig, GenerateOutput, GeneratedFile, Lang, OutputLayout, Side};
 use polyplug_utils::guest_contract_id as fnv_contract_id;
@@ -43,9 +43,11 @@ fn make_ir(contract_name: &str, major: u32, functions: Vec<ResolvedFunction>) ->
             },
             functions,
             docs: None,
+            langs: LanguageRules::default(),
         }],
         host_contracts: vec![],
         bundle: None,
+        langs: LanguageRules::default(),
     }
 }
 
@@ -64,6 +66,8 @@ fn make_fn(
         returns,
         docs: None,
         return_docs: None,
+        langs: LanguageRules::default(),
+        return_langs: LanguageRules::default(),
     }
 }
 
@@ -73,6 +77,7 @@ fn prim_param(name: &str, prim: PrimitiveType) -> ResolvedParam {
         name: name.to_owned(),
         ty: ResolvedTypeRef::Primitive(prim),
         docs: None,
+        langs: LanguageRules::default(),
     }
 }
 
@@ -528,6 +533,7 @@ fn multiple_contracts_have_independent_fns_arrays() {
                 },
                 functions: vec![make_fn("foo", 0, vec![], None)],
                 docs: None,
+                langs: LanguageRules::default(),
             },
             ResolvedContract {
                 name: "multi.b".to_owned(),
@@ -539,10 +545,12 @@ fn multiple_contracts_have_independent_fns_arrays() {
                 },
                 functions: vec![make_fn("bar", 0, vec![], None)],
                 docs: None,
+                langs: LanguageRules::default(),
             },
         ],
         host_contracts: vec![],
         bundle: None,
+        langs: LanguageRules::default(),
     };
     let interfaces: String =
         run_guest_generator(ir, "multi_contracts_independent", "interfaces.rs");

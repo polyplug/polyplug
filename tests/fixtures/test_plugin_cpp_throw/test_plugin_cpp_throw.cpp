@@ -91,7 +91,7 @@ const PluginDescriptor kTestAddDescriptor = {
 // ─── ABI exports ──────────────────────────────────────────────────────────────
 
 extern "C" uint32_t polyplug_abi_version() {
-    return 1U;
+    return 2U;
 }
 
 extern "C" AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx) {

@@ -5,6 +5,8 @@ Rust works as both a host and a guest. A Rust guest can be compiled as a native
 ordinary Rust implementation object. Host and guest share the same ABI types.
 For measured overhead, see [Performance](../PERFORMANCE.md).
 
+Define the shared contract with the [`api.toml` schema reference](../API_TOML.md), including Rust-specific `langs.rust` attributes and semantic rules.
+
 ## Install
 
 **CLI** — generates host callers and guest glue from an `api.toml` contract:
@@ -72,3 +74,20 @@ calls, and unload then follow the same pipeline as an external plugin.
 Rust's default remains one generated tree. To place application domain values
 and guest traits in a `common` crate while keeping ABI bindings private, follow
 the [split-output guide](../CODE_GENERATION.md#rust-common-platform-and-core).
+
+## Rust semantic domain rules
+
+Rust can keep an ABI declaration flat while generating a more ergonomic domain
+model for an internal profile or `DomainTypes` split partition. In particular,
+`serde = "human-name-binary-discriminant"` gives an enum human-readable names
+for JSON/YAML while preserving its exact unsigned ABI discriminant for binary
+formats; a type-level `tagged_enum` projects a tagged flat struct into a Rust
+enum; and field-level `empty_sequence_as_null` makes `null` and a missing
+sequence deserialize as an empty `Vec`.
+
+These rules do not change the generated ABI bindings, the wire layout, or any
+other language. They require a direct `serde` dependency when generated code
+uses serde; authored `derives` add neither dependencies nor imports. See the
+[Rust semantic rules reference](../API_TOML.md#rust-semantic-rules) for the
+complete valid-node/default tables, projection mapping rules, serialization
+representations, and validation errors.

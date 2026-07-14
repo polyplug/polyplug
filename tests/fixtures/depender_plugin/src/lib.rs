@@ -30,7 +30,7 @@ unsafe impl Sync for FnPtr {}
 // Tracks how many times polyplug_init was called (for cascade reload test).
 static INIT_COUNT: AtomicU32 = AtomicU32::new(0_u32);
 
-const POLYPLUG_ABI_VERSION: u32 = 1_u32;
+const POLYPLUG_ABI_VERSION: u32 = 2_u32;
 
 // ─── Instance lifecycle (stub for test plugin) ────────────────────────────────
 

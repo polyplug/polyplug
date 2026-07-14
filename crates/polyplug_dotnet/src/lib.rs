@@ -315,7 +315,7 @@ impl BundleLoader for DotnetLoader {
         // The init function and the assembly simple name are resolved per source kind, then
         // the shared init-invocation tail below drives the managed `PolyplugInit`.
         let (managed_init, bundle_name): (InitFn, String) = match source {
-            BundleSource::Code(_) => {
+            BundleSource::Internal | BundleSource::Code(_) => {
                 return Err(LoaderError::UnsupportedBundleSource {
                     loader: "dotnet",
                     source_kind: source.kind(),

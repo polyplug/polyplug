@@ -20,6 +20,10 @@ struct HostApi;
 struct HostContractInstance;
 struct HostContractInterface;
 struct GuestContractHandle;
+struct BundleDescriptorView;
+struct OwnedPluginDescriptorView;
+struct RegisteredContractDescriptorView;
+struct RuntimeIntrospection;
 struct BundleInitContext;
 struct PluginDescriptor;
 struct ReloadPhase;
@@ -35,6 +39,7 @@ struct StringView;
 struct Version;
 enum class ContractType : uint32_t;
 enum class DispatchType : uint32_t;
+enum class BundleSourceKind : uint32_t;
 enum class Compatibility : uint32_t;
 enum class ReloadPhaseType : uint32_t;
 enum class SignaturePolicy : uint32_t;
@@ -118,20 +123,17 @@ static_assert(sizeof(GuestContractInstance) == 16, "GuestContractInstance size m
 ///
 ///  Contains an opaque runtime pointer and function pointers for guest calls.
 ///  All functions use self-passing pattern (receive HostApi pointer as first parameter).
-///  `HostApi` contains an opaque runtime pointer, callback table, and one reserved pointer.
-///  Producers set every callback to a valid function and set `reserved` to null.
-///
-///  # Who provides
-///  The runtime creates this struct and passes it to `polyplug_init()`.
-///  The struct is allocated using `Box::leak()` for `'static` lifetime.
+///  `HostApi` contains an opaque runtime pointer, callback table, and one
+///  introspection-table pointer.
 ///
 ///  # Nullability
 ///  Every function-pointer field is REQUIRED and ALWAYS non-null: the runtime
 ///  is the sole producer of this struct and populates all 21 callbacks at
 ///  creation. Consumers never construct or mutate a `HostApi`. Only the
 ///  `runtime` pointer can become null (it is swapped to null by
-///  `polyplug_runtime_destroy`), and only the trailing `reserved` data pointer
-///  is a null placeholder by contract.
+///  `polyplug_runtime_destroy`). `reserved` points to
+///  [`RuntimeIntrospection`](crate::plugin::RuntimeIntrospection) for current
+///  runtimes and is null only for an older ABI producer.
 ///
 ///  # Who calls
 ///  Guest (plugin) code calls these functions to interact with the runtime.
@@ -156,12 +158,12 @@ using HostApi_register_guest_contract_fn = void(*)(const HostApi*, const PluginD
 using HostApi_alloc_fn = uint8_t*(*)(const HostApi*, size_t, size_t);
 using HostApi_free_fn = void(*)(const HostApi*, uint8_t*, size_t, size_t);
 using HostApi_find_guest_contract_fn = GuestContractHandle(*)(const HostApi*, uint64_t, uint32_t);
-using HostApi_find_all_guest_contracts_fn = Array(*)(const HostApi*, uint64_t, uint32_t);
+using HostApi_find_all_guest_contracts_fn = void(*)(const HostApi*, uint64_t, uint32_t, Array*);
 using HostApi_resolve_guest_contract_fn = const GuestContractInterface*(*)(const HostApi*, GuestContractHandle);
 using HostApi_get_host_contract_fn = HostContractInstance(*)(const HostApi*, uint64_t, uint32_t);
 using HostApi_resolve_host_contract_interface_fn = const HostContractInterface*(*)(const HostApi*, uint64_t, uint32_t);
-using HostApi_list_bundles_fn = Array(*)(const HostApi*);
-using HostApi_get_dependencies_fn = Array(*)(const HostApi*);
+using HostApi_list_bundles_fn = void(*)(const HostApi*, Array*);
+using HostApi_get_dependencies_fn = void(*)(const HostApi*, Array*);
 using HostApi_load_bundle_fn = void(*)(const HostApi*, const uint8_t*, size_t, AbiError*);
 using HostApi_reload_bundle_fn = void(*)(const HostApi*, const uint8_t*, size_t, AbiError*);
 using HostApi_register_host_contract_fn = void(*)(const HostApi*, const HostContractInterface*, AbiError*);
@@ -232,16 +234,9 @@ struct HostApi {
     HostApi_find_guest_contract_fn find_guest_contract;
     ///  Find all guest contracts matching contract_id and minimum version.
     ///
-    ///  Returns an Array of GuestContractHandle. Caller must free via `host->free`.
-    ///  Use when multiple implementations of the same contract may exist.
-    ///
-    ///  # Arguments
-    ///  - `this`: HostApi pointer (self-passing)
-    ///  - `contract_id`: Contract identifier hash
-    ///  - `min_version`: Minimum version required
-    ///
-    ///  # Returns
-    ///  Array of GuestContractHandle. Caller owns and must free.
+    ///  Writes a caller-owned Array of GuestContractHandle into `out_handles`.
+    ///  The caller frees a non-null result through `host->free`; an empty result is
+    ///  `Array::empty()`. The explicit out parameter avoids aggregate return ABI lowering.
     HostApi_find_all_guest_contracts_fn find_all_guest_contracts;
     ///  Resolve a GuestContractHandle to a GuestContractInterface pointer.
     ///
@@ -281,28 +276,22 @@ struct HostApi {
     ///  # Returns
     ///  Pointer to HostContractInterface, or null if invalid/not found.
     HostApi_resolve_host_contract_interface_fn resolve_host_contract_interface;
-    ///  List all loaded bundles.
+    ///  List all loaded bundles into caller-provided `out_bundles`.
     ///
-    ///  Returns an Array of BundleId. Caller must free via `host->free`.
-    ///  Bundle IDs are stable for the lifetime of the runtime.
-    ///
-    ///  # Arguments
-    ///  - `this`: HostApi pointer (self-passing)
-    ///
-    ///  # Returns
-    ///  Array of BundleId. Caller owns and must free.
+    ///  A non-null output receives a caller-owned array, freed through `host->free`.
+    ///  An empty result is `Array::empty()`. The explicit output avoids aggregate-return
+    ///  ABI lowering.
     HostApi_list_bundles_fn list_bundles;
-    ///  Get dependencies for the calling bundle.
+    ///  Get dependencies for the calling bundle into caller-provided `out_dependencies`.
     ///
     ///  Uses bundle_id from current BundleInitContext (TLS) to look up declared deps.
-    ///  Returns an Array of DependencyInfo. Caller must free via `host->free`.
+    ///  A non-null output receives a caller-owned array, freed through `host->free`.
+    ///  An empty result is `Array::empty()`. The explicit output avoids aggregate-return
+    ///  ABI lowering.
     ///
     ///  # Arguments
     ///  - `this`: HostApi pointer (self-passing)
-    ///
-    ///  # Returns
-    ///  Array of DependencyInfo. Caller owns and must free.
-    ///  Returns empty array if called outside bundle init context.
+    ///  - `out_dependencies`: result array or null
     HostApi_get_dependencies_fn get_dependencies;
     ///  Load a plugin bundle from a path.
     ///
@@ -465,7 +454,8 @@ struct HostApi {
     ///  # Returns
     ///  The current registry revision, or zero when `this` is null.
     HostApi_registry_revision_fn registry_revision;
-    ///  Reserved. Producers must set this to null; consumers must not read it.
+    ///  Optional pointer to a [`RuntimeIntrospection`](crate::plugin::RuntimeIntrospection)
+    ///  table. A null pointer denotes a runtime built by an older ABI producer.
     const void* reserved;
 };
 static_assert(sizeof(HostApi) == 184, "HostApi size mismatch");
@@ -507,6 +497,26 @@ struct GuestContractHandle {
     uint32_t generation;
 };
 static_assert(sizeof(GuestContractHandle) == 8, "GuestContractHandle size mismatch");
+
+///  `HostApi::reserved` points to this table for current runtimes. Its address is
+///  stable for the runtime lifetime; SDKs must treat a null `reserved` pointer as
+///  unsupported. A successful descriptor callback transfers its string allocations
+///  to the caller; a failed callback transfers no allocation.
+using RuntimeIntrospection_get_bundle_descriptor_fn = bool(*)(const HostApi*, uint64_t, BundleDescriptorView*);
+using RuntimeIntrospection_list_registered_guest_contracts_fn = void(*)(const HostApi*, Array*);
+using RuntimeIntrospection_get_registered_contract_descriptor_fn = bool(*)(const HostApi*, GuestContractHandle, RegisteredContractDescriptorView*);
+struct RuntimeIntrospection {
+    ///  Copy a loaded bundle descriptor into `out_descriptor`.
+    RuntimeIntrospection_get_bundle_descriptor_fn get_bundle_descriptor;
+    ///  Write stable handles for all live guest-contract registrations into `out_handles`.
+    ///
+    ///  A non-null `out_handles` receives an owned array; an empty result is
+    ///  `Array::empty()`. This explicit output avoids aggregate-return lowering.
+    RuntimeIntrospection_list_registered_guest_contracts_fn list_registered_guest_contracts;
+    ///  Copy a live guest-contract ownership descriptor into `out_descriptor`.
+    RuntimeIntrospection_get_registered_contract_descriptor_fn get_registered_contract_descriptor;
+};
+static_assert(sizeof(RuntimeIntrospection) == 24, "RuntimeIntrospection size mismatch");
 
 ///  Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
 ///
@@ -812,6 +822,21 @@ enum class DispatchType : uint32_t {
     VirtualMachine = 1,
 };
 
+///  The retained origin of a loaded bundle.
+///
+///  This is metadata only: a `Code` or `Bytes` origin never exposes the artifact
+///  payload through the ABI.
+enum class BundleSourceKind : uint32_t {
+    ///  Providers registered directly by generated bindings in the host process.
+    Internal = 0,
+    ///  An on-disk bundle directory.
+    Path = 1,
+    ///  In-memory source text.
+    Code = 2,
+    ///  In-memory artifact bytes.
+    Bytes = 3,
+};
+
 ///  How strictly version compatibility is enforced when resolving plugins.
 enum class Compatibility : uint32_t {
     ///  Exact major match and minor >= required.
@@ -917,7 +942,7 @@ enum class ParseVersionError : uint32_t {
     InvalidInt = 1,
 };
 
-#define POLYPLUG_ABI_VERSION 1U
+#define POLYPLUG_ABI_VERSION 2U
 ///  VM dispatch data — call through a dispatch function.
 ///
 ///  Used when `dispatch_type == DispatchType::VirtualMachine`.
@@ -951,6 +976,58 @@ struct VmDispatch {
     VmLoaderData loader_data;
 };
 static_assert(sizeof(VmDispatch) == 16, "VmDispatch size mismatch");
+
+///  Caller-owned ABI descriptor of one loaded bundle.
+///
+///  `name` is allocated through `HostApi::alloc`. The successful callback transfers
+///  ownership to the caller, which must release a non-null buffer through
+///  `HostApi::free(host, name.items, name.len, name.align)` exactly once.
+struct BundleDescriptorView {
+    ///  Stable bundle identity.
+    uint64_t id;
+    ///  Human-readable bundle name.
+    void* name;
+    size_t name_len;
+    size_t name__align;
+    ///  Semantic bundle version.
+    Version version;
+    ///  Runtime language selected for the bundle.
+    SupportedLanguage runtime;
+    ///  Retained bundle origin.
+    BundleSourceKind source_kind;
+};
+static_assert(sizeof(BundleDescriptorView) == 56, "BundleDescriptorView size mismatch");
+
+///  Caller-owned ABI descriptor for a registered provider.
+///
+///  Each non-null string buffer is allocated through `HostApi::alloc` and must be
+///  released through `HostApi::free` with its exact `len` and `align` exactly once.
+struct OwnedPluginDescriptorView {
+    ///  Human-readable provider name.
+    void* name;
+    size_t name_len;
+    size_t name__align;
+    ///  Full guest-contract name.
+    void* contract_name;
+    size_t contract_name_len;
+    size_t contract_name__align;
+    ///  Provider version.
+    Version version;
+};
+static_assert(sizeof(OwnedPluginDescriptorView) == 64, "OwnedPluginDescriptorView size mismatch");
+
+///  Caller-owned ABI descriptor of one registered guest-contract provider.
+struct RegisteredContractDescriptorView {
+    ///  Stable handle for the live registration.
+    GuestContractHandle handle;
+    ///  Bundle that owns the registration.
+    uint64_t bundle_id;
+    ///  Canonical guest-contract identity.
+    uint64_t contract_id;
+    ///  Canonical provider descriptor with caller-owned string buffers.
+    OwnedPluginDescriptorView plugin;
+};
+static_assert(sizeof(RegisteredContractDescriptorView) == 88, "RegisteredContractDescriptorView size mismatch");
 
 ///  Context passed to every guest `polyplug_init()` function.
 ///

@@ -66,9 +66,11 @@ fn test_find_all_guest_contracts_empty_registry() {
     // SAFETY: polyplug_runtime_create(ptr::null()) returns a valid HostApi or null on OOM.
     let host: *const HostApi = unsafe { polyplug_runtime_create(ptr::null()) };
     assert!(!host.is_null());
-    // SAFETY: host is valid (asserted above).
-    let arr: Array<GuestContractHandle> =
-        unsafe { ((*host).find_all_guest_contracts)(host, 0xDEAD_BEEF_u64, 0) };
+    let mut arr: Array<GuestContractHandle> = Array::empty();
+    // SAFETY: host is valid and `arr` is a writable output slot.
+    unsafe {
+        ((*host).find_all_guest_contracts)(host, 0xDEAD_BEEF_u64, 0, &raw mut arr);
+    }
     // No plugins loaded, so len == 0. Point is: no crash, no panic.
     assert_eq!(
         arr.len, 0,

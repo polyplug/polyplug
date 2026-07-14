@@ -4,5 +4,5 @@
 /// ABI version constant — makes this a recognisable polyplug plugin binary.
 #[unsafe(no_mangle)]
 pub extern "C" fn polyplug_abi_version() -> u32 {
-    1_u32
+    2_u32
 }

@@ -599,24 +599,20 @@ mod tests {
         );
     }
 
-    /// Test that fn ptrs returning Array<T> by value declare the concrete
-    /// 24-byte `Array` struct return — NOT `void*`. A narrowed return type
-    /// makes the SysV sret write past the slot LuaJIT allocates (corruption).
+    /// Explicit out-array callbacks must produce a void C function pointer with
+    /// the Array pointer as a trailing argument, avoiding aggregate return lowering.
     #[test]
-    fn lua_fn_ptr_array_return_is_by_value_struct() {
+    fn lua_fn_ptr_array_out_parameter_is_explicit() {
         let (typedef, _type_name) = LuaGenerator::generate_fn_ptr_typedef(
             "HostApi",
             "find_all_guest_contracts",
-            "unsafeextern\"C\"fn(this:*constHostApi,contract_id:u64,min_version:u32)->Array<GuestContractHandle>",
+            "unsafeextern\"C\"fn(this:*constHostApi,contract_id:u64,min_version:u32,out_handles:*mutArray<GuestContractHandle>)",
         );
         assert!(
-            typedef.contains("typedef Array (*HostApi_find_all_guest_contracts_fn)("),
-            "Array<T> return must map to the by-value Array struct: {}",
-            typedef
-        );
-        assert!(
-            !typedef.contains("void* (*HostApi_find_all_guest_contracts_fn)"),
-            "Array<T> return must not be narrowed to void*: {}",
+            typedef.contains(
+                "typedef void (*HostApi_find_all_guest_contracts_fn)(const HostApi*, uint64_t, uint32_t, Array*);"
+            ),
+            "out-array callbacks must not return an aggregate: {}",
             typedef
         );
     }

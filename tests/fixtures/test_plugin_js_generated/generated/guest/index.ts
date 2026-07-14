@@ -4,4 +4,4 @@
 
 // Main entry point for bundling
 export { TEST_ADDER_INTERFACE, setTestAdderFactory } from './contracts';
-export { POLYPLUG_MANIFEST, polyplug_init } from './init';
+export { polyplug_init } from './init';

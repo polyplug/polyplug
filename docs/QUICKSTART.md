@@ -71,6 +71,8 @@ Use either the string return form (`return = "StringView"`) or the documented
 return table shown above. Documentation line endings normalize to LF; tabs and
 ordinary line breaks are supported.
 
+For the complete schema—including structs, enums, host contracts, expanded returns, and per-language `langs` attributes—see the [`api.toml` reference](API_TOML.md).
+
 ---
 
 ## Step 2 — Write `bundle.toml`

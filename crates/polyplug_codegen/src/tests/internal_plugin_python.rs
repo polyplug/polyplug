@@ -695,7 +695,7 @@ import domain
 assert host_types.Inner is domain.Inner
 assert guest_types.Outer is domain.Outer
 assert guest_bindings.PYTHON_PROVIDERPythonProfilePlugin is guest_contracts.PYTHON_PROVIDERPythonProfilePlugin
-assert guest_bindings.polyplug_abi_version() == 1
+assert guest_bindings.polyplug_abi_version() == 2
 "#,
     )
     .expect("write ordinary split verification script");

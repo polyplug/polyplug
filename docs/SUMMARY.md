@@ -55,6 +55,7 @@
 # Reference
 
 - [Generated Names](generated-names.md)
+- [`api.toml` schema reference](API_TOML.md)
 - [CLI (`polyplugc`)](cli.md)
 - [ABI Types](abi_types.md)
 - [ABI Architecture](ABI_ARCHITECTURE.md)

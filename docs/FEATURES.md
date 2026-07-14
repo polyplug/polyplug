@@ -52,6 +52,14 @@ Key ABI facts (verified in `crates/polyplug_abi/src/host/host_api.rs`):
   plugin's generated registrar both stage every guest registration, validate the
   exact manifest provider and function sets, then atomically publish one registry
   snapshot. A failure publishes no contract, metadata, or dependency declaration.
+- **Live introspection:** `bundle_descriptors` and
+  `registered_contract_descriptors` snapshot the committed registry, including
+  the owner of each live contract. Bundle origins are payload-free metadata:
+  `Internal`, `Path`, `Code`, or `Bytes`; they do not retain supplied source or
+  byte payloads. SDKs expose the ABI's matching `BundleSourceKind`.
+- **Lifecycle boundary:** loaded/unloaded is runtime state. Per-plugin
+  enabled/disabled flags and contract `initialize`/`uninitialize` calls are
+  application policy, not generic Polyplug lifecycle transitions.
 - **ABI freeze policy:** the ABI freezes at v1.0; the project is pre-1.0 today, so
   ABI-visible changes are permitted **only with explicit owner approval**, never
   unilaterally (CLAUDE.md Rule 7; [`TRUST_MODEL.md`](TRUST_MODEL.md) §7).

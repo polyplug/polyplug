@@ -5,6 +5,8 @@ plugins through generated typed callers; a Lua plugin is a
 plain `.lua` file shipped as-is — no build step. For measured overhead, see
 [Performance](../PERFORMANCE.md).
 
+Define the shared contract with the [`api.toml` schema reference](../API_TOML.md), including Lua-specific `langs.lua` attribute bodies.
+
 ## Install
 
 **CLI** — generates host callers and guest glue from an `api.toml` contract:

@@ -23,7 +23,7 @@
 #include <system_error>
 #include <vector>
 
-static_assert(POLYPLUG_ABI_VERSION == 1,
+static_assert(POLYPLUG_ABI_VERSION == 2,
     "polyplug header version mismatch — recompile against updated headers");
 
 struct ResolveHandle;
@@ -132,6 +132,23 @@ private:
 struct InternalPluginCommit {
     uint64_t bundle_id;
     std::vector<GuestContractHandle> handles;
+};
+
+struct LoadedBundleDescriptor {
+    uint64_t id;
+    std::string name;
+    Version version;
+    SupportedLanguage runtime;
+    BundleSourceKind source_kind;
+};
+
+struct RegisteredContractDescriptor {
+    GuestContractHandle handle;
+    uint64_t bundle_id;
+    uint64_t contract_id;
+    std::string plugin_name;
+    std::string contract_name;
+    Version version;
 };
 
 class Runtime {
@@ -479,12 +496,12 @@ public:
     }
 
     /// Find all guest contracts matching contract_id.
-    /// Calls through HostApi.find_all_guest_contracts field.
-    /// Returns vector of GuestContractHandle (8 bytes each: u32 index + u32 generation).
-    /// The ABI Array (items, len, align) is freed via host->free after copying into the vector.
+    /// Calls through HostApi.find_all_guest_contracts with an explicit output buffer.
+    /// The ABI Array is freed via host->free after copying into the vector.
     std::vector<GuestContractHandle> find_all_guest_contracts(uint64_t contract_id, uint32_t min_version, size_t cap = 64) const {
         ensure_host();
-        Array arr = host_->find_all_guest_contracts(host_, contract_id, min_version);
+        Array arr{};
+        host_->find_all_guest_contracts(host_, contract_id, min_version, &arr);
 
         std::vector<GuestContractHandle> handles;
         handles.reserve(arr.len);
@@ -492,8 +509,7 @@ public:
         for (size_t i = 0; i < arr.len && i < cap; ++i) {
             handles.push_back(ptr[i]);
         }
-        // Free the array via HostApi.free (size = len * sizeof(GuestContractHandle)).
-        if (arr.items != nullptr && arr.len > 0) {
+        if (arr.items != nullptr) {
             host_->free(host_, static_cast<uint8_t*>(arr.items),
                         arr.len * sizeof(GuestContractHandle), arr.align);
         }
@@ -526,6 +542,68 @@ public:
         }
     }
 
+    /// Snapshot all loaded bundle descriptors, copying and releasing caller-owned ABI strings.
+    std::vector<LoadedBundleDescriptor> bundle_descriptors() const {
+        ensure_host();
+        if (host_->reserved == nullptr) {
+            return {};
+        }
+        const RuntimeIntrospection* introspection = introspection_table();
+        std::vector<LoadedBundleDescriptor> descriptors;
+        const std::vector<uint64_t> bundle_ids = loaded_bundle_ids();
+        descriptors.reserve(bundle_ids.size());
+        for (const uint64_t bundle_id : bundle_ids) {
+            BundleDescriptorView view{};
+            if (!introspection->get_bundle_descriptor(host_, bundle_id, &view)) {
+                continue;
+            }
+            DescriptorAllocation name{host_, view.name};
+            descriptors.push_back(LoadedBundleDescriptor{
+                view.id,
+                name.copy(),
+                view.version,
+                view.runtime,
+                view.source_kind,
+            });
+        }
+        return descriptors;
+    }
+
+    /// Snapshot every registered guest-contract descriptor and its owning bundle.
+    std::vector<RegisteredContractDescriptor> registered_contract_descriptors() const {
+        ensure_host();
+        if (host_->reserved == nullptr) {
+            return {};
+        }
+        const RuntimeIntrospection* introspection = introspection_table();
+        Array handles{};
+        introspection->list_registered_guest_contracts(host_, &handles);
+        std::vector<RegisteredContractDescriptor> descriptors;
+        auto* items = static_cast<GuestContractHandle*>(handles.items);
+        descriptors.reserve(handles.len);
+        for (size_t index = 0; index < handles.len; ++index) {
+            RegisteredContractDescriptorView view{};
+            if (!introspection->get_registered_contract_descriptor(host_, items[index], &view)) {
+                continue;
+            }
+            DescriptorAllocation name{host_, view.plugin.name};
+            DescriptorAllocation contract_name{host_, view.plugin.contract_name};
+            descriptors.push_back(RegisteredContractDescriptor{
+                view.handle,
+                view.bundle_id,
+                view.contract_id,
+                name.copy(),
+                contract_name.copy(),
+                view.plugin.version,
+            });
+        }
+        if (handles.items != nullptr) {
+            host_->free(host_, static_cast<uint8_t*>(handles.items),
+                        handles.len * sizeof(GuestContractHandle), handles.align);
+        }
+        return descriptors;
+    }
+
     /// Get the HostApi pointer.
     const HostApi* host() const noexcept {
         return host_;
@@ -544,6 +622,26 @@ public:
     }
 
 private:
+    struct DescriptorAllocation {
+        const HostApi* host;
+        Array array;
+
+        ~DescriptorAllocation() {
+            if (array.items != nullptr) {
+                host->free(
+                    host, static_cast<uint8_t*>(array.items), array.len, array.align);
+            }
+        }
+
+        std::string copy() const {
+            if (array.items == nullptr || array.len == 0) {
+                return {};
+            }
+            return std::string(
+                reinterpret_cast<const char*>(array.items), array.len);
+        }
+    };
+
     struct ResidentEntry {
         uint64_t bundle_id;
         std::unique_ptr<detail::InternalPluginResident> resident;
@@ -551,6 +649,26 @@ private:
 
     Runtime(const HostApi* h, std::unique_ptr<detail::OnReloadFn> cb) noexcept
         : host_(h), on_reload_cb_(std::move(cb)) {}
+
+    const RuntimeIntrospection* introspection_table() const {
+        if (host_->reserved == nullptr) {
+            throw std::runtime_error("runtime does not expose metadata introspection");
+        }
+        return static_cast<const RuntimeIntrospection*>(host_->reserved);
+    }
+
+    std::vector<uint64_t> loaded_bundle_ids() const {
+        Array bundles{};
+        host_->list_bundles(host_, &bundles);
+        std::vector<uint64_t> ids;
+        auto* items = static_cast<uint64_t*>(bundles.items);
+        if (items != nullptr) {
+            ids.assign(items, items + bundles.len);
+            host_->free(host_, static_cast<uint8_t*>(bundles.items),
+                        bundles.len * sizeof(uint64_t), bundles.align);
+        }
+        return ids;
+    }
 
     void ensure_host() const {
         if (host_ == nullptr) {

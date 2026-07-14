@@ -336,7 +336,6 @@ class BunBackend implements FfiBackend {
             },
         };
     }
-
     prepareFunction(pointer: PolyPtr, definition: FfiSymbolDef): FfiFunction {
         const params: readonly unknown[] = definition.parameters;
         const sig: { args: BunType[]; returns: BunType } = toBunSignature(definition);

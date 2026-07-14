@@ -13,23 +13,21 @@
 //! pre-reload slot), and records whether `reload` was invoked via an
 //! `Arc<AtomicBool>` flag — letting the test assert which bundles cascaded.
 
-use core::sync::atomic::AtomicBool;
-use core::sync::atomic::Ordering;
-use std::path::PathBuf;
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use core::ffi::c_void;
 use core::ptr;
 use polyplug::error::LoaderError;
-use polyplug::loader::BundleLoader;
-use polyplug::loader::BundleSource;
+use polyplug::loader::{BundleLoader, BundleOrigin, BundleSource};
 use polyplug::runtime::Runtime;
 
 use polyplug_abi::dispatch::VmLoaderData;
 use polyplug_abi::{
     AbiError, Compatibility, DispatchMechanisms, DispatchType, GuestContractInstance,
     GuestContractInterface, HostApi, NativeDispatch, PluginDescriptor, RuntimeConfig, StringView,
-    Version,
+    SupportedLanguage, Version,
 };
 use polyplug_common::ManifestData;
 use polyplug_utils::bundle_id;
@@ -154,6 +152,40 @@ impl BundleLoader for CascadeLoader {
     }
 }
 
+struct FailingReloadLoader {
+    reload_calls: Arc<AtomicUsize>,
+}
+
+impl BundleLoader for FailingReloadLoader {
+    fn loader_name(&self) -> &'static str {
+        "javascript"
+    }
+
+    fn supports_hot_reload(&self) -> bool {
+        true
+    }
+
+    fn load(
+        &self,
+        manifest: &ManifestData,
+        _source: &BundleSource,
+        _runtime: &Runtime,
+    ) -> Result<(), LoaderError> {
+        Err(LoaderError::InitFailed {
+            bundle: manifest.name.clone(),
+            error: "test loader must only be used for reload".to_owned(),
+        })
+    }
+
+    fn reload(&self, manifest: &ManifestData, _runtime: &Runtime) -> Result<(), LoaderError> {
+        self.reload_calls.fetch_add(1, Ordering::SeqCst);
+        Err(LoaderError::InitFailed {
+            bundle: manifest.name.clone(),
+            error: "intentional reload failure".to_owned(),
+        })
+    }
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn hot_reload_config() -> RuntimeConfig {
@@ -184,18 +216,58 @@ fn write_bundle(
     let bundle_dir: PathBuf = temp.path().join(bundle_name);
     fs::create_dir_all(&bundle_dir).expect("create bundle dir");
     fs::write(bundle_dir.join("dummy.so"), b"").expect("write dummy so");
+    write_manifest(ManifestFixture {
+        bundle_dir: &bundle_dir,
+        bundle_name,
+        loader_name,
+        provided_contract,
+        version: "1.0",
+        needs_reinit,
+        dependency_contract: dep_contract,
+        bundle_dependencies: &[],
+    });
+    bundle_dir
+}
 
+struct ManifestFixture<'a> {
+    bundle_dir: &'a Path,
+    bundle_name: &'a str,
+    loader_name: &'a str,
+    provided_contract: &'a str,
+    version: &'a str,
+    needs_reinit: bool,
+    dependency_contract: Option<&'a str>,
+    bundle_dependencies: &'a [&'a str],
+}
+
+fn write_manifest(fixture: ManifestFixture<'_>) {
+    let ManifestFixture {
+        bundle_dir,
+        bundle_name,
+        loader_name,
+        provided_contract,
+        version,
+        needs_reinit,
+        dependency_contract,
+        bundle_dependencies,
+    } = fixture;
     let bundle_id_val: u64 = bundle_id(bundle_name);
+    let bundle_dependencies: String = bundle_dependencies
+        .iter()
+        .map(|dependency| format!("\"{dependency}\""))
+        .collect::<Vec<String>>()
+        .join(", ");
     let mut manifest: String = format!(
         "id = {bundle_id_val}\n\
          name = \"{bundle_name}\"\n\
          loader = \"{loader_name}\"\n\
          file = \"dummy.so\"\n\
-         version = \"1.0\"\n\
+         version = \"{version}\"\n\
          provides = [\"{provided_contract}\"]\n\
-         needs_reinit_on_dep_reload = {needs_reinit}\n"
+         needs_reinit_on_dep_reload = {needs_reinit}\n\
+         bundle_dependencies = [{bundle_dependencies}]\n"
     );
-    if let Some(contract_name) = dep_contract {
+    if let Some(contract_name) = dependency_contract {
         let contract_id: u64 = guest_contract_id(contract_name, 1_u32);
         manifest.push_str(&format!(
             "\n[[dependency]]\n\
@@ -206,7 +278,6 @@ fn write_bundle(
         ));
     }
     fs::write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
-    bundle_dir
 }
 
 // ─── Test 1: opt-out bundle does not cascade ────────────────────────────────────
@@ -362,5 +433,190 @@ fn cascade_reload_cycle_detection() {
     assert!(
         b_reload_called.load(Ordering::SeqCst),
         "B must cascade-reload from A's reload"
+    );
+}
+
+#[test]
+fn successful_reload_publishes_replacement_metadata_before_future_cascades() {
+    let temp: TempDir = TempDir::new().expect("temp dir");
+    let provider_contract: u64 = guest_contract_id("provider.contract", 1_u32);
+    let dependent_contract: u64 = guest_contract_id("dependent.contract", 1_u32);
+    let dependent_reloaded: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+
+    let runtime: Arc<Runtime> = Runtime::builder()
+        .config(hot_reload_config())
+        .loader(CascadeLoader {
+            loader_name: "rust",
+            contract_id: provider_contract,
+            contract_name: "provider.contract",
+            reload_called: Arc::new(AtomicBool::new(false)),
+        })
+        .loader(CascadeLoader {
+            loader_name: "native",
+            contract_id: dependent_contract,
+            contract_name: "dependent.contract",
+            reload_called: Arc::clone(&dependent_reloaded),
+        })
+        .loader(CascadeLoader {
+            loader_name: "javascript",
+            contract_id: dependent_contract,
+            contract_name: "dependent.contract",
+            reload_called: Arc::clone(&dependent_reloaded),
+        })
+        .build()
+        .expect("runtime build should succeed");
+
+    let provider_path: PathBuf =
+        write_bundle(&temp, "provider", "rust", "provider.contract", false, None);
+    let dependent_path: PathBuf = write_bundle(
+        &temp,
+        "dependent",
+        "native",
+        "dependent.contract",
+        false,
+        Some("stale.contract"),
+    );
+    runtime
+        .load_bundle(provider_path.as_path())
+        .expect("load provider");
+    runtime
+        .load_bundle(dependent_path.as_path())
+        .expect("load dependent");
+
+    write_manifest(ManifestFixture {
+        bundle_dir: &dependent_path,
+        bundle_name: "dependent",
+        loader_name: "javascript",
+        provided_contract: "dependent.contract",
+        version: "2.4.6",
+        needs_reinit: true,
+        dependency_contract: Some("provider.contract"),
+        bundle_dependencies: &["replacement-bundle@2.1"],
+    });
+    runtime
+        .reload_bundle(dependent_path.as_path())
+        .expect("reload dependent");
+
+    let dependent_id: BundleId = BundleId::new("dependent");
+    let descriptor = runtime
+        .bundle_descriptors()
+        .into_iter()
+        .find(|descriptor| descriptor.id == dependent_id)
+        .expect("replacement descriptor must be visible");
+    assert_eq!(
+        descriptor.version,
+        Version {
+            major: 2,
+            minor: 4,
+            patch: 6,
+        }
+    );
+    assert_eq!(descriptor.runtime, SupportedLanguage::JavaScript);
+    assert!(matches!(descriptor.origin, BundleOrigin::Path(_)));
+    assert_eq!(descriptor.dependencies.len(), 1);
+    assert_eq!(descriptor.dependencies[0].name, "replacement-bundle");
+    assert_eq!(
+        descriptor.dependencies[0].min_version,
+        Some(Version {
+            major: 2,
+            minor: 1,
+            patch: 0,
+        })
+    );
+
+    dependent_reloaded.store(false, Ordering::SeqCst);
+    runtime
+        .reload_bundle(provider_path.as_path())
+        .expect("reload provider");
+    assert!(
+        dependent_reloaded.load(Ordering::SeqCst),
+        "the replacement dependency and manifest path must drive the next cascade"
+    );
+}
+
+#[test]
+fn failed_reload_keeps_committed_metadata_and_cascade_membership() {
+    let temp: TempDir = TempDir::new().expect("temp dir");
+    let provider_contract: u64 = guest_contract_id("provider.contract", 1_u32);
+    let dependent_contract: u64 = guest_contract_id("dependent.contract", 1_u32);
+    let failed_reload_calls: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+
+    let runtime: Arc<Runtime> = Runtime::builder()
+        .config(hot_reload_config())
+        .loader(CascadeLoader {
+            loader_name: "rust",
+            contract_id: provider_contract,
+            contract_name: "provider.contract",
+            reload_called: Arc::new(AtomicBool::new(false)),
+        })
+        .loader(CascadeLoader {
+            loader_name: "native",
+            contract_id: dependent_contract,
+            contract_name: "dependent.contract",
+            reload_called: Arc::new(AtomicBool::new(false)),
+        })
+        .loader(FailingReloadLoader {
+            reload_calls: Arc::clone(&failed_reload_calls),
+        })
+        .build()
+        .expect("runtime build should succeed");
+
+    let provider_path: PathBuf =
+        write_bundle(&temp, "provider", "rust", "provider.contract", false, None);
+    let dependent_path: PathBuf = write_bundle(
+        &temp,
+        "dependent",
+        "native",
+        "dependent.contract",
+        true,
+        Some("provider.contract"),
+    );
+    runtime
+        .load_bundle(provider_path.as_path())
+        .expect("load provider");
+    runtime
+        .load_bundle(dependent_path.as_path())
+        .expect("load dependent");
+
+    write_manifest(ManifestFixture {
+        bundle_dir: &dependent_path,
+        bundle_name: "dependent",
+        loader_name: "javascript",
+        provided_contract: "dependent.contract",
+        version: "9.9.9",
+        needs_reinit: false,
+        dependency_contract: Some("replacement.contract"),
+        bundle_dependencies: &["replacement-bundle@9.0"],
+    });
+    assert!(
+        runtime.reload_bundle(dependent_path.as_path()).is_err(),
+        "replacement init must fail"
+    );
+    assert_eq!(failed_reload_calls.load(Ordering::SeqCst), 1);
+
+    let dependent_id: BundleId = BundleId::new("dependent");
+    let descriptor = runtime
+        .bundle_descriptors()
+        .into_iter()
+        .find(|descriptor| descriptor.id == dependent_id)
+        .expect("prior descriptor remains visible");
+    assert_eq!(
+        descriptor.version,
+        Version {
+            major: 1,
+            minor: 0,
+            patch: 0,
+        }
+    );
+    assert_eq!(descriptor.runtime, SupportedLanguage::Rust);
+    assert!(descriptor.dependencies.is_empty());
+
+    runtime
+        .reload_bundle(provider_path.as_path())
+        .expect("reload provider");
+    assert_eq!(
+        failed_reload_calls.load(Ordering::SeqCst),
+        2,
+        "the prior dependency and manifest path must still select the dependent"
     );
 }

@@ -173,8 +173,8 @@ if (typeof abi.GUEST_CONTRACT_INTERFACE_SIZE !== "number") {
 }
 
 // guest exports POLYPLUG_ABI_VERSION + AbiErrorCode (Rule 17 canonical enum).
-if (guest.POLYPLUG_ABI_VERSION !== 1) {
-  throw new Error("@polyplug/guest POLYPLUG_ABI_VERSION !== 1, got " + guest.POLYPLUG_ABI_VERSION);
+if (guest.POLYPLUG_ABI_VERSION !== 2) {
+  throw new Error("@polyplug/guest POLYPLUG_ABI_VERSION !== 2, got " + guest.POLYPLUG_ABI_VERSION);
 }
 if (!guest.AbiErrorCode || guest.AbiErrorCode.Ok !== 0) {
   throw new Error("@polyplug/guest AbiErrorCode.Ok !== 0");

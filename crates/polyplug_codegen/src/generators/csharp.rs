@@ -10,14 +10,18 @@ use super::GeneratedFiles;
 use super::collect_peer_contracts;
 use super::peer_min_version;
 
+use super::attributes::{inner_attributes, render_attributes};
 use super::docs::{write_csharp_xml_docs, xml_escape};
+use crate::Lang;
 use crate::OutputLayout;
 use crate::OutputPartition;
 use crate::PolyplugcError;
 use crate::ResolvedBundleFile;
 use crate::Side;
 use crate::ir::AbiBuiltin;
+use crate::ir::CustomizableNode;
 use crate::ir::EnumDef;
+use crate::ir::LanguageRules;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
@@ -178,8 +182,9 @@ fn cs_types_write_err(source: io::Error) -> PolyplugcError {
 /// blittable field bags, so they share one emitter.
 fn render_cs_pod_struct(
     name: String,
-    fields: Vec<(String, String, Option<String>)>,
+    fields: Vec<(String, String, Option<String>, Vec<String>)>,
     docs: Option<&str>,
+    attributes: Vec<String>,
 ) -> Result<String, PolyplugcError> {
     let cs_struct: CSharpType = CSharpType {
         kind: CSharpTypeKind::Struct,
@@ -195,7 +200,7 @@ fn render_cs_pod_struct(
         interfaces: Vec::new(),
         fields: fields
             .into_iter()
-            .map(|(field_type, field_name, docs)| CSharpField {
+            .map(|(field_type, field_name, docs, attributes)| CSharpField {
                 name: field_name,
                 field_type,
                 visibility: CSharpVisibility::Public,
@@ -203,16 +208,20 @@ fn render_cs_pod_struct(
                 is_const: false,
                 is_readonly: false,
                 initializer: None,
-                attributes: Vec::new(),
+                attributes,
                 docs: docs.map(|docs| lines_for_csharp_docs(&docs)),
             })
             .collect(),
         properties: Vec::new(),
         methods: Vec::new(),
-        attributes: vec![
-            "System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)"
-                .to_owned(),
-        ],
+        attributes: {
+            let mut rendered = vec![
+                "System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)"
+                    .to_owned(),
+            ];
+            rendered.extend(attributes);
+            rendered
+        },
         docs: docs.map(lines_for_csharp_docs),
     };
     let mut indent_level: i32 = 0;
@@ -233,10 +242,69 @@ fn lines_for_csharp_docs(docs: &str) -> Vec<String> {
         .map(str::to_owned)
         .collect()
 }
+fn cs_render_attributes(node: CustomizableNode, rules: &LanguageRules) -> String {
+    let attributes = render_attributes(Lang::CSharp, node, rules);
+    if attributes.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", attributes.join("\n"))
+    }
+}
+
+fn cs_parameter_type(param: &ResolvedParam, param_type: String) -> String {
+    let attributes = render_attributes(Lang::CSharp, CustomizableNode::Param, &param.langs);
+    if attributes.is_empty() {
+        param_type
+    } else {
+        format!("{}\n        {param_type}", attributes.join("\n        "))
+    }
+}
+
+fn cs_function_attribute_prefix(func: &ResolvedFunction) -> String {
+    let mut attributes = cs_render_attributes(CustomizableNode::Function, &func.langs);
+    attributes.push_str(&cs_render_attributes(
+        CustomizableNode::Return,
+        &func.return_langs,
+    ));
+    attributes
+}
+
+fn cs_assembly_attributes(ir: &ValidatedIr) -> String {
+    cs_render_attributes(CustomizableNode::Api, &ir.langs)
+}
+/// The bindings `Types.cs` unit owns assembly attributes. It is present in every
+/// unified and split C# projection, while domain and contract partitions may be
+/// compiled independently.
+fn cs_with_assembly_attributes(ir: &ValidatedIr, mut content: String) -> String {
+    let attributes = cs_assembly_attributes(ir);
+    if !attributes.is_empty() {
+        let mut usings_end = CS_HEADER.len();
+        for line in content[CS_HEADER.len()..].split_inclusive('\n') {
+            if line.trim().is_empty() || line.trim_start().starts_with("using ") {
+                usings_end += line.len();
+            } else {
+                break;
+            }
+        }
+        content.insert_str(usings_end, &attributes);
+    }
+    content
+}
+fn wrap_cs_namespace_with_assembly_attributes(
+    ir: &ValidatedIr,
+    content: &str,
+    namespace: &str,
+) -> String {
+    format!(
+        "{}{}",
+        cs_assembly_attributes(ir),
+        wrap_cs_namespace(content, namespace)
+    )
+}
 
 /// Emit a C# struct definition for a user-defined IR type.
 fn generate_cs_user_type(ty: &ResolvedType) -> Result<String, PolyplugcError> {
-    let fields: Vec<(String, String, Option<String>)> = ty
+    let fields: Vec<(String, String, Option<String>, Vec<String>)> = ty
         .fields
         .iter()
         .map(|field| {
@@ -244,10 +312,16 @@ fn generate_cs_user_type(ty: &ResolvedType) -> Result<String, PolyplugcError> {
                 cs_type_name(&field.ty),
                 field.name.clone(),
                 field.docs.clone(),
+                inner_attributes(Lang::CSharp, &field.langs).to_vec(),
             )
         })
         .collect();
-    render_cs_pod_struct(ty.name.clone(), fields, ty.docs.as_deref())
+    render_cs_pod_struct(
+        ty.name.clone(),
+        fields,
+        ty.docs.as_deref(),
+        inner_attributes(Lang::CSharp, &ty.langs).to_vec(),
+    )
 }
 
 /// Emit a C# enum definition for a validated IR enum.
@@ -267,11 +341,11 @@ fn generate_cs_enum(e: &EnumDef) -> Result<String, PolyplugcError> {
             })
             .collect(),
         is_flags: e.bitflag,
-        attributes: Vec::new(),
+        attributes: inner_attributes(Lang::CSharp, &e.langs).to_vec(),
         docs: e.docs.as_deref().map(lines_for_csharp_docs),
     };
     let mut indent_level: i32 = 0;
-    cs_backend()
+    let mut rendered = cs_backend()
         .render_enum(
             &cs_enum,
             None::<&str>,
@@ -279,7 +353,22 @@ fn generate_cs_enum(e: &EnumDef) -> Result<String, PolyplugcError> {
             None,
             &mut indent_level,
         )
-        .map_err(cs_types_write_err)
+        .map_err(cs_types_write_err)?;
+    for variant in &e.variants {
+        let attributes = cs_render_attributes(CustomizableNode::EnumVariant, &variant.langs);
+        if !attributes.is_empty() {
+            let attributes = attributes
+                .lines()
+                .map(|attribute| format!("    {attribute}\n"))
+                .collect::<String>();
+            rendered = rendered.replacen(
+                &format!("    {} =", variant.name),
+                &format!("{attributes}    {} =", variant.name),
+                1,
+            );
+        }
+    }
+    Ok(rendered)
 }
 
 /// Returns true if the function needs an arg-pack struct (2+ parameters).
@@ -424,7 +513,7 @@ fn emit_cs_arg_pack(
     func: &ResolvedFunction,
 ) -> Result<String, PolyplugcError> {
     let name: String = format!("{}{}Args", contract_struct, pascal_case(&func.name));
-    let fields: Vec<(String, String, Option<String>)> = func
+    let fields: Vec<(String, String, Option<String>, Vec<String>)> = func
         .params
         .iter()
         .map(|param| {
@@ -432,10 +521,11 @@ fn emit_cs_arg_pack(
                 cs_type_name(&param.ty),
                 pascal_case(&param.name),
                 param.docs.clone(),
+                Vec::new(),
             )
         })
         .collect();
-    render_cs_pod_struct(name, fields, func.docs.as_deref())
+    render_cs_pod_struct(name, fields, func.docs.as_deref(), Vec::new())
 }
 
 /// Convert a name to PascalCase (e.g. "add_primitive" → "AddPrimitive", "test.add" → "TestAdd").
@@ -651,6 +741,10 @@ fn generate_cs_guest_contracts_partition_file(
     out.push('\n');
     out.push_str(&format!("namespace {namespace};\n\n"));
     for contract in &ir.contracts {
+        out.push_str(&cs_render_attributes(
+            CustomizableNode::GuestContract,
+            &contract.langs,
+        ));
         write_csharp_xml_docs(&mut out, "", contract.docs.as_deref(), &[], None);
         let iface_name = contract_name_to_cs_interface(&contract.name);
         out.push_str(&format!(
@@ -718,6 +812,10 @@ fn generate_cs_guest_contracts(ir: &ValidatedIr) -> Result<String, PolyplugcErro
     out.push('\n');
 
     for contract in &ir.contracts {
+        out.push_str(&cs_render_attributes(
+            CustomizableNode::GuestContract,
+            &contract.langs,
+        ));
         write_csharp_xml_docs(&mut out, "", contract.docs.as_deref(), &[], None);
         let iface_name: String = contract_name_to_cs_interface(&contract.name);
         out.push_str(&format!(
@@ -745,7 +843,7 @@ fn cs_render_interface_method(func: &ResolvedFunction) -> Result<String, Polyplu
         let param: &ResolvedParam = &func.params[0];
         vec![CSharpParameter {
             name: param.name.clone(),
-            param_type: format!("ref {}", cs_type_name(&param.ty)),
+            param_type: cs_parameter_type(param, format!("ref {}", cs_type_name(&param.ty))),
             default_value: None,
         }]
     } else {
@@ -753,7 +851,7 @@ fn cs_render_interface_method(func: &ResolvedFunction) -> Result<String, Polyplu
             .iter()
             .map(|p: &ResolvedParam| CSharpParameter {
                 name: p.name.clone(),
-                param_type: cs_type_name(&p.ty),
+                param_type: cs_parameter_type(p, cs_type_name(&p.ty)),
                 default_value: None,
             })
             .collect::<Vec<CSharpParameter>>()
@@ -772,7 +870,7 @@ fn cs_render_interface_method(func: &ResolvedFunction) -> Result<String, Polyplu
         is_async: false,
         is_unsafe: false,
         body: None,
-        attributes: Vec::new(),
+        attributes: inner_attributes(Lang::CSharp, &func.langs).to_vec(),
         docs: None,
     };
     let backend: CSharpBackend = CSharpBackend::default();
@@ -796,6 +894,11 @@ fn cs_render_interface_method(func: &ResolvedFunction) -> Result<String, Polyplu
         &params,
         func.return_docs.as_deref(),
     );
+    for attribute in render_attributes(Lang::CSharp, CustomizableNode::Return, &func.return_langs) {
+        out.push_str("    ");
+        out.push_str(&attribute);
+        out.push('\n');
+    }
     out.push_str(&rendered);
     Ok(out)
 }
@@ -904,6 +1007,7 @@ fn render_cs_host_method(
     is_static: bool,
     return_type: String,
     parameters: Vec<CSharpParameter>,
+    attributes: Vec<String>,
     docs: Vec<String>,
     body: String,
 ) -> Result<String, PolyplugcError> {
@@ -921,7 +1025,7 @@ fn render_cs_host_method(
         is_async: false,
         is_unsafe: false,
         body: Some(vec![body]),
-        attributes: Vec::new(),
+        attributes,
         docs: if docs.is_empty() { None } else { Some(docs) },
     };
     let options: CSharpMethodRenderOptions = CSharpMethodRenderOptions {
@@ -1903,6 +2007,10 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         }
         out.push_str("/// Instance-based RAII wrapper with automatic cleanup via IDisposable.\n");
         out.push_str("/// </summary>\n");
+        out.push_str(&cs_render_attributes(
+            CustomizableNode::GuestContract,
+            &contract.langs,
+        ));
         out.push_str(&format!(
             "public sealed unsafe class {caller_name} : IDisposable {{\n"
         ));
@@ -2212,10 +2320,11 @@ fn generate_host_fn_caller(
         let p: &ResolvedParam = &func.params[0];
         let cs_ty: String = cs_type_name(&p.ty);
         match &p.ty {
-            ResolvedTypeRef::UserDefined(_) => {
-                format!("ref {cs_ty} {name}", name = p.name, cs_ty = cs_ty)
-            }
-            _ => format!("{cs_ty} {name}", name = p.name, cs_ty = cs_ty),
+            ResolvedTypeRef::UserDefined(_) => cs_parameter_type(
+                p,
+                format!("ref {cs_ty} {name}", name = p.name, cs_ty = cs_ty),
+            ),
+            _ => cs_parameter_type(p, format!("{cs_ty} {name}", name = p.name, cs_ty = cs_ty)),
         }
     };
 
@@ -2238,6 +2347,11 @@ fn generate_host_fn_caller(
             "    /// <summary>Returns a value borrowing this caller's arena; it stays valid\n",
         );
         out.push_str("    /// until the next arena-backed call on this caller.</summary>\n");
+    }
+    for attribute in cs_function_attribute_prefix(func).lines() {
+        out.push_str("    ");
+        out.push_str(attribute);
+        out.push('\n');
     }
     out.push_str(&format!(
         "    public {ret} {method_name}({params_sig}) {{\n"
@@ -2526,6 +2640,10 @@ fn generate_cs_guest_host_contract_caller(
         out.push_str(&format!("/// {}\n", xml_escape(line)));
     }
     out.push_str("/// </summary>\n");
+    out.push_str(&cs_render_attributes(
+        CustomizableNode::HostContract,
+        &contract.langs,
+    ));
     out.push_str(&format!("public sealed class {} {{\n", class_name));
     out.push_str("    private readonly IntPtr _instance;\n");
     out.push_str("    private readonly IntPtr _interface;\n");
@@ -2583,6 +2701,7 @@ fn generate_cs_guest_host_contract_caller(
                 default_value: Some("0".to_owned()),
             },
         ],
+        Vec::new(),
         vec![
             "<summary>Factory method - creates caller from HostApi or null if not found.</summary>"
                 .to_owned(),
@@ -2628,7 +2747,7 @@ fn generate_cs_guest_host_contract_method(
         .iter()
         .map(|p: &ResolvedParam| CSharpParameter {
             name: p.name.clone(),
-            param_type: cs_guest_caller_param_type_name(&p.ty),
+            param_type: cs_parameter_type(p, cs_guest_caller_param_type_name(&p.ty)),
             default_value: None,
         })
         .collect::<Vec<CSharpParameter>>();
@@ -2759,11 +2878,17 @@ fn generate_cs_guest_host_contract_method(
     }
 
     out.push_str("        }");
+    for attribute in render_attributes(Lang::CSharp, CustomizableNode::Return, &func.return_langs) {
+        dst.push_str("    ");
+        dst.push_str(&attribute);
+        dst.push('\n');
+    }
     dst.push_str(&render_cs_host_method(
         method_name,
         false,
         return_type,
         parameters,
+        inner_attributes(Lang::CSharp, &func.langs).to_vec(),
         docs,
         body,
     )?);
@@ -3210,8 +3335,7 @@ fn generate_cs_host_interface_method(out: &mut String, func: &ResolvedFunction) 
         func.params
             .iter()
             .map(|p: &ResolvedParam| {
-                let cs_ty: String = cs_host_param_type_name(&p.ty);
-                format!("{} {}", cs_ty, p.name)
+                cs_parameter_type(p, format!("{} {}", cs_host_param_type_name(&p.ty), p.name))
             })
             .collect::<Vec<_>>()
             .join(", ")
@@ -3229,6 +3353,11 @@ fn generate_cs_host_interface_method(out: &mut String, func: &ResolvedFunction) 
         &params,
         func.return_docs.as_deref(),
     );
+    for attribute in cs_function_attribute_prefix(func).lines() {
+        out.push_str("    ");
+        out.push_str(attribute);
+        out.push('\n');
+    }
     out.push_str(&format!(
         "    {} {}({});\n",
         return_type, method_name, params_str
@@ -3243,6 +3372,10 @@ fn generate_cs_host_contract_interface(out: &mut String, contract: &ResolvedHost
         contract.name, contract.contract_id
     ));
     write_csharp_xml_docs(out, "", contract.docs.as_deref(), &[], None);
+    out.push_str(&cs_render_attributes(
+        CustomizableNode::HostContract,
+        &contract.langs,
+    ));
     out.push_str(&format!("public interface {} {{\n", iface_name));
 
     for func in &contract.functions {
@@ -4453,7 +4586,8 @@ fn apply_cs_split_layout(
         Side::Host => {
             for file in &mut files.files {
                 if file.path == Path::new("host/Types.cs") {
-                    file.content = generate_cs_host_binding_types_file(ir)?;
+                    file.content =
+                        cs_with_assembly_attributes(ir, generate_cs_host_binding_types_file(ir)?);
                 }
                 if file.path == Path::new("host/Callers.cs") {
                     rewrite_cs_split_host_caller_addresses(&mut file.content, ir);
@@ -4482,7 +4616,8 @@ fn apply_cs_split_layout(
                 .retain(|file| file.path != Path::new("guest/Contracts.cs"));
             for file in &mut files.files {
                 if file.path == Path::new("guest/Types.cs") {
-                    file.content = generate_cs_guest_binding_types_file(ir)?;
+                    file.content =
+                        cs_with_assembly_attributes(ir, generate_cs_guest_binding_types_file(ir)?);
                 }
                 if file
                     .path
@@ -4551,8 +4686,11 @@ fn apply_cs_internal_split_layout(
         .retain(|file| file.path != Path::new("guest/Contracts.cs"));
     for file in &mut files.files {
         if file.path == Path::new("guest/Types.cs") {
-            file.content =
-                wrap_cs_namespace(&generate_cs_guest_binding_types_file(ir)?, guest_namespace);
+            file.content = wrap_cs_namespace_with_assembly_attributes(
+                ir,
+                &generate_cs_guest_binding_types_file(ir)?,
+                guest_namespace,
+            );
         } else if file.path == Path::new("host/Types.cs") {
             file.content =
                 rewrite_cs_file_namespace(generate_cs_host_binding_types_file(ir)?, host_namespace);
@@ -4647,14 +4785,13 @@ impl CSharpGenerator {
             "internal static class InternalPluginFactory",
             1,
         );
-        resident = resident.replacen(
-            "public static InternalPluginBundle CreateInternalPluginBundle(",
-            "internal static InternalPluginBundle Create(",
-            1,
-        );
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/Types.cs"),
-            content: wrap_cs_namespace(&generate_cs_types_file(ir)?, &guest_namespace),
+            content: wrap_cs_namespace_with_assembly_attributes(
+                ir,
+                &generate_cs_types_file(ir)?,
+                &guest_namespace,
+            ),
             force_regenerate: false,
             partition: OutputPartition::Bindings,
             references: Vec::new(),
@@ -4763,7 +4900,7 @@ impl CodeGenerator for CSharpGenerator {
     ) -> Result<(), PolyplugcError> {
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/Types.cs"),
-            content: generate_cs_host_types_file(ir)?,
+            content: cs_with_assembly_attributes(ir, generate_cs_host_types_file(ir)?),
             force_regenerate: false,
             partition: OutputPartition::Bindings,
             references: Vec::new(),
@@ -4813,7 +4950,7 @@ impl CodeGenerator for CSharpGenerator {
     ) -> Result<(), PolyplugcError> {
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/Types.cs"),
-            content: generate_cs_types_file(ir)?,
+            content: cs_with_assembly_attributes(ir, generate_cs_types_file(ir)?),
             force_regenerate: false,
             partition: OutputPartition::Bindings,
             references: Vec::new(),
@@ -4900,6 +5037,7 @@ mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
     use crate::ir::EnumVariant;
+    use crate::ir::LanguageRules;
     use crate::ir::ReprType;
     use crate::ir::ResolvedDependency;
     use crate::ir::ResolvedPlugin;
@@ -4917,14 +5055,17 @@ mod tests {
                     name: "Unknown".to_owned(),
                     value: "0".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 EnumVariant {
                     name: "Rgba8".to_owned(),
                     value: "1".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let out: String = generate_cs_enum(&e).expect("render enum");
         assert!(
@@ -4949,14 +5090,17 @@ mod tests {
                     name: "None".to_owned(),
                     value: "0".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 EnumVariant {
                     name: "Compressed".to_owned(),
                     value: "1".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let out: String = generate_cs_enum(&e).expect("render enum");
         assert!(
@@ -4982,11 +5126,13 @@ mod tests {
                 },
                 functions: vec![],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             host_contracts: vec![],
             types: vec![],
             enums: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String = generate_cs_guest_init(&ir);
         assert!(
@@ -5016,11 +5162,13 @@ mod tests {
                 },
                 functions: vec![],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             host_contracts: vec![],
             types: vec![],
             enums: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String =
             generate_cs_guest_interfaces(&ir).expect("Interfaces.cs generation must succeed");
@@ -5046,6 +5194,7 @@ mod tests {
                 },
                 functions: vec![],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             host_contracts: vec![],
             types: vec![],
@@ -5075,6 +5224,7 @@ mod tests {
                 dependencies: vec![],
                 needs_reinit_on_dep_reload: false,
             }),
+            langs: LanguageRules::default(),
         };
         let out: String =
             generate_cs_guest_interfaces(&ir).expect("Interfaces.cs generation must succeed");
@@ -5165,10 +5315,13 @@ mod tests {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 },
                 ResolvedFunction {
                     name: "logf".to_owned(),
@@ -5178,19 +5331,24 @@ mod tests {
                             name: "level".to_owned(),
                             ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                             docs: None,
+                            langs: LanguageRules::default(),
                         },
                         ResolvedParam {
                             name: "format".to_owned(),
                             ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                             docs: None,
+                            langs: LanguageRules::default(),
                         },
                     ],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_cs_host_contract_interface(&mut out, &contract);
@@ -5230,14 +5388,19 @@ mod tests {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String = generate_cs_host_contracts_file(&ir);
         assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
@@ -5278,10 +5441,14 @@ mod tests {
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5307,6 +5474,7 @@ mod tests {
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5401,12 +5569,16 @@ mod tests {
                     name: "message".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 returns: None,
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_cs_guest_host_contract_caller(&mut out, &contract)
@@ -5499,10 +5671,14 @@ mod tests {
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String =
             generate_cs_guest_host_contracts_file(&ir).expect("render host contracts");
@@ -5545,12 +5721,16 @@ mod tests {
                     name: "message".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_cs_guest_host_contract_caller(&mut out, &contract)
@@ -5610,10 +5790,14 @@ mod tests {
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5639,6 +5823,7 @@ mod tests {
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5678,10 +5863,14 @@ mod tests {
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5707,6 +5896,7 @@ mod tests {
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5745,14 +5935,19 @@ mod tests {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String = generate_cs_host_interface_factories_file(&ir);
         assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
@@ -5800,12 +5995,16 @@ mod tests {
                     name: "message".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 returns: None,
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_cs_host_interface_factory(&mut out, &contract, &[]);
@@ -5887,12 +6086,16 @@ mod tests {
                         name: "input".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             host_contracts: vec![],
             bundle: Some(ResolvedBundle {
@@ -5913,6 +6116,7 @@ mod tests {
                 }],
                 needs_reinit_on_dep_reload: false,
             }),
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5980,9 +6184,11 @@ mod tests {
                 },
                 functions: vec![],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -6012,6 +6218,7 @@ mod tests {
                 },
                 functions: vec![],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             host_contracts: vec![],
             bundle: Some(ResolvedBundle {
@@ -6028,6 +6235,7 @@ mod tests {
                 dependencies: vec![],
                 needs_reinit_on_dep_reload: false,
             }),
+            langs: LanguageRules::default(),
         };
         let mut files2: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -6057,8 +6265,10 @@ mod tests {
                 name: "Info".to_owned(),
                 value: "1".to_owned(),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         }];
         let func: ResolvedFunction = ResolvedFunction {
             name: "set_level".to_owned(),
@@ -6067,10 +6277,13 @@ mod tests {
                 name: "level".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             returns: None,
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_cs_host_thunk_args(&mut out, &func, "UnusedArgs", &enums);
@@ -6094,10 +6307,13 @@ mod tests {
                 name: "desc".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("ImageDesc".to_owned()),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             returns: None,
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_cs_host_thunk_args(&mut out, &func, "UnusedArgs", &[]);

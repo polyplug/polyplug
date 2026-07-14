@@ -301,7 +301,7 @@ static ERROR_TEST_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
 /// ABI version sentinel — loader checks this before calling polyplug_init.
 #[unsafe(no_mangle)]
 pub extern "C" fn polyplug_abi_version() -> u32 {
-    1
+    2
 }
 
 /// Plugin init — called by the loader to register interfaces.

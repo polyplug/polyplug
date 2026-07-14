@@ -5,6 +5,8 @@ through `ctypes` and loads bundles of any language; as a guest it ships a plain
 `.py` file any polyplug host can load — no build step, no Rust toolchain. For
 measured overhead, see [Performance](../PERFORMANCE.md).
 
+Define the shared contract with the [`api.toml` schema reference](../API_TOML.md), including Python-specific `langs.python` attribute bodies.
+
 ## Install
 
 **CLI** — generates host callers and guest glue from an `api.toml` contract:

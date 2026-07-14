@@ -45,12 +45,16 @@ pub use guest::{GuestContractInstance, GuestContractInterface};
 
 pub use host::{HostApi, HostContractInstance, HostContractInterface};
 
-pub use plugin::{BundleInitContext, GuestContractHandle, PluginDescriptor};
+pub use plugin::{
+    BundleDescriptorView, BundleInitContext, BundleSourceKind, GuestContractHandle,
+    OwnedPluginDescriptorView, PluginDescriptor, RegisteredContractDescriptorView,
+    RuntimeIntrospection,
+};
 
 // ─── ABI version sentinel ────────────────────────────────────────────────────
 
 /// ABI version sentinel — all bundles must export a function returning this value.
-pub const POLYPLUG_ABI_VERSION: u32 = 1;
+pub const POLYPLUG_ABI_VERSION: u32 = 2;
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 

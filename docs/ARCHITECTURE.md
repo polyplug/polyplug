@@ -98,6 +98,55 @@ sequenceDiagram
 `host->register_guest_contract(host, &descriptor, &interface)` — identical across
 every language generator (a hard rule; see `CLAUDE.md` §10).
 
+## Runtime metadata introspection
+
+After a bundle transaction commits, the runtime exposes snapshots of its live
+registry state. In Rust, `Runtime::bundle_descriptors()` returns
+`Vec<BundleDescriptor>` and `Runtime::registered_contract_descriptors()` returns
+`Vec<RegisteredContractDescriptor>`. The first snapshot is in stable bundle-ID
+order and includes bundle ID, name, version, guest runtime, declared
+dependencies, and `BundleOrigin`; the second is in stable handle order and
+includes the live handle, owning bundle ID, contract ID, and registered plugin
+descriptor.
+
+`BundleOrigin` is retained metadata, not an acquisition handle or payload:
+
+| Origin | Meaning retained after load |
+| --- | --- |
+| `Internal` | Generated bindings registered providers in the host process. |
+| `Path(PathBuf)` | The bundle was acquired from its bundle directory. |
+| `Code` | Source text was supplied programmatically; the source text is not retained. |
+| `Bytes` | Bundle bytes were supplied programmatically; the bytes are not retained. |
+
+The language-neutral ABI reports the corresponding payload-free
+`BundleSourceKind` (`Internal`, `Path`, `Code`, or `Bytes`). Its maintained SDK
+wrappers return copied descriptor snapshots and copied plugin strings, so an
+application can inspect them without borrowing registry storage. A missing
+optional introspection table on an older runtime produces an empty snapshot;
+it is not evidence that a bundle is loaded.
+
+The snapshots describe **currently loaded and registered** state only. A
+successful `unload_bundle` invalidates the bundle and its contract
+registrations, so later snapshots no longer contain them. They are therefore
+useful for diagnostics, inventory, and correlating a live caller handle with
+its owning bundle; they are not a history of previously loaded bundles.
+
+### Runtime lifecycle is not application enablement
+
+Polyplug loads, registers, reloads, and unloads bundles. It does not define a
+generic "enabled contract" state and never invokes an application-level
+`initialize` method merely because a bundle is loaded. An application that has
+per-plugin policy owns an `enabled: bool` (or equivalent), chooses whether to
+construct/call a generated caller, and explicitly invokes its contract's
+`initialize`/`uninitialize` operations if that API defines them.
+
+Consequently, an application can keep a bundle loaded but disabled, or enable a
+plugin only after it has been loaded and its descriptor inspected. Conversely,
+unload is runtime ownership and invalidation: before requesting it, the
+application must quiesce callers and instances as described in
+[Lifecycle](how-it-works/lifecycle.md). Do not use an `enabled` flag as a
+substitute for that unload protocol.
+
 ## Internal plugin registration contract
 
 An **external plugin** is acquired from its directory and loader before this

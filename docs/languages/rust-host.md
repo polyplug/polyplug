@@ -128,6 +128,26 @@ let runtime: Arc<Runtime> = Runtime::builder()
 `Required` rejects unsigned or tampered bundles. See the
 [Trust Model](../TRUST_MODEL.md).
 
+### Inspect loaded bundles and contracts
+
+`Runtime::bundle_descriptors()` snapshots the currently loaded bundles; each
+Rust `BundleDescriptor` includes its `BundleOrigin`, dependencies, and runtime.
+`Runtime::registered_contract_descriptors()` snapshots each live contract handle
+with its owning bundle and plugin descriptor:
+
+```rust,ignore
+for bundle in runtime.bundle_descriptors() {
+    println!("{}: {:?}", bundle.name, bundle.origin);
+}
+let contracts = runtime.registered_contract_descriptors();
+```
+
+`BundleOrigin::{Internal, Path(_), Code, Bytes}` is payload-free acquisition
+metadata: `Code` does not retain source text and `Bytes` does not retain bundle
+bytes. These snapshots contain loaded/registered state, not an application
+enabled flag. Applications own any per-plugin enable/initialize policy; see
+[Runtime lifecycle is not application enablement](../ARCHITECTURE.md#runtime-lifecycle-is-not-application-enablement).
+
 ## 4. Register a host contract (optional)
 
 If your `api.toml` defines a host contract (a service the host provides to

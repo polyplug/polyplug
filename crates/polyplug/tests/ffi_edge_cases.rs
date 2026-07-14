@@ -125,9 +125,11 @@ fn test_find_all_guest_contracts_empty_registry() {
     let host: *const HostApi = unsafe { polyplug_runtime_create(null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
-    // SAFETY: host is valid.
-    let arr: Array<GuestContractHandle> =
-        unsafe { ((*host).find_all_guest_contracts)(host, 0xDEAD_BEEF_u64, 0) };
+    let mut arr: Array<GuestContractHandle> = Array::empty();
+    // SAFETY: host is valid and `arr` is a writable output slot.
+    unsafe {
+        ((*host).find_all_guest_contracts)(host, 0xDEAD_BEEF_u64, 0, &raw mut arr);
+    }
     assert_eq!(
         arr.len, 0,
         "find_all on empty registry must return empty array"
@@ -161,9 +163,11 @@ fn test_find_all_guest_contracts_single_plugin() {
 
     let contract_id: u64 = guest_contract_id("reload.test", 1);
 
-    // SAFETY: host is valid.
-    let arr: Array<GuestContractHandle> =
-        unsafe { ((*host).find_all_guest_contracts)(host, contract_id, 0) };
+    let mut arr: Array<GuestContractHandle> = Array::empty();
+    // SAFETY: host is valid and `arr` is a writable output slot.
+    unsafe {
+        ((*host).find_all_guest_contracts)(host, contract_id, 0, &raw mut arr);
+    }
     assert_eq!(arr.len, 1, "find_all must return exactly 1 result");
     assert!(!arr.items.is_null(), "array items must not be null");
     // SAFETY: arr.items is valid for arr.len elements.
@@ -267,9 +271,11 @@ fn test_find_all_guest_contracts_multiple_plugins() {
         );
     }
 
-    // SAFETY: host is valid.
-    let arr: Array<GuestContractHandle> =
-        unsafe { ((*host).find_all_guest_contracts)(host, guest_contract_id("test.add", 1), 0) };
+    let mut arr: Array<GuestContractHandle> = Array::empty();
+    // SAFETY: host is valid and `arr` is a writable output slot.
+    unsafe {
+        ((*host).find_all_guest_contracts)(host, guest_contract_id("test.add", 1), 0, &raw mut arr);
+    }
     assert_eq!(arr.len, 2, "find_all must find both plugins");
 
     // Free the array via host->free

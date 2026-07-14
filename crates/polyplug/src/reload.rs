@@ -25,9 +25,11 @@ use polyplug_utils::{BundleId, GuestContractId};
 use polyplug_common::ManifestData;
 
 use crate::error::{LoaderError, RegistryError, RuntimeError};
-use crate::loader::{BundleLoader, parse_manifest};
+use crate::loader::manifest::parsed_bundle_dependencies;
+use crate::loader::{BundleLoader, BundleSource, parse_manifest};
 use crate::logger::{RecoverPoisoned, RecoveringGuard};
-use crate::runtime::Runtime;
+use crate::runtime::{Runtime, parse_manifest_version, supported_language_from_str};
+use crate::runtime_store::BundleDescriptor;
 
 /// Helper to create a StringView from a Rust string slice.
 fn string_view(s: &str) -> StringView {
@@ -177,6 +179,22 @@ impl Runtime {
             return Err(err);
         }
 
+        // Build replacement metadata before opening the reload window. Any malformed
+        // manifest content therefore fails before dispatch or visible metadata changes.
+        let replacement_descriptor: BundleDescriptor = BundleDescriptor {
+            id: bundle_id,
+            name: manifest.name.clone(),
+            version: parse_manifest_version(&manifest.version, &manifest.name, &manifest.path)?,
+            runtime: supported_language_from_str(&manifest.loader),
+            origin: BundleSource::Path(manifest.path.clone()).origin(),
+            dependencies: parsed_bundle_dependencies(&manifest),
+        };
+        let replacement_contract_dependencies: HashSet<GuestContractId> = manifest
+            .dependencies
+            .iter()
+            .map(|dependency| dependency.contract_id)
+            .collect();
+
         // Store slot indices before reload (for the interface swap)
         let slot_indices: Vec<u32> = self.registry.get_bundle_plugin_slots(bundle_id);
 
@@ -227,7 +245,20 @@ impl Runtime {
                 // active version is kept) before propagating, mirroring the loader
                 // failure path below — otherwise the host never learns the reload
                 // aborted.
-                if let Err(e) = self.registry.apply_reload_swap(bundle_id, &slot_indices) {
+                // Hold the manifest cache lock across the registry publication. Cache
+                // readers either observe the prior committed manifest or block until
+                // the descriptor/interface snapshot and replacement manifest commit
+                // together; a failed interface commit leaves the cache untouched.
+                let mut manifests: RecoveringGuard<MutexGuard<'_, HashMap<String, ManifestData>>> =
+                    self.bundle_manifests
+                        .lock()
+                        .recover_poisoned(self.logger, "reload");
+                if let Err(e) = self.registry.apply_reload_swap(
+                    bundle_id,
+                    &slot_indices,
+                    replacement_descriptor,
+                    replacement_contract_dependencies,
+                ) {
                     let err: RuntimeError = RuntimeError::Registry(e);
                     if let Some(cb) = self.on_reload_cb() {
                         (cb.0)(
@@ -241,6 +272,8 @@ impl Runtime {
                     }
                     return Err(err);
                 }
+                manifests.insert(manifest.name.clone(), manifest.clone());
+                drop(manifests);
 
                 // The swap reclaimed the previous interface and guest-side state for
                 // this bundle. Reset only its accounting so another provider of the

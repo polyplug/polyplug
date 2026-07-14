@@ -3,9 +3,14 @@
 //! Guest contracts are implemented by plugins and consumed by the host.
 
 mod guest_contract_handle;
+mod introspection;
 mod plugin_context;
 mod plugin_descriptor;
 
 pub use guest_contract_handle::GuestContractHandle;
+pub use introspection::{
+    BundleDescriptorView, BundleSourceKind, OwnedPluginDescriptorView,
+    RegisteredContractDescriptorView, RuntimeIntrospection,
+};
 pub use plugin_context::BundleInitContext;
 pub use plugin_descriptor::PluginDescriptor;

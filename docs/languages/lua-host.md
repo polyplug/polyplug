@@ -126,6 +126,26 @@ local rt = polyplug.Runtime.new({
 `Required` rejects unsigned or tampered bundles. See the
 [Trust Model](../TRUST_MODEL.md).
 
+### Inspect loaded bundles and contracts
+
+Lua returns copied table snapshots from `rt:bundle_descriptors()` and
+`rt:registered_contract_descriptors()`:
+
+```lua
+for _, bundle in ipairs(rt:bundle_descriptors()) do
+    print(bundle.name, tonumber(bundle.source_kind))
+end
+local contracts = rt:registered_contract_descriptors()
+```
+
+`source_kind` is the payload-free SDK projection of Rust `BundleOrigin`:
+`Internal`, `Path`, `Code`, or `Bytes`. Programmatically supplied source and
+byte payloads are never exposed. The tables describe bundles currently loaded
+and contracts currently registered; they are not an application per-plugin
+enabled state and do not invoke a contract `initialize` operation. Keep that
+policy in the application; see
+[Runtime lifecycle is not application enablement](../ARCHITECTURE.md#runtime-lifecycle-is-not-application-enablement).
+
 ## 4. Register a host contract (optional)
 
 If your `api.toml` defines a host contract (a service the host provides to

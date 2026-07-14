@@ -174,8 +174,12 @@ unsafe extern "C" fn bench_find_all_guest_contracts(
     _this: *const HostApi,
     _contract_id: u64,
     _min_version: u32,
-) -> Array<GuestContractHandle> {
-    Array::empty()
+    out_handles: *mut Array<GuestContractHandle>,
+) {
+    if !out_handles.is_null() {
+        // SAFETY: the caller provided a non-null output slot.
+        unsafe { out_handles.write(Array::empty()) };
+    }
 }
 
 /// Resolves a plugin handle to an interface pointer via the thread-local BENCH_REGISTRY.
@@ -214,13 +218,22 @@ unsafe extern "C" fn bench_resolve_host_contract_interface(
 }
 
 /// Returns empty array of bundle IDs.
-unsafe extern "C" fn bench_list_bundles(_this: *const HostApi) -> Array<BundleId> {
-    Array::empty()
+unsafe extern "C" fn bench_list_bundles(_this: *const HostApi, out_bundles: *mut Array<BundleId>) {
+    if !out_bundles.is_null() {
+        // SAFETY: `out_bundles` was checked non-null and receives a valid empty array.
+        unsafe { out_bundles.write(Array::empty()) };
+    }
 }
 
 /// Returns empty array of dependencies.
-unsafe extern "C" fn bench_get_dependencies(_this: *const HostApi) -> Array<DependencyInfo> {
-    Array::empty()
+unsafe extern "C" fn bench_get_dependencies(
+    _this: *const HostApi,
+    out_dependencies: *mut Array<DependencyInfo>,
+) {
+    if !out_dependencies.is_null() {
+        // SAFETY: `out_dependencies` was checked non-null and receives a valid empty array.
+        unsafe { out_dependencies.write(Array::empty()) };
+    }
 }
 
 /// load_bundle stub — writes error to out_err (not used in benches).

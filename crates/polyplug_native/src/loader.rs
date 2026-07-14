@@ -125,10 +125,10 @@ impl NativeLoader {
         runtime: &Runtime,
     ) -> Result<(), LoaderError> {
         // The native loader supports on-disk bundles only: there is no clean,
-        // portable in-memory dlopen on Windows/macOS, so Code/Bytes are rejected.
+        // portable in-memory dlopen on Windows/macOS, so non-path sources are rejected.
         match source {
             BundleSource::Path(_) => {}
-            BundleSource::Code(_) | BundleSource::Bytes(_) => {
+            BundleSource::Internal | BundleSource::Code(_) | BundleSource::Bytes(_) => {
                 return Err(LoaderError::UnsupportedBundleSource {
                     loader: "native",
                     source_kind: source.kind(),

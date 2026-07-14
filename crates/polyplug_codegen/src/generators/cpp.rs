@@ -15,15 +15,19 @@ use super::collect_peer_contracts;
 use super::is_native_runtime;
 use super::peer_min_version;
 
+use super::attributes::render_attributes;
 use super::docs::append_lines;
+use crate::Lang;
 use crate::OutputDestination;
 use crate::OutputLayout;
 use crate::OutputPartition;
 use crate::PolyplugcError;
 use crate::Side;
 use crate::ir::AbiBuiltin;
+use crate::ir::CustomizableNode;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
+use crate::ir::LanguageRules;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
@@ -70,6 +74,106 @@ fn cpp_include_block(groups: &[&[(&str, bool)]]) -> String {
         }
     }
     blocks.join("\n")
+}
+
+fn cpp_attribute_lines(node: CustomizableNode, rules: &LanguageRules, indent: &str) -> String {
+    render_attributes(Lang::Cpp, node, rules)
+        .into_iter()
+        .map(|attribute| format!("{indent}{attribute}\n"))
+        .collect()
+}
+
+fn emit_cpp_attributes(
+    out: &mut String,
+    node: CustomizableNode,
+    rules: &LanguageRules,
+    indent: &str,
+) {
+    out.push_str(&cpp_attribute_lines(node, rules, indent));
+}
+
+fn cpp_function_attribute_lines(func: &ResolvedFunction, indent: &str) -> String {
+    format!(
+        "{}{}",
+        cpp_attribute_lines(CustomizableNode::Function, &func.langs, indent),
+        cpp_attribute_lines(CustomizableNode::Return, &func.return_langs, indent)
+    )
+}
+
+fn cpp_prefix_rendered_function_attributes(rendered: String, attributes: &str) -> String {
+    if attributes.is_empty() {
+        return rendered;
+    }
+
+    let mut output = String::new();
+    let mut inserted = false;
+    for line in rendered.split_inclusive('\n') {
+        if !inserted
+            && line.starts_with("    ")
+            && !line.starts_with("    //")
+            && !line.trim().is_empty()
+        {
+            output.push_str(attributes);
+            inserted = true;
+        }
+        output.push_str(line);
+    }
+    output
+}
+
+fn cpp_parameter_declaration(param: &ResolvedParam, param_type: &str) -> String {
+    format!("{param_type} {}", param.name)
+}
+
+fn cpp_parameter_list(
+    params: &[ResolvedParam],
+    indent: &str,
+    type_name: impl Fn(&ResolvedParam) -> String,
+) -> String {
+    if params
+        .iter()
+        .all(|param| cpp_attribute_lines(CustomizableNode::Param, &param.langs, "").is_empty())
+    {
+        return params
+            .iter()
+            .map(|param| cpp_parameter_declaration(param, &type_name(param)))
+            .collect::<Vec<String>>()
+            .join(", ");
+    }
+
+    let continuation = format!("{indent}    ");
+    let mut output = String::from("\n");
+    for (index, param) in params.iter().enumerate() {
+        output.push_str(&cpp_attribute_lines(
+            CustomizableNode::Param,
+            &param.langs,
+            &continuation,
+        ));
+        output.push_str(&continuation);
+        output.push_str(&cpp_parameter_declaration(param, &type_name(param)));
+        if index + 1 != params.len() {
+            output.push(',');
+        }
+        output.push('\n');
+    }
+    output.push_str(indent);
+    output
+}
+
+fn cpp_langprint_parameter_type(param: &ResolvedParam, param_type: &str) -> String {
+    let attributes = cpp_attribute_lines(CustomizableNode::Param, &param.langs, "        ");
+    if attributes.is_empty() {
+        param_type.to_owned()
+    } else {
+        format!("\n{attributes}        {param_type}")
+    }
+}
+
+fn emit_cpp_root_attributes(out: &mut String, rules: &LanguageRules) {
+    for attribute in render_attributes(Lang::Cpp, CustomizableNode::Api, rules) {
+        out.push_str(&attribute);
+        out.push('\n');
+    }
 }
 
 /// The C++ code generator.
@@ -374,6 +478,7 @@ fn cpp_guest_domain_include(
 fn generate_cpp_binding_metadata_hpp(ir: &ValidatedIr, domain_include: Option<&str>) -> String {
     let mut out = String::new();
     out.push_str(CPP_FILE_HEADER);
+    emit_cpp_root_attributes(&mut out, &ir.langs);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
     out.push_str("#pragma once\n");
     let local_includes = domain_include
@@ -546,6 +651,7 @@ fn cpp_replace_include(content: &mut String, headers: &[&str], replacement: Opti
 fn generate_types_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CPP_FILE_HEADER);
+    emit_cpp_root_attributes(&mut out, &ir.langs);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
     out.push_str("#pragma once\n");
     out.push_str(&cpp_include_block(&[
@@ -581,6 +687,7 @@ fn generate_types_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
 fn generate_cpp_domain_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out = String::new();
     out.push_str(CPP_FILE_HEADER);
+    emit_cpp_root_attributes(&mut out, &ir.langs);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
     out.push_str("#pragma once\n");
     out.push_str(&cpp_include_block(&[
@@ -604,6 +711,7 @@ fn generate_cpp_domain_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
 fn generate_contracts_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CPP_FILE_HEADER);
+    emit_cpp_root_attributes(&mut out, &ir.langs);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
     out.push_str("#pragma once\n");
     out.push_str(&cpp_include_block(&[
@@ -634,6 +742,7 @@ fn generate_cpp_guest_contract_class(
     for line in super::docs::lines(contract.docs.as_deref()) {
         out.push_str(&format!("/// {line}\n"));
     }
+    emit_cpp_attributes(out, CustomizableNode::GuestContract, &contract.langs, "");
     out.push_str(&format!("class {} {{\npublic:\n", class_name));
     out.push_str(&format!("    virtual ~{}() = default;\n", class_name));
 
@@ -666,7 +775,7 @@ fn cpp_render_abstract_method(func: &ResolvedFunction) -> Result<String, Polyplu
             };
             CppParameter {
                 name: p.name.clone(),
-                param_type,
+                param_type: cpp_langprint_parameter_type(p, &param_type),
                 default_value: None,
             }
         })
@@ -712,7 +821,13 @@ fn cpp_render_abstract_method(func: &ResolvedFunction) -> Result<String, Polyplu
             path: "guest/contracts.hpp".to_owned(),
             source,
         })?;
-    Ok(format!("{rendered}\n"))
+    Ok(format!(
+        "{}\n",
+        cpp_prefix_rendered_function_attributes(
+            rendered,
+            &cpp_function_attribute_lines(func, "    "),
+        )
+    ))
 }
 
 // ─── interfaces.hpp generator ───────────────────────────────────────────────────
@@ -1078,6 +1193,7 @@ fn render_cpp_host_method(
     name: String,
     parameters: Vec<CppParameter>,
     return_type: String,
+    attribute_lines: String,
     is_static: bool,
     docs: Vec<String>,
     body: String,
@@ -1120,6 +1236,7 @@ fn render_cpp_host_method(
             Some(&options),
             &mut indent_level,
         )
+        .map(|rendered| cpp_prefix_rendered_function_attributes(rendered, &attribute_lines))
         .map_err(|source: io::Error| PolyplugcError::WriteFailed {
             path: "guest/host_contracts.hpp".to_owned(),
             source,
@@ -1584,7 +1701,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("#endif\n\n");
 
     // polyplug_abi_version
-    out.push_str("extern \"C\" POLYPLUG_ENTRYPOINT_EXPORT uint32_t polyplug_abi_version() { return 1U; }\n\n");
+    out.push_str("extern \"C\" POLYPLUG_ENTRYPOINT_EXPORT uint32_t polyplug_abi_version() { return 2U; }\n\n");
 
     // polyplug_init
     out.push_str("extern \"C\" POLYPLUG_ENTRYPOINT_EXPORT AbiError polyplug_init(const HostApi* host, const BundleInitContext* ctx) {\n");
@@ -2110,6 +2227,7 @@ fn generate_cpp_internal_manifest(ir: &ValidatedIr) -> Result<String, PolyplugcE
 fn generate_host_callers_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CPP_FILE_HEADER);
+    emit_cpp_root_attributes(&mut out, &ir.langs);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
     out.push_str("#pragma once\n");
     out.push_str(&cpp_include_block(&[
@@ -2322,7 +2440,15 @@ fn render_cpp_enum_decl(e: &EnumDef, repr_cpp: &str) -> Result<String, Polyplugc
         .variants
         .iter()
         .map(|variant: &EnumVariant| CppEnumVariant {
-            name: variant.name.clone(),
+            name: {
+                let attributes =
+                    cpp_attribute_lines(CustomizableNode::EnumVariant, &variant.langs, "    ");
+                if attributes.is_empty() {
+                    variant.name.clone()
+                } else {
+                    format!("{}\n{attributes}", variant.name)
+                }
+            },
             value: Some(substitute_variant_refs_cpp(
                 &e.variants,
                 &variant.value,
@@ -2353,18 +2479,22 @@ fn render_cpp_enum_decl(e: &EnumDef, repr_cpp: &str) -> Result<String, Polyplugc
         ..CppBackend::default()
     };
     let mut indent_level: i32 = 0;
-    backend
-        .render_enum(
-            &cpp_enum,
-            None::<&str>,
-            None::<&str>,
-            None,
-            &mut indent_level,
-        )
-        .map_err(|source: io::Error| PolyplugcError::WriteFailed {
-            path: "guest/types.hpp".to_owned(),
-            source,
-        })
+    let mut rendered = cpp_attribute_lines(CustomizableNode::Enum, &e.langs, "");
+    rendered.push_str(
+        &backend
+            .render_enum(
+                &cpp_enum,
+                None::<&str>,
+                None::<&str>,
+                None,
+                &mut indent_level,
+            )
+            .map_err(|source: io::Error| PolyplugcError::WriteFailed {
+                path: "guest/types.hpp".to_owned(),
+                source,
+            })?,
+    );
+    Ok(rendered)
 }
 
 // ─── Per-type struct emitter ──────────────────────────────────────────────────
@@ -2374,6 +2504,7 @@ fn generate_cpp_type(out: &mut String, ty: &ResolvedType) {
     for line in super::docs::lines(ty.docs.as_deref()) {
         out.push_str(&format!("/// {line}\n"));
     }
+    emit_cpp_attributes(out, CustomizableNode::Type, &ty.langs, "");
     out.push_str("struct ");
     out.push_str(&ty.name);
     out.push_str(" {\n");
@@ -2381,6 +2512,7 @@ fn generate_cpp_type(out: &mut String, ty: &ResolvedType) {
         for line in super::docs::lines(field.docs.as_deref()) {
             out.push_str(&format!("    /// {line}\n"));
         }
+        emit_cpp_attributes(out, CustomizableNode::Field, &field.langs, "    ");
         out.push_str(&format!(
             "    {} {};\n",
             cpp_types_hpp_type_name(&field.ty),
@@ -2678,6 +2810,7 @@ fn generate_cpp_host_contract(
         );
         out.push_str("/// valid only until the next arena-backed call on the same caller.\n");
     }
+    emit_cpp_attributes(out, CustomizableNode::GuestContract, &contract.langs, "");
     out.push_str(&format!("class {} {{\npublic:\n", class_name));
 
     // Factory method: resolve handle + create_instance
@@ -2992,13 +3125,7 @@ fn generate_cpp_host_function(
         .map(cpp_type_name)
         .unwrap_or_else(|| "void".to_owned());
 
-    // Build parameter list string.
-    let params: Vec<String> = func
-        .params
-        .iter()
-        .map(|p| format!("{} {}", cpp_type_name(&p.ty), p.name))
-        .collect();
-    let params_str: String = params.join(", ");
+    let params_str = cpp_parameter_list(&func.params, "    ", |param| cpp_type_name(&param.ty));
 
     out.push_str(&format!(
         "    /// Call `{}` (function_id={})\n",
@@ -3022,6 +3149,8 @@ fn generate_cpp_host_function(
         );
         out.push_str("    /// the next arena-backed call on this caller.\n");
     }
+    emit_cpp_attributes(out, CustomizableNode::Function, &func.langs, "    ");
+    emit_cpp_attributes(out, CustomizableNode::Return, &func.return_langs, "    ");
     out.push_str(&format!(
         "    {} {}({}) {{\n",
         return_type, func.name, params_str
@@ -3321,6 +3450,7 @@ fn generate_cpp_host_contract_trait(out: &mut String, contract: &ResolvedHostCon
     for line in super::docs::lines(contract.docs.as_deref()) {
         out.push_str(&format!("/// {line}\n"));
     }
+    emit_cpp_attributes(out, CustomizableNode::HostContract, &contract.langs, "");
     out.push_str(&format!("class {} {{\npublic:\n", class_name));
     out.push_str(&format!("    virtual ~{}() = default;\n", class_name));
 
@@ -3406,6 +3536,7 @@ fn generate_cpp_guest_host_contract_caller(
     for line in super::docs::lines(contract.docs.as_deref()) {
         out.push_str(&format!("/// {line}\n"));
     }
+    emit_cpp_attributes(out, CustomizableNode::HostContract, &contract.langs, "");
     out.push_str(&format!("class {} {{\npublic:\n", class_name));
 
     // Factory method - from_host. langprint renders the FORM; the body is verbatim.
@@ -3446,6 +3577,7 @@ fn generate_cpp_guest_host_contract_caller(
             },
         ],
         format!("std::optional<{class_name}>"),
+        String::new(),
         true,
         vec!["Factory method - creates caller from HostApi or nullopt if not found.".to_owned()],
         from_host_body,
@@ -3533,7 +3665,7 @@ fn generate_cpp_guest_host_contract_method(
         .iter()
         .map(|p| CppParameter {
             name: p.name.clone(),
-            param_type: cpp_guest_caller_param_type_name(&p.ty),
+            param_type: cpp_langprint_parameter_type(p, &cpp_guest_caller_param_type_name(&p.ty)),
             default_value: None,
         })
         .collect::<Vec<CppParameter>>();
@@ -3633,6 +3765,7 @@ fn generate_cpp_guest_host_contract_method(
         func.name.clone(),
         parameters,
         return_type,
+        cpp_function_attribute_lines(func, "    "),
         false,
         docs,
         body,
@@ -3773,6 +3906,7 @@ fn emit_cpp_guest_host_contract_out_setup(out: &mut String, returns: &Option<Res
 fn generate_cpp_guest_host_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     let mut out: String = String::new();
     out.push_str(CPP_FILE_HEADER);
+    emit_cpp_root_attributes(&mut out, &ir.langs);
     out.push_str(
         "// Re-generate with: polyplugc generate --bundle bundle.toml --lang cpp --out <dir>\n",
     );
@@ -3825,19 +3959,13 @@ fn generate_cpp_host_trait_method(out: &mut String, func: &ResolvedFunction) {
         .map(cpp_type_name)
         .unwrap_or_else(|| "void".to_owned());
 
-    let params: Vec<String> = func
-        .params
-        .iter()
-        .map(|p| {
-            let cpp_ty: String = cpp_type_name(&p.ty);
-            match &p.ty {
-                ResolvedTypeRef::UserDefined(_) => format!("const {}& {}", cpp_ty, p.name),
-                ResolvedTypeRef::AbiType(_) => format!("{} {}", cpp_ty, p.name),
-                ResolvedTypeRef::Primitive(_) => format!("{} {}", cpp_ty, p.name),
-            }
-        })
-        .collect();
-    let params_str: String = params.join(", ");
+    let params_str = cpp_parameter_list(&func.params, "    ", |param| {
+        let cpp_ty = cpp_type_name(&param.ty);
+        match &param.ty {
+            ResolvedTypeRef::UserDefined(_) => format!("const {cpp_ty}&"),
+            ResolvedTypeRef::AbiType(_) | ResolvedTypeRef::Primitive(_) => cpp_ty,
+        }
+    });
 
     for line in super::docs::lines(func.docs.as_deref()) {
         out.push_str(&format!("    /// {line}\n"));
@@ -3850,6 +3978,8 @@ fn generate_cpp_host_trait_method(out: &mut String, func: &ResolvedFunction) {
     for line in super::docs::lines(func.return_docs.as_deref()) {
         out.push_str(&format!("    /// @return {line}\n"));
     }
+    emit_cpp_attributes(out, CustomizableNode::Function, &func.langs, "    ");
+    emit_cpp_attributes(out, CustomizableNode::Return, &func.return_langs, "    ");
     out.push_str(&format!(
         "    virtual {} {}({}) = 0;\n",
         return_type, func.name, params_str
@@ -3860,6 +3990,7 @@ fn generate_cpp_host_trait_method(out: &mut String, func: &ResolvedFunction) {
 fn generate_cpp_host_contracts_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CPP_FILE_HEADER);
+    emit_cpp_root_attributes(&mut out, &ir.langs);
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
     out.push_str("#pragma once\n");
     out.push_str(&cpp_include_block(&[
@@ -4298,6 +4429,7 @@ const _: fn() = || {
 fn generate_cpp_peer_callers_file(ir: &ValidatedIr, peers: &[&ResolvedContract]) -> String {
     let mut out: String = String::new();
     out.push_str(CPP_FILE_HEADER);
+    emit_cpp_root_attributes(&mut out, &ir.langs);
     out.push_str(
         "// Re-generate with: polyplugc generate --bundle bundle.toml --lang cpp --out <dir>\n",
     );
@@ -4389,6 +4521,7 @@ fn generate_cpp_peer_caller(out: &mut String, contract: &ResolvedContract, min_v
         );
         out.push_str("/// valid only until the next arena-backed call on the same caller.\n");
     }
+    emit_cpp_attributes(out, CustomizableNode::GuestContract, &contract.langs, "");
     out.push_str(&format!("class {} {{\npublic:\n", class_name));
 
     // ── resolve(host) factory ───────────────────────────────────────────────
@@ -4667,12 +4800,7 @@ fn generate_cpp_peer_fn_caller(out: &mut String, class_name: &str, func: &Resolv
         .map(cpp_type_name)
         .unwrap_or_else(|| "void".to_owned());
 
-    let params: Vec<String> = func
-        .params
-        .iter()
-        .map(|p| format!("{} {}", cpp_type_name(&p.ty), p.name))
-        .collect();
-    let params_str: String = params.join(", ");
+    let params_str = cpp_parameter_list(&func.params, "    ", |param| cpp_type_name(&param.ty));
 
     // Not const: the per-call staleness check may invoke revalidate(), which
     // re-resolves the interface/instance and updates the cached revision.
@@ -4688,6 +4816,8 @@ fn generate_cpp_peer_fn_caller(out: &mut String, class_name: &str, func: &Resolv
         );
         out.push_str("    /// the next arena-backed call on this caller.\n");
     }
+    emit_cpp_attributes(out, CustomizableNode::Function, &func.langs, "    ");
+    emit_cpp_attributes(out, CustomizableNode::Return, &func.return_langs, "    ");
     out.push_str(&format!(
         "    {} {}({}){} {{\n",
         return_type, func.name, params_str, self_qual
@@ -4828,10 +4958,14 @@ mod tests {
 
     use super::*;
     use crate::ResolvedBundleFile;
+    use crate::ValidatedImport;
+    use crate::ir::LanguageAttributes;
+    use crate::ir::LanguageRules;
     use crate::ir::ReprType;
     use crate::ir::ResolvedDependency;
     use crate::ir::ResolvedField;
     use crate::ir::Version;
+    use std::path::PathBuf;
 
     #[test]
     fn class_name_conversion() {
@@ -4868,6 +5002,7 @@ mod tests {
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -4893,6 +5028,7 @@ mod tests {
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -4919,6 +5055,7 @@ mod tests {
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String = generate_init_hpp(&ir).expect("generate_init_hpp");
 
@@ -4961,14 +5098,17 @@ mod tests {
                     name: "Unknown".to_owned(),
                     value: "0".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 EnumVariant {
                     name: "Rgba8".to_owned(),
                     value: "1".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_cpp_enum(&mut out, &e).expect("render enum");
@@ -4997,14 +5137,17 @@ mod tests {
                     name: "None".to_owned(),
                     value: "0".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 EnumVariant {
                     name: "Compressed".to_owned(),
                     value: "1".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_cpp_enum(&mut out, &e).expect("render enum");
@@ -5039,18 +5182,23 @@ mod tests {
                         name: "a".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::I32),
                         docs: None,
+                        langs: LanguageRules::default(),
                     },
                     ResolvedParam {
                         name: "b".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::I32),
                         docs: None,
+                        langs: LanguageRules::default(),
                     },
                 ],
                 returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::I32)),
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
 
         let mut out: String = String::new();
@@ -5253,10 +5401,13 @@ mod tests {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 },
                 ResolvedFunction {
                     name: "logf".to_owned(),
@@ -5266,19 +5417,24 @@ mod tests {
                             name: "level".to_owned(),
                             ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                             docs: None,
+                            langs: LanguageRules::default(),
                         },
                         ResolvedParam {
                             name: "format".to_owned(),
                             ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                             docs: None,
+                            langs: LanguageRules::default(),
                         },
                     ],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_cpp_host_contract_trait(&mut out, &contract);
@@ -5319,14 +5475,19 @@ mod tests {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String = generate_cpp_host_contracts_file(&ir);
         assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
@@ -5364,10 +5525,14 @@ mod tests {
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5393,6 +5558,7 @@ mod tests {
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5508,12 +5674,16 @@ mod tests {
                     name: "message".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 returns: None,
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_cpp_guest_host_contract_caller(&mut out, &contract)
@@ -5566,10 +5736,14 @@ mod tests {
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String = generate_cpp_guest_host_contracts_file(&ir)
             .expect("host contracts generation must succeed");
@@ -5611,10 +5785,14 @@ mod tests {
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5640,6 +5818,7 @@ mod tests {
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5679,10 +5858,14 @@ mod tests {
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5708,6 +5891,7 @@ mod tests {
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -5746,14 +5930,19 @@ mod tests {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String = generate_cpp_host_interface_factories_file(&ir);
         assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
@@ -5801,12 +5990,16 @@ mod tests {
                     name: "message".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 returns: None,
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_cpp_host_interface_factory(&mut out, &contract);
@@ -5895,12 +6088,16 @@ mod tests {
                             name: "input".to_owned(),
                             ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                             docs: None,
+                            langs: LanguageRules::default(),
                         }],
                         returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
                         docs: None,
                         return_docs: None,
+                        langs: LanguageRules::default(),
+                        return_langs: LanguageRules::default(),
                     }],
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 ResolvedContract {
                     name: "data.Transformer".to_owned(),
@@ -5912,6 +6109,7 @@ mod tests {
                     },
                     functions: vec![],
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             host_contracts: vec![],
@@ -5937,6 +6135,7 @@ mod tests {
                 }],
                 needs_reinit_on_dep_reload: false,
             }),
+            langs: LanguageRules::default(),
         };
 
         let generator: CppGenerator = CppGenerator;
@@ -6027,9 +6226,11 @@ mod tests {
                 },
                 functions: vec![],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -6058,8 +6259,10 @@ mod tests {
                     name: "level".to_owned(),
                     ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             enums: vec![EnumDef {
                 name: "LogLevel".to_owned(),
@@ -6070,14 +6273,17 @@ mod tests {
                         name: "Debug".to_owned(),
                         value: "0".to_owned(),
                         docs: None,
+                        langs: LanguageRules::default(),
                     },
                     EnumVariant {
                         name: "Error".to_owned(),
                         value: "1".to_owned(),
                         docs: None,
+                        langs: LanguageRules::default(),
                     },
                 ],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             contracts: vec![ResolvedContract {
                 name: "pipeline.decoder".to_owned(),
@@ -6094,12 +6300,16 @@ mod tests {
                         name: "level".to_owned(),
                         ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             host_contracts: vec![ResolvedHostContract {
                 name: "host.logger".to_owned(),
@@ -6118,18 +6328,23 @@ mod tests {
                             name: "level".to_owned(),
                             ty: ResolvedTypeRef::UserDefined("LogLevel".to_owned()),
                             docs: None,
+                            langs: LanguageRules::default(),
                         },
                         ResolvedParam {
                             name: "message".to_owned(),
                             ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                             docs: None,
+                            langs: LanguageRules::default(),
                         },
                     ],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: Some(ResolvedBundle {
                 name: "decoder_bundle".to_owned(),
@@ -6153,6 +6368,7 @@ mod tests {
                 }],
                 needs_reinit_on_dep_reload: false,
             }),
+            langs: LanguageRules::default(),
         }
     }
 
@@ -6353,12 +6569,16 @@ mod tests {
                         name: "input".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             host_contracts: vec![],
             bundle: Some(ResolvedBundle {
@@ -6386,6 +6606,7 @@ mod tests {
                 dependencies: vec![],
                 needs_reinit_on_dep_reload: false,
             }),
+            langs: LanguageRules::default(),
         };
 
         let interfaces: String = generate_interfaces_hpp(&ir).expect("generate_interfaces_hpp");
@@ -6400,6 +6621,282 @@ mod tests {
             interfaces.contains("ENCODER_A_INTERFACE")
                 && interfaces.contains("ENCODER_B_INTERFACE"),
             "each provider must get its own plugin-named interface: {interfaces}"
+        );
+    }
+
+    fn attribute_rules(language: Option<Lang>, values: &[&str]) -> LanguageRules {
+        let attributes = LanguageAttributes {
+            attributes: values.iter().map(|value| (*value).to_owned()).collect(),
+        };
+        match language {
+            Some(Lang::Cpp) => LanguageRules {
+                cpp: Some(attributes),
+                ..LanguageRules::default()
+            },
+            Some(Lang::Rust) => LanguageRules {
+                rust: Some(attributes),
+                ..LanguageRules::default()
+            },
+            Some(Lang::CSharp | Lang::Python | Lang::Lua | Lang::JsQuickJs) => {
+                unreachable!("test only uses C++ and Rust rules")
+            }
+            None => LanguageRules::default(),
+        }
+    }
+
+    fn semantic_attribute_ir(language: Option<Lang>) -> ValidatedIr {
+        let function = || ResolvedFunction {
+            name: "measure".to_owned(),
+            function_id: 0,
+            params: vec![ResolvedParam {
+                name: "sample".to_owned(),
+                ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                docs: None,
+                langs: attribute_rules(language, &["maybe_unused", "deprecated(\"parameter\")"]),
+            }],
+            returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            docs: None,
+            return_docs: None,
+            langs: attribute_rules(language, &["nodiscard", "deprecated(\"function\")"]),
+            return_langs: attribute_rules(language, &["nodiscard", "deprecated(\"return\")"]),
+        };
+
+        ValidatedIr {
+            types: vec![ResolvedType {
+                name: "Packet".to_owned(),
+                fields: vec![ResolvedField {
+                    name: "count".to_owned(),
+                    ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    docs: None,
+                    langs: attribute_rules(language, &["maybe_unused", "deprecated(\"field\")"]),
+                }],
+                docs: None,
+                langs: attribute_rules(language, &["deprecated(\"record\")", "maybe_unused"]),
+            }],
+            enums: vec![EnumDef {
+                name: "Status".to_owned(),
+                repr: ReprType::U32,
+                bitflag: true,
+                variants: vec![EnumVariant {
+                    name: "Ready".to_owned(),
+                    value: "1".to_owned(),
+                    docs: None,
+                    langs: attribute_rules(
+                        language,
+                        &["deprecated(\"variant\")", "deprecated(\"variant_second\")"],
+                    ),
+                }],
+                docs: None,
+                langs: attribute_rules(language, &["deprecated(\"enum\")", "maybe_unused"]),
+            }],
+            contracts: vec![ResolvedContract {
+                name: "sample.measure".to_owned(),
+                contract_id: 0x10,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![function()],
+                docs: None,
+                langs: attribute_rules(language, &["deprecated(\"guest\")", "maybe_unused"]),
+            }],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.measure".to_owned(),
+                contract_id: 0x11,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                singleton: false,
+                functions: vec![function()],
+                docs: None,
+                langs: attribute_rules(language, &["deprecated(\"host\")", "maybe_unused"]),
+            }],
+            bundle: None,
+            langs: attribute_rules(language, &["api_root", "api_version"]),
+        }
+    }
+
+    #[test]
+    fn cpp_attributes_cover_public_semantic_surfaces_in_unified_and_split_outputs() {
+        let ir = semantic_attribute_ir(Some(Lang::Cpp));
+
+        let types = generate_types_hpp(&ir).expect("render C++ types");
+        assert!(
+            types.contains("// [[langprint::root(api_root)]]\n// [[langprint::root(api_version)]]")
+                && types.contains("[[deprecated(\"record\")]]\n[[maybe_unused]]\nstruct Packet")
+                && types.contains(
+                    "    [[maybe_unused]]\n    [[deprecated(\"field\")]]\n    uint32_t count"
+                )
+                && types.contains("[[deprecated(\"enum\")]]\n[[maybe_unused]]")
+                && types.contains(
+                    "Ready\n    [[deprecated(\"variant\")]]\n    [[deprecated(\"variant_second\")]]"
+                ),
+            "types must render each root, type, field, enum, and variant attribute on its own line: {types}"
+        );
+
+        let guest_contracts = generate_contracts_hpp(&ir).expect("render guest contracts");
+        assert!(
+            guest_contracts.contains(
+                "[[deprecated(\"guest\")]]\n[[maybe_unused]]\nclass SampleMeasureGuestContract"
+            )
+                && guest_contracts.contains(
+                    "    [[nodiscard]]\n    [[deprecated(\"function\")]]\n    [[nodiscard]]\n    [[deprecated(\"return\")]]"
+                )
+                && guest_contracts.contains(
+                    "measure(\n        [[maybe_unused]]\n        [[deprecated(\"parameter\")]]"
+                ),
+            "guest contracts must render every contract/function/parameter/return item on its own line: {guest_contracts}"
+        );
+
+        let host_callers = generate_host_callers_hpp(&ir).expect("render host callers");
+        assert!(
+            host_callers.contains(
+                "[[deprecated(\"guest\")]]\n[[maybe_unused]]\nclass SampleMeasureContract"
+            )
+                && host_callers.contains(
+                    "    [[nodiscard]]\n    [[deprecated(\"function\")]]\n    [[nodiscard]]\n    [[deprecated(\"return\")]]"
+                )
+                && host_callers.contains(
+                    "measure(\n        [[maybe_unused]]\n        [[deprecated(\"parameter\")]]"
+                ),
+            "host callers must render every guest projection item on its own line: {host_callers}"
+        );
+
+        let host_contracts = generate_cpp_host_contracts_file(&ir);
+        assert!(
+            host_contracts
+                .contains("[[deprecated(\"host\")]]\n[[maybe_unused]]\nclass HostMeasure")
+                && host_contracts.contains(
+                    "    [[nodiscard]]\n    [[deprecated(\"function\")]]\n    [[nodiscard]]\n    [[deprecated(\"return\")]]"
+                )
+                && host_contracts.contains(
+                    "measure(\n        [[maybe_unused]]\n        [[deprecated(\"parameter\")]]"
+                ),
+            "host abstract contracts must render every item on its own line: {host_contracts}"
+        );
+
+        let guest_host_callers =
+            generate_cpp_guest_host_contracts_file(&ir).expect("render guest host callers");
+        assert!(
+            guest_host_callers.contains(
+                "[[deprecated(\"host\")]]\n[[maybe_unused]]\nclass HostMeasureContract"
+            )
+                && guest_host_callers.contains(
+                    "    [[nodiscard]]\n    [[deprecated(\"function\")]]\n    [[nodiscard]]\n    [[deprecated(\"return\")]]"
+                )
+                && guest_host_callers.contains(
+                    "measure(\n        [[maybe_unused]]\n        [[deprecated(\"parameter\")]]"
+                ),
+            "guest host callers must render every host projection item on its own line: {guest_host_callers}"
+        );
+
+        let mut peer_caller = String::new();
+        generate_cpp_peer_caller(&mut peer_caller, &ir.contracts[0], 0);
+        assert!(
+            peer_caller.contains(
+                "[[deprecated(\"guest\")]]\n[[maybe_unused]]\nclass SampleMeasureContractPeer"
+            )
+                && peer_caller.contains(
+                    "    [[nodiscard]]\n    [[deprecated(\"function\")]]\n    [[nodiscard]]\n    [[deprecated(\"return\")]]"
+                )
+                && peer_caller.contains(
+                    "measure(\n        [[maybe_unused]]\n        [[deprecated(\"parameter\")]]"
+                ),
+            "peer callers must render every guest projection item on its own line: {peer_caller}"
+        );
+
+        let split_layout = OutputLayout {
+            bindings: OutputDestination::Inline,
+            domain_types: OutputDestination::Emit {
+                root: PathBuf::from("domain"),
+                import: ValidatedImport::parse(Lang::Cpp, "domain.hpp")
+                    .expect("valid C++ domain include"),
+            },
+            guest_contracts: OutputDestination::Emit {
+                root: PathBuf::from("contracts"),
+                import: ValidatedImport::parse(Lang::Cpp, "guest_contracts.hpp")
+                    .expect("valid C++ contracts include"),
+            },
+        };
+        let generator = CppGenerator;
+        let mut split_guest = GeneratedFiles::default();
+        generator
+            .generate_guest(&ir, &split_layout, &mut split_guest)
+            .expect("generate split guest files");
+        generator
+            .apply_output_layout(&ir, Side::Guest, &split_layout, &mut split_guest)
+            .expect("split guest files");
+        let split_domain = split_guest
+            .files
+            .iter()
+            .find(|file| file.path.as_path() == Path::new("guest/domain.hpp"))
+            .expect("split guest domain file");
+        let split_contracts = split_guest
+            .files
+            .iter()
+            .find(|file| file.path.as_path() == Path::new("guest/guest_contracts.hpp"))
+            .expect("split guest contract file");
+        assert!(
+            split_domain
+                .content
+                .contains("[[deprecated(\"record\")]]\n[[maybe_unused]]\nstruct Packet")
+                && split_contracts.content.contains(
+                    "[[deprecated(\"guest\")]]\n[[maybe_unused]]\nclass SampleMeasureGuestContract"
+                ),
+            "split files must retain multiline public semantic attributes:\ndomain={}\ncontracts={}",
+            split_domain.content,
+            split_contracts.content
+        );
+    }
+
+    #[test]
+    fn cpp_attribute_absence_preserves_generated_bytes() {
+        let without_rules = semantic_attribute_ir(None);
+        let unrelated_rust_rules = semantic_attribute_ir(Some(Lang::Rust));
+
+        assert_eq!(
+            generate_types_hpp(&without_rules).expect("render default types"),
+            generate_types_hpp(&unrelated_rust_rules).expect("render unrelated rules"),
+            "a missing C++ rule must preserve types output exactly"
+        );
+        assert_eq!(
+            generate_contracts_hpp(&without_rules).expect("render default guest contracts"),
+            generate_contracts_hpp(&unrelated_rust_rules).expect("render unrelated rules"),
+            "a missing C++ rule must preserve guest contract output exactly"
+        );
+        assert_eq!(
+            generate_host_callers_hpp(&without_rules).expect("render default host callers"),
+            generate_host_callers_hpp(&unrelated_rust_rules).expect("render unrelated rules"),
+            "a missing C++ rule must preserve caller output exactly"
+        );
+        assert_eq!(
+            generate_cpp_domain_hpp(&without_rules).expect("render default split domain"),
+            generate_cpp_domain_hpp(&unrelated_rust_rules)
+                .expect("render unrelated split domain rules"),
+            "a missing C++ rule must preserve split domain output exactly"
+        );
+        assert_eq!(
+            generate_cpp_host_contracts_file(&without_rules),
+            generate_cpp_host_contracts_file(&unrelated_rust_rules),
+            "a missing C++ rule must preserve host contract output exactly"
+        );
+        assert_eq!(
+            generate_cpp_guest_host_contracts_file(&without_rules)
+                .expect("render default guest host callers"),
+            generate_cpp_guest_host_contracts_file(&unrelated_rust_rules)
+                .expect("render unrelated guest host caller rules"),
+            "a missing C++ rule must preserve guest host caller output exactly"
+        );
+        let mut default_peer = String::new();
+        let mut unrelated_peer = String::new();
+        generate_cpp_peer_caller(&mut default_peer, &without_rules.contracts[0], 0);
+        generate_cpp_peer_caller(&mut unrelated_peer, &unrelated_rust_rules.contracts[0], 0);
+        assert_eq!(
+            default_peer, unrelated_peer,
+            "a missing C++ rule must preserve peer caller output exactly"
         );
     }
 }

@@ -205,6 +205,487 @@ fn main() {
 }
 
 #[test]
+fn generated_internal_rust_tagged_enum_projection_dispatches_all_variants() {
+    let temp: TempDir = tempfile::tempdir().expect("create temporary directory");
+    let api = temp.path().join("api.toml");
+    let bundle = temp.path().join("bundle.toml");
+    fs::write(
+        &api,
+        "[[enum]]\nname = \"Kind\"\nrepr = \"u32\"\nlangs = { rust = { serde = \"human-name-binary-discriminant\" } }\n\n[[enum.variants]]\nname = \"Empty\"\nvalue = \"17\"\nlangs = { rust = { primary_name = \"none\", default = true } }\n\n[[enum.variants]]\nname = \"Boolean\"\nvalue = \"305419896\"\n\n[[enum.variants]]\nname = \"Integer\"\nvalue = \"2596069104\"\n\n[[enum.variants]]\nname = \"Decimal\"\nvalue = \"3735928559\"\n\n[[enum.variants]]\nname = \"Text\"\nvalue = \"4294967294\"\n\n[[enum]]\nname = \"SmallKind\"\nrepr = \"u8\"\nlangs = { rust = { serde = \"human-name-binary-discriminant\" } }\n\n[[enum.variants]]\nname = \"Tiny\"\nvalue = \"7\"\nlangs = { rust = { default = true } }\n\n[[enum.variants]]\nname = \"Large\"\nvalue = \"251\"\n\n[[types]]\nname = \"Value\"\nlangs = { rust = { tagged_enum = { tag_field = \"kind\", variants = [{ tag = \"Empty\", name = \"None\" }, { tag = \"Boolean\", name = \"Bool\", payload = \"bool_value\" }, { tag = \"Integer\", name = \"Int\", payload = \"int_value\" }, { tag = \"Decimal\", name = \"Float\", payload = \"float_value\" }, { tag = \"Text\", name = \"String\", payload = \"string_value\" }] } } }\nfields = [{ name = \"kind\", type = \"Kind\" }, { name = \"bool_value\", type = \"bool\" }, { name = \"int_value\", type = \"i64\" }, { name = \"float_value\", type = \"f64\" }, { name = \"string_value\", type = \"StringView\" }]\n\n[[guest_contract]]\nname = \"projection.value\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"roundtrip\"\nparams = [{ name = \"value\", type = \"Value\" }]\nreturn = \"Value\"\n",
+    )
+    .expect("write tagged projection API");
+    let api_text = fs::read_to_string(&api)
+        .expect("read tagged projection API")
+        .replace(
+            "{ tag = \"Empty\", name = \"None\" }",
+            "{ tag = \"Empty\", name = \"None\", default = true }",
+        )
+        .replace(
+            "primary_name = \"none\", default = true",
+            "primary_name = \"none\", aliases = [\"empty\"], default = true",
+        )
+        .replace(
+            "{ name = \"string_value\", type = \"StringView\" }]",
+            "{ name = \"string_value\", type = \"StringView\" }, { name = \"values\", type = \"Array<bool>\", langs = { rust = { empty_sequence_as_null = true } } }]",
+        )
+        .replace(
+            "\n[[types]]\nname = \"Value\"",
+            "\n[[enum]]\nname = \"MediumKind\"\nrepr = \"u16\"\nlangs = { rust = { serde = \"human-name-binary-discriminant\" } }\n\n[[enum.variants]]\nname = \"Medium\"\nvalue = \"513\"\n\n[[enum.variants]]\nname = \"Maximum\"\nvalue = \"65535\"\n\n[[enum]]\nname = \"LargeKind\"\nrepr = \"u64\"\nlangs = { rust = { serde = \"human-name-binary-discriminant\" } }\n\n[[enum.variants]]\nname = \"Large\"\nvalue = \"4294967297\"\n\n[[enum.variants]]\nname = \"Maximum\"\nvalue = \"18446744073709551615\"\n\n[[types]]\nname = \"Value\"",
+        );
+    fs::write(&api, api_text).expect("add tagged projection default");
+    fs::write(
+        &bundle,
+        "[bundle]\nname = \"tagged_projection_dispatch\"\nversion = \"1.0\"\napi = \"api.toml\"\n\n[[dependency]]\nkind = \"contract\"\ncontract = \"projection.value\"\nmin_version = \"1.0.0\"\n\n[[plugin]]\nname = \"provider\"\nimplements = [\"projection.value@1.0\"]\n",
+    )
+    .expect("write tagged projection bundle");
+    let declarations_root = temp.path().join("declarations");
+    let generated = generate_internal_rust(InternalRustGenerateConfig {
+        bundle_toml: bundle,
+        layout: OutputLayout {
+            bindings: OutputDestination::Inline,
+            domain_types: OutputDestination::Emit {
+                root: declarations_root.clone(),
+                import: ValidatedImport::parse(Lang::Rust, "crate::domain").expect("domain import"),
+            },
+            guest_contracts: OutputDestination::Emit {
+                root: declarations_root.clone(),
+                import: ValidatedImport::parse(Lang::Rust, "crate::guest_contracts")
+                    .expect("guest-contract import"),
+            },
+        },
+    })
+    .expect("generate split tagged projection bindings");
+    let domain = generated
+        .files
+        .iter()
+        .find(|file| file.path.ends_with("guest/domain.rs"))
+        .expect("generated domain declarations")
+        .content
+        .as_str();
+    assert!(
+        domain.contains("pub enum Value")
+            && domain.contains("None,")
+            && domain.contains("Bool(bool)")
+            && domain.contains("Int(i64)")
+            && domain.contains("Float(f64)")
+            && domain.contains("String(String)"),
+        "tagged projection must expose authored domain variants: {domain}"
+    );
+    assert!(
+        domain.contains("serializer.serialize_u32(")
+            && domain.contains("serializer.serialize_u8(")
+            && !domain.contains("derive(Debug, Clone, PartialEq, Eq")
+            && !domain.contains("derive(Debug, Clone, PartialEq, Hash"),
+        "domain must use authored enum repr widths without invalid float derives: {domain}"
+    );
+    let crate_root = temp.path().join("consumer");
+    let source_dir = crate_root.join("src");
+    fs::create_dir_all(&source_dir).expect("create consumer source directory");
+    write_output(&generated, &source_dir).expect("write generated bindings");
+    let generated_root = Path::new("internal").join(format!(
+        "tagged_projection_dispatch-{:016x}",
+        bundle_id("tagged_projection_dispatch")
+    ));
+    let generated_module_path = generated_root.join("mod.rs");
+    let domain_module_path = declarations_root
+        .join(&generated_root)
+        .join("guest/domain.rs");
+    let guest_contracts_module_path = declarations_root
+        .join(&generated_root)
+        .join("guest/guest_contracts.rs");
+    fs::write(
+        crate_root.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"tagged_projection_dispatch_consumer\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\npolyplug = {{ path = \"{}\" }}\npolyplug_abi = {{ path = \"{}\" }}\npolyplug_common = {{ path = \"{}\" }}\npolyplug_guest = {{ path = \"{}\" }}\npolyplug_utils = {{ path = \"{}\" }}\npostcard = {{ version = \"1\", features = [\"use-std\"] }}\nserde = \"1\"\nserde_json = \"1\"\nserde_yaml = \"0.9\"\n\n[workspace]\n",
+            cargo_path("crates/polyplug"),
+            cargo_path("crates/polyplug_abi"),
+            cargo_path("crates/polyplug_common"),
+            cargo_path("sdks/rust/guest"),
+            cargo_path("crates/polyplug_utils"),
+        ),
+    )
+    .expect("write consumer Cargo.toml");
+    let consumer_source = format!(
+        "#[path = {domain_module_path:?}]\npub mod domain;\n#[path = {guest_contracts_module_path:?}]\npub mod guest_contracts;\n#[path = {generated_module_path:?}]\nmod generated;\n"
+    ) + r#"use std::fmt::{Display, Formatter};
+use std::sync::Arc;
+
+use polyplug::Runtime;
+use polyplug_guest::{GuestError, HostContext};
+use serde::de::{Deserializer, Visitor};
+use serde::ser::{Impossible, Serializer};
+use serde::{Deserialize, Serialize};
+use generated::guest::domain as generated_domain;
+use generated::guest::guest_contracts as generated_guest_contracts;
+use generated::host::domain as host_domain;
+
+#[derive(Debug)]
+struct BinaryError;
+
+impl Display for BinaryError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("unsupported binary operation")
+    }
+}
+
+impl std::error::Error for BinaryError {}
+
+impl serde::ser::Error for BinaryError {
+    fn custom<T: Display>(_message: T) -> Self {
+        Self
+    }
+}
+
+impl serde::de::Error for BinaryError {
+    fn custom<T: Display>(_message: T) -> Self {
+        Self
+    }
+}
+
+#[derive(Default)]
+struct BinarySink(Vec<u8>);
+
+impl Serializer for &mut BinarySink {
+    type Ok = ();
+    type Error = BinaryError;
+    type SerializeSeq = Impossible<(), BinaryError>;
+    type SerializeTuple = Impossible<(), BinaryError>;
+    type SerializeTupleStruct = Impossible<(), BinaryError>;
+    type SerializeTupleVariant = Impossible<(), BinaryError>;
+    type SerializeMap = Impossible<(), BinaryError>;
+    type SerializeStruct = Impossible<(), BinaryError>;
+    type SerializeStructVariant = Impossible<(), BinaryError>;
+
+    fn is_human_readable(&self) -> bool {
+        false
+    }
+
+    fn serialize_u8(self, value: u8) -> Result<Self::Ok, Self::Error> {
+        self.0.push(value);
+        Ok(())
+    }
+
+    fn serialize_u32(self, value: u32) -> Result<Self::Ok, Self::Error> {
+        self.0.extend_from_slice(&value.to_le_bytes());
+        Ok(())
+    }
+
+    fn serialize_u16(self, value: u16) -> Result<Self::Ok, Self::Error> {
+        self.0.extend_from_slice(&value.to_le_bytes());
+        Ok(())
+    }
+
+    fn serialize_u64(self, value: u64) -> Result<Self::Ok, Self::Error> {
+        self.0.extend_from_slice(&value.to_le_bytes());
+        Ok(())
+    }
+
+    fn serialize_bool(self, _value: bool) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_i8(self, _value: i8) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_i16(self, _value: i16) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_i32(self, _value: i32) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_i64(self, _value: i64) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_i128(self, _value: i128) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_u128(self, _value: u128) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_f32(self, _value: f32) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_f64(self, _value: f64) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_char(self, _value: char) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_str(self, _value: &str) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_bytes(self, _value: &[u8]) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_none(self) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_some<T: ?Sized + Serialize>(self, _value: &T) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_unit(self) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_unit_struct(self, _name: &'static str) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_unit_variant(self, _name: &'static str, _index: u32, _variant: &'static str) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_newtype_struct<T: ?Sized + Serialize>(self, _name: &'static str, _value: &T) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_newtype_variant<T: ?Sized + Serialize>(self, _name: &'static str, _index: u32, _variant: &'static str, _value: &T) -> Result<Self::Ok, Self::Error> { Err(BinaryError) }
+    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> { Err(BinaryError) }
+    fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple, Self::Error> { Err(BinaryError) }
+    fn serialize_tuple_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeTupleStruct, Self::Error> { Err(BinaryError) }
+    fn serialize_tuple_variant(self, _name: &'static str, _index: u32, _variant: &'static str, _len: usize) -> Result<Self::SerializeTupleVariant, Self::Error> { Err(BinaryError) }
+    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> { Err(BinaryError) }
+    fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct, Self::Error> { Err(BinaryError) }
+    fn serialize_struct_variant(self, _name: &'static str, _index: u32, _variant: &'static str, _len: usize) -> Result<Self::SerializeStructVariant, Self::Error> { Err(BinaryError) }
+}
+
+enum BinaryNumber {
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+}
+
+impl<'de> Deserializer<'de> for BinaryNumber {
+    type Error = BinaryError;
+
+    fn is_human_readable(&self) -> bool {
+        false
+    }
+
+    fn deserialize_any<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value, Self::Error> {
+        Err(BinaryError)
+    }
+
+    fn deserialize_u8<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        match self {
+            Self::U8(value) => visitor.visit_u8(value),
+            _ => Err(BinaryError),
+        }
+    }
+
+    fn deserialize_u16<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        match self {
+            Self::U16(value) => visitor.visit_u16(value),
+            _ => Err(BinaryError),
+        }
+    }
+
+    fn deserialize_u32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        match self {
+            Self::U32(value) => visitor.visit_u32(value),
+            _ => Err(BinaryError),
+        }
+    }
+
+    fn deserialize_u64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        match self {
+            Self::U64(value) => visitor.visit_u64(value),
+            _ => Err(BinaryError),
+        }
+    }
+
+    serde::forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u128 f32 f64 char str string bytes byte_buf option unit
+        unit_struct newtype_struct seq tuple tuple_struct map struct enum identifier ignored_any
+    }
+}
+
+struct Provider;
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct Settings {
+    #[serde(default, deserialize_with = "domain::empty_sequence_as_null", serialize_with = "domain::serialize_empty_sequence_as_null")]
+    values: Vec<bool>,
+}
+
+impl generated_guest_contracts::ProjectionValueContract for Provider {
+    fn roundtrip(&self, value: domain::Value) -> Result<domain::Value, GuestError> {
+        match &value {
+            domain::Value::None => {}
+            domain::Value::Bool(value) => assert!(*value),
+            domain::Value::Int(value) => assert_eq!(*value, -47),
+            domain::Value::Float(value) => assert_eq!(*value, 13.25),
+            domain::Value::String(value) => assert_eq!(value, "arena-string"),
+        }
+        Ok(value)
+    }
+}
+
+
+fn main() {
+    for (kind, expected) in [
+        (domain::Kind::Empty, [17, 0, 0, 0]),
+        (domain::Kind::Boolean, [0x78, 0x56, 0x34, 0x12]),
+        (domain::Kind::Integer, [0xF0, 0xDE, 0xBC, 0x9A]),
+        (domain::Kind::Decimal, [0xEF, 0xBE, 0xAD, 0xDE]),
+        (domain::Kind::Text, [0xFE, 0xFF, 0xFF, 0xFF]),
+    ] {
+        let mut bytes = BinarySink::default();
+        kind.serialize(&mut bytes).expect("serialize u32 discriminant");
+        assert_eq!(bytes.0, expected);
+        let decoded = domain::Kind::deserialize(BinaryNumber::U32(u32::from_le_bytes(expected))).expect("deserialize u32 discriminant");
+        assert_eq!(decoded, kind);
+    }
+
+    for (kind, expected) in [(domain::SmallKind::Tiny, 7), (domain::SmallKind::Large, 251)] {
+        let mut bytes = BinarySink::default();
+        kind.serialize(&mut bytes).expect("serialize u8 discriminant");
+        assert_eq!(bytes.0, [expected]);
+        let decoded = domain::SmallKind::deserialize(BinaryNumber::U8(expected)).expect("deserialize u8 discriminant");
+        assert_eq!(decoded, kind);
+    }
+    for (kind, expected) in [
+        (domain::MediumKind::Medium, [1, 2]),
+        (domain::MediumKind::Maximum, [255, 255]),
+    ] {
+        let mut bytes = BinarySink::default();
+        kind.serialize(&mut bytes).expect("serialize u16 discriminant");
+        assert_eq!(bytes.0, expected);
+        let decoded = domain::MediumKind::deserialize(BinaryNumber::U16(u16::from_le_bytes(expected)))
+            .expect("deserialize u16 discriminant");
+        assert_eq!(decoded, kind);
+    }
+    for (kind, expected) in [
+        (domain::LargeKind::Large, [1, 0, 0, 0, 1, 0, 0, 0]),
+        (domain::LargeKind::Maximum, [255; 8]),
+    ] {
+        let mut bytes = BinarySink::default();
+        kind.serialize(&mut bytes).expect("serialize u64 discriminant");
+        assert_eq!(bytes.0, expected);
+        let decoded = domain::LargeKind::deserialize(BinaryNumber::U64(u64::from_le_bytes(expected)))
+            .expect("deserialize u64 discriminant");
+        assert_eq!(decoded, kind);
+    }
+    assert_eq!(domain::Kind::default(), domain::Kind::Empty);
+    assert_eq!(domain::Value::default(), domain::Value::None);
+    assert_eq!(
+        serde_json::to_string(&domain::Kind::Empty).expect("serialize human JSON"),
+        "\"none\""
+    );
+    assert_eq!(
+        serde_json::from_str::<domain::Kind>("\"empty\"").expect("deserialize JSON alias"),
+        domain::Kind::Empty
+    );
+    assert_eq!(
+        serde_yaml::to_string(&domain::Kind::Empty).expect("serialize human YAML"),
+        "none\n"
+    );
+    assert_eq!(
+        serde_yaml::from_str::<domain::Kind>("empty\n").expect("deserialize YAML alias"),
+        domain::Kind::Empty
+    );
+    assert_eq!(
+        postcard::to_stdvec(&domain::Kind::Empty).expect("serialize postcard discriminant"),
+        vec![17]
+    );
+    assert_eq!(
+        postcard::from_bytes::<domain::Kind>(&[17]).expect("deserialize postcard discriminant"),
+        domain::Kind::Empty
+    );
+
+    let empty_settings = Settings { values: Vec::new() };
+    assert_eq!(
+        serde_json::to_string(&empty_settings).expect("serialize empty JSON"),
+        "{\"values\":null}"
+    );
+    let decoded_empty_json: Settings =
+        serde_json::from_str("{\"values\":null}").expect("deserialize empty JSON");
+    assert!(decoded_empty_json.values.is_empty());
+
+    let populated_settings = Settings {
+        values: vec![true, false],
+    };
+    assert_eq!(
+        serde_json::to_string(&populated_settings).expect("serialize populated JSON"),
+        "{\"values\":[true,false]}"
+    );
+    let decoded_populated_json: Settings =
+        serde_json::from_str("{\"values\":[true,false]}").expect("deserialize populated JSON");
+    assert_eq!(decoded_populated_json.values, [true, false]);
+    assert_eq!(
+        serde_yaml::to_string(&empty_settings).expect("serialize empty YAML"),
+        "values: null\n"
+    );
+    let decoded_empty_yaml: Settings =
+        serde_yaml::from_str("values: null\n").expect("deserialize empty YAML");
+    assert!(decoded_empty_yaml.values.is_empty());
+    assert_eq!(
+        serde_yaml::to_string(&populated_settings).expect("serialize populated YAML"),
+        "values:\n- true\n- false\n"
+    );
+    let decoded_populated_yaml: Settings =
+        serde_yaml::from_str("values:\n- true\n- false\n").expect("deserialize populated YAML");
+    assert_eq!(decoded_populated_yaml.values, [true, false]);
+    assert_eq!(
+        postcard::to_stdvec(&empty_settings).expect("serialize empty postcard"),
+        vec![0]
+    );
+    assert_eq!(
+        postcard::to_stdvec(&populated_settings).expect("serialize populated postcard"),
+        vec![1, 2, 1, 0]
+    );
+
+    for settings in [empty_settings, populated_settings] {
+        let bytes = postcard::to_stdvec(&settings).expect("serialize postcard");
+        let decoded: Settings =
+            postcard::from_bytes(&bytes).expect("deserialize postcard");
+        assert_eq!(decoded.values, settings.values);
+    }
+
+    assert_eq!(generated_domain::Value::default(), domain::Value::None);
+    assert_eq!(host_domain::Value::default(), domain::Value::None);
+
+    let runtime = Arc::new(Runtime::builder().build().expect("build runtime"));
+    let mut registration = generated::guest::init::register(
+        Arc::clone(&runtime),
+        generated::guest::interfaces::InternalProviders {
+            provider_projection_value: generated::guest::interfaces::InternalProviderFactory::new(|| -> Box<dyn generated_guest_contracts::ProjectionValueContract> { Box::new(Provider) }),
+        },
+    )
+    .expect("register internal provider");
+    for value in [
+        domain::Value::None,
+        domain::Value::Bool(true),
+        domain::Value::Int(-47),
+        domain::Value::Float(13.25),
+        domain::Value::String("arena-string".to_owned()),
+    ] {
+        let result = registration
+            .provider_projection_value
+            .roundtrip(&value)
+            .expect("host to guest tagged dispatch");
+        assert_eq!(result, value);
+    }
+
+    let host = unsafe { HostContext::new(runtime.host_abi()) };
+    let mut peer = generated::guest::peer_callers::ProjectionValueContractPeer::resolve(host)
+        .expect("resolve projection peer provider");
+    let scalar_input = domain::Value::Bool(true);
+    let scalar = peer
+        .roundtrip(&scalar_input)
+        .expect("peer scalar tagged dispatch");
+    assert!(matches!(scalar, domain::Value::Bool(true)));
+    let string_input = domain::Value::String("arena-string".to_owned());
+    let text = peer
+        .roundtrip(&string_input)
+        .expect("peer string tagged dispatch");
+    match text {
+        domain::Value::String(value) => assert_eq!(value, "arena-string"),
+        _ => panic!("peer string dispatch must return the String projection"),
+    }
+    drop(peer);
+    let bundle_id = registration.bundle_id;
+    drop(registration);
+    runtime.unload_bundle(bundle_id).expect("unload provider");
+}
+"#;
+    fs::write(source_dir.join("main.rs"), consumer_source).expect("write consumer source");
+    let output = Command::new("cargo")
+        .arg("run")
+        .current_dir(&crate_root)
+        .output()
+        .expect("run generated tagged projection consumer");
+    assert!(
+        output.status.success(),
+        "generated tagged projection consumer failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let check = Command::new("cargo")
+        .arg("check")
+        .current_dir(&crate_root)
+        .output()
+        .expect("check generated tagged projection consumer");
+    assert!(
+        check.status.success(),
+        "generated tagged projection consumer check failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr),
+    );
+    let clippy = Command::new("cargo")
+        .args(["clippy", "--", "-D", "warnings"])
+        .current_dir(&crate_root)
+        .output()
+        .expect("lint generated tagged projection consumer");
+    assert!(
+        clippy.status.success(),
+        "generated tagged projection consumer Clippy failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&clippy.stdout),
+        String::from_utf8_lossy(&clippy.stderr),
+    );
+}
+
+#[test]
 fn generated_empty_internal_rust_bindings_compile_without_declaration_modules() {
     let temp: TempDir = tempfile::tempdir().expect("create temporary directory");
     let api = temp.path().join("api.toml");
@@ -279,9 +760,17 @@ fn generated_internal_rust_nested_peer_buffer_caller_compiles_and_runs() {
         "[[types]]\nname = \"Inner\"\nfields = [{ name = \"payload\", type = \"Buffer\" }]\n\n[[types]]\nname = \"Envelope\"\nfields = [{ name = \"inner\", type = \"Inner\" }]\n\n[[guest_contract]]\nname = \"peer.buffer\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"echo\"\nparams = [{ name = \"value\", type = \"Envelope\" }]\nreturn = \"Envelope\"\n",
     )
     .expect("write nested peer API TOML");
+    let api_text = fs::read_to_string(&api).expect("read nested peer API TOML");
+    fs::write(
+        &api,
+        format!(
+            "{api_text}\n[[enum]]\nname = \"ValueTag\"\nrepr = \"u32\"\n\n[[enum.variants]]\nname = \"Number\"\nvalue = \"1\"\n\n[[enum.variants]]\nname = \"Enabled\"\nvalue = \"2\"\n\n[[types]]\nname = \"Value\"\nlangs = {{ rust = {{ tagged_enum = {{ tag_field = \"tag\", variants = [{{ tag = \"Number\", name = \"Number\", payload = \"number\" }}, {{ tag = \"Enabled\", name = \"Enabled\", payload = \"enabled\" }}] }} }} }}\nfields = [{{ name = \"tag\", type = \"ValueTag\" }}, {{ name = \"number\", type = \"u32\" }}, {{ name = \"enabled\", type = \"bool\" }}]\n\n[[guest_contract.functions]]\nname = \"scalar\"\nparams = [{{ name = \"value\", type = \"Value\" }}]\nreturn = \"Value\"\n"
+        ),
+    )
+    .expect("add scalar tagged projection");
     fs::write(
         &bundle,
-        "[bundle]\nname = \"nested_peer_buffer\"\nversion = \"1.0\"\napi = \"api.toml\"\n\n[[dependency]]\nkind = \"contract\"\ncontract = \"peer.buffer\"\nmin_version = \"1.0.0\"\n",
+        "[bundle]\nname = \"nested_peer_buffer\"\nversion = \"1.0\"\napi = \"api.toml\"\n\n[[dependency]]\nkind = \"contract\"\ncontract = \"peer.buffer\"\nmin_version = \"1.0.0\"\n\n[[plugin]]\nname = \"provider\"\nimplements = [\"peer.buffer@1.0\"]\n",
     )
     .expect("write nested peer bundle TOML");
     let declarations_root = temp.path().join("declarations");
@@ -317,6 +806,21 @@ fn generated_internal_rust_nested_peer_buffer_caller_compiles_and_runs() {
         peer_callers.contains("let host = self.host;"),
         "peer Buffer return cleanup must use the stored host field: {peer_callers}"
     );
+    assert!(
+        peer_callers.contains("number: *(payload)") && peer_callers.contains("enabled: *(payload)"),
+        "split peer callers must dereference scalar projected payloads: {peer_callers}"
+    );
+    let host_callers = generated
+        .files
+        .iter()
+        .find(|file| file.path.ends_with("host/host_callers.rs"))
+        .expect("host caller output")
+        .content
+        .as_str();
+    assert!(
+        host_callers.contains("number: *(payload)") && host_callers.contains("enabled: *(payload)"),
+        "split host callers must dereference scalar projected payloads: {host_callers}"
+    );
 
     let crate_root = temp.path().join("consumer");
     let source_dir = crate_root.join("src");
@@ -348,7 +852,7 @@ fn generated_internal_rust_nested_peer_buffer_caller_compiles_and_runs() {
     fs::write(
         source_dir.join("main.rs"),
         format!(
-            "#[path = {domain_module_path:?}]\npub mod domain;\n#[path = {guest_contracts_module_path:?}]\npub mod guest_contracts;\n#[path = {generated_module_path:?}]\nmod generated;\nfn main() {{}}\n"
+            "#[path = {domain_module_path:?}]\npub mod domain;\n#[path = {guest_contracts_module_path:?}]\npub mod guest_contracts;\n#[path = {generated_module_path:?}]\npub mod generated;\nfn main() {{}}\n"
         ),
     )
     .expect("write consumer source");
@@ -362,6 +866,17 @@ fn generated_internal_rust_nested_peer_buffer_caller_compiles_and_runs() {
         "generated nested peer Buffer caller did not compile and run:\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
+    );
+    let clippy = Command::new("cargo")
+        .args(["clippy", "--", "-D", "warnings"])
+        .current_dir(&crate_root)
+        .output()
+        .expect("lint split peer consumer");
+    assert!(
+        clippy.status.success(),
+        "split host and peer caller consumer clippy failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&clippy.stdout),
+        String::from_utf8_lossy(&clippy.stderr),
     );
 }
 
@@ -484,7 +999,7 @@ fn generated_ordinary_rust_guest_uses_external_domain_and_contract_paths() {
     .expect("write host Cargo.toml");
     fs::write(
         host.join("src/main.rs"),
-        "#[path = \"generated/mod.rs\"]\nmod generated;\nuse common::domain::{Envelope, Mode};\nfn main() { let value = Envelope { mode: Mode::Cold }; assert_eq!(value.mode, Mode::Cold); }\n",
+        "#[path = \"generated/mod.rs\"]\nmod generated;\n\nuse common::domain::{Envelope, Mode};\nuse generated::host::host_callers::ContractError;\nuse polyplug_abi::AbiErrorCode;\n\nfn assert_error<T: std::error::Error>() {}\n\nfn main() {\n    assert_error::<ContractError>();\n    let empty = ContractError::new(AbiErrorCode::Generic);\n    assert_eq!(empty.to_string(), \"ContractError(code=Generic, message=)\");\n    let detailed = ContractError { code: AbiErrorCode::NotFound, message: \"missing\".to_owned() };\n    assert_eq!(detailed.to_string(), \"ContractError(code=NotFound, message=missing)\");\n    assert_eq!(detailed.clone().code as u32, AbiErrorCode::NotFound as u32);\n    let value = Envelope { mode: Mode::Cold };\n    assert_eq!(value.mode, Mode::Cold);\n}\n",
     )
     .expect("write host source");
     let output = Command::new("cargo")

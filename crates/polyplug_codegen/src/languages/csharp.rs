@@ -461,7 +461,7 @@ impl CodeGenerator for CSharpGenerator {
 /// ABI constants for polyplug.
 public static class AbiConstants
 {
-    public const uint POLYPLUG_ABI_VERSION = 1u;
+    public const uint POLYPLUG_ABI_VERSION = 2u;
 }
 }
 "#

@@ -714,6 +714,11 @@ impl LuaLoader {
         source: &BundleSource,
     ) -> Result<(String, String, Option<String>), LoaderError> {
         match source {
+            BundleSource::Internal => Err(LoaderError::UnsupportedBundleSource {
+                loader: "lua",
+                source_kind: source.kind(),
+                bundle: manifest.name.clone(),
+            }),
             BundleSource::Path(_) => {
                 let bundle_path: PathBuf = if !manifest.file.is_empty() {
                     manifest.path.join(&manifest.file)

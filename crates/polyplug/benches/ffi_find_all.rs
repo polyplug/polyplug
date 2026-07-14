@@ -156,36 +156,47 @@ unsafe extern "C" fn bench_find_all_guest_contracts(
     this: *const HostApi,
     contract_id: u64,
     min_version: u32,
-) -> Array<GuestContractHandle> {
-    BENCH_REGISTRY.with(|cell: &RefCell<Option<RuntimeStore>>| {
-        let borrowed = cell.borrow();
-        let registry = borrowed.as_ref().expect("registry not initialized");
+    out_handles: *mut Array<GuestContractHandle>,
+) {
+    if out_handles.is_null() {
+        return;
+    }
+    // SAFETY: the caller provided a non-null output slot.
+    unsafe { out_handles.write(Array::empty()) };
 
-        let count: usize =
-            registry.count_guest_contracts(GuestContractId::from_u64(contract_id), min_version);
-        if count == 0 {
-            return Array::empty();
-        }
+    let handles: Array<GuestContractHandle> =
+        BENCH_REGISTRY.with(|cell: &RefCell<Option<RuntimeStore>>| {
+            let borrowed = cell.borrow();
+            let registry = borrowed.as_ref().expect("registry not initialized");
 
-        let size: usize = count * mem::size_of::<GuestContractHandle>();
-        let align: usize = mem::align_of::<GuestContractHandle>();
-        // SAFETY: this is a valid HostApi; alloc is safe for any size/align.
-        let ptr: *mut GuestContractHandle =
-            unsafe { ((*this).alloc)(this, size, align) as *mut GuestContractHandle };
-        if ptr.is_null() {
-            return Array::empty();
-        }
+            let count: usize =
+                registry.count_guest_contracts(GuestContractId::from_u64(contract_id), min_version);
+            if count == 0 {
+                return Array::empty();
+            }
 
-        // SAFETY: ptr was allocated for `count` GuestContractHandle elements above.
-        let slice: &mut [GuestContractHandle] = unsafe { from_raw_parts_mut(ptr, count) };
-        let actual: usize = registry.find_all_guest_contracts_into(
-            GuestContractId::from_u64(contract_id),
-            min_version,
-            slice,
-        );
+            let size: usize = count * mem::size_of::<GuestContractHandle>();
+            let align: usize = mem::align_of::<GuestContractHandle>();
+            // SAFETY: this is a valid HostApi; alloc is safe for any size/align.
+            let ptr: *mut GuestContractHandle =
+                unsafe { ((*this).alloc)(this, size, align) as *mut GuestContractHandle };
+            if ptr.is_null() {
+                return Array::empty();
+            }
 
-        Array::new(ptr, actual)
-    })
+            // SAFETY: ptr was allocated for `count` GuestContractHandle elements above.
+            let slice: &mut [GuestContractHandle] = unsafe { from_raw_parts_mut(ptr, count) };
+            let actual: usize = registry.find_all_guest_contracts_into(
+                GuestContractId::from_u64(contract_id),
+                min_version,
+                slice,
+            );
+
+            Array::new(ptr, actual)
+        });
+
+    // SAFETY: the caller provided a non-null output slot.
+    unsafe { out_handles.write(handles) };
 }
 
 /// Resolves a guest contract handle to an interface pointer via BENCH_REGISTRY.
@@ -221,12 +232,21 @@ unsafe extern "C" fn bench_resolve_host_contract_interface(
     ptr::null()
 }
 
-unsafe extern "C" fn bench_list_bundles(_this: *const HostApi) -> Array<BundleId> {
-    Array::empty()
+unsafe extern "C" fn bench_list_bundles(_this: *const HostApi, out_bundles: *mut Array<BundleId>) {
+    if !out_bundles.is_null() {
+        // SAFETY: `out_bundles` was checked non-null and receives a valid empty array.
+        unsafe { out_bundles.write(Array::empty()) };
+    }
 }
 
-unsafe extern "C" fn bench_get_dependencies(_this: *const HostApi) -> Array<DependencyInfo> {
-    Array::empty()
+unsafe extern "C" fn bench_get_dependencies(
+    _this: *const HostApi,
+    out_dependencies: *mut Array<DependencyInfo>,
+) {
+    if !out_dependencies.is_null() {
+        // SAFETY: `out_dependencies` was checked non-null and receives a valid empty array.
+        unsafe { out_dependencies.write(Array::empty()) };
+    }
 }
 
 /// Alloc wrapper that ignores this (uses global allocator).
@@ -424,14 +444,16 @@ fn bench_ffi_find_all_single_match(c: &mut Criterion) {
         BenchmarkId::new("find_all_by_contract", "single_match"),
         |b| {
             b.iter(|| {
-                // SAFETY: bench_find_all_guest_contracts is backed by BENCH_REGISTRY.
-                let arr: Array<GuestContractHandle> = unsafe {
+                let mut arr: Array<GuestContractHandle> = Array::empty();
+                // SAFETY: the callback is backed by BENCH_REGISTRY and `arr` is writable.
+                unsafe {
                     (host_interface.find_all_guest_contracts)(
                         black_box(&host_interface as *const HostApi),
                         black_box(contract_id),
                         black_box(0_u32),
-                    )
-                };
+                        &raw mut arr,
+                    );
+                }
                 // Caller owns the host-allocated array; free it via host->free.
                 if !arr.items.is_null() {
                     let size: usize = arr.len * mem::size_of::<GuestContractHandle>();
@@ -474,14 +496,16 @@ fn bench_ffi_find_all_empty_result(c: &mut Criterion) {
         BenchmarkId::new("find_all_by_contract", "empty_result"),
         |b| {
             b.iter(|| {
-                // SAFETY: bench_find_all_guest_contracts is backed by BENCH_REGISTRY.
-                let arr: Array<GuestContractHandle> = unsafe {
+                let mut arr: Array<GuestContractHandle> = Array::empty();
+                // SAFETY: the callback is backed by BENCH_REGISTRY and `arr` is writable.
+                unsafe {
                     (host_interface.find_all_guest_contracts)(
                         black_box(&host_interface as *const HostApi),
                         black_box(nonexistent_contract_id),
                         black_box(0_u32),
-                    )
-                };
+                        &raw mut arr,
+                    );
+                }
                 black_box(arr.len);
             });
         },
@@ -598,14 +622,16 @@ fn bench_ffi_find_all_registry_sweep(c: &mut Criterion) {
             &target_id,
             |b, &target_id| {
                 b.iter(|| {
-                    // SAFETY: bench_find_all_guest_contracts is backed by BENCH_REGISTRY.
-                    let arr: Array<GuestContractHandle> = unsafe {
+                    let mut arr: Array<GuestContractHandle> = Array::empty();
+                    // SAFETY: the callback is backed by BENCH_REGISTRY and `arr` is writable.
+                    unsafe {
                         (host_interface.find_all_guest_contracts)(
                             black_box(&host_interface as *const HostApi),
                             black_box(target_id),
                             black_box(0_u32),
-                        )
-                    };
+                            &raw mut arr,
+                        );
+                    }
                     if !arr.items.is_null() {
                         let size_bytes: usize = arr.len * mem::size_of::<GuestContractHandle>();
                         // SAFETY: arr.items was host-allocated by bench_alloc with this size/align.

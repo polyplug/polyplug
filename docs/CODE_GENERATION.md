@@ -11,6 +11,8 @@ every table and nested table to use `guest_contract` (for example,
 `[[guest_contract.functions]]`). IDs remain
 namespaced as `guest_contract:<name>@<major>`; only the schema spelling changed.
 
+For every accepted `api.toml` key, nesting rule, validation rule, and target-language `langs` attribute wrapper, see the [`api.toml` schema reference](API_TOML.md).
+
 ## Profiles and the default layout
 
 The normal commands remain the all-in-one default:

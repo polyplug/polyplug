@@ -19,10 +19,10 @@ use crate::{
     loader::{BundleLoader, BundleSource, ScanResult, scan_dirs},
     logger::{LoggerClosure, LoggerHandle},
     runtime::{
-        LoadOptions, ReloadCallback, Runtime, host_alloc, host_create_guest_instance,
-        host_destroy_guest_instance, host_find_all_guest_contracts, host_find_guest_contract,
-        host_free, host_get_dependencies, host_get_error_len, host_get_host_contract,
-        host_get_last_error, host_list_bundles, host_load_bundle, host_log,
+        LoadOptions, RUNTIME_INTROSPECTION, ReloadCallback, Runtime, host_alloc,
+        host_create_guest_instance, host_destroy_guest_instance, host_find_all_guest_contracts,
+        host_find_guest_contract, host_free, host_get_dependencies, host_get_error_len,
+        host_get_host_contract, host_get_last_error, host_list_bundles, host_load_bundle, host_log,
         host_register_guest_contract, host_register_host_contract, host_register_loader,
         host_registry_revision, host_reload_bundle, host_resolve_guest_contract,
         host_resolve_host_contract_interface, host_unload_bundle, validate_bundle_compatibility,
@@ -287,7 +287,7 @@ impl RuntimeBuilder {
             create_guest_instance: host_create_guest_instance,
             destroy_guest_instance: host_destroy_guest_instance,
             registry_revision: host_registry_revision,
-            reserved: ptr::null(),
+            reserved: &RUNTIME_INTROSPECTION as *const _ as *const c_void,
         });
 
         let mut loader_map: HashMap<String, Box<dyn BundleLoader>> = HashMap::new();

@@ -36,6 +36,18 @@ namespace Polyplug.Abi.Tests
         public void GuestContractHandleIs8Bytes() => Assert.Equal(8, Marshal.SizeOf<GuestContractHandle>());
 
         [Fact]
+        public void BundleDescriptorViewIs56Bytes() => Assert.Equal(56, Marshal.SizeOf<BundleDescriptorView>());
+
+        [Fact]
+        public void OwnedPluginDescriptorViewIs64Bytes() => Assert.Equal(64, Marshal.SizeOf<OwnedPluginDescriptorView>());
+
+        [Fact]
+        public void RegisteredContractDescriptorViewIs88Bytes() => Assert.Equal(88, Marshal.SizeOf<RegisteredContractDescriptorView>());
+
+        [Fact]
+        public void RuntimeIntrospectionIs24Bytes() => Assert.Equal(24, Marshal.SizeOf<RuntimeIntrospection>());
+
+        [Fact]
         public void BundleInitContextIs24Bytes() => Assert.Equal(24, Marshal.SizeOf<BundleInitContext>());
 
         [Fact]

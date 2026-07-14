@@ -10,7 +10,7 @@
 
 #include <cstdint>
 
-static_assert(POLYPLUG_ABI_VERSION == 1,
+static_assert(POLYPLUG_ABI_VERSION == 2,
     "polyplug header version mismatch — recompile against updated headers");
 
 namespace polyplug {

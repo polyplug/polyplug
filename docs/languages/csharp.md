@@ -5,6 +5,8 @@ through the `Polyplug.Host` SDK and loads plugins of any language. As a guest it
 compiles to a `.NET` class library that any polyplug host can load. For measured
 overhead, see [Performance](../PERFORMANCE.md).
 
+Define the shared contract with the [`api.toml` schema reference](../API_TOML.md), including C#-specific `langs.csharp` attribute bodies.
+
 ## Install
 
 **CLI** — generates host callers and guest glue from an `api.toml` contract:

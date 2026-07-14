@@ -71,9 +71,11 @@ use polyplug_abi::guest::GuestContractInstance;
 use polyplug_abi::runtime::{Compatibility, ReloadPhase, RuntimeConfig, SignaturePolicy};
 use polyplug_abi::types::{Ed25519PublicKey, LogLevel};
 use polyplug_abi::{
-    AbiError, AbiErrorCode, Array, DependencyInfo, GuestContractHandle, GuestContractInterface,
-    HostApi, HostContractInstance, HostContractInterface, PluginDescriptor, StringView,
-    SupportedLanguage, types::Version,
+    AbiError, AbiErrorCode, Array, BundleDescriptorView, BundleSourceKind, DependencyInfo,
+    GuestContractHandle, GuestContractInterface, HostApi, HostContractInstance,
+    HostContractInterface, OwnedPluginDescriptorView, PluginDescriptor,
+    RegisteredContractDescriptorView, RuntimeIntrospection, StringView, SupportedLanguage,
+    types::Version,
 };
 use polyplug_signing::{
     BundleVerifier, PinnedKeyVerifier, SigError, verify_bundle as signing_verify_bundle,
@@ -87,10 +89,9 @@ use crate::error::RegistryError;
 use polyplug_common::{ManifestData, ManifestDependency, ManifestError, RawManifestDependency};
 
 use crate::error::RuntimeError;
-use crate::loader::BundleLoader;
-use crate::loader::BundleSource;
 use crate::loader::manifest::{parsed_bundle_dependencies, resolved_dependencies_with_logger};
 use crate::loader::parse_manifest;
+use crate::loader::{BundleLoader, BundleOrigin, BundleSource};
 use crate::logger::{LoggerClosure, LoggerHandle, RecoverPoisoned, RecoveringGuard};
 pub use crate::runtime_builder::RuntimeBuilder;
 
@@ -99,6 +100,7 @@ use crate::runtime_store::BundleDescriptor;
 use crate::runtime_store::InternalPluginResident;
 use crate::runtime_store::InternalPluginResidentRelease;
 use crate::runtime_store::PreparedGuestContract;
+use crate::runtime_store::RegisteredContractDescriptor;
 use crate::runtime_store::RuntimeStore;
 
 // ─── Runtime Configuration ───────────────────────────────────────────────────
@@ -413,7 +415,8 @@ impl Runtime {
         manifest: ManifestData,
         language: SupportedLanguage,
     ) -> Result<BundleId, RuntimeError> {
-        let bundle_id: BundleId = self.begin_prepared_bundle_transaction(manifest, language)?;
+        let bundle_id: BundleId =
+            self.begin_prepared_bundle_transaction(manifest, language, BundleSource::Internal)?;
         let inserted: bool = self
             .internal_plugin_lifecycle
             .lock()
@@ -554,6 +557,7 @@ impl Runtime {
         &self,
         manifest: ManifestData,
         language: SupportedLanguage,
+        source: BundleSource,
     ) -> Result<BundleId, RuntimeError> {
         self.validate_prepared_bundle_manifest(&manifest)?;
         let bundle_id: BundleId = BundleId::new(&manifest.name);
@@ -564,7 +568,8 @@ impl Runtime {
                 },
             ));
         }
-        self.registry.begin_prepared_bundle(manifest, language);
+        self.registry
+            .begin_prepared_bundle(manifest, language, source);
         Ok(bundle_id)
     }
 
@@ -592,7 +597,7 @@ impl Runtime {
                 })
             })?;
         let mut resident: Option<InternalPluginResident> = prepared.take_resident();
-        let (manifest, language, contracts) = prepared.into_parts();
+        let (manifest, language, source, contracts) = prepared.into_parts();
         self.validate_prepared_provider_set(&manifest, &contracts)?;
         if !opts.ignore_function_count_mismatch && opts.compatibility != Compatibility::Yolo {
             self.validate_prepared_function_counts(&manifest, &contracts, opts.compatibility)?;
@@ -613,7 +618,7 @@ impl Runtime {
                     name: manifest.name.clone(),
                     version,
                     runtime: language,
-                    file_path: manifest.path.clone(),
+                    origin: source.origin(),
                     dependencies: bundle_dependencies,
                 },
                 dependencies,
@@ -784,6 +789,16 @@ impl Runtime {
     #[inline(always)]
     pub fn registry(&self) -> &Arc<RuntimeStore> {
         &self.registry
+    }
+
+    /// Snapshot loaded bundle descriptors, including their retained origin.
+    pub fn bundle_descriptors(&self) -> Vec<BundleDescriptor> {
+        self.registry.bundle_descriptors()
+    }
+
+    /// Snapshot live guest-contract registrations with their owning bundle.
+    pub fn registered_contract_descriptors(&self) -> Vec<RegisteredContractDescriptor> {
+        self.registry.registered_contract_descriptors()
     }
 
     /// Get the runtime configuration.
@@ -1614,8 +1629,11 @@ impl Runtime {
             });
         }
         let runtime_language: SupportedLanguage = supported_language_from_str(&manifest.loader);
-        let bundle_id: BundleId =
-            self.begin_prepared_bundle_transaction(manifest.clone(), runtime_language)?;
+        let bundle_id: BundleId = self.begin_prepared_bundle_transaction(
+            manifest.clone(),
+            runtime_language,
+            source.clone(),
+        )?;
 
         let result: Result<(), RuntimeError> = (|| {
             loader
@@ -1887,7 +1905,7 @@ pub(crate) fn validate_bundle_compatibility(
     Ok(())
 }
 
-fn parse_manifest_version(
+pub(crate) fn parse_manifest_version(
     v: &str,
     _bundle_name: &str,
     manifest_path: &Path,
@@ -1939,7 +1957,7 @@ fn host_contract_version_satisfies(interface: &HostContractInterface, min_versio
 /// An unrecognized string falls back to [`SupportedLanguage::Rust`]. Callers that want
 /// to flag a typo should first consult [`is_known_runtime_language`] and emit a
 /// warning, since this function cannot distinguish "rust" from a misspelling.
-fn supported_language_from_str(s: &str) -> SupportedLanguage {
+pub(crate) fn supported_language_from_str(s: &str) -> SupportedLanguage {
     match s {
         "native" | "rust" => SupportedLanguage::Rust,
         "python" => SupportedLanguage::Python,
@@ -2352,18 +2370,18 @@ pub(crate) unsafe extern "C" fn host_find_all_guest_contracts(
     this: *const HostApi,
     contract_id: u64,
     min_version: u32,
-) -> Array<GuestContractHandle> {
+    out_handles: *mut Array<GuestContractHandle>,
+) {
+    if out_handles.is_null() {
+        return;
+    }
+    // SAFETY: `out_handles` was checked non-null and receives a valid empty default.
+    unsafe { out_handles.write(Array::empty()) };
     if this.is_null() {
-        return Array::empty();
+        return;
     }
     // SAFETY: this is a valid HostApi pointer passed by the host.
-    // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-    let registry: &RuntimeStore = &runtime.registry;
-
-    // Dependency enforcement during the init window: a plugin must not enumerate
-    // providers of a contract it did not declare. Outside the window
-    // (caller_bundle_id == 0, host-side lookups) enumeration is unrestricted.
     let caller_bundle_id: u64 = runtime.current_init_bundle_id();
     if caller_bundle_id != 0
         && !runtime.bundle_declares_dependency(
@@ -2371,43 +2389,28 @@ pub(crate) unsafe extern "C" fn host_find_all_guest_contracts(
             GuestContractId::from_u64(contract_id),
         )
     {
-        return Array::empty();
+        return;
     }
 
-    // Count AND collect under a SINGLE registry read guard. Splitting the count
-    // and the fill across two guards is unsound: a concurrent unload shrinking the
-    // registry between them would make the allocation size disagree with the
-    // returned `Array.len`, and the SDK-side free (`len * sizeof(T)`) would then
-    // deallocate with a layout differing from the allocation (UB). `vec.len()` is
-    // therefore the single source of truth for both the allocation and `Array.len`.
-    let handles: Vec<GuestContractHandle> =
-        registry.collect_guest_contracts(GuestContractId::from_u64(contract_id), min_version);
-
+    let handles: Vec<GuestContractHandle> = runtime
+        .registry
+        .collect_guest_contracts(GuestContractId::from_u64(contract_id), min_version);
     if handles.is_empty() {
-        return Array::empty();
+        return;
     }
 
-    // Allocate via the host allocator, sized to exactly the collected handles.
-    let count: usize = handles.len();
-    let size: usize = count * mem::size_of::<GuestContractHandle>();
+    let size: usize = handles.len() * mem::size_of::<GuestContractHandle>();
     let align: usize = mem::align_of::<GuestContractHandle>();
-    // SAFETY: host_alloc is safe to call from this unsafe context.
-    let ptr: *mut GuestContractHandle =
-        unsafe { host_alloc(this, size, align) as *mut GuestContractHandle };
-
-    if ptr.is_null() {
-        return Array::empty();
+    // SAFETY: `this` is live and the layout matches the handle allocation.
+    let items: *mut GuestContractHandle =
+        unsafe { host_alloc(this, size, align).cast::<GuestContractHandle>() };
+    if items.is_null() {
+        return;
     }
-
-    // Copy the collected handles into the host-allocated buffer.
-    // SAFETY: ptr was allocated by host_alloc with size = count * size_of::<GuestContractHandle>()
-    // and is valid for `count` elements; `handles` holds exactly `count` initialised
-    // elements; source and destination are distinct allocations (non-overlapping).
-    unsafe {
-        ptr::copy_nonoverlapping(handles.as_ptr(), ptr, count);
-    }
-
-    Array::new(ptr, count)
+    // SAFETY: both buffers have exactly `handles.len()` initialized handle elements.
+    unsafe { ptr::copy_nonoverlapping(handles.as_ptr(), items, handles.len()) };
+    // SAFETY: `out_handles` remains valid for the callback and now transfers ownership.
+    unsafe { out_handles.write(Array::new(items, handles.len())) };
 }
 
 /// HostApi.resolve_guest_contract callback — returns interface pointer for a handle.
@@ -2450,6 +2453,169 @@ pub(crate) unsafe extern "C" fn host_registry_revision(this: *const HostApi) -> 
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
     runtime.registry.current_revision()
+}
+
+/// Canonical host-side metadata introspection callbacks.
+pub(crate) static RUNTIME_INTROSPECTION: RuntimeIntrospection = RuntimeIntrospection {
+    get_bundle_descriptor: host_get_bundle_descriptor,
+    list_registered_guest_contracts: host_list_registered_guest_contracts,
+    get_registered_contract_descriptor: host_get_registered_contract_descriptor,
+};
+
+/// Allocate an ABI-owned UTF-8 descriptor string for one successful introspection callback.
+///
+/// The buffer is detached from registry storage before its read lock is released. Its caller
+/// owns the resulting array and must return it through [`host_free`] exactly once.
+unsafe fn copy_descriptor_string(this: *const HostApi, value: &str) -> Option<Array<u8>> {
+    if value.is_empty() {
+        return Some(Array::empty());
+    }
+    let len: usize = value.len();
+    let align: usize = mem::align_of::<u8>();
+    // SAFETY: `this` is the live runtime host and the requested layout matches `u8`.
+    let items: *mut u8 = unsafe { host_alloc(this, len, align) };
+    if items.is_null() {
+        return None;
+    }
+    // SAFETY: `items` is a non-null allocation of `len` bytes and `value` has that length.
+    unsafe { ptr::copy_nonoverlapping(value.as_ptr(), items, len) };
+    Some(Array::new(items, len))
+}
+
+/// Release one descriptor string when building a multi-string callback result fails.
+unsafe fn release_descriptor_string(this: *const HostApi, value: Array<u8>) {
+    if !value.items.is_null() {
+        // SAFETY: `value` was allocated by `copy_descriptor_string` with this exact layout.
+        unsafe { host_free(this, value.items, value.len, value.align) };
+    }
+}
+
+/// Copy a loaded bundle descriptor into an ABI view.
+///
+/// # Safety
+/// `this` must be a valid HostApi and `out_descriptor` a valid writable pointer.
+pub(crate) unsafe extern "C" fn host_get_bundle_descriptor(
+    this: *const HostApi,
+    bundle_id: BundleId,
+    out_descriptor: *mut BundleDescriptorView,
+) -> bool {
+    if this.is_null() || out_descriptor.is_null() {
+        return false;
+    }
+    // SAFETY: `this` is non-null and points to the runtime's HostApi.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+    runtime
+        .registry
+        .with_bundle_descriptor(bundle_id, |descriptor: &BundleDescriptor| {
+            // SAFETY: `this` is live and the string allocation is released by the SDK.
+            let Some(name) = (unsafe { copy_descriptor_string(this, &descriptor.name) }) else {
+                return false;
+            };
+            let source_kind: BundleSourceKind = match &descriptor.origin {
+                BundleOrigin::Internal => BundleSourceKind::Internal,
+                BundleOrigin::Path(_) => BundleSourceKind::Path,
+                BundleOrigin::Code => BundleSourceKind::Code,
+                BundleOrigin::Bytes => BundleSourceKind::Bytes,
+            };
+            // SAFETY: `out_descriptor` was checked non-null and the copied bytes now outlive
+            // the registry lock held by `with_bundle_descriptor`.
+            unsafe {
+                out_descriptor.write(BundleDescriptorView {
+                    id: descriptor.id,
+                    name,
+                    version: descriptor.version,
+                    runtime: descriptor.runtime,
+                    source_kind,
+                });
+            }
+            true
+        })
+        .unwrap_or(false)
+}
+
+/// List all live guest-contract handles for host-side descriptor inspection.
+///
+/// # Safety
+/// `this` must be a valid HostApi pointer.
+pub(crate) unsafe extern "C" fn host_list_registered_guest_contracts(
+    this: *const HostApi,
+    out_handles: *mut Array<GuestContractHandle>,
+) {
+    if out_handles.is_null() {
+        return;
+    }
+    // SAFETY: `out_handles` was checked non-null and receives a valid empty default.
+    unsafe { out_handles.write(Array::empty()) };
+    if this.is_null() {
+        return;
+    }
+    // SAFETY: `this` is non-null and points to the runtime's HostApi.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+    let handles: Vec<GuestContractHandle> = runtime.registry.list_registered_guest_contracts();
+    if handles.is_empty() {
+        return;
+    }
+    let size: usize = handles.len() * mem::size_of::<GuestContractHandle>();
+    let align: usize = mem::align_of::<GuestContractHandle>();
+    // SAFETY: `this` is live and host_alloc accepts this layout.
+    let items: *mut GuestContractHandle =
+        unsafe { host_alloc(this, size, align).cast::<GuestContractHandle>() };
+    if items.is_null() {
+        return;
+    }
+    // SAFETY: `items` has storage for every source element and does not overlap.
+    unsafe { ptr::copy_nonoverlapping(handles.as_ptr(), items, handles.len()) };
+    // SAFETY: `out_handles` remains valid for the callback and now transfers ownership.
+    unsafe { out_handles.write(Array::new(items, handles.len())) };
+}
+
+/// Copy a live guest-contract registration descriptor into an ABI view.
+///
+/// # Safety
+/// `this` must be a valid HostApi and `out_descriptor` a valid writable pointer.
+pub(crate) unsafe extern "C" fn host_get_registered_contract_descriptor(
+    this: *const HostApi,
+    handle: GuestContractHandle,
+    out_descriptor: *mut RegisteredContractDescriptorView,
+) -> bool {
+    if this.is_null() || out_descriptor.is_null() {
+        return false;
+    }
+    // SAFETY: `this` is non-null and points to the runtime's HostApi.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+    runtime
+        .registry
+        .with_registered_contract_descriptor(handle, |entry, interface| {
+            // SAFETY: `this` is live and the SDK receives ownership on success.
+            let Some(name) = (unsafe { copy_descriptor_string(this, &entry.descriptor.name) })
+            else {
+                return false;
+            };
+            // SAFETY: `this` is live and the SDK receives ownership on success.
+            let Some(contract_name) =
+                (unsafe { copy_descriptor_string(this, &entry.descriptor.contract_name) })
+            else {
+                // SAFETY: `name` was allocated above and has not crossed the ABI boundary.
+                unsafe { release_descriptor_string(this, name) };
+                return false;
+            };
+            // SAFETY: `out_descriptor` was checked non-null and both buffers are detached from
+            // the registry before its read lock can be released.
+            unsafe {
+                out_descriptor.write(RegisteredContractDescriptorView {
+                    handle,
+                    bundle_id: entry.bundle_id,
+                    contract_id: interface.contract_id.id(),
+                    plugin: OwnedPluginDescriptorView {
+                        name,
+                        contract_name,
+                        version: entry.descriptor.version,
+                    },
+                });
+            }
+            true
+        })
+        .unwrap_or(false)
 }
 
 /// HostApi.get_host_contract callback — returns an instance for a host contract.
@@ -2606,89 +2772,90 @@ pub(crate) unsafe extern "C" fn host_resolve_host_contract_interface(
 ///
 /// # Safety
 /// this must be a valid HostApi pointer with valid runtime field.
-pub(crate) unsafe extern "C" fn host_list_bundles(this: *const HostApi) -> Array<BundleId> {
+pub(crate) unsafe extern "C" fn host_list_bundles(
+    this: *const HostApi,
+    out_bundles: *mut Array<BundleId>,
+) {
+    if out_bundles.is_null() {
+        return;
+    }
+    // SAFETY: `out_bundles` was checked non-null and receives a valid empty default.
+    unsafe { out_bundles.write(Array::empty()) };
     if this.is_null() {
-        return Array::empty();
+        return;
     }
     // SAFETY: this is a valid HostApi pointer.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-
-    let manifests: RecoveringGuard<MutexGuard<'_, HashMap<String, ManifestData>>> = runtime
-        .bundle_manifests
-        .lock()
-        .recover_poisoned(runtime.logger, "runtime");
-
-    let count = manifests.len();
-    if count == 0 {
-        return Array::empty();
+    let bundle_ids: Vec<BundleId> = runtime.registry.list_bundles();
+    if bundle_ids.is_empty() {
+        return;
     }
 
-    // Allocate via host allocator
-    let size = count * mem::size_of::<BundleId>();
-    let align = mem::align_of::<BundleId>();
-    // SAFETY: host_alloc is safe to call
-    let ptr = unsafe { host_alloc(this, size, align) as *mut BundleId };
-
-    if ptr.is_null() {
-        return Array::empty();
+    let size: usize = bundle_ids.len() * mem::size_of::<BundleId>();
+    let align: usize = mem::align_of::<BundleId>();
+    // SAFETY: `this` is live and the layout matches the bundle ID allocation.
+    let items: *mut BundleId = unsafe { host_alloc(this, size, align).cast::<BundleId>() };
+    if items.is_null() {
+        return;
     }
-
-    // Fill array
-    for (i, (_, manifest)) in manifests.iter().enumerate() {
-        // SAFETY: ptr was allocated with count elements and i < count.
-        unsafe {
-            *ptr.add(i) = BundleId::from_u64(manifest.id);
-        }
-    }
-
-    Array::new(ptr, count)
+    // SAFETY: `items` has storage for every source element and does not overlap.
+    unsafe { ptr::copy_nonoverlapping(bundle_ids.as_ptr(), items, bundle_ids.len()) };
+    // SAFETY: `out_bundles` remains valid for the callback and now transfers ownership.
+    unsafe { out_bundles.write(Array::new(items, bundle_ids.len())) };
 }
 
-/// HostApi.get_dependencies callback — returns Array<DependencyInfo>.
+/// HostApi.get_dependencies callback — writes an `Array<DependencyInfo>` through its
+/// trailing output parameter.
 ///
 /// Looks up the calling bundle's dependencies using the bundle_id at the top of the
 /// runtime's per-thread init-bundle stack (the instance-owned replacement for the
-/// former process-global thread-local). Returns an empty array outside any init
-/// window (top-of-stack bundle_id == 0).
+/// former process-global thread-local). A non-null output is initialized to an empty
+/// array before every early return.
 ///
 /// # Safety
-/// this must be a valid HostApi pointer with valid runtime field.
+/// `this` must be a valid HostApi pointer with valid runtime field when non-null.
 pub(crate) unsafe extern "C" fn host_get_dependencies(
     this: *const HostApi,
-) -> Array<DependencyInfo> {
-    if this.is_null() {
-        return Array::empty();
+    out_dependencies: *mut Array<DependencyInfo>,
+) {
+    if out_dependencies.is_null() {
+        return;
     }
-    // SAFETY: this is a valid HostApi pointer.
+    // SAFETY: `out_dependencies` is non-null and valid for the callback.
+    unsafe { out_dependencies.write(Array::empty()) };
+    if this.is_null() {
+        return;
+    }
+    // SAFETY: `this` is a valid HostApi pointer.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
 
     // Get bundle_id from the runtime's per-thread init stack.
     let caller_bundle_id: u64 = runtime.current_init_bundle_id();
     if caller_bundle_id == 0 {
-        return Array::empty();
+        return;
     }
 
     let manifest: ManifestData = match runtime.init_manifest(BundleId::from_u64(caller_bundle_id)) {
         Some(manifest) => manifest,
-        None => return Array::empty(),
+        None => return,
     };
 
     let deps = &manifest.dependencies;
     if deps.is_empty() {
-        return Array::empty();
+        return;
     }
 
     let count = deps.len();
     let size = count * mem::size_of::<DependencyInfo>();
     let align = mem::align_of::<DependencyInfo>();
-    // SAFETY: host_alloc is safe to call
+    // SAFETY: host_alloc is safe to call.
     let ptr = unsafe { host_alloc(this, size, align) as *mut DependencyInfo };
 
     if ptr.is_null() {
-        return Array::empty();
+        return;
     }
 
-    // Fill array with DependencyInfo
+    // Fill array with DependencyInfo.
     for (i, dep) in deps.iter().enumerate() {
         let info = DependencyInfo {
             contract_id: dep.contract_id,
@@ -2701,7 +2868,8 @@ pub(crate) unsafe extern "C" fn host_get_dependencies(
         }
     }
 
-    Array::new(ptr, count)
+    // SAFETY: `out_dependencies` remains valid for the callback and now transfers ownership.
+    unsafe { out_dependencies.write(Array::new(ptr, count)) };
 }
 
 // ─── HostApi operation functions (18-02 implementation) ───────────────────
@@ -3270,6 +3438,9 @@ pub(crate) unsafe extern "C" fn host_destroy_guest_instance(
 mod tests {
     #![allow(clippy::expect_used)]
     use core::cell::Cell;
+    use core::mem::MaybeUninit;
+    use core::ptr;
+    use core::slice;
     use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::collections::HashMap;
     use std::fs;
@@ -3292,6 +3463,20 @@ mod tests {
             SupportedLanguage::JavaScript
         );
         assert!(is_known_runtime_language("js-quickjs"));
+    }
+
+    #[test]
+    fn get_dependencies_initializes_out_to_empty_outside_bundle_init() {
+        let runtime = Runtime::builder().build().expect("runtime build");
+        let host: *const HostApi = runtime.host_abi();
+        let mut dependencies: Array<DependencyInfo> = Array::new(ptr::dangling_mut(), 1);
+
+        // SAFETY: host belongs to the live runtime and dependencies is writable.
+        unsafe { host_get_dependencies(host, &mut dependencies) };
+
+        assert!(dependencies.items.is_null());
+        assert_eq!(dependencies.len, 0);
+        assert_eq!(dependencies.align, core::mem::align_of::<DependencyInfo>());
     }
 
     #[test]
@@ -5443,7 +5628,7 @@ mod tests {
                     patch: 0,
                 },
                 SupportedLanguage::Rust,
-                PathBuf::new(),
+                BundleOrigin::Internal,
                 Vec::new(),
             )
             .expect("provider metadata registration should succeed");
@@ -5458,7 +5643,7 @@ mod tests {
                     patch: 0,
                 },
                 SupportedLanguage::Rust,
-                PathBuf::new(),
+                BundleOrigin::Internal,
                 Vec::new(),
             )
             .expect("dependent metadata registration should succeed");
@@ -6056,7 +6241,7 @@ mod tests {
             }
         );
         assert_eq!(descriptor.runtime, SupportedLanguage::Rust);
-        assert_eq!(descriptor.file_path, PathBuf::new());
+        assert_eq!(descriptor.origin, BundleOrigin::Code);
         assert!(descriptor.dependencies.is_empty());
         assert_eq!(runtime.registry.current_revision(), revision_before + 1);
         assert_eq!(
@@ -6069,6 +6254,107 @@ mod tests {
             }
         );
         assert_eq!(unloads.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn introspection_callback_maps_every_bundle_origin() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("runtime build");
+        let cases: [(BundleOrigin, BundleSourceKind); 4] = [
+            (BundleOrigin::Internal, BundleSourceKind::Internal),
+            (
+                BundleOrigin::Path("/bundles/introspection".into()),
+                BundleSourceKind::Path,
+            ),
+            (BundleOrigin::Code, BundleSourceKind::Code),
+            (BundleOrigin::Bytes, BundleSourceKind::Bytes),
+        ];
+
+        for (index, (origin, expected_kind)) in cases.into_iter().enumerate() {
+            let bundle_id: BundleId = BundleId::from_u64(0xA000 + index as u64);
+            runtime
+                .registry
+                .register_bundle_metadata(
+                    bundle_id,
+                    format!("introspection-origin-{index}"),
+                    Version {
+                        major: 1,
+                        minor: 0,
+                        patch: 0,
+                    },
+                    SupportedLanguage::Rust,
+                    origin,
+                    Vec::new(),
+                )
+                .expect("metadata registration succeeds");
+
+            let mut view: MaybeUninit<BundleDescriptorView> = MaybeUninit::uninit();
+            // SAFETY: the runtime host API and output storage remain valid for this call.
+            assert!(unsafe {
+                host_get_bundle_descriptor(runtime.host_abi(), bundle_id, view.as_mut_ptr())
+            });
+            // SAFETY: the successful callback initialized every BundleDescriptorView field.
+            let view: BundleDescriptorView = unsafe { view.assume_init() };
+            assert_eq!(view.source_kind, expected_kind);
+            // SAFETY: the successful callback transferred this exact allocation to the test.
+            unsafe { release_descriptor_string(runtime.host_abi(), view.name) };
+        }
+    }
+
+    #[test]
+    fn owned_descriptor_copy_survives_concurrent_bundle_invalidation() {
+        let runtime: Arc<Runtime> = Runtime::builder().build().expect("runtime build");
+        let bundle_id: BundleId = BundleId::from_u64(0xA001_0000_0000_0001);
+        runtime
+            .registry
+            .register_bundle_metadata(
+                bundle_id,
+                "unload-safe-descriptor".to_owned(),
+                Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                SupportedLanguage::Rust,
+                BundleOrigin::Internal,
+                Vec::new(),
+            )
+            .expect("metadata registration");
+
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (copy_tx, copy_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let reader_runtime: Arc<Runtime> = Arc::clone(&runtime);
+        let reader = thread::spawn(move || {
+            let mut view: MaybeUninit<BundleDescriptorView> = MaybeUninit::uninit();
+            // SAFETY: the runtime remains alive until the reader finishes.
+            assert!(unsafe {
+                host_get_bundle_descriptor(reader_runtime.host_abi(), bundle_id, view.as_mut_ptr())
+            });
+            // SAFETY: success initialized the descriptor and transferred its owned name buffer.
+            let view: BundleDescriptorView = unsafe { view.assume_init() };
+            ready_tx.send(()).expect("notify main");
+            copy_rx.recv().expect("wait for invalidation");
+            // SAFETY: the name buffer is caller-owned, independent of the invalidated registry.
+            let copied: String = unsafe {
+                String::from_utf8(slice::from_raw_parts(view.name.items, view.name.len).to_vec())
+            }
+            .expect("descriptor UTF-8");
+            // SAFETY: this allocation was transferred by the successful callback.
+            unsafe { release_descriptor_string(reader_runtime.host_abi(), view.name) };
+            result_tx.send(copied).expect("send copied name");
+        });
+
+        ready_rx.recv().expect("descriptor allocation ready");
+        runtime
+            .registry
+            .invalidate_bundle(bundle_id)
+            .expect("invalidate bundle after callback return");
+        copy_tx.send(()).expect("allow owned copy");
+        assert_eq!(
+            result_rx.recv().expect("copied descriptor"),
+            "unload-safe-descriptor"
+        );
+        reader.join().expect("reader joins");
     }
 
     #[test]

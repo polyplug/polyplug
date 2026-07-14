@@ -11,6 +11,10 @@ import {
     HOST_CONTRACT_INSTANCE_SIZE,
     HOST_CONTRACT_INTERFACE_SIZE,
     GUEST_CONTRACT_HANDLE_SIZE,
+    BUNDLE_DESCRIPTOR_VIEW_SIZE,
+    OWNED_PLUGIN_DESCRIPTOR_VIEW_SIZE,
+    REGISTERED_CONTRACT_DESCRIPTOR_VIEW_SIZE,
+    RUNTIME_INTROSPECTION_SIZE,
     BUNDLE_INIT_CONTEXT_SIZE,
     PLUGIN_DESCRIPTOR_SIZE,
     RELOAD_PHASE_SIZE,
@@ -60,6 +64,22 @@ test("HostContractInterface is 80 bytes", () => {
 
 test("GuestContractHandle is 8 bytes", () => {
     assertStrictEquals(GUEST_CONTRACT_HANDLE_SIZE, 8);
+});
+
+test("BundleDescriptorView is 56 bytes", () => {
+    assertStrictEquals(BUNDLE_DESCRIPTOR_VIEW_SIZE, 56);
+});
+
+test("OwnedPluginDescriptorView is 64 bytes", () => {
+    assertStrictEquals(OWNED_PLUGIN_DESCRIPTOR_VIEW_SIZE, 64);
+});
+
+test("RegisteredContractDescriptorView is 88 bytes", () => {
+    assertStrictEquals(REGISTERED_CONTRACT_DESCRIPTOR_VIEW_SIZE, 88);
+});
+
+test("RuntimeIntrospection is 24 bytes", () => {
+    assertStrictEquals(RUNTIME_INTROSPECTION_SIZE, 24);
 });
 
 test("BundleInitContext is 24 bytes", () => {

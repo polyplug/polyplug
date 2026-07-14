@@ -91,8 +91,12 @@ unsafe extern "C" fn stub_find_all(
     _this: *const HostApi,
     _id: u64,
     _ver: u32,
-) -> Array<GuestContractHandle> {
-    Array::empty()
+    out_handles: *mut Array<GuestContractHandle>,
+) {
+    if !out_handles.is_null() {
+        // SAFETY: the caller provided a non-null output slot.
+        unsafe { out_handles.write(Array::empty()) };
+    }
 }
 
 unsafe extern "C" fn stub_resolve_guest(
@@ -118,12 +122,21 @@ unsafe extern "C" fn stub_resolve_host_interface(
     ptr::null()
 }
 
-unsafe extern "C" fn stub_list_bundles(_this: *const HostApi) -> Array<BundleId> {
-    Array::empty()
+unsafe extern "C" fn stub_list_bundles(_this: *const HostApi, out_bundles: *mut Array<BundleId>) {
+    if !out_bundles.is_null() {
+        // SAFETY: `out_bundles` was checked non-null and receives a valid empty array.
+        unsafe { out_bundles.write(Array::empty()) };
+    }
 }
 
-unsafe extern "C" fn stub_get_deps(_this: *const HostApi) -> Array<DependencyInfo> {
-    Array::empty()
+unsafe extern "C" fn stub_get_deps(
+    _this: *const HostApi,
+    out_dependencies: *mut Array<DependencyInfo>,
+) {
+    if !out_dependencies.is_null() {
+        // SAFETY: `out_dependencies` was checked non-null and receives a valid empty array.
+        unsafe { out_dependencies.write(Array::empty()) };
+    }
 }
 
 unsafe extern "C" fn stub_load(

@@ -686,11 +686,25 @@ fn register_host_functions<'js>(
                 Some(ptr) => ptr,
                 None => return 0_u32,
             };
-            // SAFETY: hvt points to 'static HostApi data.
-            // find_all_guest_contracts returns Array<GuestContractHandle>.
-            let handles: AbiArray<GuestContractHandle> =
-                unsafe { ((*hvt).find_all_guest_contracts)(hvt, contract_id, min_ver) };
-            handles.len as u32
+            let mut handles: AbiArray<GuestContractHandle> = AbiArray::empty();
+            // SAFETY: hvt points to 'static HostApi data and `handles` is a writable output slot.
+            unsafe {
+                ((*hvt).find_all_guest_contracts)(hvt, contract_id, min_ver, &raw mut handles);
+            }
+            let count: u32 = handles.len as u32;
+            if !handles.items.is_null() {
+                // SAFETY: `handles` was allocated by this HostApi and is freed with its recorded
+                // element count and alignment.
+                unsafe {
+                    ((*hvt).free)(
+                        hvt,
+                        handles.items.cast::<u8>(),
+                        handles.len * mem::size_of::<GuestContractHandle>(),
+                        handles.align,
+                    );
+                }
+            }
+            count
         },
     )
     .map_err(|e: QjsError| LoaderError::InitFailed {
@@ -2003,6 +2017,11 @@ impl BundleLoader for JsLoader {
         runtime: &PolyplugRuntime,
     ) -> Result<(), LoaderError> {
         match source {
+            BundleSource::Internal => Err(LoaderError::UnsupportedBundleSource {
+                loader: "js-quickjs",
+                source_kind: source.kind(),
+                bundle: manifest.name.clone(),
+            }),
             // On-disk source: read bundle.js from the bundle directory and eval it,
             // provisioning bundlePath/bundle_path from that directory.
             BundleSource::Path(_) => {

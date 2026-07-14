@@ -70,6 +70,15 @@ pub enum PolyplugcError {
         location: Option<SourceLocation>,
     },
 
+    /// A per-language attribute is empty or spans more than one source line.
+    InvalidLanguageAttribute {
+        language: String,
+        node: String,
+        attribute: String,
+        reason: String,
+        location: Box<SourceLocation>,
+    },
+
     /// TOML-level parse error with optional source location.
     TomlParseError {
         /// Human-readable parse error from the toml crate.
@@ -235,6 +244,19 @@ impl fmt::Display for PolyplugcError {
                     f,
                     "invalid documentation character U+{:04X}: documentation permits only tab, line breaks, and printable text",
                     *character as u32
+                )
+            }
+
+            PolyplugcError::InvalidLanguageAttribute {
+                language,
+                node,
+                attribute,
+                reason,
+                location,
+            } => {
+                write!(
+                    f,
+                    "{location} — invalid {language} attribute `{attribute}` on {node}: {reason}"
                 )
             }
 

@@ -10,7 +10,7 @@ from typing import Any, Callable
 from polyplug_abi import StringView, to_str
 from polyplug_guest import AbiError, AbiErrorCode, alloc_string_arena, register_contract
 
-POLYPLUG_ABI_VERSION: int = 1
+POLYPLUG_ABI_VERSION: int = 2
 
 class ENCODERPipelineEncoderPlugin:
     def encode(self, input: str) -> str:
@@ -38,7 +38,7 @@ def encoder_encode_abi(impl: ENCODERPipelineEncoderPlugin, args_ptr: int, out_pt
     ctypes.memmove(out_ptr, ctypes.addressof(out_view), ctypes.sizeof(out_view))
 
 def polyplug_abi_version() -> int:
-    return 1
+    return 2
 
 def polyplug_init(host_ptr: int, ctx_ptr: int) -> tuple[list[dict[str, Any]], AbiError]:
     """Build this bundle's contract registrations for the polyplug_python VM loader.

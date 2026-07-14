@@ -108,6 +108,27 @@ var rt = new RuntimeBuilder()
 `Required` rejects unsigned or tampered bundles; `.TrustedKeys(...)` pins
 accepted signers. See the [Trust Model](../TRUST_MODEL.md).
 
+### Inspect loaded bundles and contracts
+
+`GetBundleDescriptors()` and `GetRegisteredContractDescriptors()` return copied
+read-only snapshots:
+
+```csharp
+foreach (BundleDescriptor bundle in rt.GetBundleDescriptors())
+{
+    Console.WriteLine($"{bundle.Name}: {bundle.SourceKind}");
+}
+IReadOnlyList<RegisteredContractDescriptor> contracts =
+    rt.GetRegisteredContractDescriptors();
+```
+
+`SourceKind` is the payload-free SDK projection of Rust `BundleOrigin`:
+`Internal`, `Path`, `Code`, or `Bytes`. A code or bytes origin never exposes
+the supplied payload. The snapshots list current loaded bundles and live
+registrations; they do not represent a per-plugin enabled/disabled state or
+call `Initialize` for the application. Keep that policy in application code;
+see [Runtime lifecycle is not application enablement](../ARCHITECTURE.md#runtime-lifecycle-is-not-application-enablement).
+
 ## 4. Register a host contract (optional)
 
 If your `api.toml` defines a host contract (a service the host provides to

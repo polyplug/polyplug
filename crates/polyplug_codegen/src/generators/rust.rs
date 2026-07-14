@@ -8,6 +8,10 @@ use super::CALL_ARENA_BUF_LEN;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::attributes::attribute_site;
+use super::attributes::inner_attributes;
+use super::attributes::render_attributes;
+use super::attributes::target_language;
 use super::collect_peer_contracts;
 use super::is_native_runtime;
 use super::peer_min_version;
@@ -17,6 +21,7 @@ use std::path::{Path, PathBuf};
 use super::docs::append_lines;
 
 use crate::GenerateOutput;
+use crate::Lang;
 use crate::OutputDestination;
 use crate::OutputLayout;
 use crate::OutputPartition;
@@ -24,9 +29,12 @@ use crate::PolyplugcError;
 use crate::ResolvedBundleFile;
 use crate::Side;
 use crate::ir::AbiBuiltin;
+use crate::ir::CustomizableNode;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
+use crate::ir::LanguageRules;
 use crate::ir::PrimitiveType;
+use crate::ir::ReprType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
 use crate::ir::ResolvedDependency;
@@ -37,6 +45,8 @@ use crate::ir::ResolvedParam;
 use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
+use crate::ir::RustTaggedEnum;
+use crate::ir::RustTaggedEnumVariant;
 use crate::ir::ValidatedIr;
 use crate::ir::array_element_name;
 use langprint::backends::rust_backend::{
@@ -44,6 +54,7 @@ use langprint::backends::rust_backend::{
     RustExternBlock, RustField, RustFunction, RustParameter, RustSelfKind, RustStruct,
     RustStructRenderOptions, RustTrait, RustVisibility,
 };
+use langprint::ir::{RawAttribute, render_raw_attributes};
 use langprint::renderers::EnumRenderer;
 use langprint::renderers::FunctionRenderer;
 use langprint::renderers::StructRenderer;
@@ -99,9 +110,12 @@ impl RustGenerator {
             files,
             GuestRustOutputMode::InternalProfile { bundle_name },
         )?;
+        let mut root_mod_content: String = String::from(RUST_FILE_HEADER);
+        emit_rust_attributes(&mut root_mod_content, "", CustomizableNode::Api, &ir.langs);
+        root_mod_content.push_str("pub mod host;\npub mod guest;\n");
         files.files.push(GeneratedFile {
             path: PathBuf::from("mod.rs"),
-            content: format!("{RUST_FILE_HEADER}pub mod host;\npub mod guest;\n"),
+            content: root_mod_content,
             force_regenerate: true,
             partition: OutputPartition::Bindings,
             references: Vec::new(),
@@ -116,6 +130,7 @@ impl RustGenerator {
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
         let mut domain_out = String::from(RUST_FILE_HEADER);
+        emit_rust_attributes(&mut domain_out, "", CustomizableNode::Api, &ir.langs);
         generate_internal_profile_domain_types_file(&mut domain_out, ir)?;
         let domain_path = match side {
             Side::Host => PathBuf::from("host/domain.rs"),
@@ -130,6 +145,12 @@ impl RustGenerator {
         });
         if side == Side::Guest {
             let mut guest_contracts_out = String::from(RUST_FILE_HEADER);
+            emit_rust_attributes(
+                &mut guest_contracts_out,
+                "",
+                CustomizableNode::Api,
+                &ir.langs,
+            );
             generate_internal_profile_guest_contracts_file(&mut guest_contracts_out, ir)?;
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/guest_contracts.rs"),
@@ -166,6 +187,7 @@ impl RustGenerator {
         // ── types.rs ──────────────────────────────────────────────────────────
         let mut types_out: String = String::new();
         types_out.push_str(header);
+        emit_rust_attributes(&mut types_out, "", CustomizableNode::Api, &ir.langs);
         types_out.push_str(&rust_use_block(&[&[
             "polyplug_abi::Buffer",
             "polyplug_abi::StringView",
@@ -209,6 +231,7 @@ impl RustGenerator {
         if internal_mode == Some(InternalBindingMode::Profile) {
             let mut domain_out: String = String::new();
             domain_out.push_str(header);
+            emit_rust_attributes(&mut domain_out, "", CustomizableNode::Api, &ir.langs);
             generate_internal_profile_domain_types_file(&mut domain_out, ir)?;
             domain_out.push_str(&format!(
                 "pub const INTERNAL_GENERATION_FINGERPRINT: u64 = {internal_fingerprint};\n"
@@ -223,6 +246,12 @@ impl RustGenerator {
 
             let mut guest_contracts_out: String = String::new();
             guest_contracts_out.push_str(header);
+            emit_rust_attributes(
+                &mut guest_contracts_out,
+                "",
+                CustomizableNode::Api,
+                &ir.langs,
+            );
             generate_internal_profile_guest_contracts_file(&mut guest_contracts_out, ir)?;
             guest_contracts_out.push_str(&format!(
                 "pub const INTERNAL_GENERATION_FINGERPRINT: u64 = {internal_fingerprint};\n"
@@ -239,6 +268,7 @@ impl RustGenerator {
         // ── contracts.rs ──────────────────────────────────────────────────────
         let mut contracts_out: String = String::new();
         contracts_out.push_str(header);
+        emit_rust_attributes(&mut contracts_out, "", CustomizableNode::Api, &ir.langs);
         contracts_out.push_str(&rust_use_block(&[
             &[
                 "polyplug_abi::Buffer",
@@ -347,8 +377,71 @@ impl RustGenerator {
     }
 }
 
+fn has_rust_attributes(rules: &LanguageRules) -> bool {
+    !inner_attributes(Lang::Rust, rules).is_empty()
+}
+
 /// AUTO-GENERATED banner emitted at the top of every `//`-comment output file.
 const RUST_FILE_HEADER: &str = "// THIS FILE IS AUTO-GENERATED BY polyplugc. DO NOT EDIT.\n";
+
+fn rust_attributes(rules: &LanguageRules) -> Vec<String> {
+    inner_attributes(Lang::Rust, rules).to_vec()
+}
+
+fn emit_rust_attributes(
+    out: &mut String,
+    indent: &str,
+    node: CustomizableNode,
+    rules: &LanguageRules,
+) {
+    for attribute in render_attributes(Lang::Rust, node, rules) {
+        out.push_str(indent);
+        out.push_str(&attribute);
+        out.push('\n');
+    }
+}
+
+fn rust_parameter_attributes(rules: &LanguageRules) -> Vec<String> {
+    render_attributes(Lang::Rust, CustomizableNode::Param, rules)
+}
+
+fn append_rust_signature_param(
+    signature: &mut String,
+    name: &str,
+    ty: &str,
+    rules: &LanguageRules,
+) {
+    let attributes: Vec<String> = rust_parameter_attributes(rules);
+    if attributes.len() <= 1 {
+        signature.push_str(", ");
+        if let Some(attribute) = attributes.first() {
+            signature.push_str(attribute);
+            signature.push(' ');
+        }
+        signature.push_str(name);
+        signature.push_str(": ");
+        signature.push_str(ty);
+        return;
+    }
+
+    signature.push_str(",\n        ");
+    signature.push_str(&attributes.join("\n        "));
+    signature.push_str("\n        ");
+    signature.push_str(name);
+    signature.push_str(": ");
+    signature.push_str(ty);
+}
+
+fn has_multiple_rust_parameter_attributes(func: &ResolvedFunction) -> bool {
+    func.params
+        .iter()
+        .any(|param| rust_parameter_attributes(&param.langs).len() > 1)
+}
+
+fn emit_rust_function_attributes(out: &mut String, indent: &str, func: &ResolvedFunction) {
+    emit_rust_attributes(out, indent, CustomizableNode::Return, &func.return_langs);
+    emit_rust_attributes(out, indent, CustomizableNode::Function, &func.langs);
+}
 
 /// Render grouped Rust `use` blocks through langprint's [`ImportSet`] so the
 /// `use …;` syntax lives in one place rather than in hand-written
@@ -373,6 +466,25 @@ fn rust_use_block(groups: &[&[&str]]) -> String {
     blocks.join("\n")
 }
 
+fn emit_caller_arena_array(out: &mut String) {
+    out.push_str(
+        "fn caller_arena_array<T>(arena: &mut CallArena, values: &[T]) -> Result<(u64, u64), ContractError> {\n\
+         \x20   if values.is_empty() {\n\
+         \x20       return Ok((0, 0));\n\
+         \x20   }\n\
+         \x20   let bytes = values.len().checked_mul(core::mem::size_of::<T>()).ok_or_else(|| ContractError::new(AbiErrorCode::Generic))?;\n\
+         \x20   let ptr = arena.alloc(bytes, core::mem::align_of::<T>()).cast::<T>();\n\
+         \x20   if ptr.is_null() {\n\
+         \x20       return Err(ContractError::new(AbiErrorCode::Generic));\n\
+         \x20   }\n\
+         \x20   // SAFETY: `ptr` is a non-null `arena` allocation for exactly `values.len()` `T`s;\n\
+         \x20   // `values` supplies that many initialized `T`s, and the arena cannot overlap this slice.\n\
+         \x20   unsafe { core::ptr::copy_nonoverlapping(values.as_ptr(), ptr, values.len()); }\n\
+         \x20   Ok((ptr as u64, values.len() as u64))\n\
+         }\n\n",
+    );
+}
+
 impl CodeGenerator for RustGenerator {
     fn generate_host(
         &self,
@@ -392,6 +504,7 @@ impl CodeGenerator for RustGenerator {
         // ── types.rs ──────────────────────────────────────────────────────────
         let mut types_out: String = String::new();
         types_out.push_str(header);
+        emit_rust_attributes(&mut types_out, "", CustomizableNode::Api, &ir.langs);
         types_out.push_str(&rust_use_block(&[&[
             "polyplug_abi::Buffer",
             "polyplug_abi::StringView",
@@ -479,10 +592,16 @@ impl CodeGenerator for RustGenerator {
         // ── host_callers.rs ───────────────────────────────────────────────────
         let mut callers_out: String = String::new();
         callers_out.push_str(header);
+        emit_rust_attributes(&mut callers_out, "", CustomizableNode::Api, &ir.langs);
 
         let local_imports: &[&str] = &["super::types::*"];
         callers_out.push_str(&rust_use_block(&[
-            &["core::ffi::c_void", "std::sync::Arc"],
+            &[
+                "core::error::Error",
+                "core::ffi::c_void",
+                "std::fmt",
+                "std::sync::Arc",
+            ],
             &[
                 "polyplug::Runtime",
                 "polyplug_abi::AbiErrorCode",
@@ -510,7 +629,12 @@ impl CodeGenerator for RustGenerator {
             "const CALL_ARENA_BUF_LEN: usize = {CALL_ARENA_BUF_LEN};\n\n"
         ));
         callers_out.push_str("/// Host-side error type for contract calls.\n");
-        callers_out.push_str("#[derive(Debug)]\n");
+        emit_rust_generated_attributes(
+            &mut callers_out,
+            "",
+            CustomizableNode::Type,
+            &["derive(Debug, Clone)"],
+        );
         callers_out.push_str("pub struct ContractError {\n");
         callers_out.push_str("    /// ABI error code (non-zero).\n");
         callers_out.push_str("    pub code: AbiErrorCode,\n");
@@ -523,21 +647,16 @@ impl CodeGenerator for RustGenerator {
         callers_out.push_str("        Self { code, message: String::new() }\n");
         callers_out.push_str("    }\n");
         callers_out.push_str("}\n\n");
+        callers_out.push_str("impl fmt::Display for ContractError {\n");
+        callers_out.push_str("    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {\n");
+        callers_out.push_str(
+            "        write!(f, \"ContractError(code={}, message={})\", self.code, self.message)\n",
+        );
+        callers_out.push_str("    }\n");
+        callers_out.push_str("}\n\n");
+        callers_out.push_str("impl Error for ContractError {}\n\n");
         if domain_api {
-            callers_out.push_str(
-                "fn caller_arena_array<T>(arena: &mut CallArena, values: &[T]) -> Result<(u64, u64), ContractError> {\n\
-                 \x20   if values.is_empty() {\n\
-                 \x20       return Ok((0, 0));\n\
-                 \x20   }\n\
-                 \x20   let bytes = values.len().checked_mul(core::mem::size_of::<T>()).ok_or_else(|| ContractError::new(AbiErrorCode::Generic))?;\n\
-                 \x20   let ptr = arena.alloc(bytes, core::mem::align_of::<T>()).cast::<T>();\n\
-                 \x20   if ptr.is_null() {\n\
-                 \x20       return Err(ContractError::new(AbiErrorCode::Generic));\n\
-                 \x20   }\n\
-                 \x20   unsafe { core::ptr::copy_nonoverlapping(values.as_ptr(), ptr, values.len()); }\n\
-                 \x20   Ok((ptr as u64, values.len() as u64))\n\
-                 }\n\n",
-            );
+            emit_caller_arena_array(&mut callers_out);
         }
 
         for contract in &ir.contracts {
@@ -579,6 +698,7 @@ impl CodeGenerator for RustGenerator {
         // ── host/mod.rs ─────────────────────────────────────────────────────────
         let mut host_mod_content: String = String::new();
         host_mod_content.push_str(RUST_FILE_HEADER);
+        emit_rust_attributes(&mut host_mod_content, "", CustomizableNode::Api, &ir.langs);
         if domain_api {
             host_mod_content.push_str("pub mod domain;\n");
             host_mod_content.push_str("mod types;\n");
@@ -601,6 +721,7 @@ impl CodeGenerator for RustGenerator {
         // ── mod.rs (root) ─────────────────────────────────────────────────────────
         let mut root_mod_content: String = String::new();
         root_mod_content.push_str(RUST_FILE_HEADER);
+        emit_rust_attributes(&mut root_mod_content, "", CustomizableNode::Api, &ir.langs);
         root_mod_content.push_str("pub mod host;\n");
         files.files.push(GeneratedFile {
             path: PathBuf::from("mod.rs"),
@@ -846,6 +967,14 @@ fn generate_guest_contract_trait(
     out: &mut String,
     contract: &ResolvedContract,
 ) -> Result<(), PolyplugcError> {
+    if contract
+        .functions
+        .iter()
+        .any(has_multiple_rust_parameter_attributes)
+    {
+        generate_guest_contract_trait_with_multiline_parameters(out, contract);
+        return Ok(());
+    }
     let methods: Vec<RustFunction> = contract
         .functions
         .iter()
@@ -862,7 +991,7 @@ fn generate_guest_contract_trait(
         generic_args: Vec::new(),
         supertraits: vec!["Send".to_owned(), "Sync".to_owned()],
         methods,
-        attributes: Vec::new(),
+        attributes: rust_attributes(&contract.langs),
         docs: Some(docs),
     };
     let backend: RustBackend = RustBackend::default();
@@ -876,6 +1005,49 @@ fn generate_guest_contract_trait(
     out.push_str(&rendered);
     out.push('\n');
     Ok(())
+}
+
+fn generate_guest_contract_trait_with_multiline_parameters(
+    out: &mut String,
+    contract: &ResolvedContract,
+) {
+    out.push_str(&format!(
+        "/// Guest trait for contract `{}` (id=0x{:016X})\n",
+        contract.name, contract.contract_id
+    ));
+    for line in super::docs::lines(contract.docs.as_deref()) {
+        out.push_str(&format!("/// {line}\n"));
+    }
+    emit_rust_attributes(out, "", CustomizableNode::GuestContract, &contract.langs);
+    out.push_str(&format!(
+        "pub trait {}: Send + Sync {{\n",
+        contract_name_to_guest_trait(&contract.name)
+    ));
+    for func in &contract.functions {
+        for line in rust_function_docs(func) {
+            out.push_str(&format!("    /// {line}\n"));
+        }
+        emit_rust_function_attributes(out, "    ", func);
+        let mut params = String::new();
+        for param in &func.params {
+            let ty =
+                if func.params.len() == 1 && matches!(param.ty, ResolvedTypeRef::UserDefined(_)) {
+                    format!("&{}", rust_type_name(&param.ty))
+                } else {
+                    rust_type_name(&param.ty)
+                };
+            append_rust_signature_param(&mut params, &param.name, &ty, &param.langs);
+        }
+        let ret_type = func
+            .returns
+            .as_ref()
+            .map_or_else(|| "()".to_owned(), rust_type_name);
+        out.push_str(&format!(
+            "    fn {}(&self{}) -> Result<{ret_type}, GuestError>;\n",
+            func.name, params
+        ));
+    }
+    out.push_str("}\n\n");
 }
 
 /// Bodyless `RustFunction` FORM for one guest-trait method (`&self` + params → `Result<T, GuestError>`).
@@ -894,6 +1066,7 @@ fn guest_trait_method_form(func: &ResolvedFunction) -> RustFunction {
         vec![RustParameter {
             name: param.name.clone(),
             param_type,
+            attributes: rust_attributes(&param.langs),
         }]
     } else {
         func.params
@@ -901,6 +1074,7 @@ fn guest_trait_method_form(func: &ResolvedFunction) -> RustFunction {
             .map(|p: &ResolvedParam| RustParameter {
                 name: p.name.clone(),
                 param_type: rust_type_name(&p.ty),
+                attributes: rust_attributes(&p.langs),
             })
             .collect()
     };
@@ -917,7 +1091,8 @@ fn guest_trait_method_form(func: &ResolvedFunction) -> RustFunction {
         is_const: false,
         abi: None,
         body: None,
-        attributes: Vec::new(),
+        attributes: rust_attributes(&func.langs),
+        return_attributes: rust_attributes(&func.return_langs),
         docs: (!docs.is_empty()).then_some(docs),
         comments: Vec::new(),
     }
@@ -1095,7 +1270,7 @@ fn generate_guest_interfaces_file(
     let contract_use_refs: Vec<&str> = contract_uses.iter().map(String::as_str).collect();
     out.push_str(&rust_use_block(&[&contract_use_refs]));
     out.push_str("/// Wrapper for a function pointer stored in a static interface array.\n");
-    out.push_str("#[repr(transparent)]\n");
+    emit_rust_generated_attributes(out, "", CustomizableNode::Type, &["repr(transparent)"]);
     out.push_str("pub struct FnPtr(pub *const ());\n");
     out.push_str("// SAFETY: FnPtr wraps a 'static function pointer. Function pointers are safe\n");
     out.push_str(
@@ -1163,25 +1338,536 @@ fn generate_internal_profile_domain_types_file(
     out: &mut String,
     ir: &ValidatedIr,
 ) -> Result<(), PolyplugcError> {
+    if ir.types.iter().flat_map(|ty| &ty.fields).any(|field| {
+        field
+            .langs
+            .rust()
+            .is_some_and(|rules| rules.empty_sequence_as_null)
+    }) {
+        out.push_str("pub fn empty_sequence_as_null<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error> where D: serde::Deserializer<'de>, T: serde::Deserialize<'de> { Ok(<Option<Vec<T>> as serde::Deserialize>::deserialize(deserializer)?.unwrap_or_default()) }\npub fn serialize_empty_sequence_as_null<S, T>(value: &[T], serializer: S) -> Result<S::Ok, S::Error> where S: serde::Serializer, T: serde::Serialize { if value.is_empty() { serializer.serialize_none() } else { serializer.serialize_some(value) } }\n\n");
+    }
     for enum_def in &ir.enums {
-        generate_rust_enum(out, enum_def)?;
+        generate_rust_domain_enum(out, enum_def)?;
     }
     for ty in &ir.types {
         if array_element_name(&ty.name).is_some() {
             continue;
         }
-        out.push_str("#[derive(Debug, Clone, PartialEq)]\n");
-        out.push_str(&format!("pub struct {} {{\n", ty.name));
-        for field in &ty.fields {
-            out.push_str(&format!(
-                "    pub {}: {},\n",
-                field.name,
-                domain_type_name(&field.ty, &ir.types, &ir.enums)
-            ));
-        }
-        out.push_str("}\n\n");
+        generate_rust_domain_type(out, ty, ir);
     }
     Ok(())
+}
+fn rust_domain_variant_name(variant: &EnumVariant) -> &str {
+    &variant.name
+}
+
+fn generate_rust_domain_enum(out: &mut String, enum_def: &EnumDef) -> Result<(), PolyplugcError> {
+    let needs_domain_projection = enum_def
+        .langs
+        .rust()
+        .is_some_and(|rules| rules.serde.is_some())
+        || enum_def.variants.iter().any(|variant| {
+            variant
+                .langs
+                .rust()
+                .is_some_and(|rules| rules.primary_name.is_some())
+        });
+    if !needs_domain_projection || enum_def.bitflag {
+        return generate_rust_enum(out, enum_def);
+    }
+    let mut derives = merge_rust_derives(
+        &["Debug", "Clone", "Copy", "PartialEq", "Eq"],
+        &enum_def.langs,
+    );
+    if enum_def
+        .variants
+        .iter()
+        .any(|variant| variant.langs.rust().is_some_and(|rules| rules.default))
+        && !derives.iter().any(|derive| derive == "Default")
+    {
+        derives.push("Default".to_owned());
+    }
+    emit_rust_attributes(out, "", CustomizableNode::Enum, &enum_def.langs);
+    emit_rust_derive(out, CustomizableNode::Enum, &derives);
+    out.push_str(&format!("pub enum {} {{\n", enum_def.name));
+    for variant in &enum_def.variants {
+        emit_rust_attributes(out, "    ", CustomizableNode::EnumVariant, &variant.langs);
+        if variant.langs.rust().is_some_and(|rules| rules.default) {
+            emit_rust_generated_attributes(
+                out,
+                "    ",
+                CustomizableNode::EnumVariant,
+                &["default"],
+            );
+        }
+        out.push_str(&format!("    {},\n", rust_domain_variant_name(variant)));
+    }
+    out.push_str("}\n\n");
+    if enum_def
+        .langs
+        .rust()
+        .is_some_and(|rules| rules.serde.is_some())
+    {
+        emit_rust_enum_dual_serde(out, enum_def);
+    }
+    Ok(())
+}
+
+fn emit_rust_enum_dual_serde(out: &mut String, enum_def: &EnumDef) {
+    let (repr_type, serialize_method, deserialize_type) = match enum_def.repr {
+        ReprType::U8 => ("u8", "serialize_u8", "u8"),
+        ReprType::U16 => ("u16", "serialize_u16", "u16"),
+        ReprType::U32 => ("u32", "serialize_u32", "u32"),
+        ReprType::U64 => ("u64", "serialize_u64", "u64"),
+    };
+    let discriminants = enum_def
+        .variants
+        .iter()
+        .enumerate()
+        .map(|(index, variant)| {
+            format!(
+                "    const __POLYPLUG_DISCRIMINANT_{index}: {repr_type} = {};\n",
+                local_rust_enum_discriminant_expr(&enum_def.variants, &variant.value)
+            )
+        })
+        .collect::<String>();
+    let human_arms = enum_def
+        .variants
+        .iter()
+        .map(|variant| {
+            format!(
+                "Self::{} => serializer.serialize_str({:?})",
+                rust_domain_variant_name(variant),
+                variant
+                    .langs
+                    .rust()
+                    .and_then(|rules| rules.primary_name.as_deref())
+                    .unwrap_or(&variant.name)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let binary_arms = enum_def
+        .variants
+        .iter()
+        .enumerate()
+        .map(|(index, variant)| {
+            format!(
+                "Self::{} => Self::__POLYPLUG_DISCRIMINANT_{index}",
+                rust_domain_variant_name(variant)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let human_decode = enum_def
+        .variants
+        .iter()
+        .flat_map(|variant| {
+            let mut names = vec![
+                variant
+                    .langs
+                    .rust()
+                    .and_then(|rules| rules.primary_name.as_deref())
+                    .unwrap_or(&variant.name),
+            ];
+            if let Some(rules) = variant.langs.rust() {
+                names.extend(rules.aliases.iter().map(String::as_str));
+            }
+            names
+                .into_iter()
+                .map(|name| {
+                    format!(
+                        "{name:?} => Ok(Self::{})",
+                        rust_domain_variant_name(variant)
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let binary_decode = enum_def
+        .variants
+        .iter()
+        .enumerate()
+        .map(|(index, variant)| {
+            format!(
+                "value if value == Self::__POLYPLUG_DISCRIMINANT_{index} => Ok(Self::{})",
+                rust_domain_variant_name(variant)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    out.push_str(&format!(
+        "impl {name} {{\n{discriminants}}}\n\nimpl serde::Serialize for {name} {{\n    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: serde::Serializer {{\n        if serializer.is_human_readable() {{ match self {{ {human_arms} }} }} else {{ serializer.{serialize_method}(match self {{ {binary_arms} }}) }}\n    }}\n}}\n\nimpl<'de> serde::Deserialize<'de> for {name} {{\n    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: serde::Deserializer<'de> {{\n        if deserializer.is_human_readable() {{ let value = <String as serde::Deserialize>::deserialize(deserializer)?; match value.as_str() {{ {human_decode}, _ => Err(serde::de::Error::custom(\"unknown enum name\")) }} }} else {{ let value = <{deserialize_type} as serde::Deserialize>::deserialize(deserializer)?; match value {{ {binary_decode}, _ => Err(serde::de::Error::custom(\"unknown enum discriminant\")) }} }}\n    }}\n}}\n\n",
+        name = enum_def.name,
+    ));
+}
+
+fn local_rust_enum_discriminant_expr(variants: &[EnumVariant], expression: &str) -> String {
+    let chars = expression.chars().collect::<Vec<_>>();
+    let mut result = String::new();
+    let mut index = 0usize;
+    while index < chars.len() {
+        let character = chars[index];
+        if character.is_ascii_alphabetic() || character == '_' {
+            let start = index;
+            while index < chars.len()
+                && (chars[index].is_ascii_alphanumeric() || chars[index] == '_')
+            {
+                index += 1;
+            }
+            let identifier = chars[start..index].iter().collect::<String>();
+            if let Some(variant_index) = variants
+                .iter()
+                .position(|variant| variant.name == identifier)
+            {
+                result.push_str(&format!("Self::__POLYPLUG_DISCRIMINANT_{variant_index}"));
+            } else {
+                result.push_str(&identifier);
+            }
+        } else {
+            result.push(character);
+            index += 1;
+        }
+    }
+    result
+}
+
+fn merge_rust_derives(mandatory: &[&str], rules: &LanguageRules) -> Vec<String> {
+    let mut derives: Vec<String> = mandatory
+        .iter()
+        .map(|derive| (*derive).to_owned())
+        .collect();
+    if let Some(rules) = rules.rust() {
+        for derive in &rules.derives {
+            if !derives.contains(derive) {
+                derives.push(derive.clone());
+            }
+        }
+    }
+    derives
+}
+
+fn emit_rust_generated_attributes(
+    out: &mut String,
+    indent: &str,
+    node: CustomizableNode,
+    bodies: &[&str],
+) {
+    let attributes = bodies
+        .iter()
+        .map(|text| RawAttribute {
+            source: target_language(Lang::Rust),
+            text: (*text).to_owned(),
+        })
+        .collect::<Vec<_>>();
+    for attribute in render_raw_attributes(
+        target_language(Lang::Rust),
+        attribute_site(node),
+        &attributes,
+    ) {
+        out.push_str(indent);
+        out.push_str(&attribute);
+        out.push('\n');
+    }
+}
+
+fn emit_rust_derive(out: &mut String, node: CustomizableNode, derives: &[String]) {
+    let body = format!("derive({})", derives.join(", "));
+    emit_rust_generated_attributes(out, "", node, &[&body]);
+}
+
+fn generate_rust_domain_type(out: &mut String, ty: &ResolvedType, ir: &ValidatedIr) {
+    if let Some(projection) = ty.langs.rust().and_then(|rules| rules.tagged_enum.as_ref()) {
+        let mut derives = merge_rust_derives(&["Debug", "Clone", "PartialEq"], &ty.langs);
+        if projection.variants.iter().any(|mapping| mapping.default)
+            && !derives.iter().any(|derive| derive == "Default")
+        {
+            derives.push("Default".to_owned());
+        }
+        emit_rust_derive(out, CustomizableNode::Type, &derives);
+        emit_rust_attributes(out, "", CustomizableNode::Type, &ty.langs);
+        out.push_str(&format!("pub enum {} {{\n", ty.name));
+        for mapping in &projection.variants {
+            if mapping.default {
+                emit_rust_generated_attributes(
+                    out,
+                    "    ",
+                    CustomizableNode::EnumVariant,
+                    &["default"],
+                );
+            }
+            if let Some(payload) = &mapping.payload {
+                let field = ty
+                    .fields
+                    .iter()
+                    .find(|field| field.name == *payload)
+                    .unwrap_or_else(|| unreachable!("validated tagged enum payload"));
+                out.push_str(&format!(
+                    "    {}({}),\n",
+                    mapping.name,
+                    domain_type_name(&field.ty, &ir.types, &ir.enums)
+                ));
+            } else {
+                out.push_str(&format!("    {},\n", mapping.name));
+            }
+        }
+        out.push_str("}\n\n");
+        return;
+    }
+    let derives = merge_rust_derives(&["Debug", "Clone", "PartialEq"], &ty.langs);
+    emit_rust_derive(out, CustomizableNode::Type, &derives);
+    emit_rust_attributes(out, "", CustomizableNode::Type, &ty.langs);
+    out.push_str(&format!("pub struct {} {{\n", ty.name));
+    for field in &ty.fields {
+        if field
+            .langs
+            .rust()
+            .is_some_and(|rules| rules.empty_sequence_as_null)
+        {
+            emit_rust_generated_attributes(
+                out,
+                "    ",
+                CustomizableNode::Field,
+                &[
+                    "serde(default, deserialize_with = \"empty_sequence_as_null\", serialize_with = \"serialize_empty_sequence_as_null\")",
+                ],
+            );
+        }
+        emit_rust_attributes(out, "    ", CustomizableNode::Field, &field.langs);
+        out.push_str(&format!(
+            "    pub {}: {},\n",
+            field.name,
+            domain_type_name(&field.ty, &ir.types, &ir.enums)
+        ));
+    }
+    out.push_str("}\n\n");
+}
+
+fn tagged_enum_type<'a>(
+    name: &str,
+    ir: &'a ValidatedIr,
+) -> Option<(&'a ResolvedType, &'a RustTaggedEnum)> {
+    let ty = ir.types.iter().find(|item| item.name == name)?;
+    Some((ty, ty.langs.rust()?.tagged_enum.as_ref()?))
+}
+
+fn tagged_domain_from_abi_expr(name: &str, value: &str, ir: &ValidatedIr) -> Option<String> {
+    let (ty, projection) = tagged_enum_type(name, ir)?;
+    let tag = ty
+        .fields
+        .iter()
+        .find(|field| field.name == projection.tag_field)?;
+    let ResolvedTypeRef::UserDefined(tag_name) = &tag.ty else {
+        return None;
+    };
+    let variants = projection
+        .variants
+        .iter()
+        .map(|mapping| {
+            let payload = mapping
+                .payload
+                .as_ref()
+                .map_or_else(String::new, |payload| {
+                    let field = ty
+                        .fields
+                        .iter()
+                        .find(|field| field.name == *payload)
+                        .unwrap_or_else(|| unreachable!("validated tagged enum payload"));
+                    format!(
+                        "({})",
+                        domain_from_abi_expr(&field.ty, &format!("&((*({value})).{payload})"), ir)
+                    )
+                });
+            format!(
+                "super::types::{tag_name}::{} => super::domain::{name}::{}{payload}",
+                mapping.tag, mapping.name
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "match (*({value})).{} {{ {variants} }}",
+        projection.tag_field
+    ))
+}
+
+fn canonical_abi_value_expr(ty: &ResolvedTypeRef, ir: &ValidatedIr) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(PrimitiveType::Bool) => "false".to_owned(),
+        ResolvedTypeRef::Primitive(PrimitiveType::F32 | PrimitiveType::F64) => "0.0".to_owned(),
+        ResolvedTypeRef::Primitive(_) => "0".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+            "polyplug_abi::string_view_null()".to_owned()
+        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+            "polyplug_abi::Buffer { ptr: core::ptr::null_mut(), len: 0, cap: 0 }".to_owned()
+        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "core::ptr::null_mut()".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "()".to_owned(),
+        ResolvedTypeRef::UserDefined(name) if ir.enums.iter().any(|item| item.name == *name) => {
+            let enum_def = ir
+                .enums
+                .iter()
+                .find(|item| item.name == *name)
+                .unwrap_or_else(|| unreachable!("validated enum is present"));
+            let variant = enum_def
+                .variants
+                .first()
+                .unwrap_or_else(|| unreachable!("generated ABI enum has a variant"));
+            format!("super::types::{name}::{}", variant.name)
+        }
+        ResolvedTypeRef::UserDefined(name) => {
+            let fields = ir
+                .types
+                .iter()
+                .find(|item| item.name == *name)
+                .unwrap_or_else(|| unreachable!("validated ABI struct is present"))
+                .fields
+                .iter()
+                .map(|field| {
+                    format!(
+                        "{}: {}",
+                        field.name,
+                        canonical_abi_value_expr(&field.ty, ir)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("super::types::{name} {{ {fields} }}")
+        }
+    }
+}
+
+fn tagged_abi_struct_expr(
+    name: &str,
+    ty: &ResolvedType,
+    projection: &RustTaggedEnum,
+    mapping: &RustTaggedEnumVariant,
+    ir: &ValidatedIr,
+    payload_value: impl Fn(&ResolvedField) -> String,
+) -> String {
+    let tag_name = match &ty
+        .fields
+        .iter()
+        .find(|field| field.name == projection.tag_field)
+        .unwrap_or_else(|| unreachable!("validated tagged enum tag field"))
+        .ty
+    {
+        ResolvedTypeRef::UserDefined(tag_name) => tag_name,
+        _ => unreachable!("validated tagged enum tag field is an enum"),
+    };
+    let fields = ty
+        .fields
+        .iter()
+        .map(|field| {
+            let value = if field.name == projection.tag_field {
+                format!("super::types::{tag_name}::{}", mapping.tag)
+            } else if mapping.payload.as_deref() == Some(field.name.as_str()) {
+                payload_value(field)
+            } else {
+                canonical_abi_value_expr(&field.ty, ir)
+            };
+            format!("{}: {value}", field.name)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("super::types::{name} {{ {fields} }}")
+}
+
+fn tagged_abi_from_domain_expr(name: &str, value: &str, ir: &ValidatedIr) -> Option<String> {
+    let (ty, projection) = tagged_enum_type(name, ir)?;
+    let variants = projection
+        .variants
+        .iter()
+        .map(|mapping| {
+            let bind = mapping.payload.as_ref().map_or("", |_| "(payload)");
+            let abi = tagged_abi_struct_expr(name, ty, projection, mapping, ir, |field| {
+                abi_domain_value_expr(&field.ty, "payload", ir)
+            });
+            format!("super::domain::{name}::{}{bind} => {abi}", mapping.name)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!("match {value} {{ {variants} }}"))
+}
+
+fn tagged_host_abi_from_domain_expr(
+    name: &str,
+    value: &str,
+    ir: &ValidatedIr,
+    peer: bool,
+) -> Option<String> {
+    let (ty, projection) = tagged_enum_type(name, ir)?;
+    let variants = projection
+        .variants
+        .iter()
+        .map(|mapping| {
+            let bind = mapping.payload.as_ref().map_or("", |_| "(payload)");
+            let abi = tagged_abi_struct_expr(name, ty, projection, mapping, ir, |field| {
+                if peer {
+                    peer_abi_from_domain_expr(&field.ty, "payload", ir, true)
+                } else {
+                    host_abi_from_domain_expr(&field.ty, "payload", ir, true)
+                }
+            });
+            format!("super::domain::{name}::{}{bind} => {abi}", mapping.name)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!("match {value} {{ {variants} }}"))
+}
+
+fn tagged_host_domain_from_abi_expr(
+    name: &str,
+    value: &str,
+    ir: &ValidatedIr,
+    host: &str,
+    returned_from_native: &str,
+) -> Option<String> {
+    let (ty, projection) = tagged_enum_type(name, ir)?;
+    let tag = ty
+        .fields
+        .iter()
+        .find(|field| field.name == projection.tag_field)?;
+    let ResolvedTypeRef::UserDefined(tag_name) = &tag.ty else {
+        return None;
+    };
+    let variants = projection
+        .variants
+        .iter()
+        .map(|mapping| {
+            let payload = mapping
+                .payload
+                .as_ref()
+                .map_or_else(String::new, |payload| {
+                    let field = ty
+                        .fields
+                        .iter()
+                        .find(|field| field.name == *payload)
+                        .unwrap_or_else(|| unreachable!("validated tagged enum payload"));
+                    format!(
+                        "({})",
+                        host_domain_from_abi_expr(
+                            &field.ty,
+                            &format!("&((*({value})).{payload})"),
+                            ir,
+                            host,
+                            returned_from_native,
+                        )
+                    )
+                });
+            format!(
+                "super::types::{tag_name}::{} => super::domain::{name}::{}{payload}",
+                mapping.tag, mapping.name
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "match (*({value})).{} {{ {variants} }}",
+        projection.tag_field
+    ))
 }
 
 fn generate_internal_profile_guest_contracts_file(
@@ -1191,30 +1877,27 @@ fn generate_internal_profile_guest_contracts_file(
     out.push_str("use polyplug_guest::GuestError;\nuse super::domain::*;\n\n");
     for contract in &ir.contracts {
         let trait_name: String = contract_name_to_struct(&contract.name);
+        emit_rust_attributes(out, "", CustomizableNode::GuestContract, &contract.langs);
         out.push_str(&format!("pub trait {trait_name}: Send + Sync {{\n"));
         for function in &contract.functions {
-            let params: String = function
-                .params
-                .iter()
-                .map(|param| {
-                    format!(
-                        "{}: {}",
-                        param.name,
-                        domain_type_name(&param.ty, &ir.types, &ir.enums)
-                    )
-                })
-                .collect::<Vec<String>>()
-                .join(", ");
+            let mut params = String::new();
+            for param in &function.params {
+                append_rust_signature_param(
+                    &mut params,
+                    &param.name,
+                    &domain_type_name(&param.ty, &ir.types, &ir.enums),
+                    &param.langs,
+                );
+            }
             let return_type: String = function
                 .returns
                 .as_ref()
                 .map(|ty| domain_type_name(ty, &ir.types, &ir.enums))
                 .unwrap_or_else(|| "()".to_owned());
+            emit_rust_function_attributes(out, "    ", function);
             out.push_str(&format!(
-                "    fn {}(&self{}{}) -> Result<{return_type}, GuestError>;\n",
-                function.name,
-                if params.is_empty() { "" } else { ", " },
-                params
+                "    fn {}(&self{}) -> Result<{return_type}, GuestError>;\n",
+                function.name, params
             ));
         }
         out.push_str("}\n\n");
@@ -1234,6 +1917,7 @@ fn internal_generation_fingerprint(ir: &ValidatedIr) -> u64 {
     hash(&format!("{:?}", ir.enums));
     hash(&format!("{:?}", ir.contracts));
     hash(&format!("{:?}", ir.host_contracts));
+    hash(&format!("{:?}", ir.langs));
     if let Some(bundle) = &ir.bundle {
         hash(&format!(
             "{:?}{:?}{:?}{:?}{:?}",
@@ -1436,7 +2120,8 @@ fn domain_from_abi_expr(ty: &ResolvedTypeRef, value: &str, ir: &ValidatedIr) -> 
                 .map(|variant| {
                     format!(
                         "super::types::{name}::{} => super::domain::{name}::{}",
-                        variant.name, variant.name
+                        variant.name,
+                        rust_domain_variant_name(variant)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -1451,6 +2136,9 @@ fn domain_from_abi_expr(ty: &ResolvedTypeRef, value: &str, ir: &ValidatedIr) -> 
             )
         }
         ResolvedTypeRef::UserDefined(name) => {
+            if let Some(projected) = tagged_domain_from_abi_expr(name, value, ir) {
+                return projected;
+            }
             let Some(fields) = ir.types.iter().find(|item| item.name == *name) else {
                 unreachable!("validated domain struct is present");
             };
@@ -1502,7 +2190,8 @@ fn abi_domain_value_expr(ty: &ResolvedTypeRef, value: &str, ir: &ValidatedIr) ->
                 .map(|variant| {
                     format!(
                         "super::domain::{name}::{} => super::types::{name}::{}",
-                        variant.name, variant.name
+                        rust_domain_variant_name(variant),
+                        variant.name
                     )
                 })
                 .collect::<Vec<_>>()
@@ -1518,6 +2207,9 @@ fn abi_domain_value_expr(ty: &ResolvedTypeRef, value: &str, ir: &ValidatedIr) ->
             )
         }
         ResolvedTypeRef::UserDefined(name) => {
+            if let Some(projected) = tagged_abi_from_domain_expr(name, value, ir) {
+                return projected;
+            }
             let Some(fields) = ir.types.iter().find(|item| item.name == *name) else {
                 unreachable!("validated domain struct is present");
             };
@@ -1945,6 +2637,7 @@ fn emit_guest_instance_machinery(
                 parameters: vec![RustParameter {
                     name: "host".to_owned(),
                     param_type: "HostContext".to_owned(),
+                    attributes: Vec::new(),
                 }],
                 generic_args: Vec::new(),
                 return_type: Some(format!("Box<dyn {factory_trait}>")),
@@ -1954,6 +2647,7 @@ fn emit_guest_instance_machinery(
                 abi: None,
                 body: None,
                 attributes: Vec::new(),
+                return_attributes: Vec::new(),
                 docs: Some(vec![
                     "Author-provided factory — define it in the plugin crate as:".to_owned(),
                     "`#[unsafe(no_mangle)]`".to_owned(),
@@ -2128,22 +2822,27 @@ fn emit_guest_instance_machinery(
             RustParameter {
                 name: create_adapter_context_name.to_owned(),
                 param_type: "*mut c_void".to_owned(),
+                attributes: Vec::new(),
             },
             RustParameter {
                 name: "_loader_data".to_owned(),
                 param_type: "polyplug_abi::dispatch::VmLoaderData".to_owned(),
+                attributes: Vec::new(),
             },
             RustParameter {
                 name: "host".to_owned(),
                 param_type: "*const HostApi".to_owned(),
+                attributes: Vec::new(),
             },
             RustParameter {
                 name: "_args".to_owned(),
                 param_type: "*const ()".to_owned(),
+                attributes: Vec::new(),
             },
             RustParameter {
                 name: "out_instance".to_owned(),
                 param_type: "*mut GuestContractInstance".to_owned(),
+                attributes: Vec::new(),
             },
         ],
         generic_args: Vec::new(),
@@ -2154,6 +2853,7 @@ fn emit_guest_instance_machinery(
         abi: Some("C".to_owned()),
         body: Some(vec![create_body]),
         attributes: Vec::new(),
+        return_attributes: Vec::new(),
         docs: Some(vec![
             "Create a new instance: calls the author factory and boxes the payload.".to_owned(),
             "Writes a null handle through `out_instance` when `host` is null or the factory panics."
@@ -2181,18 +2881,22 @@ fn emit_guest_instance_machinery(
             RustParameter {
                 name: "_adapter_context".to_owned(),
                 param_type: "*mut c_void".to_owned(),
+                attributes: Vec::new(),
             },
             RustParameter {
                 name: "_loader_data".to_owned(),
                 param_type: "polyplug_abi::dispatch::VmLoaderData".to_owned(),
+                attributes: Vec::new(),
             },
             RustParameter {
                 name: "_host".to_owned(),
                 param_type: "*const HostApi".to_owned(),
+                attributes: Vec::new(),
             },
             RustParameter {
                 name: "instance".to_owned(),
                 param_type: "GuestContractInstance".to_owned(),
+                attributes: Vec::new(),
             },
         ],
         generic_args: Vec::new(),
@@ -2203,6 +2907,7 @@ fn emit_guest_instance_machinery(
         abi: Some("C".to_owned()),
         body: Some(vec![destroy_body]),
         attributes: Vec::new(),
+        return_attributes: Vec::new(),
         docs: Some(vec![format!(
             "Destroy an instance created by `{prefix_upper}_create_instance`."
         )]),
@@ -2322,22 +3027,27 @@ fn generate_guest_abi_wrapper(
             RustParameter {
                 name: "_adapter_context".to_owned(),
                 param_type: "*mut c_void".to_owned(),
+                attributes: Vec::new(),
             },
             RustParameter {
                 name: "instance".to_owned(),
                 param_type: "GuestContractInstance".to_owned(),
+                attributes: Vec::new(),
             },
             RustParameter {
                 name: "args".to_owned(),
                 param_type: "*const ()".to_owned(),
+                attributes: Vec::new(),
             },
             RustParameter {
                 name: out_param_name.to_owned(),
                 param_type: "*mut ()".to_owned(),
+                attributes: Vec::new(),
             },
             RustParameter {
                 name: "out_err".to_owned(),
                 param_type: "*mut AbiError".to_owned(),
+                attributes: Vec::new(),
             },
         ],
         generic_args: Vec::new(),
@@ -2348,6 +3058,7 @@ fn generate_guest_abi_wrapper(
         abi: Some("C".to_owned()),
         body: Some(vec![body]),
         attributes: vec!["allow(clippy::unnecessary_cast)".to_owned()],
+        return_attributes: Vec::new(),
         docs: Some(vec![format!(
             "ABI wrapper for {} (function_id = {}).",
             func.name, func.function_id
@@ -2499,13 +3210,13 @@ fn generate_guest_init_file(
     );
     out.push_str("// not by the generated code. Add this to your lib.rs:\n");
     out.push_str("//   #[unsafe(no_mangle)]\n");
-    out.push_str("//   pub extern \"C\" fn polyplug_abi_version() -> u32 { 1 }\n\n");
+    out.push_str("//   pub extern \"C\" fn polyplug_abi_version() -> u32 { 2 }\n\n");
 
     out.push_str("/// Register all plugin interfaces with the host.\n");
     out.push_str("///\n");
     out.push_str("/// # Safety\n");
     out.push_str("/// `host` and `ctx` must be valid non-null pointers provided by the host.\n");
-    out.push_str("#[unsafe(no_mangle)]\n");
+    emit_rust_generated_attributes(out, "", CustomizableNode::Function, &["unsafe(no_mangle)"]);
     out.push_str("pub unsafe extern \"C\" fn polyplug_init(\n");
     out.push_str("    host: *const HostApi,\n");
     out.push_str("    ctx: *const BundleInitContext,\n");
@@ -2805,11 +3516,7 @@ fn generate_internal_profile_guest_init_file(
 /// Returns true when a function's params require an arg-pack struct
 /// (i.e. 2+ primitive params, or any mix that isn't a single UserDefined param).
 fn needs_arg_pack(params: &[ResolvedParam]) -> bool {
-    if params.len() <= 1 {
-        return false;
-    }
-    // Multiple params always need packing.
-    true
+    params.len() > 1
 }
 
 /// Emit a `#[repr(C)]` arg-pack struct for a multi-param function into `types.rs`.
@@ -2821,11 +3528,18 @@ fn emit_arg_pack_struct(
     enums: &[EnumDef],
 ) -> Result<(), PolyplugcError> {
     let struct_name: String = arg_pack_struct_name(contract_struct, &func.name);
-    let fields: Vec<(String, String, Option<String>)> = func
+    let fields: Vec<(String, String, Option<String>, Vec<String>)> = func
         .params
         .iter()
-        .map(|p: &ResolvedParam| (p.name.clone(), rust_type_name(&p.ty), p.docs.clone()))
-        .collect::<Vec<(String, String, Option<String>)>>();
+        .map(|p: &ResolvedParam| {
+            (
+                p.name.clone(),
+                rust_type_name(&p.ty),
+                p.docs.clone(),
+                Vec::new(),
+            )
+        })
+        .collect::<Vec<(String, String, Option<String>, Vec<String>)>>();
     // Non-`Copy` when any param is (transitively) a `Buffer` — the arg-pack is
     // built once and passed by pointer, so it never needs `Copy`.
     let copyable: bool = func
@@ -2841,7 +3555,9 @@ fn emit_arg_pack_struct(
         &struct_name,
         docs,
         fields,
+        Vec::new(),
         copyable,
+        &[],
     )?);
     Ok(())
 }
@@ -2853,22 +3569,26 @@ fn emit_arg_pack_struct(
 fn render_rust_repr_c_struct(
     name: &str,
     docs: Vec<String>,
-    fields: Vec<(String, String, Option<String>)>,
+    fields: Vec<(String, String, Option<String>, Vec<String>)>,
+    attributes: Vec<String>,
     copyable: bool,
+    user_derives: &[String],
 ) -> Result<String, PolyplugcError> {
     let rust_fields: Vec<RustField> = fields
         .into_iter()
         .map(
-            |(fname, ftype, docs): (String, String, Option<String>)| RustField {
-                name: fname,
-                field_type: ftype,
-                visibility: RustVisibility::Pub,
-                attributes: Vec::new(),
-                docs: docs.map(|docs| {
-                    let mut lines: Vec<String> = Vec::new();
-                    append_lines(&mut lines, Some(&docs));
-                    lines
-                }),
+            |(fname, ftype, docs, attributes): (String, String, Option<String>, Vec<String>)| {
+                RustField {
+                    name: fname,
+                    field_type: ftype,
+                    visibility: RustVisibility::Pub,
+                    attributes,
+                    docs: docs.map(|docs| {
+                        let mut lines: Vec<String> = Vec::new();
+                        append_lines(&mut lines, Some(&docs));
+                        lines
+                    }),
+                }
             },
         )
         .collect::<Vec<RustField>>();
@@ -2878,12 +3598,28 @@ fn render_rust_repr_c_struct(
         generic_args: Vec::new(),
         fields: rust_fields,
         methods: Vec::new(),
-        derives: if copyable {
-            vec!["Debug".to_owned(), "Clone".to_owned(), "Copy".to_owned()]
-        } else {
-            vec!["Debug".to_owned()]
+        derives: {
+            let mandatory = if copyable {
+                ["Debug", "Clone", "Copy"].as_slice()
+            } else {
+                ["Debug"].as_slice()
+            };
+            let mut derives = mandatory
+                .iter()
+                .map(|derive| (*derive).to_owned())
+                .collect::<Vec<_>>();
+            for derive in user_derives {
+                if !derives.contains(derive) {
+                    derives.push(derive.clone());
+                }
+            }
+            derives
         },
-        attributes: vec!["repr(C)".to_owned()],
+        attributes: {
+            let mut all: Vec<String> = vec!["repr(C)".to_owned()];
+            all.extend(attributes);
+            all
+        },
         is_tuple: false,
         docs: Some(docs),
     };
@@ -3023,6 +3759,7 @@ fn generate_host_contract_caller(
              /// and is valid only until the next arena-backed call on the same caller.\n",
         );
     }
+    emit_rust_attributes(out, "", CustomizableNode::GuestContract, &contract.langs);
     out.push_str(&format!("pub struct {struct_name} {{\n"));
     out.push_str(
         "    /// Runtime owner retained for every caller dispatch and lifecycle operation.\n",
@@ -3170,6 +3907,7 @@ fn generate_host_contract_caller(
         "            // Revalidation for dispatch preserves a same-interface instance, but reset\n",
     );
     out.push_str("            // is destructive. Resolve once to distinguish that case from a replacement.\n");
+    out.push_str("            // SAFETY: the retained runtime owns `host`, and this handle is resolved only through its registry.\n");
     out.push_str("            let interface = unsafe { (host_api.resolve_guest_contract)(host, self.handle) };\n");
     out.push_str("            if interface.is_null() {\n");
     out.push_str("                self.interface = core::ptr::null();\n");
@@ -3178,11 +3916,13 @@ fn generate_host_contract_caller(
     out.push_str("                return;\n");
     out.push_str("            }\n");
     out.push_str("            if interface == self.interface && !self.instance.data.is_null() {\n");
+    out.push_str("                // SAFETY: this instance was created for the still-current resolved interface through this live runtime.\n");
     out.push_str("                unsafe { (host_api.destroy_guest_instance)(host, self.interface, self.instance) };\n");
     out.push_str("            }\n");
     out.push_str("            interface\n");
     out.push_str("        } else {\n");
     out.push_str("            if !self.instance.data.is_null() {\n");
+    out.push_str("                // SAFETY: this instance was created for the cached interface through this live runtime.\n");
     out.push_str("                unsafe { (host_api.destroy_guest_instance)(host, self.interface, self.instance) };\n");
     out.push_str("            }\n");
     out.push_str("            self.interface\n");
@@ -3190,6 +3930,7 @@ fn generate_host_contract_caller(
     out.push_str(
         "        let mut new_instance: GuestContractInstance = GuestContractInstance::null();\n",
     );
+    out.push_str("        // SAFETY: `interface` is currently resolved by the retained runtime and `new_instance` is writable.\n");
     out.push_str("        unsafe {\n");
     out.push_str("            (host_api.create_guest_instance)(host, interface, core::ptr::null(), &mut new_instance);\n");
     out.push_str("        };\n");
@@ -3221,8 +3962,9 @@ fn generate_host_contract_caller(
     );
     out.push_str("        let host_api: &HostApi = unsafe { &*host };\n");
     out.push_str("        // SAFETY: resolve_guest_contract is an ABI fn ptr safe to call with a live host and handle.\n");
-    out.push_str("        let interface: *const GuestContractInterface =\n");
-    out.push_str("            unsafe { (host_api.resolve_guest_contract)(host, self.handle) };\n");
+    out.push_str(
+        "        let interface: *const GuestContractInterface = unsafe { (host_api.resolve_guest_contract)(host, self.handle) };\n",
+    );
     out.push_str("        if interface.is_null() {\n");
     out.push_str("            self.interface = core::ptr::null();\n");
     out.push_str("            self.instance = GuestContractInstance::null();\n");
@@ -3277,6 +4019,7 @@ fn generate_host_contract_caller(
         "        // still-live instance; a different or missing interface was reclaimed.\n",
     );
     out.push_str("        if self.live_revision() != self.cached_revision {\n");
+    out.push_str("            // SAFETY: the retained runtime owns `host`, and this refresh resolves only its retained handle.\n");
     out.push_str("            let current = unsafe { (host_api.resolve_guest_contract)(host, self.handle) };\n");
     out.push_str("            if current != self.interface {\n");
     out.push_str("                return;\n");
@@ -3330,6 +4073,7 @@ fn generate_host_fn_caller(
     for line in rust_function_docs(func) {
         out.push_str(&format!("    /// {line}\n"));
     }
+    emit_rust_function_attributes(out, "    ", func);
     out.push_str("    #[allow(clippy::absurd_extreme_comparisons)]\n");
     let needs_arena: bool =
         fn_needs_arena(func) || domain_ir.is_some() && fn_needs_domain_argument_arena(func);
@@ -3533,17 +4277,17 @@ fn host_domain_type_name(ty: &ResolvedTypeRef, ir: &ValidatedIr) -> String {
 }
 
 fn build_domain_sig_params(func: &ResolvedFunction, ir: &ValidatedIr) -> String {
-    func.params
-        .iter()
-        .map(|param| {
-            let ty = host_domain_type_name(&param.ty, ir);
-            if matches!(param.ty, ResolvedTypeRef::UserDefined(_)) {
-                format!(", {}: &{ty}", param.name)
-            } else {
-                format!(", {}: {ty}", param.name)
-            }
-        })
-        .collect()
+    let mut params = String::new();
+    for param in &func.params {
+        let ty = host_domain_type_name(&param.ty, ir);
+        let ty = if matches!(param.ty, ResolvedTypeRef::UserDefined(_)) {
+            format!("&{ty}")
+        } else {
+            ty
+        };
+        append_rust_signature_param(&mut params, &param.name, &ty, &param.langs);
+    }
+    params
 }
 
 fn emit_host_domain_args_setup(
@@ -3615,7 +4359,8 @@ fn host_abi_from_domain_expr(
                 .map(|variant| {
                     format!(
                         "super::domain::{name}::{} => super::types::{name}::{}",
-                        variant.name, variant.name
+                        rust_domain_variant_name(variant),
+                        variant.name
                     )
                 })
                 .collect::<Vec<_>>()
@@ -3631,6 +4376,9 @@ fn host_abi_from_domain_expr(
             )
         }
         ResolvedTypeRef::UserDefined(name) => {
+            if let Some(projected) = tagged_host_abi_from_domain_expr(name, value, ir, false) {
+                return projected;
+            }
             let Some(fields) = ir.types.iter().find(|item| item.name == *name) else {
                 unreachable!("validated domain struct is present");
             };
@@ -3668,11 +4416,24 @@ fn host_domain_from_abi_expr(
             format!("*({value})")
         }
         ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "()".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
-            format!("unsafe {{ ({value}).try_as_str().expect(\"valid ABI string\") }}.to_owned()")
-        }
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => format!(
+            "{{\n\
+                 // SAFETY: a successful dispatch returned a valid UTF-8 StringView in its initialized out slot.\n\
+                 unsafe {{ ({value}).try_as_str().expect(\"valid ABI string\") }}.to_owned()\n\
+             }}"
+        ),
         ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => format!(
-            "{{ let buffer: &Buffer = {value}; let bytes = unsafe {{ buffer.as_slice() }}.to_vec(); if {returned_from_native} && !buffer.ptr.is_null() {{ let host = {host}; unsafe {{ ((*host).free)(host, buffer.ptr, buffer.cap, 1) }}; }} bytes }}"
+            "{{\n\
+                 let buffer: &Buffer = {value};\n\
+                 // SAFETY: a successful dispatch returned `buffer` backed by readable ABI memory.\n\
+                 let bytes = unsafe {{ buffer.as_slice() }}.to_vec();\n\
+                 if {returned_from_native} && !buffer.ptr.is_null() {{\n\
+                     let host = {host};\n\
+                     // SAFETY: native dispatch transferred this buffer's allocation to the host allocator that owns `host`.\n\
+                     unsafe {{ ((*host).free)(host, buffer.ptr, buffer.cap, 1) }};\n\
+                 }}\n\
+                 bytes\n\
+             }}"
         ),
         ResolvedTypeRef::UserDefined(name) if ir.enums.iter().any(|item| item.name == *name) => {
             let Some(enum_def) = ir.enums.iter().find(|item| item.name == *name) else {
@@ -3687,7 +4448,8 @@ fn host_domain_from_abi_expr(
                 .map(|variant| {
                     format!(
                         "super::types::{name}::{} => super::domain::{name}::{}",
-                        variant.name, variant.name
+                        variant.name,
+                        rust_domain_variant_name(variant)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -3697,11 +4459,19 @@ fn host_domain_from_abi_expr(
         ResolvedTypeRef::UserDefined(name) if let Some(element) = array_element_name(name) => {
             let element_ty = resolved_type_ref_for_name(element);
             format!(
-                "unsafe {{ ({value}).as_slice() }}.iter().map(|item| {}).collect()",
+                "{{\n\
+                     // SAFETY: a successful dispatch returned an initialized array wrapper whose elements remain valid for this conversion.\n\
+                     unsafe {{ ({value}).as_slice() }}.iter().map(|item| {}).collect()\n\
+                 }}",
                 host_domain_from_abi_expr(&element_ty, "item", ir, host, returned_from_native,)
             )
         }
         ResolvedTypeRef::UserDefined(name) => {
+            if let Some(projected) =
+                tagged_host_domain_from_abi_expr(name, value, ir, host, returned_from_native)
+            {
+                return projected;
+            }
             let Some(fields) = ir.types.iter().find(|item| item.name == *name) else {
                 unreachable!("validated domain struct is present");
             };
@@ -3730,27 +4500,15 @@ fn host_domain_from_abi_expr(
 
 /// Returns a string starting with `, ` if there are params, else empty.
 fn build_sig_params(func: &ResolvedFunction) -> String {
-    if func.params.is_empty() {
-        return String::new();
-    }
-    if func.params.len() == 1 {
-        let param: &ResolvedParam = &func.params[0];
-        let ty: &ResolvedTypeRef = &param.ty;
-        return match ty {
-            ResolvedTypeRef::UserDefined(_) => {
-                format!(", {}: &{}", param.name, rust_type_name(ty))
-            }
-            _ => format!(", {}: {}", param.name, rust_type_name(ty)),
+    let mut params = String::new();
+    for param in &func.params {
+        let ty = match &param.ty {
+            ResolvedTypeRef::UserDefined(_) => format!("&{}", rust_type_name(&param.ty)),
+            _ => rust_type_name(&param.ty),
         };
+        append_rust_signature_param(&mut params, &param.name, &ty, &param.langs);
     }
-    // Multiple params: individual args (will be packed in body)
-    let params_str: String = func
-        .params
-        .iter()
-        .map(|p: &ResolvedParam| format!(", {}: {}", p.name, rust_type_name(&p.ty)))
-        .collect::<Vec<_>>()
-        .join("");
-    params_str
+    params
 }
 
 /// Emit the `args_ptr` setup lines into the function body.
@@ -3853,11 +4611,18 @@ fn generate_rust_type(
 ) -> Result<(), PolyplugcError> {
     let mut docs: Vec<String> = vec![format!("User-defined type `{}`", ty.name)];
     append_lines(&mut docs, ty.docs.as_deref());
-    let fields: Vec<(String, String, Option<String>)> = ty
+    let fields: Vec<(String, String, Option<String>, Vec<String>)> = ty
         .fields
         .iter()
-        .map(|f: &ResolvedField| (f.name.clone(), rust_type_name(&f.ty), f.docs.clone()))
-        .collect::<Vec<(String, String, Option<String>)>>();
+        .map(|f: &ResolvedField| {
+            (
+                f.name.clone(),
+                rust_type_name(&f.ty),
+                f.docs.clone(),
+                rust_attributes(&f.langs),
+            )
+        })
+        .collect::<Vec<(String, String, Option<String>, Vec<String>)>>();
     // A struct is `Copy`/`Clone` only if every field is. `Buffer` is an owning
     // type (host-freed, single-owner) that is deliberately NOT `Copy`, so a struct
     // embedding one (directly or transitively) derives only `Debug` — copying its
@@ -3866,8 +4631,18 @@ fn generate_rust_type(
         .fields
         .iter()
         .all(|f: &ResolvedField| rust_type_ref_is_copy(&f.ty, types, enums));
+    let user_derives = ty
+        .langs
+        .rust()
+        .map(|rules| rules.derives.as_slice())
+        .unwrap_or_default();
     out.push_str(&render_rust_repr_c_struct(
-        &ty.name, docs, fields, copyable,
+        &ty.name,
+        docs,
+        fields,
+        rust_attributes(&ty.langs),
+        copyable,
+        user_derives,
     )?);
     // Array wrappers (`ArrayOf_T`, from desugaring `Array<T>`) get a typed
     // read accessor so the host reads their `items`/`len` back as a `&[T]`
@@ -4028,14 +4803,15 @@ fn generate_rust_enum(out: &mut String, e: &EnumDef) -> Result<(), PolyplugcErro
         for line in super::docs::lines(e.docs.as_deref()) {
             out.push_str(&format!("/// {line}\n"));
         }
+        emit_rust_attributes(out, "", CustomizableNode::Enum, &e.langs);
         out.push_str(&format!("pub mod {} {{\n", mod_name));
         out.push_str(&format!("    pub type {} = {};\n", e.name, repr_str));
         for variant in &e.variants {
-            let subst_value: String =
-                substitute_variant_refs_rust_bitflag(&e.variants, &variant.value);
+            let subst_value = substitute_variant_refs_rust_bitflag(&e.variants, &variant.value);
             for line in super::docs::lines(variant.docs.as_deref()) {
                 out.push_str(&format!("    /// {line}\n"));
             }
+            emit_rust_attributes(out, "    ", CustomizableNode::EnumVariant, &variant.langs);
             out.push_str(&format!(
                 "    pub const {}: {} = {};\n",
                 variant.name.to_uppercase(),
@@ -4045,58 +4821,85 @@ fn generate_rust_enum(out: &mut String, e: &EnumDef) -> Result<(), PolyplugcErro
         }
         out.push_str("}\n");
         out.push_str(&format!("pub use {}::{};\n\n", mod_name, e.name));
+    } else if has_rust_attributes(&e.langs)
+        || e.variants
+            .iter()
+            .any(|variant| has_rust_attributes(&variant.langs))
+    {
+        out.push_str(&render_rust_enum_with_attributes(e, repr_str));
     } else {
         out.push_str(&render_rust_enum_decl(e, repr_str)?);
     }
     Ok(())
 }
 
-/// Render a `#[repr(_)] #[derive(...)] pub enum` (the non-bitflag path) via
-/// langprint's Rust EnumRenderer. `attributes_before_derives` reproduces
-/// polyplugc's `#[repr(_)]`-first order; rustfmt canonicalizes the rest.
+fn render_rust_enum_with_attributes(e: &EnumDef, repr_str: &str) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("/// Enum `{}` (repr {})\n", e.name, repr_str));
+    for line in super::docs::lines(e.docs.as_deref()) {
+        out.push_str(&format!("/// {line}\n"));
+    }
+    emit_rust_attributes(&mut out, "", CustomizableNode::Enum, &e.langs);
+    let repr = format!("repr({repr_str})");
+    emit_rust_generated_attributes(&mut out, "", CustomizableNode::Enum, &[&repr]);
+    let derives = merge_rust_derives(&["Debug", "Clone", "Copy", "PartialEq", "Eq"], &e.langs);
+    emit_rust_derive(&mut out, CustomizableNode::Enum, &derives);
+    out.push_str(&format!("pub enum {} {{\n", e.name));
+    for variant in &e.variants {
+        for line in super::docs::lines(variant.docs.as_deref()) {
+            out.push_str(&format!("    /// {line}\n"));
+        }
+        emit_rust_attributes(
+            &mut out,
+            "    ",
+            CustomizableNode::EnumVariant,
+            &variant.langs,
+        );
+        let value =
+            substitute_variant_refs_rust_enum(&e.variants, &variant.value, &e.name, repr_str);
+        out.push_str(&format!("    {} = {},\n", variant.name, value));
+    }
+    out.push_str("}\n\n");
+    out
+}
+
 fn render_rust_enum_decl(e: &EnumDef, repr_str: &str) -> Result<String, PolyplugcError> {
-    let variants: Vec<RustEnumVariant> = e
+    let variants = e
         .variants
         .iter()
-        .map(|variant: &EnumVariant| {
-            let subst_value: String =
+        .map(|variant| {
+            let value =
                 substitute_variant_refs_rust_enum(&e.variants, &variant.value, &e.name, repr_str);
             RustEnumVariant {
                 name: variant.name.clone(),
-                value: RustEnumVariantValue::Discriminant(subst_value),
+                value: RustEnumVariantValue::Discriminant(value),
                 docs: variant.docs.as_ref().map(|docs| {
-                    let mut lines: Vec<String> = Vec::new();
+                    let mut lines = Vec::new();
                     append_lines(&mut lines, Some(docs));
                     lines
                 }),
             }
         })
         .collect::<Vec<RustEnumVariant>>();
-    let rust_enum: RustEnum = RustEnum {
+    let rust_enum = RustEnum {
         name: e.name.clone(),
         visibility: RustVisibility::Pub,
         variants,
         repr: Some(repr_str.to_owned()),
-        derives: vec![
-            "Debug".to_owned(),
-            "Clone".to_owned(),
-            "Copy".to_owned(),
-            "PartialEq".to_owned(),
-            "Eq".to_owned(),
-        ],
+        derives: merge_rust_derives(&["Debug", "Clone", "Copy", "PartialEq", "Eq"], &e.langs),
         docs: {
-            let mut docs: Vec<String> = vec![format!("Enum `{}` (repr {})", e.name, repr_str)];
+            let mut docs = vec![format!("Enum `{}` (repr {})", e.name, repr_str)];
             append_lines(&mut docs, e.docs.as_deref());
             Some(docs)
         },
     };
-    let options: RustEnumRenderOptions = RustEnumRenderOptions {
+    let options = RustEnumRenderOptions {
         attributes_before_derives: true,
         ..RustEnumRenderOptions::default()
     };
-    let backend: RustBackend = RustBackend::default();
-    let mut indent_level: i32 = 0;
-    let rendered: String = backend
+    let backend = RustBackend::default();
+    let mut indent_level = 0;
+    let rendered = backend
         .render_enum(
             &rust_enum,
             None::<&str>,
@@ -4201,6 +5004,7 @@ fn generate_host_contract_trait(out: &mut String, contract: &ResolvedHostContrac
     for line in super::docs::lines(contract.docs.as_deref()) {
         out.push_str(&format!("/// {line}\n"));
     }
+    emit_rust_attributes(out, "", CustomizableNode::HostContract, &contract.langs);
     out.push_str(&format!("pub trait {trait_name}: Send + Sync {{\n"));
     for func in &contract.functions {
         generate_host_trait_method(out, func);
@@ -4210,15 +5014,15 @@ fn generate_host_contract_trait(out: &mut String, contract: &ResolvedHostContrac
 
 /// Generate one trait method for a host contract function.
 fn generate_host_trait_method(out: &mut String, func: &ResolvedFunction) {
-    let params_str: String = if func.params.is_empty() {
-        String::new()
-    } else {
-        func.params
-            .iter()
-            .map(|p: &ResolvedParam| format!(", {}: {}", p.name, host_param_type_name(&p.ty)))
-            .collect::<Vec<_>>()
-            .join("")
-    };
+    let mut params_str = String::new();
+    for param in &func.params {
+        append_rust_signature_param(
+            &mut params_str,
+            &param.name,
+            &host_param_type_name(&param.ty),
+            &param.langs,
+        );
+    }
 
     let ret_type: String = match &func.returns {
         Some(ty) => host_return_type_name(ty),
@@ -4239,6 +5043,7 @@ fn generate_host_trait_method(out: &mut String, func: &ResolvedFunction) {
     for line in super::docs::lines(func.return_docs.as_deref()) {
         out.push_str(&format!("    ///\n    /// # Returns\n    /// {line}\n"));
     }
+    emit_rust_function_attributes(out, "    ", func);
     out.push_str(&format!(
         "    fn {}(&self{}) -> {ret_type};\n",
         func.name, params_str
@@ -4254,6 +5059,7 @@ fn generate_host_contracts_file(ir: &ValidatedIr) -> String {
 
     let mut out: String = String::new();
     out.push_str(header);
+    emit_rust_attributes(&mut out, "", CustomizableNode::Api, &ir.langs);
 
     out.push_str(&rust_use_block(&[
         &["polyplug_abi::StringView", "polyplug_abi::Buffer"],
@@ -4842,6 +5648,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> Result<String, Polypl
 
     let mut out: String = String::new();
     out.push_str(header);
+    emit_rust_attributes(&mut out, "", CustomizableNode::Api, &ir.langs);
 
     let any_needs_arena: bool = ir
         .host_contracts
@@ -4919,6 +5726,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> Result<String, Polypl
         parameters: vec![RustParameter {
             name: "code".to_owned(),
             param_type: "AbiErrorCode".to_owned(),
+            attributes: Vec::new(),
         }],
         generic_args: Vec::new(),
         return_type: Some("Self".to_owned()),
@@ -4928,6 +5736,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> Result<String, Polypl
         abi: None,
         body: Some(vec!["Self { code, message: String::new() }".to_owned()]),
         attributes: Vec::new(),
+        return_attributes: Vec::new(),
         docs: Some(vec!["Create a new error with the given code.".to_owned()]),
         comments: Vec::new(),
     };
@@ -5043,7 +5852,7 @@ fn generate_guest_host_contract_caller(
         fields,
         methods: Vec::new(),
         derives: Vec::new(),
-        attributes: Vec::new(),
+        attributes: rust_attributes(&contract.langs),
         is_tuple: false,
         docs: Some(struct_docs),
     };
@@ -5120,10 +5929,12 @@ fn generate_guest_host_contract_caller(
             RustParameter {
                 name: "host".to_owned(),
                 param_type: "*const HostApi".to_owned(),
+                attributes: Vec::new(),
             },
             RustParameter {
                 name: "min_version".to_owned(),
                 param_type: "u32".to_owned(),
+                attributes: Vec::new(),
             },
         ],
         generic_args: Vec::new(),
@@ -5134,6 +5945,7 @@ fn generate_guest_host_contract_caller(
         abi: None,
         body: Some(vec![from_host_body]),
         attributes: Vec::new(),
+        return_attributes: Vec::new(),
         docs: Some(vec![
             "Factory method - creates caller from HostApi or None if not found.".to_owned(),
             String::new(),
@@ -5158,6 +5970,7 @@ fn generate_guest_host_contract_caller(
         abi: None,
         body: Some(vec!["!self.interface.is_null()".to_owned()]),
         attributes: Vec::new(),
+        return_attributes: Vec::new(),
         docs: Some(vec![
             "Check if caller is valid (resolved interface is non-null).".to_owned(),
         ]),
@@ -5189,6 +6002,7 @@ fn generate_guest_host_contract_method(
         .map(|p: &ResolvedParam| RustParameter {
             name: p.name.clone(),
             param_type: guest_param_type_name(&p.ty),
+            attributes: rust_attributes(&p.langs),
         })
         .collect::<Vec<RustParameter>>();
 
@@ -5363,6 +6177,17 @@ fn generate_guest_host_contract_method(
     if body.ends_with('\n') {
         body.pop();
     }
+    if has_multiple_rust_parameter_attributes(func) {
+        render_guest_host_contract_method_with_multiline_parameters(
+            out,
+            func,
+            needs_arena,
+            &ret_type,
+            &body,
+        );
+        out.push('\n');
+        return Ok(());
+    }
     let method: RustFunction = RustFunction {
         name: func.name.clone(),
         visibility: RustVisibility::Pub,
@@ -5379,13 +6204,57 @@ fn generate_guest_host_contract_method(
         is_const: false,
         abi: None,
         body: Some(vec![body]),
-        attributes: Vec::new(),
+        attributes: rust_attributes(&func.langs),
+        return_attributes: rust_attributes(&func.return_langs),
         docs: Some(docs),
         comments: Vec::new(),
     };
     out.push_str(&render_rust_host_fn(&method)?);
     out.push('\n');
     Ok(())
+}
+
+fn render_guest_host_contract_method_with_multiline_parameters(
+    out: &mut String,
+    func: &ResolvedFunction,
+    needs_arena: bool,
+    ret_type: &str,
+    body: &str,
+) {
+    let mut docs = vec![format!(
+        "Call host contract function `{}` (function_id={})",
+        func.name, func.function_id
+    )];
+    docs.extend(rust_function_docs(func));
+    if needs_arena {
+        docs.push("Returns a value borrowing this caller's arena; it stays valid until".to_owned());
+        docs.push("the next arena-backed call on this caller.".to_owned());
+    }
+    for line in docs {
+        out.push_str(&format!("/// {line}\n"));
+    }
+    emit_rust_function_attributes(out, "", func);
+    out.push_str(&format!("pub fn {}(\n", func.name));
+    out.push_str(if needs_arena {
+        "    &mut self,\n"
+    } else {
+        "    &self,\n"
+    });
+    for param in &func.params {
+        for attribute in rust_parameter_attributes(&param.langs) {
+            out.push_str("    ");
+            out.push_str(&attribute);
+            out.push('\n');
+        }
+        out.push_str(&format!(
+            "    {}: {},\n",
+            param.name,
+            guest_param_type_name(&param.ty)
+        ));
+    }
+    out.push_str(&format!(
+        ") -> Result<{ret_type}, HostContractError> {{\n{body}\n}}\n"
+    ));
 }
 
 /// Generate ergonomic guest-side type name for caller method parameters.
@@ -5563,6 +6432,7 @@ fn generate_peer_callers_file(
 
     let mut out: String = String::new();
     out.push_str(header);
+    emit_rust_attributes(&mut out, "", CustomizableNode::Api, &ir.langs);
 
     // Peer dispatch goes directly through the cached interface (emit_native_vm_dispatch),
     // matching on the interface's dispatch kind — same as the host→guest caller.
@@ -5636,7 +6506,7 @@ fn generate_peer_callers_file(
     }
 
     out.push_str("/// Error returned from peer guest contract calls.\n");
-    out.push_str("#[derive(Debug)]\n");
+    emit_rust_generated_attributes(&mut out, "", CustomizableNode::Type, &["derive(Debug)"]);
     out.push_str("pub struct PeerCallError {\n");
     out.push_str("    /// ABI error code (non-zero).\n");
     out.push_str("    pub code: AbiErrorCode,\n");
@@ -5696,6 +6566,7 @@ fn generate_peer_caller(
              /// and is valid only until the next arena-backed call on the same caller.\n",
         );
     }
+    emit_rust_attributes(out, "", CustomizableNode::GuestContract, &contract.langs);
     out.push_str(&format!("pub struct {struct_name} {{\n"));
     out.push_str("    /// Resolved interface pointer for the peer contract.\n");
     out.push_str("    interface: *const GuestContractInterface,\n");
@@ -5983,6 +6854,7 @@ fn generate_peer_fn_caller(
         "    /// Call peer function `{}` (function_id={}) via direct cached-interface dispatch.\n",
         func.name, fn_id
     ));
+    emit_rust_function_attributes(out, "    ", func);
     out.push_str("    #[allow(clippy::absurd_extreme_comparisons)]\n");
     // All methods take `&mut self`: the per-call staleness check may invoke
     // revalidate(), which re-resolves the interface and recreates the instance.
@@ -6172,7 +7044,8 @@ fn peer_abi_from_domain_expr(
                 .map(|variant| {
                     format!(
                         "super::domain::{name}::{} => super::types::{name}::{}",
-                        variant.name, variant.name
+                        rust_domain_variant_name(variant),
+                        variant.name
                     )
                 })
                 .collect::<Vec<_>>()
@@ -6188,6 +7061,9 @@ fn peer_abi_from_domain_expr(
             )
         }
         ResolvedTypeRef::UserDefined(name) => {
+            if let Some(projected) = tagged_host_abi_from_domain_expr(name, value, ir, true) {
+                return projected;
+            }
             let Some(fields) = ir.types.iter().find(|item| item.name == *name) else {
                 unreachable!("validated domain struct is present");
             };
@@ -6220,6 +7096,7 @@ fn generate_guest_mod_rs(
 ) -> String {
     let mut out: String = String::new();
     out.push_str(RUST_FILE_HEADER);
+    emit_rust_attributes(&mut out, "", CustomizableNode::Api, &ir.langs);
     if internal_mode == Some(InternalBindingMode::Profile) || domain_api {
         out.push_str("pub mod domain;\n");
         out.push_str("pub mod guest_contracts;\n");
@@ -6251,6 +7128,7 @@ mod tests {
     use crate::Lang;
     use crate::ResolvedBundleFile;
     use crate::ValidatedImport;
+    use crate::ir::LanguageRules;
     use crate::ir::ReprType;
     use crate::ir::Version;
     use std::path::{Path, PathBuf};
@@ -6273,6 +7151,7 @@ mod tests {
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -6285,6 +7164,41 @@ mod tests {
     }
 
     #[test]
+    fn generated_host_contract_error_uses_standard_error_traits() {
+        let generator: RustGenerator = RustGenerator;
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![],
+            bundle: None,
+            langs: LanguageRules::default(),
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_host(&ir, &OutputLayout::unified(), &mut files)
+            .expect("generate_host");
+        let callers: &str = files
+            .files
+            .iter()
+            .find(|file: &&GeneratedFile| file.path == Path::new("host/host_callers.rs"))
+            .expect("generated host callers")
+            .content
+            .as_str();
+        assert!(
+            callers.contains("use std::error::Error;")
+                && callers.contains("use std::fmt;")
+                && callers.contains("#[derive(Debug, Clone)]")
+                && callers.contains("impl fmt::Display for ContractError")
+                && callers.contains(
+                    "write!(f, \"ContractError(code={}, message={})\", self.code, self.message)"
+                )
+                && callers.contains("impl Error for ContractError {}"),
+            "generated ContractError must use the standard Error contract: {callers}"
+        );
+    }
+
+    #[test]
     fn generate_host_produces_three_files() {
         let generator: RustGenerator = RustGenerator;
         let ir: ValidatedIr = ValidatedIr {
@@ -6293,6 +7207,7 @@ mod tests {
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -6331,14 +7246,17 @@ mod tests {
                     name: "Unknown".to_owned(),
                     value: "0".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 EnumVariant {
                     name: "Rgba8".to_owned(),
                     value: "1".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_rust_enum(&mut out, &e).expect("render enum");
@@ -6364,14 +7282,17 @@ mod tests {
                     name: "None".to_owned(),
                     value: "0".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 EnumVariant {
                     name: "Compressed".to_owned(),
                     value: "1".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_rust_enum(&mut out, &e).expect("render enum");
@@ -6398,19 +7319,23 @@ mod tests {
                     name: "Compressed".to_owned(),
                     value: "1".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 EnumVariant {
                     name: "Hdr".to_owned(),
                     value: "1 << 1".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 EnumVariant {
                     name: "CompressedHdr".to_owned(),
                     value: "Compressed | Hdr".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_rust_enum(&mut out, &e).expect("render enum");
@@ -6475,6 +7400,25 @@ mod tests {
         );
     }
 
+    fn assert_unsafe_blocks_are_documented(generated: &str) {
+        let lines: Vec<&str> = generated.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            if line.contains("unsafe {") {
+                let safety_comment = lines[..index]
+                    .iter()
+                    .rev()
+                    .take_while(|line| line.trim_start().starts_with("//"))
+                    .any(|line| line.trim_start().starts_with("// SAFETY:"));
+                assert!(
+                    safety_comment,
+                    "unsafe block on generated line {} lacks a preceding SAFETY comment:\n{}",
+                    index + 1,
+                    generated
+                );
+            }
+        }
+    }
+
     #[test]
     fn host_caller_with_stringview_return_uses_arena() {
         let contract: ResolvedContract = ResolvedContract {
@@ -6492,12 +7436,16 @@ mod tests {
                     name: "input".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_host_contract_caller(&mut out, &contract, None).expect("generate caller");
@@ -6526,6 +7474,37 @@ mod tests {
             !out.contains("pub fn decode(&self"),
             "arena-backed method must NOT remain &self: {out}"
         );
+        assert_unsafe_blocks_are_documented(&out);
+    }
+
+    #[test]
+    fn host_domain_return_unsafe_blocks_are_documented() {
+        let ir = ValidatedIr {
+            types: Vec::new(),
+            enums: Vec::new(),
+            contracts: Vec::new(),
+            host_contracts: Vec::new(),
+            bundle: None,
+            langs: LanguageRules::default(),
+        };
+        for ty in [
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+            ResolvedTypeRef::AbiType(AbiBuiltin::Buffer),
+            ResolvedTypeRef::UserDefined("ArrayOf_u32".to_owned()),
+        ] {
+            let generated = host_domain_from_abi_expr(
+                &ty,
+                "&out_val",
+                &ir,
+                "self.host()",
+                "returned_from_native",
+            );
+            assert_unsafe_blocks_are_documented(&generated);
+        }
+
+        let mut generated = String::new();
+        emit_caller_arena_array(&mut generated);
+        assert_unsafe_blocks_are_documented(&generated);
     }
 
     #[test]
@@ -6545,12 +7524,16 @@ mod tests {
                     name: "a".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_host_contract_caller(&mut out, &contract, None).expect("generate caller");
@@ -6589,10 +7572,13 @@ mod tests {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 },
                 ResolvedFunction {
                     name: "logf".to_owned(),
@@ -6602,19 +7588,24 @@ mod tests {
                             name: "level".to_owned(),
                             ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                             docs: None,
+                            langs: LanguageRules::default(),
                         },
                         ResolvedParam {
                             name: "format".to_owned(),
                             ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                             docs: None,
+                            langs: LanguageRules::default(),
                         },
                     ],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_host_contract_trait(&mut out, &contract);
@@ -6654,14 +7645,19 @@ mod tests {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String = generate_host_contracts_file(&ir);
         assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
@@ -6698,10 +7694,14 @@ mod tests {
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -6727,6 +7727,7 @@ mod tests {
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -6813,8 +7814,11 @@ mod tests {
                 returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_guest_host_contract_caller(&mut out, &contract)
@@ -6855,8 +7859,11 @@ mod tests {
                 returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_guest_host_contract_caller(&mut out, &contract)
@@ -6891,10 +7898,13 @@ mod tests {
                 name: "message".to_owned(),
                 ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             returns: None,
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_host_thunk(&mut out, &func, "host.logger", "HostLogger");
@@ -6917,10 +7927,13 @@ mod tests {
                 name: "data".to_owned(),
                 ty: ResolvedTypeRef::AbiType(AbiBuiltin::Buffer),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             returns: None,
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_host_thunk(&mut out, &func, "host.store", "HostStore");
@@ -6946,16 +7959,20 @@ mod tests {
                     name: "tag".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 ResolvedParam {
                     name: "payload".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::Buffer),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             returns: None,
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_host_thunk(&mut out, &func, "host.bus", "HostBus");
@@ -6991,12 +8008,16 @@ mod tests {
                     name: "message".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 returns: None,
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         generate_guest_host_contract_caller(&mut out, &contract)
@@ -7041,10 +8062,14 @@ mod tests {
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String = generate_guest_host_contracts_file(&ir)
             .expect("host contracts generation must succeed");
@@ -7082,10 +8107,14 @@ mod tests {
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -7111,6 +8140,7 @@ mod tests {
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -7149,14 +8179,19 @@ mod tests {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String = generate_host_interface_factories_file(&ir);
         assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
@@ -7207,10 +8242,14 @@ mod tests {
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -7236,6 +8275,7 @@ mod tests {
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut files: GeneratedFiles = GeneratedFiles::default();
         generator
@@ -7274,14 +8314,19 @@ mod tests {
                         name: "message".to_owned(),
                         ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: None,
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let out: String = generate_host_interface_factories_file(&ir);
         assert!(out.contains("// SAFETY:"), "missing SAFETY comment: {out}");
@@ -7304,12 +8349,16 @@ mod tests {
                     name: "input".to_owned(),
                     ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
 
         let contract_b: ResolvedContract = ResolvedContract {
@@ -7327,12 +8376,16 @@ mod tests {
                     name: "data".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
 
         let ir: ValidatedIr = ValidatedIr {
@@ -7362,6 +8415,7 @@ mod tests {
                 }],
                 needs_reinit_on_dep_reload: false,
             }),
+            langs: LanguageRules::default(),
         };
 
         let generator: RustGenerator = RustGenerator;
@@ -7456,14 +8510,17 @@ mod tests {
                     name: "Active".to_owned(),
                     value: "1".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 EnumVariant {
                     name: "Inactive".to_owned(),
                     value: "2".to_owned(),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
 
         let decoder: ResolvedContract = ResolvedContract {
@@ -7481,12 +8538,16 @@ mod tests {
                     name: "data".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 returns: Some(ResolvedTypeRef::UserDefined("Status".to_owned())),
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
 
         let ir: ValidatedIr = ValidatedIr {
@@ -7516,6 +8577,7 @@ mod tests {
                 }],
                 needs_reinit_on_dep_reload: false,
             }),
+            langs: LanguageRules::default(),
         };
 
         let generator: RustGenerator = RustGenerator;
@@ -7561,9 +8623,11 @@ mod tests {
                 },
                 functions: vec![],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
 
         let generator: RustGenerator = RustGenerator;
@@ -7606,10 +8670,13 @@ mod tests {
                 name: "mode".to_owned(),
                 ty: ResolvedTypeRef::UserDefined("PixelFormat".to_owned()),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             returns: None,
             docs: None,
             return_docs: None,
+            langs: LanguageRules::default(),
+            return_langs: LanguageRules::default(),
         };
         let mut out: String = String::new();
         emit_guest_host_contract_args_setup(&mut out, &func, "HostThemeCaller");
@@ -7644,12 +8711,16 @@ mod tests {
                     name: "data".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                     docs: None,
+                    langs: LanguageRules::default(),
                 }],
                 returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
                 docs: None,
                 return_docs: None,
+                langs: LanguageRules::default(),
+                return_langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -7681,6 +8752,7 @@ mod tests {
                 dependencies: vec![],
                 needs_reinit_on_dep_reload: false,
             }),
+            langs: LanguageRules::default(),
         };
 
         let generator: RustGenerator = RustGenerator;
@@ -7741,18 +8813,22 @@ mod tests {
                         name: "Cold".to_owned(),
                         value: "1".to_owned(),
                         docs: None,
+                        langs: LanguageRules::default(),
                     },
                     EnumVariant {
                         name: "Hot".to_owned(),
                         value: "2".to_owned(),
                         docs: None,
+                        langs: LanguageRules::default(),
                     },
                 ],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             contracts: vec![],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mode = ResolvedTypeRef::UserDefined("Mode".to_owned());
 
@@ -7793,8 +8869,10 @@ mod tests {
                 name: "payload".to_owned(),
                 ty: ResolvedTypeRef::AbiType(AbiBuiltin::Buffer),
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let nested_array = ResolvedType {
             name: "ArrayOf_Nested".to_owned(),
@@ -7803,14 +8881,17 @@ mod tests {
                     name: "items".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 ResolvedField {
                     name: "len".to_owned(),
                     ty: ResolvedTypeRef::Primitive(PrimitiveType::U64),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let envelope = ResolvedType {
             name: "Envelope".to_owned(),
@@ -7819,14 +8900,17 @@ mod tests {
                     name: "nested".to_owned(),
                     ty: ResolvedTypeRef::UserDefined("Nested".to_owned()),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
                 ResolvedField {
                     name: "items".to_owned(),
                     ty: ResolvedTypeRef::UserDefined("ArrayOf_Nested".to_owned()),
                     docs: None,
+                    langs: LanguageRules::default(),
                 },
             ],
             docs: None,
+            langs: LanguageRules::default(),
         };
         let ir = ValidatedIr {
             types: vec![nested, nested_array, envelope],
@@ -7846,11 +8930,15 @@ mod tests {
                     returns: Some(ResolvedTypeRef::UserDefined("Envelope".to_owned())),
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let layout = OutputLayout {
             bindings: OutputDestination::Inline,
@@ -7914,15 +9002,20 @@ mod tests {
                         name: "value".to_owned(),
                         ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
                         docs: None,
+                        langs: LanguageRules::default(),
                     }],
                     returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::U32)),
                     docs: None,
                     return_docs: None,
+                    langs: LanguageRules::default(),
+                    return_langs: LanguageRules::default(),
                 }],
                 docs: None,
+                langs: LanguageRules::default(),
             }],
             host_contracts: vec![],
             bundle: None,
+            langs: LanguageRules::default(),
         };
         let mut unified = GeneratedFiles::default();
         RustGenerator

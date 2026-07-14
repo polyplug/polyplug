@@ -13,6 +13,10 @@ from abi import (
     HostContractInstance,
     HostContractInterface,
     GuestContractHandle,
+    BundleDescriptorView,
+    OwnedPluginDescriptorView,
+    RegisteredContractDescriptorView,
+    RuntimeIntrospection,
     BundleInitContext,
     PluginDescriptor,
     ReloadPhase,
@@ -62,6 +66,22 @@ def test_host_contract_interface_size():
 
 def test_guest_contract_handle_size():
     assert ctypes.sizeof(GuestContractHandle) == 8, f"GuestContractHandle expected 8 bytes, got {ctypes.sizeof(GuestContractHandle)}"
+
+
+def test_bundle_descriptor_view_size():
+    assert ctypes.sizeof(BundleDescriptorView) == 56, f"BundleDescriptorView expected 56 bytes, got {ctypes.sizeof(BundleDescriptorView)}"
+
+
+def test_owned_plugin_descriptor_view_size():
+    assert ctypes.sizeof(OwnedPluginDescriptorView) == 64, f"OwnedPluginDescriptorView expected 64 bytes, got {ctypes.sizeof(OwnedPluginDescriptorView)}"
+
+
+def test_registered_contract_descriptor_view_size():
+    assert ctypes.sizeof(RegisteredContractDescriptorView) == 88, f"RegisteredContractDescriptorView expected 88 bytes, got {ctypes.sizeof(RegisteredContractDescriptorView)}"
+
+
+def test_runtime_introspection_size():
+    assert ctypes.sizeof(RuntimeIntrospection) == 24, f"RuntimeIntrospection expected 24 bytes, got {ctypes.sizeof(RuntimeIntrospection)}"
 
 
 def test_bundle_init_context_size():

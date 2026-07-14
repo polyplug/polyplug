@@ -8,7 +8,7 @@ using Polyplug.Abi;
 
 namespace Polyplug.Host;
 
-public sealed class Runtime
+public sealed class Runtime : IDisposable
 {
     // HostApi pointer and loaded struct (18-03)
     private nint _host;
@@ -36,6 +36,7 @@ public sealed class Runtime
     private ReloadBundleDelegate? _reloadBundleFn;
     private UnloadBundleDelegate? _unloadBundleFn;
     private FindGuestContractDelegate? _findGuestContractFn;
+    private ListBundlesDelegate? _listBundlesFn;
     private FindAllGuestContractsDelegate? _findAllFn;
     private ResolveGuestContractDelegate? _resolveFn;
     private GetLastErrorDelegate? _getLastErrorFn;
@@ -43,6 +44,9 @@ public sealed class Runtime
     private RegisterHostContractDelegate? _registerHostContractFn;
     private RegisterLoaderDelegate? _registerLoaderFn;
     private FreeDelegate? _freeFn;
+    private GetBundleDescriptorDelegate? _getBundleDescriptorFn;
+    private ListRegisteredGuestContractsDelegate? _listRegisteredGuestContractsFn;
+    private GetRegisteredContractDescriptorDelegate? _getRegisteredContractDescriptorFn;
 
     // ─── Function pointer delegate types (18-03) ─────────────────────────────────
 
@@ -67,7 +71,10 @@ public sealed class Runtime
     private delegate GuestContractHandle FindGuestContractDelegate(nint host, ulong contractId, uint minVersion);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate Polyplug.Abi.Array FindAllGuestContractsDelegate(nint host, ulong contractId, uint minVersion);
+    private delegate void FindAllGuestContractsDelegate(
+        nint host, ulong contractId, uint minVersion, out Polyplug.Abi.Array handles);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void ListBundlesDelegate(nint host, out Polyplug.Abi.Array bundles);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate nint ResolveGuestContractDelegate(nint host, GuestContractHandle handle);
@@ -86,8 +93,25 @@ public sealed class Runtime
 
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate void FreeDelegate(nint host, nint ptr, nuint size, nuint align);
+    internal delegate void FreeDelegate(nint host, nint ptr, nuint size, nuint align);
 
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal delegate bool GetBundleDescriptorDelegate(
+        nint host,
+        ulong bundleId,
+        out BundleDescriptorView descriptor);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void ListRegisteredGuestContractsDelegate(
+        nint host, out Polyplug.Abi.Array handles);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    internal delegate bool GetRegisteredContractDescriptorDelegate(
+        nint host,
+        GuestContractHandle handle,
+        out RegisteredContractDescriptorView descriptor);
     /// <summary>
     /// Create a new Runtime instance with default configuration.
     /// Gets HostApi pointer from FFI and caches struct fields.
@@ -244,6 +268,27 @@ public sealed class Runtime
         return Encoding.UTF8.GetString(buffer);
     }
 
+    private static string OwnedBytesToString(nint pointer, nuint length)
+    {
+        if (pointer == nint.Zero || length == nuint.Zero)
+        {
+            return string.Empty;
+        }
+
+        int byteCount = checked((int)length);
+        byte[] buffer = new byte[byteCount];
+        Marshal.Copy(pointer, buffer, 0, byteCount);
+        return Encoding.UTF8.GetString(buffer);
+    }
+
+    private void FreeDescriptorBytes(nint pointer, nuint length, nuint alignment)
+    {
+        if (pointer != nint.Zero)
+        {
+            _freeFn!(_host, pointer, length, alignment);
+        }
+    }
+
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void OnReloadTrampoline(nint userData, nint phasePtr);
 
@@ -268,16 +313,62 @@ public sealed class Runtime
         _getErrorLenFn = Marshal.GetDelegateForFunctionPointer<GetErrorLenDelegate>(_hostStruct.GetErrorLen);
         _registerHostContractFn = Marshal.GetDelegateForFunctionPointer<RegisterHostContractDelegate>(_hostStruct.RegisterHostContract);
         _registerLoaderFn = Marshal.GetDelegateForFunctionPointer<RegisterLoaderDelegate>(_hostStruct.RegisterLoader);
+        _listBundlesFn = Marshal.GetDelegateForFunctionPointer<ListBundlesDelegate>(_hostStruct.ListBundles);
         _freeFn = Marshal.GetDelegateForFunctionPointer<FreeDelegate>(_hostStruct.Free);
+
+        if (_hostStruct.Reserved == nint.Zero)
+        {
+            return;
+        }
+
+        RuntimeIntrospection introspection = Marshal.PtrToStructure<RuntimeIntrospection>(_hostStruct.Reserved);
+        if (introspection.GetBundleDescriptor != nint.Zero)
+        {
+            _getBundleDescriptorFn =
+                Marshal.GetDelegateForFunctionPointer<GetBundleDescriptorDelegate>(introspection.GetBundleDescriptor);
+        }
+        if (introspection.ListRegisteredGuestContracts != nint.Zero)
+        {
+            _listRegisteredGuestContractsFn =
+                Marshal.GetDelegateForFunctionPointer<ListRegisteredGuestContractsDelegate>(
+                    introspection.ListRegisteredGuestContracts);
+        }
+        if (introspection.GetRegisteredContractDescriptor != nint.Zero)
+        {
+            _getRegisteredContractDescriptorFn =
+                Marshal.GetDelegateForFunctionPointer<GetRegisteredContractDescriptorDelegate>(
+                    introspection.GetRegisteredContractDescriptor);
+        }
+    }
+
+    /// <summary>
+    /// Destroys the native runtime and releases managed callback and resident state.
+    /// </summary>
+    public void Dispose()
+    {
+        if (!DestroyRuntime())
+        {
+            throw new InvalidOperationException("Failed to destroy runtime.");
+        }
+
+        GC.SuppressFinalize(this);
     }
 
     ~Runtime()
     {
-        if (_host != nint.Zero && !NativeMethods.PolyplugRuntimeDestroy(_host))
+        if (!DestroyRuntime())
         {
             GC.ReRegisterForFinalize(this);
-            return;
         }
+    }
+
+    private bool DestroyRuntime()
+    {
+        if (_host != nint.Zero && !NativeMethods.PolyplugRuntimeDestroy(_host))
+        {
+            return false;
+        }
+
         _host = nint.Zero;
 
         // Release the per-instance reload callback storage only after the native
@@ -292,6 +383,7 @@ public sealed class Runtime
             _reloadTrampolineHandle.Free();
         }
         ReleaseInternalPlugins();
+        return true;
     }
 
     private void ReleaseInternalPlugins()
@@ -449,29 +541,161 @@ public sealed class Runtime
     {
         EnsureHost();
 
-        // find_all_guest_contracts returns Array<GuestContractHandle> by value
-        // (items pointer, len, align). The caller owns the items buffer and must
-        // free it via host->free using the returned size and alignment.
-        Polyplug.Abi.Array array = _findAllFn!(_host, contractId, minVersion);
-        if (array.Items == nint.Zero || array.Len == nuint.Zero)
+        // find_all_guest_contracts writes Array<GuestContractHandle> through an explicit
+        // out parameter. The caller owns and frees its non-null buffer exactly once.
+        _findAllFn!(_host, contractId, minVersion, out Polyplug.Abi.Array array);
+        if (array.Items == nint.Zero)
         {
             return [];
         }
 
-        // Each GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }`
-        // = 8 bytes, so the array element stride is sizeof(GuestContractHandle) and
-        // each element is marshaled as the full struct.
-        int count = checked((int)array.Len.ToUInt64());
         int stride = Marshal.SizeOf<GuestContractHandle>();
-        GuestContractHandle[] handles = new GuestContractHandle[count];
-        for (int i = 0; i < count; i++)
+        try
         {
-            handles[i] = Marshal.PtrToStructure<GuestContractHandle>(array.Items + i * stride);
+            if (array.Len == nuint.Zero)
+            {
+                return [];
+            }
+
+            int count = checked((int)array.Len.ToUInt64());
+            GuestContractHandle[] handles = new GuestContractHandle[count];
+            for (int i = 0; i < count; i++)
+            {
+                handles[i] = Marshal.PtrToStructure<GuestContractHandle>(array.Items + i * stride);
+            }
+
+            return handles;
+        }
+        finally
+        {
+            _freeFn!(_host, array.Items, array.Len * (nuint)stride, array.Align);
+        }
+    }
+
+    /// <summary>
+    /// Snapshots loaded bundle metadata, copying borrowed ABI strings before return.
+    /// Older runtimes that do not expose introspection return an empty snapshot.
+    /// </summary>
+    public IReadOnlyList<BundleDescriptor> GetBundleDescriptors()
+    {
+        EnsureHost();
+        if (_getBundleDescriptorFn is null)
+        {
+            return System.Array.AsReadOnly(System.Array.Empty<BundleDescriptor>());
         }
 
-        _freeFn!(_host, array.Items, (nuint)(count * stride), array.Align);
+        _listBundlesFn!(_host, out Polyplug.Abi.Array bundles);
+        if (bundles.Items == nint.Zero)
+        {
+            return System.Array.AsReadOnly(System.Array.Empty<BundleDescriptor>());
+        }
 
-        return handles;
+        int stride = sizeof(ulong);
+        try
+        {
+            if (bundles.Len == nuint.Zero)
+            {
+                return System.Array.AsReadOnly(System.Array.Empty<BundleDescriptor>());
+            }
+
+            int count = checked((int)bundles.Len.ToUInt64());
+            List<BundleDescriptor> descriptors = new(count);
+            for (int index = 0; index < count; index++)
+            {
+                ulong bundleId = unchecked((ulong)Marshal.ReadInt64(bundles.Items + index * stride));
+                if (!_getBundleDescriptorFn(_host, bundleId, out BundleDescriptorView view))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    descriptors.Add(new BundleDescriptor(
+                        view.Id,
+                        OwnedBytesToString(view.Name, view.NameLen),
+                        view.Version,
+                        view.Runtime,
+                        view.SourceKind));
+                }
+                finally
+                {
+                    FreeDescriptorBytes(view.Name, view.NameLen, view.NameAlign);
+                }
+            }
+
+            return System.Array.AsReadOnly(descriptors.ToArray());
+        }
+        finally
+        {
+            _freeFn!(_host, bundles.Items, bundles.Len * (nuint)stride, bundles.Align);
+        }
+    }
+
+    /// Snapshots live guest-contract ownership metadata, copying and releasing caller-owned ABI
+    /// strings before return. Older runtimes that do not expose introspection return an empty
+    /// snapshot.
+    /// </summary>
+    public IReadOnlyList<RegisteredContractDescriptor> GetRegisteredContractDescriptors()
+    {
+        EnsureHost();
+        if (_listRegisteredGuestContractsFn is null || _getRegisteredContractDescriptorFn is null)
+        {
+            return System.Array.AsReadOnly(System.Array.Empty<RegisteredContractDescriptor>());
+        }
+
+        _listRegisteredGuestContractsFn(_host, out Polyplug.Abi.Array handles);
+        if (handles.Items == nint.Zero)
+        {
+            return System.Array.AsReadOnly(System.Array.Empty<RegisteredContractDescriptor>());
+        }
+
+        int stride = Marshal.SizeOf<GuestContractHandle>();
+        try
+        {
+            if (handles.Len == nuint.Zero)
+            {
+                return System.Array.AsReadOnly(System.Array.Empty<RegisteredContractDescriptor>());
+            }
+
+            int count = checked((int)handles.Len.ToUInt64());
+            List<RegisteredContractDescriptor> descriptors = new(count);
+            for (int index = 0; index < count; index++)
+            {
+                GuestContractHandle handle =
+                    Marshal.PtrToStructure<GuestContractHandle>(handles.Items + index * stride);
+                if (!_getRegisteredContractDescriptorFn(_host, handle, out RegisteredContractDescriptorView view))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    descriptors.Add(new RegisteredContractDescriptor(
+                        view.Handle,
+                        view.BundleId,
+                        view.ContractId,
+                        OwnedBytesToString(view.Plugin.Name, view.Plugin.NameLen),
+                        OwnedBytesToString(
+                            view.Plugin.ContractName,
+                            view.Plugin.ContractNameLen),
+                        view.Plugin.Version));
+                }
+                finally
+                {
+                    FreeDescriptorBytes(view.Plugin.Name, view.Plugin.NameLen, view.Plugin.NameAlign);
+                    FreeDescriptorBytes(
+                        view.Plugin.ContractName,
+                        view.Plugin.ContractNameLen,
+                        view.Plugin.ContractNameAlign);
+                }
+            }
+
+            return System.Array.AsReadOnly(descriptors.ToArray());
+        }
+        finally
+        {
+            _freeFn!(_host, handles.Items, handles.Len * (nuint)stride, handles.Align);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -625,6 +849,81 @@ public sealed class Runtime
             Marshal.FreeHGlobal(ptr);
         }
     }
+}
+
+/// <summary>
+/// An immutable snapshot of metadata for one loaded bundle.
+/// </summary>
+public sealed class BundleDescriptor
+{
+    internal BundleDescriptor(
+        ulong id,
+        string name,
+        Polyplug.Abi.Version version,
+        SupportedLanguage runtime,
+        BundleSourceKind sourceKind)
+    {
+        Id = id;
+        Name = name;
+        Version = version;
+        Runtime = runtime;
+        SourceKind = sourceKind;
+    }
+
+    /// <summary>Stable bundle identity.</summary>
+    public ulong Id { get; }
+
+    /// <summary>Human-readable bundle name.</summary>
+    public string Name { get; }
+
+    /// <summary>Semantic bundle version.</summary>
+    public Polyplug.Abi.Version Version { get; }
+
+    /// <summary>Runtime language selected for the bundle.</summary>
+    public SupportedLanguage Runtime { get; }
+
+    /// <summary>Retained origin of the bundle.</summary>
+    public BundleSourceKind SourceKind { get; }
+}
+
+/// <summary>
+/// An immutable snapshot of one live guest-contract registration.
+/// </summary>
+public sealed class RegisteredContractDescriptor
+{
+    internal RegisteredContractDescriptor(
+        GuestContractHandle handle,
+        ulong bundleId,
+        ulong contractId,
+        string pluginName,
+        string contractName,
+        Polyplug.Abi.Version version)
+    {
+        Handle = handle;
+        BundleId = bundleId;
+        ContractId = contractId;
+        PluginName = pluginName;
+        ContractName = contractName;
+        Version = version;
+    }
+
+    /// <summary>Stable handle for the live registration.</summary>
+    public GuestContractHandle Handle { get; }
+
+    /// <summary>Bundle that owns the registration.</summary>
+    public ulong BundleId { get; }
+
+    /// <summary>Canonical guest-contract identity.</summary>
+    public ulong ContractId { get; }
+
+    /// <summary>Human-readable provider name.</summary>
+    public string PluginName { get; }
+
+    /// <summary>Full canonical contract name.</summary>
+    public string ContractName { get; }
+
+    /// <summary>Provider version.</summary>
+    public Polyplug.Abi.Version Version { get; }
 }
 
 /// <summary>

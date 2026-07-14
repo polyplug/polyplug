@@ -344,6 +344,13 @@ impl BundleLoader for PythonLoader {
         // flow through the same in-memory exec path. `Path` keeps the original
         // on-disk import flow byte-for-byte.
         match source {
+            BundleSource::Internal => {
+                return Err(LoaderError::UnsupportedBundleSource {
+                    loader: "python",
+                    source_kind: source.kind(),
+                    bundle: manifest.name.clone(),
+                });
+            }
             BundleSource::Path(_) => {}
             BundleSource::Code(code) => {
                 return self.load_from_source_text(manifest, code, runtime);

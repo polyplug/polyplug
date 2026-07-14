@@ -135,14 +135,14 @@ print("\n=== find_all_guest_contracts ABI layout ===")
 
 local ffi = require("ffi")
 
--- The ABI returns Array BY VALUE: { items ptr, len size_t, align size_t } = 24
--- bytes, align 8. The host binding must declare exactly this layout — a
--- narrower struct return makes the SysV sret write past LuaJIT's return slot.
+-- The ABI writes Array through an explicit trailing out parameter. The host
+-- binding must declare that exact callback shape so every target shares the
+-- same aggregate ABI.
 assert_equals(24, ffi.sizeof("Array"),  "ABI Array struct is 24 bytes")
 assert_equals(8,  ffi.alignof("Array"), "ABI Array struct is 8-byte aligned")
-assert_equals("Array(*)(const HostApi*, uint64_t, uint32_t)",
+assert_equals("void(*)(const HostApi*, uint64_t, uint32_t, Array*)",
     runtime.FIND_ALL_FN_SIGNATURE,
-    "find_all cast signature returns the by-value Array struct")
+    "find_all cast signature writes Array through a trailing out parameter")
 -- The cast signature must be constructible against the generated cdef.
 local fn_ctype_ok = pcall(ffi.typeof, runtime.FIND_ALL_FN_SIGNATURE)
 assert_true(fn_ctype_ok, "FIND_ALL_FN_SIGNATURE is a valid ctype against the generated ABI")

@@ -14,6 +14,7 @@ import ctypes
 import os
 import sys
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Optional, Protocol, runtime_checkable
 
@@ -23,6 +24,8 @@ from polyplug_abi import (
     AbiError,
     AbiErrorCode,
     Array,
+    BundleDescriptorView,
+    BundleSourceKind,
     Compatibility,
     DispatchMechanisms,
     Ed25519PublicKey,
@@ -32,9 +35,11 @@ from polyplug_abi import (
     HostContractInterface,
     HostContractInstance,
     HostApi,
+    RegisteredContractDescriptorView,
     ReloadPhase,
     ReloadPhaseType,
     RuntimeConfig,
+    RuntimeIntrospection,
     SignaturePolicy,
     SupportedLanguage,
 )
@@ -61,6 +66,24 @@ _NULL_HANDLE_INDEX: int = (1 << 32) - 1
 
 # Ed25519PublicKey is the 32-byte compressed Edwards point encoding.
 _ED25519_PUBLIC_KEY_LEN: int = 32
+
+@dataclass(frozen=True)
+class BundleDescriptor:
+    id: int
+    name: str
+    version: object
+    runtime: int
+    source_kind: BundleSourceKind
+
+
+@dataclass(frozen=True)
+class RegisteredContractDescriptor:
+    handle: GuestContractHandle
+    bundle_id: int
+    contract_id: int
+    plugin_name: str
+    contract_name: str
+    version: object
 
 _BACKEND: str = "ctypes"
 _cffi_available: bool = False
@@ -287,6 +310,8 @@ def _read_c_string(ptr: int, length: int) -> str:
     if ptr == 0 or length == 0:
         return ""
     return ctypes.string_at(ptr, length).decode("utf-8", errors="replace")
+
+
 
 
 class Runtime:
@@ -709,32 +734,102 @@ class Runtime:
     def find_all_by_contract(self, contract_id: int, min_version: int) -> list[GuestContractHandle]:
         """Find all guest contracts matching contract_id."""
         host: int = self._ensure_host()
-        # `find_all_guest_contracts` returns an `Array` struct BY VALUE
-        # (#[repr(C)] { items: *mut T, len: usize, align: usize } = 24 bytes).
-        # The CFUNCTYPE restype is the `Array` Structure, so ctypes performs the
-        # sret struct-return ABI and `array` is a populated `Array` instance —
-        # NOT a pointer. Reading its fields directly is correct; treating the
-        # result as a pointer (the old behavior) misread the sret register.
-        array: Array = self._find_all_fn(host, contract_id, min_version)
+        array: Array = Array()
+        self._find_all_fn(host, contract_id, min_version, ctypes.byref(array))
+        try:
+            array_data: int = array.items or 0
+            array_len: int = array.len
+            if array_len == 0 or array_data == 0:
+                return []
 
-        array_data: int = array.items or 0
-        array_len: int = array.len
-        if array_len == 0 or array_data == 0:
+            element_size: int = ctypes.sizeof(GuestContractHandle)
+            return [
+                GuestContractHandle.from_buffer_copy(
+                    ctypes.string_at(array_data + index * element_size, element_size)
+                )
+                for index in range(array_len)
+            ]
+        finally:
+            if array.items:
+                self._free_fn(
+                    host,
+                    array.items,
+                    array.len * ctypes.sizeof(GuestContractHandle),
+                    array.align,
+                )
+
+    def _introspection(self) -> RuntimeIntrospection:
+        if not self._host_struct.reserved:
+            raise RuntimeError("runtime does not expose metadata introspection")
+        return RuntimeIntrospection.from_address(self._host_struct.reserved)
+
+    def bundle_descriptors(self) -> list[BundleDescriptor]:
+        host: int = self._ensure_host()
+        if not self._host_struct.reserved:
             return []
+        table = self._introspection()
+        bundles: Array = Array()
+        self._host_struct.list_bundles(host, ctypes.byref(bundles))
+        descriptors: list[BundleDescriptor] = []
+        try:
+            for index in range(bundles.len):
+                bundle_id = ctypes.c_uint64.from_address(bundles.items + index * 8).value
+                view = BundleDescriptorView()
+                if not table.get_bundle_descriptor(host, bundle_id, ctypes.byref(view)):
+                    continue
+                try:
+                    descriptors.append(BundleDescriptor(
+                        view.id,
+                        _read_c_string(view.name, view.name_len),
+                        view.version,
+                        int(view.runtime),
+                        BundleSourceKind(view.source_kind),
+                    ))
+                finally:
+                    if view.name:
+                        self._free_fn(host, view.name, view.name_len, view.name__align)
+        finally:
+            if bundles.items:
+                self._free_fn(host, bundles.items, bundles.len * 8, bundles.align)
+        return descriptors
 
-        # GuestContractHandle is `#[repr(C)] { index: u32, generation: u32 }` = 8 bytes,
-        # so the array has an 8-byte element stride and each element is read as a full struct.
-        element_size: int = ctypes.sizeof(GuestContractHandle)
-        handles: list[GuestContractHandle] = []
-        for i in range(array_len):
-            handle: GuestContractHandle = GuestContractHandle.from_address(array_data + i * element_size)
-            handles.append(handle)
-
-        # Free the array via host->free using the same size/align the runtime
-        # allocated with: size = len * sizeof(element), align = array.align.
-        self._free_fn(host, array_data, array_len * element_size, array.align)
-
-        return handles
+    def registered_contract_descriptors(self) -> list[RegisteredContractDescriptor]:
+        host: int = self._ensure_host()
+        if not self._host_struct.reserved:
+            return []
+        table = self._introspection()
+        handles: Array = Array()
+        table.list_registered_guest_contracts(host, ctypes.byref(handles))
+        descriptors: list[RegisteredContractDescriptor] = []
+        try:
+            stride = ctypes.sizeof(GuestContractHandle)
+            for index in range(handles.len):
+                handle = GuestContractHandle.from_address(handles.items + index * stride)
+                view = RegisteredContractDescriptorView()
+                if not table.get_registered_contract_descriptor(host, handle, ctypes.byref(view)):
+                    continue
+                try:
+                    descriptors.append(RegisteredContractDescriptor(
+                        view.handle, view.bundle_id, view.contract_id,
+                        _read_c_string(view.plugin.name, view.plugin.name_len),
+                        _read_c_string(
+                            view.plugin.contract_name, view.plugin.contract_name_len
+                        ),
+                        view.plugin.version,
+                    ))
+                finally:
+                    if view.plugin.name:
+                        self._free_fn(
+                            host, view.plugin.name, view.plugin.name_len,
+                            view.plugin.name__align)
+                    if view.plugin.contract_name:
+                        self._free_fn(
+                            host, view.plugin.contract_name, view.plugin.contract_name_len,
+                            view.plugin.contract_name__align)
+        finally:
+            if handles.items:
+                self._free_fn(host, handles.items, handles.len * ctypes.sizeof(GuestContractHandle), handles.align)
+        return descriptors
 
     def resolve_guest_contract(self, handle: GuestContractHandle) -> int:
         """Resolve a guest contract handle to a GuestContractInterface pointer."""

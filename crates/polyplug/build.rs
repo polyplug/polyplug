@@ -73,6 +73,14 @@ fn main() {
         no_init_plugin_so.display()
     );
 
+    // OLD_ABI_PLUGIN_SO — native plugin deliberately exporting ABI v1
+    let old_abi_plugin_so: PathBuf =
+        fixtures_dir.join(format!("{}old_abi_plugin.{}", plugin_prefix, plugin_ext));
+    println!(
+        "cargo:rustc-env=OLD_ABI_PLUGIN_SO={}",
+        old_abi_plugin_so.display()
+    );
+
     // DEPENDER_PLUGIN_SO — dependency test plugin
     let depender_plugin_so: PathBuf =
         fixtures_dir.join(format!("{}depender_plugin.{}", plugin_prefix, plugin_ext));
@@ -127,6 +135,13 @@ fn main() {
     println!(
         "cargo:rustc-env=NO_INIT_PLUGIN_DIR={}",
         no_init_plugin_dir.display()
+    );
+
+    // OLD_ABI_PLUGIN_DIR — deliberately stale ABI-v1 bundle
+    let old_abi_plugin_dir: PathBuf = fixtures_dir.join("old_abi_plugin");
+    println!(
+        "cargo:rustc-env=OLD_ABI_PLUGIN_DIR={}",
+        old_abi_plugin_dir.display()
     );
 
     // RELOAD_PLUGIN_V1_DIR, RELOAD_PLUGIN_V2_DIR — reload test plugin directories

@@ -44,6 +44,7 @@ import {
   HOST_API_GET_LAST_ERROR_OFFSET,
   HOST_API_GET_ERROR_LEN_OFFSET,
   HOST_API_REGISTRY_REVISION_OFFSET,
+  HOST_API_RESERVED_OFFSET,
   RUNTIME_CONFIG_COMPATIBILITY_OFFSET,
   RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET,
   RUNTIME_CONFIG_ON_RELOAD_OFFSET,
@@ -80,6 +81,26 @@ import {
   HOST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET,
   HOST_CONTRACT_INTERFACE_DISPATCH_OFFSET,
   HOST_CONTRACT_INTERFACE_SIZE,
+  BUNDLE_DESCRIPTOR_VIEW_ID_OFFSET,
+  BUNDLE_DESCRIPTOR_VIEW_NAME_OFFSET,
+  BUNDLE_DESCRIPTOR_VIEW_VERSION_OFFSET,
+  BUNDLE_DESCRIPTOR_VIEW_RUNTIME_OFFSET,
+  BUNDLE_DESCRIPTOR_VIEW_SOURCE_KIND_OFFSET,
+  BUNDLE_DESCRIPTOR_VIEW_SIZE,
+  REGISTERED_CONTRACT_DESCRIPTOR_VIEW_HANDLE_OFFSET,
+  REGISTERED_CONTRACT_DESCRIPTOR_VIEW_BUNDLE_ID_OFFSET,
+  REGISTERED_CONTRACT_DESCRIPTOR_VIEW_CONTRACT_ID_OFFSET,
+  REGISTERED_CONTRACT_DESCRIPTOR_VIEW_PLUGIN_OFFSET,
+  REGISTERED_CONTRACT_DESCRIPTOR_VIEW_SIZE,
+  ARRAY_ITEMS_OFFSET,
+  ARRAY_LEN_OFFSET,
+  ARRAY_ALIGN_OFFSET,
+  OWNED_PLUGIN_DESCRIPTOR_VIEW_NAME_OFFSET,
+  OWNED_PLUGIN_DESCRIPTOR_VIEW_CONTRACT_NAME_OFFSET,
+  OWNED_PLUGIN_DESCRIPTOR_VIEW_VERSION_OFFSET,
+  RUNTIME_INTROSPECTION_GET_BUNDLE_DESCRIPTOR_OFFSET,
+  RUNTIME_INTROSPECTION_LIST_REGISTERED_GUEST_CONTRACTS_OFFSET,
+  RUNTIME_INTROSPECTION_GET_REGISTERED_CONTRACT_DESCRIPTOR_OFFSET,
   PLUGIN_DESCRIPTOR_CONTRACT_NAME_OFFSET,
   PLUGIN_DESCRIPTOR_NAME_OFFSET,
   PLUGIN_DESCRIPTOR_SIZE,
@@ -189,6 +210,88 @@ export const SignaturePolicy = Object.freeze({
   WarnOnly: 1,
   Required: 2,
 });
+
+/**
+ * Retained origins for loaded bundles.
+ *
+ * This mirrors the ABI's TypeScript-only `const enum` as a runtime value for
+ * JavaScript hosts.
+ */
+export const BundleSourceKind = Object.freeze({
+  Internal: 0,
+  Path: 1,
+  Code: 2,
+  Bytes: 3,
+});
+
+function bundleSourceKindFromAbi(value) {
+  switch (value) {
+    case BundleSourceKind.Internal:
+      return BundleSourceKind.Internal;
+    case BundleSourceKind.Path:
+      return BundleSourceKind.Path;
+    case BundleSourceKind.Code:
+      return BundleSourceKind.Code;
+    case BundleSourceKind.Bytes:
+      return BundleSourceKind.Bytes;
+    default:
+      throw new RangeError(`unknown BundleSourceKind: ${value}`);
+  }
+}
+
+function immutableVersion(view, offset) {
+  return Object.freeze({
+    major: view.getUint32(offset + VERSION_MAJOR_OFFSET, true),
+    minor: view.getUint32(offset + VERSION_MINOR_OFFSET, true),
+    patch: view.getUint32(offset + VERSION_PATCH_OFFSET, true),
+  });
+}
+
+function immutableHandle(view, offset) {
+  return Object.freeze({
+    index: view.getUint32(offset + GUEST_CONTRACT_HANDLE_INDEX_OFFSET, true),
+    generation: view.getUint32(offset + GUEST_CONTRACT_HANDLE_GENERATION_OFFSET, true),
+  });
+}
+
+function readAbiArray(result) {
+  const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+  return {
+    items: _ffi.pointerCreate(view.getBigUint64(0, true)),
+    length: view.getBigUint64(8, true),
+    align: view.getBigUint64(16, true),
+  };
+}
+
+/**
+ * Call an ABI function with its explicit trailing `Array<T>*` output parameter.
+ *
+ * The output pointer is part of Polyplug's declared callback signature, not an
+ * ABI-lowering sret argument; every FFI backend therefore invokes the same
+ * scalar/void function signature on every architecture.
+ */
+function callAbiArrayOutFunction(pointer, parameters, args) {
+  const out = new BigUint64Array(3);
+  _ffi.callFunction(
+    pointer,
+    { parameters: [...parameters, "pointer"], result: "void" },
+    [...args, _ffi.pointerOf(out)],
+  );
+  return readAbiArray(out);
+}
+
+function copyStringView(view, offset) {
+  const ptr = _ffi.pointerCreate(view.getBigUint64(offset + STRING_VIEW_PTR_OFFSET, true));
+  const len = Number(view.getBigUint64(offset + STRING_VIEW_LEN_OFFSET, true));
+  return ptr === null || len === 0 ? "" : utf8At(ptr, len);
+}
+
+function safeArrayLength(length) {
+  if (length > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RangeError(`ABI array length exceeds JavaScript's safe integer range: ${length}`);
+  }
+  return Number(length);
+}
 
 // ─── FFI Symbols: Only create and destroy ───────────────────────────────────────
 // All operations are accessed through HostApi struct fields.
@@ -1208,6 +1311,75 @@ export class Runtime {
     return this.#lib;
   }
 
+  #introspectionTable() {
+    return _ffi.pointerCreate(
+      _ffi.pointerView(this.#host).getBigUint64(HOST_API_RESERVED_OFFSET, true),
+    );
+  }
+
+  #introspectionCallback(offset) {
+    const table = this.#introspectionTable();
+    return table === null
+      ? null
+      : _ffi.pointerCreate(_ffi.pointerView(table).getBigUint64(offset, true));
+  }
+
+  #ownedDescriptorArray(view, offset) {
+    return {
+      items: _ffi.pointerCreate(view.getBigUint64(offset + ARRAY_ITEMS_OFFSET, true)),
+      length: view.getBigUint64(offset + ARRAY_LEN_OFFSET, true),
+      align: view.getBigUint64(offset + ARRAY_ALIGN_OFFSET, true),
+    };
+  }
+
+  #copyAndFreeDescriptorString(view, offset) {
+    const value = this.#ownedDescriptorArray(view, offset);
+    try {
+      return value.items === null || value.length === 0n
+        ? ""
+        : utf8At(value.items, safeArrayLength(value.length));
+    } finally {
+      this.#freeAbiArray(value.items, value.length, value.align, 1);
+    }
+  }
+
+  #copyAndFreeProviderStrings(view, offset) {
+    const name = this.#ownedDescriptorArray(
+      view, offset + OWNED_PLUGIN_DESCRIPTOR_VIEW_NAME_OFFSET,
+    );
+    const contractName = this.#ownedDescriptorArray(
+      view, offset + OWNED_PLUGIN_DESCRIPTOR_VIEW_CONTRACT_NAME_OFFSET,
+    );
+    try {
+      return {
+        name: name.items === null || name.length === 0n
+          ? ""
+          : utf8At(name.items, safeArrayLength(name.length)),
+        contractName: contractName.items === null || contractName.length === 0n
+          ? ""
+          : utf8At(contractName.items, safeArrayLength(contractName.length)),
+      };
+    } finally {
+      this.#freeAbiArray(name.items, name.length, name.align, 1);
+      this.#freeAbiArray(contractName.items, contractName.length, contractName.align, 1);
+    }
+  }
+
+  #freeAbiArray(items, length, align, elementSize) {
+    if (items === null) {
+      return;
+    }
+    const free = readHostField(this.#host, HOST_API_OFFSETS.free);
+    if (free === null) {
+      throw new Error("HostApi.free is null while releasing an ABI array");
+    }
+    _ffi.callFunction(
+      free,
+      { parameters: ["pointer", "pointer", "usize", "usize"], result: "void" },
+      [this.#host, items, length * BigInt(elementSize), align],
+    );
+  }
+
   /**
    * Get last error message.
    * Calls through HostApi.get_last_error and get_error_len fields.
@@ -1543,58 +1715,187 @@ export class Runtime {
    * @returns {{ index: number, generation: number }[]} Array of guest contract handles
    */
   findAllGuestContracts(contractId, minVersion = 0, cap = 64) {
-    // find_all_guest_contracts returns the ABI `Array` struct BY VALUE:
-    // #[repr(C)] { items: pointer @ 0, len: usize @ 8, align: usize @ 16 } =
-    // 24 bytes. Declaring anything smaller makes the SysV sret write past the
-    // buffer Deno allocates for the return value (memory corruption). Deno FFI
-    // returns by-value structs as a Uint8Array buffer (mirrors the
-    // AbiError-by-value pattern in loadBundle above).
-    const result = callHostMethod(
-      this.#host,
-      HOST_API_OFFSETS.find_all_guest_contracts,
+    const findAll = readHostField(this.#host, HOST_API_OFFSETS.find_all_guest_contracts);
+    if (findAll === null) {
+      throw new Error("HostApi.find_all_guest_contracts is null");
+    }
+    const array = callAbiArrayOutFunction(
+      findAll,
       ["pointer", "u64", "u32"],
-      { struct: ["pointer", "usize", "usize"] },
-      [this.#host, contractId, minVersion]
+      [this.#host, contractId, minVersion],
     );
+    try {
+      if (array.items === null || array.length === 0n) {
+        return [];
+      }
 
-    // Read the returned Array struct: { items @ 0, len @ 8, align @ 16 }.
-    const resultDv = new DataView(result.buffer, result.byteOffset, result.byteLength);
-    const arrPtrRaw = resultDv.getBigUint64(0, true);
-    const arrLen = Number(resultDv.getBigUint64(8, true));
-    const arrAlign = resultDv.getBigUint64(16, true);
-    const arrPtr = _ffi.pointerCreate(arrPtrRaw);
-
-    if (arrPtr === null || arrLen === 0) {
-      return [];
-    }
-
-    // Read handles from array. GuestContractHandle is
-    // `#[repr(C)] { index: u32, generation: u32 }` (8 bytes, align 4), so
-    // elements have an 8-byte stride; each is read as a { index, generation }.
-    const handles = [];
-    const arrView = _ffi.pointerView(arrPtr);
-    for (let i = 0; i < Math.min(arrLen, cap); i++) {
-      const base = i * GUEST_CONTRACT_HANDLE_SIZE;
-      handles.push({
-        index: arrView.getUint32(base + GUEST_CONTRACT_HANDLE_INDEX_OFFSET),
-        generation: arrView.getUint32(base + GUEST_CONTRACT_HANDLE_GENERATION_OFFSET),
-      });
-    }
-
-    // Free the array via HostApi.free using the runtime's allocation size and
-    // alignment: size = len * sizeof(GuestContractHandle), align = Array.align
-    // as returned by the runtime.
-    if (arrLen > 0) {
-      callHostMethod(
-        this.#host,
-        HOST_API_OFFSETS.free,
-        ["pointer", "pointer", "usize", "usize"],
-        "void",
-        [this.#host, arrPtr, BigInt(arrLen * GUEST_CONTRACT_HANDLE_SIZE), arrAlign]
+      const handles = [];
+      const items = _ffi.pointerView(array.items);
+      for (let index = 0; index < Math.min(safeArrayLength(array.length), cap); index += 1) {
+        const offset = index * GUEST_CONTRACT_HANDLE_SIZE;
+        handles.push({
+          index: items.getUint32(offset + GUEST_CONTRACT_HANDLE_INDEX_OFFSET, true),
+          generation: items.getUint32(offset + GUEST_CONTRACT_HANDLE_GENERATION_OFFSET, true),
+        });
+      }
+      return handles;
+    } finally {
+      this.#freeAbiArray(
+        array.items,
+        array.length,
+        array.align,
+        GUEST_CONTRACT_HANDLE_SIZE,
       );
     }
+  }
 
-    return handles;
+  /**
+   * Snapshot every loaded bundle descriptor.
+   *
+   * The returned array and its descriptors are immutable copies. An older host
+   * without the optional introspection table returns an empty immutable array.
+   * @returns {ReadonlyArray<Readonly<{
+   *   id: bigint,
+   *   name: string,
+   *   version: Readonly<{ major: number, minor: number, patch: number }>,
+   *   runtime: number,
+   *   sourceKind: number,
+   * }>>}
+   */
+  bundleDescriptors() {
+    const descriptor = this.#introspectionCallback(
+      RUNTIME_INTROSPECTION_GET_BUNDLE_DESCRIPTOR_OFFSET,
+    );
+    const listBundles = readHostField(this.#host, HOST_API_OFFSETS.list_bundles);
+    if (descriptor === null || listBundles === null) {
+      return Object.freeze([]);
+    }
+
+    const array = callAbiArrayOutFunction(
+      listBundles,
+      ["pointer"],
+      [this.#host],
+    );
+    try {
+      if (array.items === null || array.length === 0n) {
+        return Object.freeze([]);
+      }
+
+      const ids = _ffi.pointerView(array.items);
+      const descriptors = [];
+      for (let index = 0; index < safeArrayLength(array.length); index += 1) {
+        const viewBytes = new Uint8Array(BUNDLE_DESCRIPTOR_VIEW_SIZE);
+        if (!_ffi.callFunction(
+          descriptor,
+          { parameters: ["pointer", "u64", "pointer"], result: "bool" },
+          [this.#host, ids.getBigUint64(index * 8, true), _ffi.pointerOf(viewBytes)],
+        )) {
+          continue;
+        }
+        const view = new DataView(viewBytes.buffer);
+        descriptors.push(Object.freeze({
+          id: view.getBigUint64(BUNDLE_DESCRIPTOR_VIEW_ID_OFFSET, true),
+          name: this.#copyAndFreeDescriptorString(view, BUNDLE_DESCRIPTOR_VIEW_NAME_OFFSET),
+          version: immutableVersion(view, BUNDLE_DESCRIPTOR_VIEW_VERSION_OFFSET),
+          runtime: view.getUint32(BUNDLE_DESCRIPTOR_VIEW_RUNTIME_OFFSET, true),
+          sourceKind: bundleSourceKindFromAbi(
+            view.getUint32(BUNDLE_DESCRIPTOR_VIEW_SOURCE_KIND_OFFSET, true),
+          ),
+        }));
+      }
+      return Object.freeze(descriptors);
+    } finally {
+      this.#freeAbiArray(array.items, array.length, array.align, 8);
+    }
+  }
+
+  /**
+   * Snapshot every registered guest contract and its owning bundle.
+   *
+   * The returned array and its descriptors are immutable copies. An older host
+   * without the optional introspection table returns an empty immutable array.
+   * @returns {ReadonlyArray<Readonly<{
+   *   handle: Readonly<{ index: number, generation: number }>,
+   *   bundleId: bigint,
+   *   contractId: bigint,
+   *   pluginName: string,
+   *   contractName: string,
+   *   version: Readonly<{ major: number, minor: number, patch: number }>,
+   * }>>}
+   */
+  registeredContractDescriptors() {
+    const list = this.#introspectionCallback(
+      RUNTIME_INTROSPECTION_LIST_REGISTERED_GUEST_CONTRACTS_OFFSET,
+    );
+    const descriptor = this.#introspectionCallback(
+      RUNTIME_INTROSPECTION_GET_REGISTERED_CONTRACT_DESCRIPTOR_OFFSET,
+    );
+    if (list === null || descriptor === null) {
+      return Object.freeze([]);
+    }
+
+    const array = callAbiArrayOutFunction(
+      list,
+      ["pointer"],
+      [this.#host],
+    );
+    try {
+      if (array.items === null || array.length === 0n) {
+        return Object.freeze([]);
+      }
+
+      const handles = _ffi.pointerView(array.items);
+      const descriptors = [];
+      for (let index = 0; index < safeArrayLength(array.length); index += 1) {
+        const handleOffset = index * GUEST_CONTRACT_HANDLE_SIZE;
+        const handleIndex = handles.getUint32(
+          handleOffset + GUEST_CONTRACT_HANDLE_INDEX_OFFSET,
+          true,
+        );
+        const handleGeneration = handles.getUint32(
+          handleOffset + GUEST_CONTRACT_HANDLE_GENERATION_OFFSET,
+          true,
+        );
+        const packedHandle = BigInt(handleIndex) | (BigInt(handleGeneration) << 32n);
+
+        const viewBytes = new Uint8Array(REGISTERED_CONTRACT_DESCRIPTOR_VIEW_SIZE);
+        if (!_ffi.callFunction(
+          descriptor,
+          { parameters: ["pointer", "u64", "pointer"], result: "bool" },
+          [this.#host, packedHandle, _ffi.pointerOf(viewBytes)],
+        )) {
+          continue;
+        }
+
+        const view = new DataView(viewBytes.buffer);
+        const pluginOffset = REGISTERED_CONTRACT_DESCRIPTOR_VIEW_PLUGIN_OFFSET;
+        const strings = this.#copyAndFreeProviderStrings(view, pluginOffset);
+        descriptors.push(Object.freeze({
+          handle: immutableHandle(view, REGISTERED_CONTRACT_DESCRIPTOR_VIEW_HANDLE_OFFSET),
+          bundleId: view.getBigUint64(
+            REGISTERED_CONTRACT_DESCRIPTOR_VIEW_BUNDLE_ID_OFFSET,
+            true,
+          ),
+          contractId: view.getBigUint64(
+            REGISTERED_CONTRACT_DESCRIPTOR_VIEW_CONTRACT_ID_OFFSET,
+            true,
+          ),
+          pluginName: strings.name,
+          contractName: strings.contractName,
+          version: immutableVersion(
+            view, pluginOffset + OWNED_PLUGIN_DESCRIPTOR_VIEW_VERSION_OFFSET,
+          ),
+        }));
+      }
+      return Object.freeze(descriptors);
+    } finally {
+      this.#freeAbiArray(
+        array.items,
+        array.length,
+        array.align,
+        GUEST_CONTRACT_HANDLE_SIZE,
+      );
+    }
   }
 
   /**
