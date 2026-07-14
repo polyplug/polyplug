@@ -58,7 +58,7 @@ cannot be used to mutate the buffer's bytes:
 | Language | Return | Copy? | Read-only enforced by |
 |---|---|---|---|
 | Rust (`sdks/rust/guest`) | `&[u8]` | zero-copy | immutable borrow (`&`, not `&mut`) |
-| C++ (`sdks/cpp/abi`) | `std::basic_string_view<uint8_t>` | zero-copy | `string_view` has no mutating ops |
+| C++ (`sdks/cpp/abi`) | `polyplug::abi::ByteView` | zero-copy | only `const uint8_t` accessors and iterators |
 | C# (`sdks/csharp/abi`) | `ReadOnlySpan<byte>` | zero-copy | `ReadOnlySpan`, not `Span` |
 | Python (`sdks/python`) | `memoryview` (`.toreadonly()`) | zero-copy | `.readonly == True` (writes raise) |
 | Lua (`sdks/lua/abi`) | `(const uint8_t* cdata, len)` pair | zero-copy | `const`-qualified cdata (LuaJIT errors on write) |

@@ -22,7 +22,7 @@ methods:
     - split
   # Buffer is an owning byte buffer (ptr/len/cap). `as_bytes` borrows its bytes
   # as a zero-copy view in every language where the runtime allows it (Rust
-  # &[u8], C++ basic_string_view<uint8_t>, C# ReadOnlySpan<byte>, Python
+  # &[u8], C++ ByteView, C# ReadOnlySpan<byte>, Python
   # memoryview, Lua (ptr,len) cdata) — never decoded, byte-exact. The JS runtimes
   # (Deno FFI copy, QuickJS guest bridge) cannot view host memory, so there the
   # bytes are copied into a Uint8Array. Lives in the same target file as the

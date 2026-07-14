@@ -73,7 +73,7 @@ addr = ctypes.cast(data, ctypes.c_void_p).value
 buf = Buffer(ptr=addr, len=3, cap=3)
 mv = as_bytes(buf)
 # as_bytes is a read primitive: the view must be read-only, like Rust &[u8] /
-# C# ReadOnlySpan<byte> / C++ basic_string_view. A writable view would let a
+# C# ReadOnlySpan<byte> / C++ ByteView. A writable view would let a
 # caller scribble back into the buffer's memory.
 assert mv.readonly, 'as_bytes memoryview must be read-only'
 hx = bytes(mv).hex()
