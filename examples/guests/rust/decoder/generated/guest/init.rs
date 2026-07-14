@@ -27,7 +27,7 @@ use super::interfaces::PIPELINE_DECODER_CONTRACT_ID;
 // Note: polyplug_abi_version() should be exported by the plugin crate itself,
 // not by the generated code. Add this to your lib.rs:
 //   #[unsafe(no_mangle)]
-//   pub extern "C" fn polyplug_abi_version() -> u32 { 1 }
+//   pub extern "C" fn polyplug_abi_version() -> u32 { 2 }
 
 /// Register all plugin interfaces with the host.
 ///

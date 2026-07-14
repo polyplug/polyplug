@@ -7186,7 +7186,7 @@ mod tests {
             .content
             .as_str();
         assert!(
-            callers.contains("use std::error::Error;")
+            callers.contains("use core::error::Error;")
                 && callers.contains("use std::fmt;")
                 && callers.contains("#[derive(Debug, Clone)]")
                 && callers.contains("impl fmt::Display for ContractError")
@@ -7194,7 +7194,7 @@ mod tests {
                     "write!(f, \"ContractError(code={}, message={})\", self.code, self.message)"
                 )
                 && callers.contains("impl Error for ContractError {}"),
-            "generated ContractError must use the standard Error contract: {callers}"
+            "generated ContractError must import and implement the standard Error contract: {callers}"
         );
     }
 

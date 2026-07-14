@@ -4498,7 +4498,7 @@ fn generate_cs_internal_registration_file(
     out.push_str("        ArgumentNullException.ThrowIfNull(input);\n");
     out.push_str("        Providers providers = input.Consume();\n");
     out.push_str("        ArgumentNullException.ThrowIfNull(runtime);\n");
-    out.push_str("        InternalPluginBundle plugin = Guest.InternalPluginFactory.Create(\n");
+    out.push_str("        InternalPluginBundle plugin = Guest.InternalPluginFactory.CreateInternalPluginBundle(\n");
     for (index, (plugin, contract)) in providers.iter().enumerate() {
         let property = cs_internal_provider_property(plugin, contract);
         let separator = if index + 1 == providers.len() {

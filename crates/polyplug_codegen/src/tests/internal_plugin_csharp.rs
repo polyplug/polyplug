@@ -17,7 +17,17 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Output};
+use std::sync::Mutex;
+
+static DOTNET_BUILD_LOCK: Mutex<()> = Mutex::new(());
+
+fn run_dotnet(command: &mut Command, context: &str) -> Output {
+    let _guard = DOTNET_BUILD_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    command.output().expect(context)
+}
 
 fn output_map(output: GenerateOutput) -> BTreeMap<PathBuf, String> {
     output
@@ -208,6 +218,7 @@ fn internal_csharp_profile_uses_identity_namespaces_and_typed_registration() {
     assert!(registration.contains("public ulong BundleId"));
     assert!(registration.contains("public GuestContractHandle[] Handles"));
     assert!(registration.contains("CreateFromCommittedHandle(runtime, published.Handles[0])"));
+    assert!(registration.contains("InternalPluginFactory.CreateInternalPluginBundle("));
     assert!(registration.contains("ShapeProviderShapeContract"));
     let resident = output
         .values()
@@ -351,12 +362,12 @@ fn two_internal_csharp_profiles_with_different_apis_compile_together() {
         ),
     )
     .expect("write C# compile project");
-    let output = Command::new("dotnet")
+    let mut command = Command::new("dotnet");
+    command
         .args(["build", "--nologo", "--verbosity", "quiet"])
         .arg(&project)
-        .current_dir(&source)
-        .output()
-        .expect("run focused C# generated-profile compilation");
+        .current_dir(&source);
+    let output = run_dotnet(&mut command, "run focused C# generated-profile compilation");
     assert!(
         output.status.success(),
         "two internal C# profiles with distinct APIs must compile together\nstdout:\n{}\nstderr:\n{}",
@@ -613,9 +624,7 @@ static class Program
         .arg(&project)
         .current_dir(&source);
     configure_native_library_search_path(&mut command, &native_dir);
-    let output = command
-        .output()
-        .expect("run generated C# internal profile executable");
+    let output = run_dotnet(&mut command, "run generated C# internal profile executable");
     assert!(
         output.status.success(),
         "generated C# profile must register and dispatch against the real runtime\nstdout:\n{}\nstderr:\n{}",
@@ -844,13 +853,13 @@ static class UnsafeDefault<T> where T : struct
         ],
         &[abi, guest_sdk, host_sdk, domain_project, contracts_project],
     );
-    let output = Command::new("dotnet")
+    let mut command = Command::new("dotnet");
+    command
         .args(["run", "--nologo", "--verbosity", "quiet"])
         .arg("--project")
         .arg(&binding_project)
-        .current_dir(&bindings_root)
-        .output()
-        .expect("compile and run split C# projects");
+        .current_dir(&bindings_root);
+    let output = run_dotnet(&mut command, "compile and run split C# projects");
     assert!(
         output.status.success(),
         "split C# projects must compile and run with canonical external types\nstdout:\n{}\nstderr:\n{}",

@@ -1472,6 +1472,11 @@ fn write_lua_guest_contract_luals(
             emit_lua_attributes(out, "", CustomizableNode::Param, &param.langs);
         }
         emit_lua_attributes(out, "", CustomizableNode::Return, &function.return_langs);
+        write_luals_docs(out, "", function.docs.as_deref());
+        for param in &function.params {
+            write_luals_docs(out, "", param.docs.as_deref());
+        }
+        write_luals_docs(out, "", function.return_docs.as_deref());
         let mut params = vec![format!("self: {provider}")];
         params.extend(function.params.iter().map(|param| {
             format!(

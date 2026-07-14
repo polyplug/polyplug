@@ -244,7 +244,7 @@ fn rust_caller_layouts_keep_unified_baseline_and_split_canonical_types() {
             .find(|entry| entry.path == "host/host_callers.rs")
             .expect("unified Rust host callers")
             .sha256,
-        "b5f532fb23aa5ab5f5143cd78ffeb73b0c2f467ecc9927966e6bdec33bfb73cd",
+        "26a02447cc426c86e0b50c0d97cf416b089be88ddcbded333ade352511f7fe91",
         "unified Rust host caller bytes are a compatibility contract"
     );
 
