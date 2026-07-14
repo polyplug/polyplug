@@ -3412,9 +3412,11 @@ fn generate_host_fn_caller(
     if let Some(return_type) = &func.returns {
         emit_out_assume_init(out, &func.returns);
         if let Some(ir) = domain_ir {
-            out.push_str(
-                "        let returned_from_native: bool = interface.dispatch_type == DispatchType::Native;\n",
-            );
+            if domain_type_contains_buffer(return_type, ir) {
+                out.push_str(
+                    "        let returned_from_native: bool = interface.dispatch_type == DispatchType::Native;\n",
+                );
+            }
             out.push_str(&format!(
                 "        Ok({})\n",
                 host_domain_from_abi_expr(
@@ -6076,9 +6078,11 @@ fn generate_peer_fn_caller(
     if let Some(return_type) = &func.returns {
         emit_out_assume_init(out, &func.returns);
         if let Some(ir) = domain_ir {
-            out.push_str(
-                "        let returned_from_native: bool = interface.dispatch_type == DispatchType::Native;\n",
-            );
+            if domain_type_contains_buffer(return_type, ir) {
+                out.push_str(
+                    "        let returned_from_native: bool = interface.dispatch_type == DispatchType::Native;\n",
+                );
+            }
             out.push_str(&format!(
                 "        Ok({})\n",
                 host_domain_from_abi_expr(
@@ -7956,6 +7960,10 @@ mod tests {
         assert_eq!(
             split_callers, unified_callers,
             "guest-contract placement must not change ordinary host caller signatures"
+        );
+        assert!(
+            !unified_callers.contains("let returned_from_native"),
+            "non-Buffer returns must not emit an unused ownership discriminator: {unified_callers}"
         );
     }
 
