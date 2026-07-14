@@ -332,8 +332,8 @@ test-rust:
     @echo "=== Running Rust Tests ==="
     cargo test --{{profile}} -p polyplug -p polyplug_abi -p polyplug_codegen
 
-# Run Rust tests with all workspace crates
-test-rust-all:
+# Build current Rust example plugins before workspace tests that load their dylibs.
+test-rust-all: build-rust-examples
     @echo "=== Running All Rust Tests ==="
     cargo test --{{profile}} --workspace
 
@@ -617,6 +617,11 @@ verify-abi-mirrors:
 # ============================================================================
 # Examples
 # ============================================================================
+
+# Build Rust example plugins and hosts used by workspace integration tests.
+build-rust-examples:
+    @echo "=== Building Rust Examples ==="
+    @cd examples && bash build.sh
 
 # Build all example plugins (all languages) and hosts
 build-examples:
