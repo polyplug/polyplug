@@ -83,6 +83,9 @@ impl RustGenerator {
         layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
+        if matches!(&layout.bindings, OutputDestination::Omit) {
+            return self.generate_internal_declaration_bundle(ir, layout, files);
+        }
         let mut host_files: GeneratedFiles = GeneratedFiles::default();
         self.generate_host(ir, layout, &mut host_files)?;
         if *layout != OutputLayout::unified()
@@ -127,6 +130,104 @@ impl RustGenerator {
             force_regenerate: true,
             partition: OutputPartition::Bindings,
             references: Vec::new(),
+        });
+        Ok(())
+    }
+
+    fn generate_internal_declaration_bundle(
+        &self,
+        ir: &ValidatedIr,
+        layout: &OutputLayout,
+        files: &mut GeneratedFiles,
+    ) -> Result<(), PolyplugcError> {
+        let fingerprint = internal_generation_fingerprint(ir);
+        if declaration_partition_is_emitted(&layout.domain_types) {
+            let mut domain_out = String::from(RUST_FILE_HEADER);
+            emit_rust_attributes(&mut domain_out, "", CustomizableNode::Api, &ir.langs);
+            generate_internal_profile_domain_types_file(&mut domain_out, ir)?;
+            domain_out.push_str(&format!(
+                "pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = {fingerprint};\n"
+            ));
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("domain.rs"),
+                content: domain_out,
+                force_regenerate: false,
+                partition: OutputPartition::DomainTypes,
+                references: Vec::new(),
+            });
+        }
+        if !matches!(&layout.guest_contracts, OutputDestination::Omit) {
+            let mut guest_contracts_out = String::from(RUST_FILE_HEADER);
+            emit_rust_attributes(
+                &mut guest_contracts_out,
+                "",
+                CustomizableNode::Api,
+                &ir.langs,
+            );
+            generate_internal_profile_guest_contracts_file(&mut guest_contracts_out, ir)?;
+            guest_contracts_out.push_str(&format!(
+                "pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = {fingerprint};\n"
+            ));
+            let references = internal_guest_contracts_require_domain_types(ir)
+                .then_some(OutputPartition::DomainTypes)
+                .into_iter()
+                .collect();
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest_contracts.rs"),
+                content: guest_contracts_out,
+                force_regenerate: false,
+                partition: OutputPartition::GuestContracts,
+                references,
+            });
+        }
+
+        let root_partition = if matches!(&layout.domain_types, OutputDestination::Inline) {
+            Some(OutputPartition::DomainTypes)
+        } else if matches!(&layout.guest_contracts, OutputDestination::Inline) {
+            Some(OutputPartition::GuestContracts)
+        } else {
+            None
+        };
+        let Some(root_partition) = root_partition else {
+            return Ok(());
+        };
+
+        let mut root_mod_content = String::from(RUST_FILE_HEADER);
+        emit_rust_attributes(&mut root_mod_content, "", CustomizableNode::Api, &ir.langs);
+        let mut references = Vec::new();
+        append_internal_declaration_module(
+            &mut root_mod_content,
+            &mut references,
+            "domain",
+            OutputPartition::DomainTypes,
+            &layout.domain_types,
+        );
+        append_internal_declaration_module(
+            &mut root_mod_content,
+            &mut references,
+            "guest_contracts",
+            OutputPartition::GuestContracts,
+            &layout.guest_contracts,
+        );
+        root_mod_content.push_str(&format!(
+            "pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = {fingerprint};\n"
+        ));
+        if !matches!(&layout.domain_types, OutputDestination::Omit) {
+            root_mod_content.push_str(
+                "const _: [(); 1] = [(); (_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT == domain::_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT) as usize];\n",
+            );
+        }
+        if !matches!(&layout.guest_contracts, OutputDestination::Omit) {
+            root_mod_content.push_str(
+                "const _: [(); 1] = [(); (_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT == guest_contracts::_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT) as usize];\n",
+            );
+        }
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("mod.rs"),
+            content: root_mod_content,
+            force_regenerate: true,
+            partition: root_partition,
+            references,
         });
         Ok(())
     }
@@ -1882,11 +1983,84 @@ fn tagged_host_domain_from_abi_expr(
     ))
 }
 
+fn append_internal_declaration_module(
+    out: &mut String,
+    references: &mut Vec<OutputPartition>,
+    name: &str,
+    partition: OutputPartition,
+    destination: &OutputDestination,
+) {
+    match destination {
+        OutputDestination::Inline => {
+            out.push_str(&format!("pub mod {name};\n"));
+            references.push(partition);
+        }
+        OutputDestination::Emit { import, .. } | OutputDestination::ImportOnly { import } => {
+            out.push_str(&format!("pub use {} as {name};\n", import.as_str()));
+            references.push(partition);
+        }
+        OutputDestination::Omit => {}
+    }
+}
+
+fn internal_guest_contracts_require_domain_types(ir: &ValidatedIr) -> bool {
+    ir.contracts
+        .iter()
+        .flat_map(|contract| &contract.functions)
+        .any(|function| {
+            function
+                .params
+                .iter()
+                .any(|param| internal_contract_type_requires_domain(&param.ty, ir))
+                || function
+                    .returns
+                    .as_ref()
+                    .is_some_and(|ty| internal_contract_type_requires_domain(ty, ir))
+        })
+}
+
+fn internal_contract_type_requires_domain(ty: &ResolvedTypeRef, ir: &ValidatedIr) -> bool {
+    let ResolvedTypeRef::UserDefined(name) = ty else {
+        return false;
+    };
+    let name = array_element_name(name).unwrap_or(name);
+    ir.types.iter().any(|ty| ty.name == name)
+        || ir.enums.iter().any(|enum_def| enum_def.name == name)
+}
+
+fn declaration_partition_is_emitted(destination: &OutputDestination) -> bool {
+    matches!(
+        destination,
+        OutputDestination::Inline | OutputDestination::Emit { .. }
+    )
+}
+
+fn internal_guest_contract_domain_type_name(ty: &ResolvedTypeRef, ir: &ValidatedIr) -> String {
+    let ResolvedTypeRef::UserDefined(name) = ty else {
+        return domain_type_name(ty, &ir.types, &ir.enums);
+    };
+    if let Some(element) = array_element_name(name) {
+        let element_name = if ir.types.iter().any(|ty| ty.name == element)
+            || ir.enums.iter().any(|enum_def| enum_def.name == element)
+        {
+            format!("super::domain::{element}")
+        } else {
+            domain_named_type(element, &ir.types, &ir.enums)
+        };
+        return format!("Vec<{element_name}>");
+    }
+    if internal_contract_type_requires_domain(ty, ir) {
+        format!("super::domain::{name}")
+    } else {
+        domain_type_name(ty, &ir.types, &ir.enums)
+    }
+}
+
 fn generate_internal_profile_guest_contracts_file(
     out: &mut String,
     ir: &ValidatedIr,
 ) -> Result<(), PolyplugcError> {
-    out.push_str("use polyplug_guest::GuestError;\nuse super::domain::*;\n\n");
+    out.push_str("use polyplug_guest::GuestError;\n\n");
     for contract in &ir.contracts {
         let trait_name: String = contract_name_to_struct(&contract.name);
         emit_rust_attributes(out, "", CustomizableNode::GuestContract, &contract.langs);
@@ -1897,14 +2071,14 @@ fn generate_internal_profile_guest_contracts_file(
                 append_rust_signature_param(
                     &mut params,
                     &param.name,
-                    &domain_type_name(&param.ty, &ir.types, &ir.enums),
+                    &internal_guest_contract_domain_type_name(&param.ty, ir),
                     &param.langs,
                 );
             }
             let return_type: String = function
                 .returns
                 .as_ref()
-                .map(|ty| domain_type_name(ty, &ir.types, &ir.enums))
+                .map(|ty| internal_guest_contract_domain_type_name(ty, ir))
                 .unwrap_or_else(|| "()".to_owned());
             emit_rust_function_attributes(out, "    ", function);
             out.push_str(&format!(

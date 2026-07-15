@@ -344,7 +344,12 @@ fn internal_rust_layout_emits_declarations_and_rebinds_private_bindings() {
         .find(|file| file.partition == OutputPartition::GuestContracts)
         .expect("guest contract declaration file");
     assert!(contracts.content.contains("pub trait"));
-    assert!(contracts.content.contains("common::domain"));
+    assert!(
+        !contracts.content.contains("common::domain")
+            && !contracts.content.contains("super::domain"),
+        "primitive contracts must not create a domain-partition edge: {}",
+        contracts.content
+    );
     let bindings = output
         .files
         .iter()

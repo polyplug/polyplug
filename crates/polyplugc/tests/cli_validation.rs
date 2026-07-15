@@ -375,7 +375,7 @@ fn generate_internal_rust_profile_partitions_declarations_by_cli_layout() {
     let contracts = temp.path().join("contracts");
     fs::write(
         &api_path,
-        "[[types]]\nname = \"State\"\nfields = [{ name = \"value\", type = \"u32\" }]\n\n[[guest_contract]]\nname = \"cli.profile\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"value\"\nreturn = \"u32\"\n",
+        "[[types]]\nname = \"State\"\nfields = [{ name = \"value\", type = \"u32\" }]\n\n[[guest_contract]]\nname = \"cli.profile\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"value\"\nreturn = \"State\"\n",
     )
     .expect("write API");
     fs::write(
@@ -408,7 +408,14 @@ fn generate_internal_rust_profile_partitions_declarations_by_cli_layout() {
     let contracts_file = contracts.join(namespace).join("guest_contracts.rs");
     assert!(contracts_file.is_file());
     let contracts_source = fs::read_to_string(contracts_file).expect("read contract declarations");
-    assert!(contracts_source.contains("use common::domain::*;"));
+    assert!(
+        contracts_source.contains("fn value(&self) -> Result<common::domain::State, GuestError>;")
+    );
+    assert!(!contracts_source.contains("use common::domain::*;"));
+    let root_file = bindings.join(namespace).join("mod.rs");
+    let root_source = fs::read_to_string(root_file).expect("read guest root");
+    assert!(root_source.contains("pub use common::domain;"));
+    assert!(root_source.contains("pub use common::contracts as guest_contracts;"));
     let interfaces = bindings.join(namespace).join("interfaces.rs");
     assert!(interfaces.is_file());
     assert!(!bindings.join(namespace).join("domain.rs").exists());

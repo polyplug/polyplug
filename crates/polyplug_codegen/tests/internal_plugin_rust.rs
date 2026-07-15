@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use polyplug_codegen::{
-    GenerateConfig, InternalRustGenerateConfig, Lang, OutputDestination, OutputLayout, Side,
-    ValidatedImport, generate, generate_internal_rust, write_output,
+    GenerateConfig, InternalRustGenerateConfig, Lang, OutputDestination, OutputLayout,
+    OutputPartition, Side, ValidatedImport, generate, generate_internal_rust, write_output,
 };
 use polyplug_utils::bundle_id;
 use tempfile::TempDir;
@@ -1085,6 +1085,364 @@ fn generated_ordinary_rust_guest_uses_external_domain_and_contract_paths() {
 }
 
 #[test]
+fn generated_internal_rust_declaration_root_is_portable_and_detects_mixed_partitions() {
+    let temp = tempfile::tempdir().expect("create temporary workspace");
+    let api = temp.path().join("api.toml");
+    let bundle = temp.path().join("bundle.toml");
+    fs::write(
+        &api,
+        "[[types]]\nname = \"GameEnginePluginContract\"\nfields = [{ name = \"enabled\", type = \"bool\" }]\n\n[[guest_contract]]\nname = \"game_engine.plugin\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"configure\"\nparams = [{ name = \"value\", type = \"GameEnginePluginContract\" }]\nreturn = \"GameEnginePluginContract\"\n",
+    )
+    .expect("write declaration API TOML");
+    fs::write(
+        &bundle,
+        "[bundle]\nname = \"game_engine\"\nversion = \"1.0\"\napi = \"api.toml\"\n\n[[plugin]]\nname = \"engine\"\nimplements = [\"game_engine.plugin@1.0\"]\n",
+    )
+    .expect("write declaration bundle TOML");
+    let generated_root =
+        Path::new("internal").join(format!("game_engine-{:016x}", bundle_id("game_engine")));
+    let crate_root = temp.path().join("common");
+    let generated_dir = crate_root.join("src/generated");
+    fs::create_dir_all(&generated_dir).expect("create common generated directory");
+    let generated = generate_internal_rust(InternalRustGenerateConfig {
+        bundle_toml: bundle,
+        layout: OutputLayout {
+            bindings: OutputDestination::Omit,
+            domain_types: OutputDestination::Inline,
+            guest_contracts: OutputDestination::Inline,
+        },
+    })
+    .expect("generate declaration-only internal Rust output");
+    assert!(
+        generated
+            .files
+            .iter()
+            .all(|file| file.partition != OutputPartition::Bindings),
+        "declaration-only output must not create bindings: {:?}",
+        generated.files
+    );
+    let generated_paths: Vec<PathBuf> = generated
+        .files
+        .iter()
+        .map(|file| file.path.clone())
+        .collect();
+    assert_eq!(
+        generated_paths,
+        [
+            generated_root.join("domain.rs"),
+            generated_root.join("guest_contracts.rs"),
+            generated_root.join("mod.rs"),
+        ],
+        "declaration-only output must contain one portable root and semantic modules"
+    );
+    write_output(&generated, &generated_dir).expect("write declaration-only output");
+    let root_path = generated_dir.join(&generated_root).join("mod.rs");
+    let root = fs::read_to_string(&root_path).expect("read declaration root");
+    assert!(
+        root.contains("pub mod domain;")
+            && root.contains("pub mod guest_contracts;")
+            && root.contains("_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT")
+            && !root.contains("pub use domain::*;")
+            && !root.contains("pub use guest_contracts::*;")
+            && !root.contains("#[path")
+            && !root.contains("assert_eq!"),
+        "declaration root must be portable assembly glue: {root}"
+    );
+    assert!(
+        !generated_dir.join(&generated_root).join("host").exists()
+            && !generated_dir.join(&generated_root).join("guest").exists(),
+        "declaration-only output must not write host, guest, or binding files"
+    );
+    fs::write(
+        crate_root.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"generated_game_engine_common\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\npolyplug_guest = {{ path = \"{}\" }}\n\n[workspace]\n",
+            cargo_path("sdks/rust/guest"),
+        ),
+    )
+    .expect("write common manifest");
+    let root_module_path = Path::new("generated").join(&generated_root).join("mod.rs");
+    fs::write(
+        crate_root.join("src/lib.rs"),
+        format!(
+            "#[path = {root_module_path:?}]\nmod generated;\n\npub use generated::domain;\npub use generated::guest_contracts;\n"
+        ),
+    )
+    .expect("module-include generated declaration root once");
+    fs::write(
+        crate_root.join("src/main.rs"),
+        "use generated_game_engine_common::domain::GameEnginePluginContract as GameEngineConfig;\nuse generated_game_engine_common::guest_contracts::GameEnginePluginContract as GameEnginePlugin;\nuse polyplug_guest::GuestError;\n\nstruct Engine;\n\nimpl GameEnginePlugin for Engine {\n    fn configure(&self, value: GameEngineConfig) -> Result<GameEngineConfig, GuestError> {\n        Ok(GameEngineConfig { enabled: !value.enabled })\n    }\n}\n\nfn main() {\n    let configured = Engine.configure(GameEngineConfig { enabled: false }).expect(\"configure engine\");\n    assert!(configured.enabled);\n}\n",
+    )
+    .expect("write declaration consumer");
+    let output = Command::new("cargo")
+        .arg("run")
+        .current_dir(&crate_root)
+        .output()
+        .expect("run declaration consumer");
+    assert!(
+        output.status.success(),
+        "declaration-only consumer did not compile and use canonical symbols:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let domain_path = generated_dir.join(&generated_root).join("domain.rs");
+    let domain = fs::read_to_string(&domain_path).expect("read domain declaration");
+    fs::write(
+        &domain_path,
+        domain.replace(
+            "pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = ",
+            "pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = 0; // ",
+        ),
+    )
+    .expect("write mixed declaration partition");
+    let mixed = Command::new("cargo")
+        .arg("check")
+        .current_dir(&crate_root)
+        .output()
+        .expect("compile mixed declaration partitions");
+    assert!(
+        !mixed.status.success(),
+        "generated declaration root must reject mixed fingerprints:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&mixed.stdout),
+        String::from_utf8_lossy(&mixed.stderr),
+    );
+}
+
+#[test]
+fn generated_internal_rust_declaration_root_rejects_stale_imported_partition() {
+    let temp = tempfile::tempdir().expect("create temporary workspace");
+    let api = temp.path().join("api.toml");
+    let bundle = temp.path().join("bundle.toml");
+    fs::write(
+        &api,
+        "[[types]]\nname = \"Settings\"\nfields = [{ name = \"enabled\", type = \"bool\" }]\n\n[[guest_contract]]\nname = \"settings.service\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"configure\"\nparams = [{ name = \"value\", type = \"Settings\" }]\nreturn = \"Settings\"\n",
+    )
+    .expect("write imported declaration API");
+    fs::write(
+        &bundle,
+        "[bundle]\nname = \"imported_declarations\"\nversion = \"1.0\"\napi = \"api.toml\"\n\n[[plugin]]\nname = \"service\"\nimplements = [\"settings.service@1.0\"]\n",
+    )
+    .expect("write imported declaration bundle");
+    let generated_root = Path::new("internal").join(format!(
+        "imported_declarations-{:016x}",
+        bundle_id("imported_declarations")
+    ));
+    let common = temp.path().join("common");
+    let consumer = temp.path().join("consumer");
+    for crate_root in [&common, &consumer] {
+        fs::create_dir_all(crate_root.join("src")).expect("create workspace crate source");
+    }
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"common\", \"consumer\"]\nresolver = \"3\"\n",
+    )
+    .expect("write workspace manifest");
+    let common_generated = common.join("src/generated");
+    let common_output = generate_internal_rust(InternalRustGenerateConfig {
+        bundle_toml: bundle.clone(),
+        layout: OutputLayout {
+            bindings: OutputDestination::Omit,
+            domain_types: OutputDestination::Inline,
+            guest_contracts: OutputDestination::Omit,
+        },
+    })
+    .expect("generate common declarations");
+    write_output(&common_output, &common_generated).expect("write common declarations");
+    fs::write(
+        common.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"common\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\npolyplug_guest = {{ path = \"{}\" }}\n",
+            cargo_path("sdks/rust/guest"),
+        ),
+    )
+    .expect("write common manifest");
+    let common_domain_module = Path::new("generated")
+        .join(&generated_root)
+        .join("domain.rs");
+    fs::write(
+        common.join("src/lib.rs"),
+        format!("#[path = {common_domain_module:?}]\npub mod domain;\n"),
+    )
+    .expect("module-include common generated domain");
+    let imported_contracts = OutputDestination::ImportOnly {
+        import: ValidatedImport::parse(Lang::Rust, "common::guest_contracts")
+            .expect("guest-contract import"),
+    };
+    let inline_domain = match generate_internal_rust(InternalRustGenerateConfig {
+        bundle_toml: bundle.clone(),
+        layout: OutputLayout {
+            bindings: OutputDestination::Omit,
+            domain_types: OutputDestination::Inline,
+            guest_contracts: imported_contracts.clone(),
+        },
+    }) {
+        Err(error) => error,
+        Ok(_) => panic!("imported contracts using domain types require a domain import"),
+    };
+    assert!(
+        inline_domain
+            .to_string()
+            .contains("cannot resolve domain types without an import"),
+        "imported contracts must reject an inline domain partition: {inline_domain}"
+    );
+    let omitted_domain = match generate_internal_rust(InternalRustGenerateConfig {
+        bundle_toml: bundle.clone(),
+        layout: OutputLayout {
+            bindings: OutputDestination::Omit,
+            domain_types: OutputDestination::Omit,
+            guest_contracts: imported_contracts,
+        },
+    }) {
+        Err(error) => error,
+        Ok(_) => panic!("imported contracts using domain types require a domain partition"),
+    };
+    assert!(
+        omitted_domain
+            .to_string()
+            .contains("references omitted domain types partition"),
+        "imported contracts must reject an omitted domain partition: {omitted_domain}"
+    );
+    let consumer_generated = consumer.join("src/generated");
+    let consumer_output = generate_internal_rust(InternalRustGenerateConfig {
+        bundle_toml: bundle,
+        layout: OutputLayout {
+            bindings: OutputDestination::Omit,
+            domain_types: OutputDestination::ImportOnly {
+                import: ValidatedImport::parse(Lang::Rust, "common::domain")
+                    .expect("domain import"),
+            },
+            guest_contracts: OutputDestination::Inline,
+        },
+    })
+    .expect("generate imported declaration root");
+    write_output(&consumer_output, &consumer_generated).expect("write imported declaration root");
+    let consumer_root = consumer_generated.join(&generated_root).join("mod.rs");
+    let root = fs::read_to_string(&consumer_root).expect("read imported declaration root");
+    assert!(
+        root.contains("pub use common::domain;")
+            && root.contains("pub mod guest_contracts;")
+            && root.contains("domain::_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT"),
+        "assembly root must check imported semantic aliases: {root}"
+    );
+    fs::write(
+        consumer.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"consumer\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\ncommon = {{ path = \"../common\" }}\npolyplug_guest = {{ path = \"{}\" }}\n",
+            cargo_path("sdks/rust/guest"),
+        ),
+    )
+    .expect("write consumer manifest");
+    let consumer_root_module = Path::new("generated").join(&generated_root).join("mod.rs");
+    fs::write(
+        consumer.join("src/main.rs"),
+        format!(
+            "#[path = {consumer_root_module:?}]\nmod generated;\n\nfn main() {{\n    let settings = generated::domain::Settings {{ enabled: true }};\n    assert!(settings.enabled);\n}}\n"
+        ),
+    )
+    .expect("module-include consumer root once");
+    let output = Command::new("cargo")
+        .args(["check", "-p", "consumer"])
+        .current_dir(temp.path())
+        .output()
+        .expect("compile imported declaration root");
+    assert!(
+        output.status.success(),
+        "imported declaration root did not compile:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let domain = common_generated.join(&generated_root).join("domain.rs");
+    let domain_source = fs::read_to_string(&domain).expect("read common generated domain");
+    fs::write(
+        &domain,
+        domain_source.replace(
+            "pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = ",
+            "pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = 0; // ",
+        ),
+    )
+    .expect("write stale imported declaration");
+    let stale = Command::new("cargo")
+        .args(["check", "-p", "consumer"])
+        .current_dir(temp.path())
+        .output()
+        .expect("compile stale imported declaration root");
+    assert!(
+        !stale.status.success(),
+        "assembly root must reject stale imported declarations:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&stale.stdout),
+        String::from_utf8_lossy(&stale.stderr),
+    );
+}
+
+#[test]
+fn generated_internal_rust_declaration_root_skips_omitted_domain_partition() {
+    let temp = tempfile::tempdir().expect("create temporary output");
+    let api = temp.path().join("api.toml");
+    let bundle = temp.path().join("bundle.toml");
+    fs::write(
+        &api,
+        "[[guest_contract]]\nname = \"heartbeat.service\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"ping\"\nparams = [{ name = \"value\", type = \"u32\" }]\nreturn = \"u32\"\n",
+    )
+    .expect("write primitive contract API");
+    fs::write(
+        &bundle,
+        "[bundle]\nname = \"heartbeat\"\nversion = \"1.0\"\napi = \"api.toml\"\n\n[[plugin]]\nname = \"service\"\nimplements = [\"heartbeat.service@1.0\"]\n",
+    )
+    .expect("write primitive contract bundle");
+    let generated = generate_internal_rust(InternalRustGenerateConfig {
+        bundle_toml: bundle.clone(),
+        layout: OutputLayout {
+            bindings: OutputDestination::Omit,
+            domain_types: OutputDestination::Omit,
+            guest_contracts: OutputDestination::Inline,
+        },
+    })
+    .expect("generate guest-contract-only declarations");
+    let root = generated
+        .files
+        .iter()
+        .find(|file| file.path.ends_with("mod.rs"))
+        .expect("guest-contract declaration root");
+    assert_eq!(root.partition, OutputPartition::GuestContracts);
+    assert_eq!(root.references, [OutputPartition::GuestContracts]);
+    assert!(
+        root.content.contains("pub mod guest_contracts;")
+            && !root.content.contains("domain")
+            && !root.content.contains("host")
+            && !root.content.contains("guest;"),
+        "assembly root must reference only non-omitted semantic partitions: {}",
+        root.content
+    );
+    write_output(&generated, &temp.path().join("out"))
+        .expect("write guest-contract-only declaration root");
+    let imported_contracts = generate_internal_rust(InternalRustGenerateConfig {
+        bundle_toml: bundle,
+        layout: OutputLayout {
+            bindings: OutputDestination::Omit,
+            domain_types: OutputDestination::Inline,
+            guest_contracts: OutputDestination::ImportOnly {
+                import: ValidatedImport::parse(Lang::Rust, "common::guest_contracts")
+                    .expect("primitive guest-contract import"),
+            },
+        },
+    })
+    .expect("primitive imported contracts do not require a domain edge");
+    let imported_root = imported_contracts
+        .files
+        .iter()
+        .find(|file| file.path.ends_with("mod.rs"))
+        .expect("primitive imported declaration root");
+    assert!(
+        imported_root.content.contains("pub mod domain;")
+            && imported_root.content.contains("common::guest_contracts"),
+        "primitive imported contracts must retain only their configured alias: {}",
+        imported_root.content
+    );
+    write_output(&imported_contracts, &temp.path().join("imported"))
+        .expect("write primitive imported declaration root");
+}
+
+#[test]
 fn generated_internal_rust_three_crate_split_preserves_nominal_types_and_stateful_arrays() {
     let temp = tempfile::tempdir().expect("create temporary workspace");
     let api = temp.path().join("api.toml");
@@ -1119,36 +1477,36 @@ fn generated_internal_rust_three_crate_split_preserves_nominal_types_and_statefu
     let common_generated_root = common.join("src/generated");
     let common_layout = OutputLayout {
         bindings: OutputDestination::Omit,
-        domain_types: OutputDestination::Emit {
-            root: common_generated_root.clone(),
-            import: ValidatedImport::parse(Lang::Rust, "crate::domain")
-                .expect("common domain import"),
-        },
-        guest_contracts: OutputDestination::Emit {
-            root: common_generated_root.clone(),
-            import: ValidatedImport::parse(Lang::Rust, "crate::guest_contracts")
-                .expect("common guest contract import"),
-        },
+        domain_types: OutputDestination::Inline,
+        guest_contracts: OutputDestination::Inline,
     };
     let common_output = generate_internal_rust(InternalRustGenerateConfig {
         bundle_toml: bundle.clone(),
         layout: common_layout,
     })
     .expect("generate common declarations");
-    write_output(&common_output, &common.join("src/ignored"))
-        .expect("write common declaration partitions");
+    write_output(&common_output, &common_generated_root)
+        .expect("write common declaration assembly");
     let common_domain = common_generated_root
         .join(&generated_root)
-        .join("guest/domain.rs");
+        .join("domain.rs");
     let common_contracts = common_generated_root
         .join(&generated_root)
-        .join("guest/guest_contracts.rs");
+        .join("guest_contracts.rs");
+    let common_root = common_generated_root.join(&generated_root).join("mod.rs");
     assert!(
-        common_domain.is_file() && common_contracts.is_file(),
-        "common must emit canonical domain and guest-contract declarations"
+        common_domain.is_file() && common_contracts.is_file() && common_root.is_file(),
+        "common must emit one declaration root and canonical semantic modules"
     );
     assert!(
-        !common.join("src/ignored/guest/types.rs").exists(),
+        !common_generated_root
+            .join(&generated_root)
+            .join("host")
+            .exists()
+            && !common_generated_root
+                .join(&generated_root)
+                .join("guest")
+                .exists(),
         "common must omit ABI binding partitions"
     );
     let common_domain_source =
@@ -1166,19 +1524,14 @@ fn generated_internal_rust_three_crate_split_preserves_nominal_types_and_statefu
         ),
     )
     .expect("write common manifest");
-    let common_domain_module_path = Path::new("generated")
-        .join(&generated_root)
-        .join("guest/domain.rs");
-    let common_contracts_module_path = Path::new("generated")
-        .join(&generated_root)
-        .join("guest/guest_contracts.rs");
+    let common_module_path = Path::new("generated").join(&generated_root).join("mod.rs");
     fs::write(
         common.join("src/lib.rs"),
         format!(
-            "#[path = {common_domain_module_path:?}]\npub mod domain;\n#[path = {common_contracts_module_path:?}]\npub mod guest_contracts;\n"
+            "#[path = {common_module_path:?}]\nmod generated;\n\npub use generated::domain;\npub use generated::guest_contracts;\n"
         ),
     )
-    .expect("write common declarations module");
+    .expect("module-include common declaration root once");
 
     fs::write(
         platform.join("Cargo.toml"),
@@ -1268,24 +1621,20 @@ fn generated_internal_rust_three_crate_split_preserves_nominal_types_and_statefu
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-    let interfaces_path = core_generated_root
-        .join(&generated_root)
-        .join("guest/interfaces.rs");
-    let interfaces = fs::read_to_string(&interfaces_path).expect("read core interface partition");
-    let fingerprint_start = interfaces
+    let domain = fs::read_to_string(&common_domain).expect("read common domain declaration");
+    let fingerprint_start = domain
         .find("pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = ")
-        .expect("interface fingerprint");
-    let fingerprint_end = interfaces[fingerprint_start..]
+        .expect("domain fingerprint");
+    let fingerprint_end = domain[fingerprint_start..]
         .find(';')
         .map(|offset| fingerprint_start + offset + 1)
-        .expect("interface fingerprint terminator");
-    let mut mismatched_interfaces = interfaces;
-    mismatched_interfaces.replace_range(
+        .expect("domain fingerprint terminator");
+    let mut mismatched_domain = domain;
+    mismatched_domain.replace_range(
         fingerprint_start..fingerprint_end,
         "pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = 0;",
     );
-    fs::write(&interfaces_path, mismatched_interfaces)
-        .expect("write mismatched interface partition");
+    fs::write(&common_domain, mismatched_domain).expect("write mixed common declaration");
     let mismatch = Command::new("cargo")
         .arg("check")
         .arg("-p")
@@ -1295,7 +1644,7 @@ fn generated_internal_rust_three_crate_split_preserves_nominal_types_and_statefu
         .expect("compile mismatched split internal workspace");
     assert!(
         !mismatch.status.success(),
-        "generated Rust root must reject mismatched declaration and binding partitions:\nstdout: {}\nstderr: {}",
+        "generated declaration root must reject mixed semantic partitions:\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&mismatch.stdout),
         String::from_utf8_lossy(&mismatch.stderr),
     );

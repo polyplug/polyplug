@@ -217,44 +217,56 @@ platform/  owns the handwritten Platform implementation
 core/      owns generated bindings, Runtime, registration, and callers
 ```
 
-`common/build.rs` emits the canonical declarations. The CLI keeps Bindings
-inline, so this example directs its private, unexported binding files to
-`src/ignored`; `common/src/lib.rs` exposes only the declaration partitions. It
-invokes the installed `polyplugc` binary; set `POLYPLUGC` if the binary is not
-on `PATH`.
+`common/build.rs` can emit only canonical declarations with the Rust library
+API. `Bindings: Omit` emits no host callers, adapters, providers, manifests,
+or ABI files. When either semantic partition is inline, generation instead
+emits one assembly `mod.rs` beside the semantic files. That root uses portable
+relative module declarations for inline partitions and stable named imports for
+external partitions. It owns fingerprint checks for every non-omitted semantic
+module.
+
+If an imported guest-contract partition has signatures using generated domain
+types, `DomainTypes` must also be an import: an inline or omitted domain
+partition would create incompatible nominal types. Primitive-only imported
+contracts have no domain-partition edge.
+
 
 ```rust,ignore
-use std::{env, path::PathBuf, process::Command};
+use std::{env, path::PathBuf};
+
+use polyplug_codegen::{
+    InternalRustGenerateConfig, OutputDestination, OutputLayout, generate_internal_rust,
+    write_output,
+};
 
 fn main() {
     println!("cargo:rerun-if-changed=../bundle.toml");
     println!("cargo:rerun-if-changed=../api.toml");
-    let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let status = Command::new(env::var("POLYPLUGC").unwrap_or_else(|_| "polyplugc".into()))
-        .args([
-            "generate", "--bundle", "../bundle.toml", "--internal", "--lang", "rust",
-            "--out", "src/ignored",
-            "--domain-types-out", "src/generated",
-            "--domain-types-import", "crate::domain",
-            "--guest-contracts-out", "src/generated",
-            "--guest-contracts-import", "crate::guest_contracts",
-        ])
-        .current_dir(root)
-        .status()
-        .expect("run polyplugc");
-    assert!(status.success(), "polyplugc failed");
+    let output_root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("src/generated");
+    let output = generate_internal_rust(InternalRustGenerateConfig {
+        bundle_toml: "../bundle.toml".into(),
+        layout: OutputLayout {
+            bindings: OutputDestination::Omit,
+            domain_types: OutputDestination::Inline,
+            guest_contracts: OutputDestination::Inline,
+        },
+    })
+    .expect("generate declarations");
+    write_output(&output, &output_root).expect("write declarations");
 }
 ```
 
-`common/src/lib.rs` exposes only the canonical declarations. For a bundle whose
-`[bundle] name` is `platform`, the identity namespace is
+For a bundle whose `[bundle] name` is `platform`, the identity namespace is
 `platform-3e4bd4e31c5c3ad2`; use the directory generated for the actual bundle.
+`common/src/lib.rs` module-includes the generated root exactly once, then
+reexports its public modules:
 
 ```rust,ignore
-#[path = "generated/internal/platform-3e4bd4e31c5c3ad2/guest/domain.rs"]
-pub mod domain;
-#[path = "generated/internal/platform-3e4bd4e31c5c3ad2/guest/guest_contracts.rs"]
-pub mod guest_contracts;
+#[path = "generated/internal/platform-3e4bd4e31c5c3ad2/mod.rs"]
+mod generated;
+
+pub use generated::domain;
+pub use generated::guest_contracts;
 ```
 
 `platform/src/lib.rs` implements the declarations directly—there is no ABI
@@ -307,9 +319,9 @@ fn main() {
 mod generated;
 ```
 
-The generated root compares every internal partition fingerprint itself. A
-mixed generation therefore fails during compilation; applications do not add
-their own assertion.
+The generated root compares every non-omitted internal partition fingerprint,
+including imported semantic modules. A mixed generation therefore fails during
+compilation; applications do not add their own assertion.
 
 
 The core crate then registers `platform::Platform` through the generated
