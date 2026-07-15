@@ -1239,17 +1239,7 @@ fn rust_function_docs(func: &ResolvedFunction) -> Vec<String> {
 
 /// Convert contract name to guest trait name, e.g. "test.add" -> "TestAddGuestContract".
 fn contract_name_to_guest_trait(name: &str) -> String {
-    name.split('.')
-        .map(|p: &str| {
-            let mut chars: core::str::Chars<'_> = p.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("")
-        + "GuestContract"
+    canonical_pascal_case(name) + "GuestContract"
 }
 
 /// Convert contract name to UPPER_SNAKE prefix, e.g. "test.add" -> "TEST_ADD".
@@ -2598,7 +2588,7 @@ fn generate_guest_plugin_interface(
     }
 
     // Author factory + per-instance payload — no static implementation storage.
-    let state_struct: String = format!("{}PluginState", to_pascal_ident(&plugin_lower));
+    let state_struct: String = format!("{}PluginState", canonical_pascal_case(&plugin_lower));
     emit_guest_instance_machinery(
         out,
         GuestInstanceMachinery {
@@ -2723,7 +2713,7 @@ fn internal_factory_symbol(provider: &str) -> String {
 }
 
 fn profile_adapter_name(provider: &str) -> String {
-    format!("{}DomainAdapter", to_pascal_ident(provider))
+    format!("{}DomainAdapter", canonical_pascal_case(provider))
 }
 
 struct GuestInstanceMachinery<'a> {
@@ -3056,20 +3046,6 @@ fn emit_guest_instance_machinery(
     out.push_str(&render_rust_interface_fn(&destroy_fn)?);
     out.push('\n');
     Ok(())
-}
-
-/// Convert a lowercase snake identifier to PascalCase, e.g. "my_plugin" -> "MyPlugin".
-fn to_pascal_ident(s: &str) -> String {
-    s.split('_')
-        .map(|seg: &str| {
-            let mut chars: core::str::Chars<'_> = seg.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("")
 }
 
 /// Generate one ABI wrapper function for a contract function.

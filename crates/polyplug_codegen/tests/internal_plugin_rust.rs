@@ -1085,18 +1085,82 @@ fn generated_ordinary_rust_guest_uses_external_domain_and_contract_paths() {
 }
 
 #[test]
+fn generated_external_rust_guest_uses_canonical_contract_pascal_case() {
+    let temp = tempfile::tempdir().expect("create external guest workspace");
+    let api = temp.path().join("api.toml");
+    fs::write(
+        &api,
+        "[[guest_contract]]\nname = \"game_engine.Plugin\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"enabled\"\nreturn = \"bool\"\n",
+    )
+    .expect("write external guest API TOML");
+    let crate_root = temp.path().join("guest");
+    fs::create_dir_all(crate_root.join("src")).expect("create external guest source directory");
+    let generated = generate(GenerateConfig {
+        api_toml: api,
+        lang: Lang::Rust,
+        side: Side::Guest,
+        layout: OutputLayout::unified(),
+    })
+    .expect("generate external Rust guest bindings");
+    write_output(&generated, &crate_root.join("src/generated"))
+        .expect("write external Rust guest bindings");
+    let contracts = fs::read_to_string(crate_root.join("src/generated/guest/contracts.rs"))
+        .expect("read external guest contracts");
+    let interfaces = fs::read_to_string(crate_root.join("src/generated/guest/interfaces.rs"))
+        .expect("read external guest interfaces");
+    let init = fs::read_to_string(crate_root.join("src/generated/guest/init.rs"))
+        .expect("read external guest registration");
+    let legacy_guest_contract = concat!("Game_", "enginePluginGuestContract");
+    assert!(
+        contracts.contains("pub trait GameEnginePluginGuestContract")
+            && interfaces.contains("Box<dyn GameEnginePluginGuestContract>")
+            && interfaces.contains("polyplug_create_game_engine_Plugin")
+            && init.contains("(host.register_guest_contract)")
+            && !contracts.contains(legacy_guest_contract)
+            && !interfaces.contains(legacy_guest_contract),
+        "external guest bindings must use one canonical contract identifier:\ncontracts: {contracts}\ninterfaces: {interfaces}\ninit: {init}"
+    );
+    fs::write(
+        crate_root.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"canonical_external_guest\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\npolyplug_abi = {{ path = \"{}\" }}\npolyplug_guest = {{ path = \"{}\" }}\npolyplug_utils = {{ path = \"{}\" }}\n\n[workspace]\n",
+            cargo_path("crates/polyplug_abi"),
+            cargo_path("sdks/rust/guest"),
+            cargo_path("crates/polyplug_utils"),
+        ),
+    )
+    .expect("write external guest manifest");
+    fs::write(
+        crate_root.join("src/lib.rs"),
+        "#[path = \"generated/guest/mod.rs\"]\nmod generated;\n\nuse generated::contracts::GameEnginePluginGuestContract;\nuse polyplug_guest::{GuestError, HostContext};\n\nstruct Provider;\n\nimpl GameEnginePluginGuestContract for Provider {\n    fn enabled(&self) -> Result<bool, GuestError> {\n        Ok(true)\n    }\n}\n\n#[allow(non_snake_case)]\n#[unsafe(no_mangle)]\npub fn polyplug_create_game_engine_Plugin(\n    _host: HostContext,\n) -> Box<dyn GameEnginePluginGuestContract> {\n    Box::new(Provider)\n}\n",
+    )
+    .expect("write external guest implementation");
+    let output = Command::new("cargo")
+        .arg("build")
+        .current_dir(&crate_root)
+        .output()
+        .expect("build external Rust guest");
+    assert!(
+        output.status.success(),
+        "canonical external Rust guest did not compile:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
 fn generated_internal_rust_declaration_root_is_portable_and_detects_mixed_partitions() {
     let temp = tempfile::tempdir().expect("create temporary workspace");
     let api = temp.path().join("api.toml");
     let bundle = temp.path().join("bundle.toml");
     fs::write(
         &api,
-        "[[types]]\nname = \"GameEnginePluginContract\"\nfields = [{ name = \"enabled\", type = \"bool\" }]\n\n[[guest_contract]]\nname = \"game_engine.plugin\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"configure\"\nparams = [{ name = \"value\", type = \"GameEnginePluginContract\" }]\nreturn = \"GameEnginePluginContract\"\n",
+        "[[types]]\nname = \"GameEnginePluginContract\"\nfields = [{ name = \"enabled\", type = \"bool\" }]\n\n[[guest_contract]]\nname = \"game_engine.Plugin\"\nversion = \"1.0\"\n\n[[guest_contract.functions]]\nname = \"configure\"\nparams = [{ name = \"value\", type = \"GameEnginePluginContract\" }]\nreturn = \"GameEnginePluginContract\"\n",
     )
     .expect("write declaration API TOML");
     fs::write(
         &bundle,
-        "[bundle]\nname = \"game_engine\"\nversion = \"1.0\"\napi = \"api.toml\"\n\n[[plugin]]\nname = \"engine\"\nimplements = [\"game_engine.plugin@1.0\"]\n",
+        "[bundle]\nname = \"game_engine\"\nversion = \"1.0\"\napi = \"api.toml\"\n\n[[plugin]]\nname = \"engine\"\nimplements = [\"game_engine.Plugin@1.0\"]\n",
     )
     .expect("write declaration bundle TOML");
     let generated_root =
@@ -1147,6 +1211,18 @@ fn generated_internal_rust_declaration_root_is_portable_and_detects_mixed_partit
             && !root.contains("#[path")
             && !root.contains("assert_eq!"),
         "declaration root must be portable assembly glue: {root}"
+    );
+    let guest_contracts = fs::read_to_string(
+        generated_dir
+            .join(&generated_root)
+            .join("guest_contracts.rs"),
+    )
+    .expect("read generated internal guest contracts");
+    let legacy_internal_contract = concat!("Game_", "enginePluginContract");
+    assert!(
+        guest_contracts.contains("pub trait GameEnginePluginContract")
+            && !guest_contracts.contains(legacy_internal_contract),
+        "internal declarations must use the canonical contract identifier: {guest_contracts}"
     );
     assert!(
         !generated_dir.join(&generated_root).join("host").exists()
