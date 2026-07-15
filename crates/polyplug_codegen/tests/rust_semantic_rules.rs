@@ -319,9 +319,9 @@ fn internal_fingerprint_includes_api_root_language_rules() {
             .iter()
             .find(|file| file.path.ends_with("guest/domain.rs"))
             .and_then(|file| {
-                file.content
-                    .lines()
-                    .find(|line| line.starts_with("pub const INTERNAL_GENERATION_FINGERPRINT:"))
+                file.content.lines().find(|line| {
+                    line.starts_with("pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT:")
+                })
             })
             .map(str::to_owned)
             .or_panic("domain fingerprint")

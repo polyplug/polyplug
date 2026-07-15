@@ -974,3 +974,136 @@ assert runtime_contracts.PYTHON_PROVIDERPythonProfilePlugin is guest_contracts.P
         String::from_utf8_lossy(&result.stderr),
     );
 }
+
+#[test]
+fn internal_python_root_rejects_stale_host_callers_fingerprint() {
+    let temp = tempfile::tempdir().expect("create Python stale-binding fixture");
+    let api = temp.path().join("api.toml");
+    let bundle = temp.path().join("bundle.toml");
+    let out = temp.path().join("out");
+    write_api(&api);
+    write_internal_bundle(
+        &bundle,
+        "python_stale_callers",
+        "api.toml",
+        "python_provider",
+    );
+    let output = generate_internal_python(InternalPythonGenerateConfig {
+        bundle_toml: bundle,
+        out_dir: out.clone(),
+        layout: OutputLayout::unified(),
+    })
+    .expect("generate Python profile");
+    write_output(&output, &out).expect("write Python profile");
+    let package = out.join("internal").join(format!(
+        "python_stale_callers-{:016x}",
+        bundle_id("python_stale_callers")
+    ));
+    let callers = package.join("host/callers.py");
+    let source = fs::read_to_string(&callers).expect("read generated callers");
+    fs::write(
+        &callers,
+        source.replacen(
+            "_polyplug_internal_generation_fingerprint = 0x",
+            "_polyplug_internal_generation_fingerprint = 0x0 #",
+            1,
+        ),
+    )
+    .expect("write stale callers");
+    let script = temp.path().join("import.py");
+    fs::write(
+        &script,
+        "import importlib.util, sys\nfrom pathlib import Path\nroot = Path(sys.argv[1])\nname = 'stale_python'\nspec = importlib.util.spec_from_file_location(name, root / '__init__.py', submodule_search_locations=[str(root)])\npkg = importlib.util.module_from_spec(spec)\nsys.modules[name] = pkg\nspec.loader.exec_module(pkg)\nimportlib.import_module(name + '.internal')\n",
+    )
+    .expect("write Python import script");
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates directory")
+        .parent()
+        .expect("workspace directory");
+    let python_path = join_paths([
+        workspace.join("sdks").join("python"),
+        workspace.join("sdks").join("python").join("host"),
+        workspace.join("sdks").join("python").join("polyplug_abi"),
+        workspace.join("sdks").join("python").join("guest"),
+    ])
+    .expect("join Python import paths");
+    let result = Command::new("python3")
+        .arg(&script)
+        .arg(&package)
+        .env("PYTHONPATH", python_path)
+        .output()
+        .expect("import stale Python profile");
+    assert!(
+        !result.status.success()
+            && String::from_utf8_lossy(&result.stderr)
+                .contains("generated internal partitions are incompatible"),
+        "stale generated callers must fail Python root import:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr),
+    );
+}
+
+#[test]
+fn internal_python_root_rejects_stale_host_types_fingerprint() {
+    let temp = tempfile::tempdir().expect("create Python stale-types fixture");
+    let api = temp.path().join("api.toml");
+    let bundle = temp.path().join("bundle.toml");
+    let out = temp.path().join("out");
+    write_api(&api);
+    write_internal_bundle(&bundle, "python_stale_types", "api.toml", "python_provider");
+    let output = generate_internal_python(InternalPythonGenerateConfig {
+        bundle_toml: bundle,
+        out_dir: out.clone(),
+        layout: OutputLayout::unified(),
+    })
+    .expect("generate Python profile");
+    write_output(&output, &out).expect("write Python profile");
+    let package = out.join("internal").join(format!(
+        "python_stale_types-{:016x}",
+        bundle_id("python_stale_types")
+    ));
+    let types = package.join("host/types.py");
+    let source = fs::read_to_string(&types).expect("read generated host types");
+    fs::write(
+        &types,
+        source.replacen(
+            "_polyplug_internal_generation_fingerprint = 0x",
+            "_polyplug_internal_generation_fingerprint = 0x0 #",
+            1,
+        ),
+    )
+    .expect("write stale host types");
+    let script = temp.path().join("import.py");
+    fs::write(
+        &script,
+        "import importlib.util, sys\nfrom pathlib import Path\nroot = Path(sys.argv[1])\nname = 'stale_types'\nspec = importlib.util.spec_from_file_location(name, root / '__init__.py', submodule_search_locations=[str(root)])\npkg = importlib.util.module_from_spec(spec)\nsys.modules[name] = pkg\nspec.loader.exec_module(pkg)\nimportlib.import_module(name + '.internal')\n",
+    )
+    .expect("write Python import script");
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates directory")
+        .parent()
+        .expect("workspace directory");
+    let python_path = join_paths([
+        workspace.join("sdks").join("python"),
+        workspace.join("sdks").join("python").join("host"),
+        workspace.join("sdks").join("python").join("polyplug_abi"),
+        workspace.join("sdks").join("python").join("guest"),
+    ])
+    .expect("join Python import paths");
+    let result = Command::new("python3")
+        .arg(&script)
+        .arg(&package)
+        .env("PYTHONPATH", python_path)
+        .output()
+        .expect("import stale Python profile");
+    assert!(
+        !result.status.success()
+            && String::from_utf8_lossy(&result.stderr)
+                .contains("generated internal partitions are incompatible"),
+        "stale generated host types must fail Python root import:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr),
+    );
+}

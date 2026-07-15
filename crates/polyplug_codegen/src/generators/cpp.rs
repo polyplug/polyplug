@@ -11,7 +11,9 @@ use super::CALL_ARENA_BUF_LEN;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::canonical_pascal_case;
 use super::collect_peer_contracts;
+use super::internal_generation_fingerprint;
 use super::is_native_runtime;
 use super::peer_min_version;
 
@@ -595,10 +597,37 @@ impl CppGenerator {
             partition: OutputPartition::Bindings,
             references: Vec::new(),
         });
-        self.apply_output_layout(ir, Side::Guest, layout, files)
+        self.apply_output_layout(ir, Side::Guest, layout, files)?;
+        append_cpp_internal_fingerprints(
+            files,
+            bundle.bundle_id,
+            internal_generation_fingerprint(ir),
+        );
+        Ok(())
     }
 }
 
+fn append_cpp_internal_fingerprints(files: &mut GeneratedFiles, bundle_id: u64, fingerprint: u64) {
+    let macro_name = format!("POLYPLUG_INTERNAL_GENERATION_FINGERPRINT_{bundle_id:016X}");
+    let guard = format!(
+        "#ifdef {macro_name}\n\
+         #if {macro_name} != 0x{fingerprint:016X}\n\
+         #error \"generated internal partitions are incompatible\"\n\
+         #endif\n\
+         #else\n\
+         #define {macro_name} 0x{fingerprint:016X}\n\
+         #endif\n"
+    );
+    for file in &mut files.files {
+        if file
+            .path
+            .extension()
+            .is_some_and(|extension| extension == "hpp")
+        {
+            file.content = format!("{guard}{}", file.content);
+        }
+    }
+}
 fn cpp_internal_namespace(bundle_id: u64) -> String {
     format!("bundle_{bundle_id:016x}")
 }
@@ -3368,32 +3397,12 @@ fn cpp_types_hpp_type_name(ty: &ResolvedTypeRef) -> String {
 
 fn contract_name_to_class(name: &str) -> String {
     // Convert "image.decode" -> "ImageDecodeContract"
-    name.split('.')
-        .map(|p| {
-            let mut chars: core::str::Chars<'_> = p.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("")
-        + "Contract"
+    canonical_pascal_case(name) + "Contract"
 }
 
 /// Convert "test.add" → "TestAddPlugin"
 fn contract_name_to_guest_contract_class(name: &str) -> String {
-    name.split('.')
-        .map(|p| {
-            let mut chars: core::str::Chars<'_> = p.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("")
-        + "GuestContract"
+    canonical_pascal_case(name) + "GuestContract"
 }
 
 /// Convert "test.add" → "test_add"
@@ -3420,17 +3429,7 @@ fn capitalise_first(s: &str) -> String {
 fn host_contract_name_to_cpp_trait(name: &str) -> String {
     let name_without_prefix: &str = name.strip_prefix("host.").unwrap_or(name);
 
-    let pascal: String = name_without_prefix
-        .split('.')
-        .map(|p| {
-            let mut chars: core::str::Chars<'_> = p.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("");
+    let pascal: String = canonical_pascal_case(name_without_prefix);
 
     if pascal.starts_with("Host") {
         pascal

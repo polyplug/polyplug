@@ -466,3 +466,85 @@ fn split_javascript_guest_bindings_typecheck_against_emitted_external_packages()
         String::from_utf8_lossy(&result.stderr)
     );
 }
+
+#[test]
+fn internal_javascript_root_rejects_stale_host_callers_fingerprint() {
+    let temp = tempfile::tempdir().expect("create JavaScript stale-binding fixture");
+    let api = temp.path().join("api.toml");
+    let bundle = temp.path().join("bundle.toml");
+    let out = temp.path().join("out");
+    write_api(&api);
+    write_internal_bundle(
+        &bundle,
+        "javascript_stale_callers",
+        "api.toml",
+        "javascript_provider",
+    );
+    let output = generate_internal_javascript(InternalJavaScriptGenerateConfig {
+        bundle_toml: bundle,
+        out_dir: out.clone(),
+        layout: OutputLayout::unified(),
+    })
+    .expect("generate JavaScript profile");
+    write_output(&output, &out).expect("write JavaScript profile");
+    let profile = out.join("internal").join(format!(
+        "javascript_stale_callers-{:016x}",
+        bundle_id("javascript_stale_callers")
+    ));
+    let callers = profile.join("host/callers.ts");
+    let source = fs::read_to_string(&callers).expect("read generated callers");
+    let start = source
+        .find("export const _polyplugInternalGenerationFingerprint = ")
+        .expect("generated callers fingerprint");
+    let end = source[start..]
+        .find(';')
+        .map(|offset| start + offset + 1)
+        .expect("generated callers fingerprint terminator");
+    let mut stale = source;
+    stale.replace_range(
+        start..end,
+        "export const _polyplugInternalGenerationFingerprint = 0x0n;",
+    );
+    fs::write(&callers, stale).expect("write stale callers");
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates directory")
+        .parent()
+        .expect("workspace directory");
+    let import_map = temp.path().join("imports.json");
+    fs::write(
+        &import_map,
+        format!(
+            "{{\"imports\":{{\"@polyplug/abi\":\"{}\",\"@polyplug/host\":\"{}\",\"@polyplug/loaders/js\":\"{}\"}}}}",
+            file_url(&workspace.join("sdks/js/abi/polyplug_abi.ts")),
+            file_url(&workspace.join("sdks/js/host/mod.js")),
+            file_url(&workspace.join("sdks/js/loaders/js/mod.ts")),
+        ),
+    )
+    .expect("write JavaScript import map");
+    let driver = temp.path().join("import.ts");
+    fs::write(
+        &driver,
+        format!(
+            "await import({:?});\n",
+            file_url(&profile.join("internal.ts"))
+        ),
+    )
+    .expect("write JavaScript import driver");
+    let result = Command::new("deno")
+        .arg("run")
+        .arg("--import-map")
+        .arg(&import_map)
+        .args(["--allow-env", "--allow-read", "--allow-ffi"])
+        .arg(&driver)
+        .output()
+        .expect("run stale JavaScript profile");
+    assert!(
+        !result.status.success()
+            && String::from_utf8_lossy(&result.stderr)
+                .contains("generated internal partitions are incompatible"),
+        "stale generated callers must fail JavaScript root import:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr),
+    );
+}

@@ -21,6 +21,68 @@ use crate::ir::ValidatedIr;
 
 /// Arena buffer length (bytes) emitted by every language generator.
 pub const CALL_ARENA_BUF_LEN: usize = 512;
+/// Convert contract and declaration path segments into their canonical PascalCase
+/// identifier form.
+pub(crate) fn canonical_pascal_case(value: &str) -> String {
+    value
+        .split(['.', '_', '-'])
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let mut characters = segment.chars();
+            match characters.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + characters.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
+/// Fingerprint every semantic input that contributes to an internal profile.
+pub(crate) fn internal_generation_fingerprint(ir: &ValidatedIr) -> u64 {
+    let mut fingerprint: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut hash = |text: &str| {
+        for byte in text.bytes() {
+            fingerprint ^= u64::from(byte);
+            fingerprint = fingerprint.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    hash(&format!("{:?}", ir.types));
+    hash(&format!("{:?}", ir.enums));
+    hash(&format!("{:?}", ir.contracts));
+    hash(&format!("{:?}", ir.host_contracts));
+    hash(&format!("{:?}", ir.langs));
+    if let Some(bundle) = &ir.bundle {
+        hash(&format!(
+            "{:?}{:?}{:?}{:?}{:?}",
+            bundle.name,
+            bundle.version,
+            bundle.loader,
+            bundle.bundle_id,
+            bundle.needs_reinit_on_dep_reload
+        ));
+        hash(&format!("{:?}", bundle.plugins));
+        hash(&format!("{:?}", bundle.dependencies));
+        match &bundle.file {
+            ResolvedBundleFile::Absent => hash("absent"),
+            ResolvedBundleFile::Single(path) => hash(path),
+            ResolvedBundleFile::PlatformMap(files) => {
+                let mut entries: Vec<(&str, &str, &str)> = files
+                    .iter()
+                    .map(|(key, path)| (key.os.as_str(), key.arch.as_str(), path.as_str()))
+                    .collect();
+                entries.sort_unstable();
+                for (os, arch, path) in entries {
+                    hash(os);
+                    hash(arch);
+                    hash(path);
+                }
+            }
+        }
+    } else {
+        hash("no-bundle");
+    }
+    fingerprint
+}
 
 /// Collect every contract in `ir.contracts` whose `contract_id` appears in the
 /// bundle's declared dependencies.  Returns an empty vec when there is no bundle
@@ -172,4 +234,21 @@ pub trait CodeGenerator {
         layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonical_pascal_case;
+
+    #[test]
+    fn canonical_pascal_case_tokenizes_contract_segments() {
+        assert_eq!(
+            canonical_pascal_case("game_engine.Plugin"),
+            "GameEnginePlugin"
+        );
+        assert_eq!(
+            canonical_pascal_case("game-engine_plugin"),
+            "GameEnginePlugin"
+        );
+    }
 }

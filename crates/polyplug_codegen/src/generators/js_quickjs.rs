@@ -10,7 +10,9 @@ use std::path::PathBuf;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::canonical_pascal_case;
 use super::collect_peer_contracts;
+use super::internal_generation_fingerprint;
 use super::peer_min_version;
 
 use super::attributes::render_attributes;
@@ -144,6 +146,7 @@ impl JsQuickjsGenerator {
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
         let split: bool = layout != &OutputLayout::unified();
+        let fingerprint = internal_generation_fingerprint(ir);
         if !split {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("host/types.ts"),
@@ -154,22 +157,27 @@ impl JsQuickjsGenerator {
             });
             files.files.push(GeneratedFile {
                 path: PathBuf::from("host/callers.ts"),
-                content: generate_internal_callers_ts(ir)?,
+                content: with_ts_internal_fingerprint(
+                    generate_internal_callers_ts(ir)?,
+                    fingerprint,
+                ),
                 force_regenerate: false,
                 partition: OutputPartition::Bindings,
                 references: Vec::new(),
             });
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/types.ts"),
-                content: generate_types_ts(ir)?,
+                content: with_ts_internal_fingerprint(generate_types_ts(ir)?, fingerprint),
                 force_regenerate: false,
                 partition: OutputPartition::Bindings,
                 references: Vec::new(),
             });
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/contracts.ts"),
-                content: generate_internal_contracts_ts(ir)?
-                    .replace("\"./types\"", "\"./types.ts\""),
+                content: with_ts_internal_fingerprint(
+                    generate_internal_contracts_ts(ir)?.replace("\"./types\"", "\"./types.ts\""),
+                    fingerprint,
+                ),
                 force_regenerate: false,
                 partition: OutputPartition::Bindings,
                 references: Vec::new(),
@@ -196,7 +204,7 @@ impl JsQuickjsGenerator {
         if domain_types_present {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("domain/types.ts"),
-                content: generate_domain_types_ts(ir)?,
+                content: with_ts_internal_fingerprint(generate_domain_types_ts(ir)?, fingerprint),
                 force_regenerate: false,
                 partition: OutputPartition::DomainTypes,
                 references: Vec::new(),
@@ -205,7 +213,10 @@ impl JsQuickjsGenerator {
         if !guest_contracts_omitted {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/contracts.ts"),
-                content: generate_guest_contract_declarations_ts(ir, &domain_module)?,
+                content: with_ts_internal_fingerprint(
+                    generate_guest_contract_declarations_ts(ir, &domain_module)?,
+                    fingerprint,
+                ),
                 force_regenerate: false,
                 partition: OutputPartition::GuestContracts,
                 references: domain_type_references(ir),
@@ -213,11 +224,10 @@ impl JsQuickjsGenerator {
         }
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/callers.ts"),
-            content: with_js_domain_type_imports(
-                generate_internal_callers_ts(ir)?,
-                &domain_module,
-                ir,
-            )?,
+            content: with_ts_internal_fingerprint(
+                with_js_domain_type_imports(generate_internal_callers_ts(ir)?, &domain_module, ir)?,
+                fingerprint,
+            ),
             force_regenerate: false,
             partition: OutputPartition::Bindings,
             references: domain_type_references(ir),
@@ -234,15 +244,29 @@ impl JsQuickjsGenerator {
         )?;
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/bindings.ts"),
-            content: if guest_contracts_omitted {
-                guest_binding_content
-            } else {
-                with_js_guest_contract_type_imports(guest_binding_content, &contracts_module, ir)?
-            },
+            content: with_ts_internal_fingerprint(
+                if guest_contracts_omitted {
+                    guest_binding_content
+                } else {
+                    with_js_guest_contract_type_imports(
+                        guest_binding_content,
+                        &contracts_module,
+                        ir,
+                    )?
+                },
+                fingerprint,
+            ),
             force_regenerate: false,
             partition: OutputPartition::Bindings,
             references: guest_binding_references,
         });
+        let mut semantic_sources = Vec::new();
+        if domain_types_present {
+            semantic_sources.push(domain_module.as_str());
+        }
+        if !guest_contracts_omitted {
+            semantic_sources.push(contracts_module.as_str());
+        }
         files.files.push(GeneratedFile {
             path: PathBuf::from("internal.ts"),
             content: generate_internal_profile_ts_with_modules(
@@ -250,6 +274,7 @@ impl JsQuickjsGenerator {
                 &domain_module,
                 "./host/callers.ts",
                 "./guest/bindings.ts",
+                &semantic_sources,
             )?,
             force_regenerate: false,
             partition: OutputPartition::Bindings,
@@ -257,6 +282,13 @@ impl JsQuickjsGenerator {
         });
         Ok(())
     }
+}
+
+fn with_ts_internal_fingerprint(mut content: String, fingerprint: u64) -> String {
+    content.push_str(&format!(
+        "\nexport const _polyplugInternalGenerationFingerprint = 0x{fingerprint:016X}n;\n"
+    ));
+    content
 }
 
 impl CodeGenerator for JsQuickjsGenerator {
@@ -1135,6 +1167,7 @@ fn generate_internal_profile_ts(ir: &ValidatedIr) -> Result<String, PolyplugcErr
         "./guest/types.ts",
         "./host/callers.ts",
         "./guest/contracts.ts",
+        &["./guest/types.ts", "./guest/contracts.ts"],
     )
 }
 
@@ -1143,6 +1176,7 @@ fn generate_internal_profile_ts_with_modules(
     type_source: &str,
     callers_source: &str,
     wrappers_source: &str,
+    semantic_sources: &[&str],
 ) -> Result<String, PolyplugcError> {
     let entries: Vec<(&ResolvedPlugin, &ResolvedContract)> = js_internal_provider_entries(ir)?;
     let mut out: String = String::from(
@@ -1181,6 +1215,33 @@ import { bridgeLibrary } from "@polyplug/loaders/js";
             wrapper_imports.join(", ")
         ));
     }
+    let fingerprint = internal_generation_fingerprint(ir);
+    let mut checks = Vec::new();
+    for (name, source) in [
+        ("callersFingerprint", callers_source),
+        ("bindingsFingerprint", wrappers_source),
+    ] {
+        out.push_str(&format!(
+            "import {{ _polyplugInternalGenerationFingerprint as {name} }} from {source:?};\n"
+        ));
+        checks.push(format!("{name} !== _polyplugInternalGenerationFingerprint"));
+    }
+    for (index, source) in semantic_sources.iter().enumerate() {
+        let name = format!("semanticFingerprint{index}");
+        out.push_str(&format!(
+            "import {{ _polyplugInternalGenerationFingerprint as {name} }} from {source:?};\n"
+        ));
+        checks.push(format!("{name} !== _polyplugInternalGenerationFingerprint"));
+    }
+    out.push_str(&format!(
+        "export const _polyplugInternalGenerationFingerprint = 0x{fingerprint:016X}n;\n\
+         if ({}) throw new Error(\"generated internal partitions are incompatible\");\n",
+        if checks.is_empty() {
+            "false".to_owned()
+        } else {
+            checks.join(" || ")
+        }
+    ));
     out.push_str("\nexport interface InternalRuntime {\n    registerInternalPluginWithHandles(bundle: { dispose(): void }, handleCount: number): { bundleId: bigint; handles: unknown[] };\n    unloadBundle(bundleId: bigint): void;\n}\n\n");
     for (plugin, contract) in &entries {
         let field: String = js_internal_provider_field(&plugin.name, &contract.name);
@@ -2814,17 +2875,7 @@ fn emit_deno_read_buffer(out: &mut String, dv: &str, off: usize, name: &str, own
 }
 
 fn contract_to_class_name(contract_name: &str) -> String {
-    contract_name
-        .split('.')
-        .map(|part: &str| {
-            let mut chars: core::str::Chars<'_> = part.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-            }
-        })
-        .collect::<Vec<String>>()
-        .join("")
+    canonical_pascal_case(contract_name)
 }
 
 // ─── Host Contract Interface Generation ────────────────────────────────────────
@@ -2834,17 +2885,7 @@ fn contract_to_class_name(contract_name: &str) -> String {
 fn host_contract_name_to_ts_interface(name: &str) -> String {
     let name_without_prefix: &str = name.strip_prefix("host.").unwrap_or(name);
 
-    let pascal: String = name_without_prefix
-        .split('.')
-        .map(|p: &str| {
-            let mut chars: core::str::Chars<'_> = p.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("");
+    let pascal: String = canonical_pascal_case(name_without_prefix);
 
     if pascal.starts_with("Host") {
         pascal
@@ -3006,17 +3047,7 @@ fn generate_host_contracts_ts(ir: &ValidatedIr) -> String {
 fn host_contract_name_to_ts_caller(name: &str) -> String {
     let name_without_prefix: &str = name.strip_prefix("host.").unwrap_or(name);
 
-    let pascal: String = name_without_prefix
-        .split('.')
-        .map(|p: &str| {
-            let mut chars: core::str::Chars<'_> = p.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("");
+    let pascal: String = canonical_pascal_case(name_without_prefix);
 
     if pascal.starts_with("Host") {
         pascal + "Contract"

@@ -1695,3 +1695,67 @@ int main() {
         String::from_utf8_lossy(&execution.stderr),
     );
 }
+
+#[test]
+fn internal_cpp_profile_rejects_mismatched_fingerprint_during_compilation() {
+    let temp = TempDir::new().expect("create C++ fingerprint fixture");
+    let mut output = internal_output(&temp, "cpp_fingerprint", "game_engine.Plugin");
+    let interfaces = output
+        .files
+        .iter_mut()
+        .find(|file| {
+            file.path
+                .ends_with(Path::new("guest").join("interfaces.hpp"))
+        })
+        .expect("interfaces fingerprint partition");
+    let comparison = interfaces
+        .content
+        .find("#if ")
+        .expect("fingerprint comparison");
+    let value_start = interfaces.content[comparison..]
+        .find(" != ")
+        .map(|offset| comparison + offset + 4)
+        .expect("fingerprint comparison value");
+    let value_end = interfaces.content[value_start..]
+        .find('\n')
+        .map(|offset| value_start + offset)
+        .expect("fingerprint comparison terminator");
+    interfaces
+        .content
+        .replace_range(value_start..value_end, "0x0");
+    let generated = temp.path().join("generated");
+    write_output(&output, &generated).expect("write mismatched C++ profile");
+    let header = output
+        .files
+        .iter()
+        .find(|file| {
+            file.path
+                .ends_with(Path::new("guest").join("internal_plugin.hpp"))
+        })
+        .expect("internal profile root")
+        .path
+        .clone();
+    let source = generated.join("mismatch.cpp");
+    fs::write(&source, format!("#include \"{}\"\n", header.display()))
+        .expect("write mismatched C++ consumer");
+    let root = workspace_root();
+    let compile = Command::new("g++")
+        .args(["-std=c++20", "-fsyntax-only"])
+        .arg(&source)
+        .arg("-I")
+        .arg(&generated)
+        .arg("-I")
+        .arg(root.join("sdks/cpp/host"))
+        .arg("-I")
+        .arg(root.join("sdks/cpp/abi"))
+        .output()
+        .expect("compile mismatched C++ profile");
+    assert!(
+        !compile.status.success()
+            && String::from_utf8_lossy(&compile.stderr)
+                .contains("generated internal partitions are incompatible"),
+        "mismatched C++ partitions must fail compilation:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr),
+    );
+}

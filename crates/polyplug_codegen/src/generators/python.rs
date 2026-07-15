@@ -6,7 +6,9 @@ use super::CALL_ARENA_BUF_LEN;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::canonical_pascal_case;
 use super::collect_peer_contracts;
+use super::internal_generation_fingerprint;
 use super::peer_min_version;
 
 use super::attributes::render_attributes;
@@ -31,7 +33,7 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use crate::ir::array_element_name;
-use crate::{OutputLayout, OutputPartition, Side};
+use crate::{OutputDestination, OutputLayout, OutputPartition, Side};
 use langprint::backends::python_backend::{
     PythonBackend, PythonEnum, PythonEnumMember, PythonFunction, PythonFunctionRenderOptions,
     PythonParameter,
@@ -748,7 +750,86 @@ impl PythonGenerator {
             references: Vec::new(),
         });
         apply_python_output_layout(ir, true, layout, files)?;
+        let semantic_modules = if layout == &OutputLayout::unified() {
+            vec![".guest.types".to_owned(), ".guest.contracts".to_owned()]
+        } else {
+            let mut modules = Vec::new();
+            if !python_domain_imports(ir).is_empty() {
+                modules.push(python_layout_import(
+                    layout,
+                    OutputPartition::DomainTypes,
+                    ".domain",
+                ));
+            }
+            if !matches!(
+                layout.destination(OutputPartition::GuestContracts),
+                OutputDestination::Omit
+            ) {
+                modules.push(python_layout_import(
+                    layout,
+                    OutputPartition::GuestContracts,
+                    ".guest_contracts",
+                ));
+            }
+            modules
+        };
+        append_python_internal_fingerprints(
+            files,
+            internal_generation_fingerprint(ir),
+            &semantic_modules,
+        );
         Ok(())
+    }
+}
+
+fn append_python_internal_fingerprints(
+    files: &mut GeneratedFiles,
+    fingerprint: u64,
+    semantic_modules: &[String],
+) {
+    for file in &mut files.files {
+        if file
+            .path
+            .extension()
+            .is_some_and(|extension| extension == "py")
+        {
+            file.content.push_str(&format!(
+                "\n_polyplug_internal_generation_fingerprint = 0x{fingerprint:016X}\n"
+            ));
+        }
+    }
+    if let Some(root) = files
+        .files
+        .iter_mut()
+        .find(|file| file.path == Path::new("internal.py"))
+    {
+        let mut checks = Vec::new();
+        let mut imports = String::new();
+        for (binding, module) in [
+            ("_internal_callers", ".host.callers"),
+            ("_internal_adapter", ".host.internal_adapter"),
+            ("_internal_host_types", ".host.types"),
+        ] {
+            imports.push_str(&format!(
+                "from {module} import _polyplug_internal_generation_fingerprint as {binding}\n"
+            ));
+            checks.push(format!(
+                "{binding} != _polyplug_internal_generation_fingerprint"
+            ));
+        }
+        for (index, module) in semantic_modules.iter().enumerate() {
+            let binding = format!("_internal_semantic_{index}");
+            imports.push_str(&format!(
+                "from {module} import _polyplug_internal_generation_fingerprint as {binding}\n"
+            ));
+            checks.push(format!(
+                "{binding} != _polyplug_internal_generation_fingerprint"
+            ));
+        }
+        root.content.push_str(&format!(
+            "\n{imports}if {}:\n    raise RuntimeError(\"generated internal partitions are incompatible\")\n",
+            if checks.is_empty() { "False".to_owned() } else { checks.join(" or ") }
+        ));
     }
 }
 
@@ -3815,31 +3896,11 @@ fn has_return_value(returns: &Option<ResolvedTypeRef>) -> bool {
 }
 
 fn contract_name_to_struct(name: &str) -> String {
-    let converted: String = name
-        .split('.')
-        .map(|p: &str| {
-            let mut chars: core::str::Chars<'_> = p.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("");
-    format!("{converted}Contract")
+    format!("{}Contract", canonical_pascal_case(name))
 }
 
 fn contract_name_to_camel(name: &str) -> String {
-    name.split('.')
-        .map(|p: &str| {
-            let mut chars: core::str::Chars<'_> = p.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("")
+    canonical_pascal_case(name)
 }
 
 fn contract_name_to_guest_trait(name: &str) -> String {

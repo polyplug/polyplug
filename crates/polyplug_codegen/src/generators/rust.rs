@@ -12,7 +12,9 @@ use super::attributes::attribute_site;
 use super::attributes::inner_attributes;
 use super::attributes::render_attributes;
 use super::attributes::target_language;
+use super::canonical_pascal_case;
 use super::collect_peer_contracts;
+use super::internal_generation_fingerprint;
 use super::is_native_runtime;
 use super::peer_min_version;
 use std::collections::{BTreeSet, HashSet};
@@ -26,7 +28,6 @@ use crate::OutputDestination;
 use crate::OutputLayout;
 use crate::OutputPartition;
 use crate::PolyplugcError;
-use crate::ResolvedBundleFile;
 use crate::Side;
 use crate::ir::AbiBuiltin;
 use crate::ir::CustomizableNode;
@@ -113,6 +114,13 @@ impl RustGenerator {
         let mut root_mod_content: String = String::from(RUST_FILE_HEADER);
         emit_rust_attributes(&mut root_mod_content, "", CustomizableNode::Api, &ir.langs);
         root_mod_content.push_str("pub mod host;\npub mod guest;\n");
+        if !ir.types.is_empty() || !ir.enums.is_empty() || !ir.contracts.is_empty() {
+            let fingerprint = internal_generation_fingerprint(ir);
+            root_mod_content.push_str(&format!(
+                "pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = {fingerprint};\n\
+                 const _: [(); 1] = [(); (_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT == guest::_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT) as usize];\n"
+            ));
+        }
         files.files.push(GeneratedFile {
             path: PathBuf::from("mod.rs"),
             content: root_mod_content,
@@ -234,7 +242,7 @@ impl RustGenerator {
             emit_rust_attributes(&mut domain_out, "", CustomizableNode::Api, &ir.langs);
             generate_internal_profile_domain_types_file(&mut domain_out, ir)?;
             domain_out.push_str(&format!(
-                "pub const INTERNAL_GENERATION_FINGERPRINT: u64 = {internal_fingerprint};\n"
+                "pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = {internal_fingerprint};\n"
             ));
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/domain.rs"),
@@ -254,7 +262,7 @@ impl RustGenerator {
             );
             generate_internal_profile_guest_contracts_file(&mut guest_contracts_out, ir)?;
             guest_contracts_out.push_str(&format!(
-                "pub const INTERNAL_GENERATION_FINGERPRINT: u64 = {internal_fingerprint};\n"
+                "pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = {internal_fingerprint};\n"
             ));
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/guest_contracts.rs"),
@@ -297,7 +305,7 @@ impl RustGenerator {
         generate_guest_interfaces_file(&mut interfaces_out, ir, internal_mode, domain_api)?;
         if internal_mode == Some(InternalBindingMode::Profile) {
             interfaces_out.push_str(&format!(
-                "pub const INTERNAL_GENERATION_FINGERPRINT: u64 = {internal_fingerprint};\n"
+                "pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = {internal_fingerprint};\n"
             ));
         }
 
@@ -1907,52 +1915,6 @@ fn generate_internal_profile_guest_contracts_file(
         out.push_str("}\n\n");
     }
     Ok(())
-}
-
-fn internal_generation_fingerprint(ir: &ValidatedIr) -> u64 {
-    let mut fingerprint: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut hash = |text: &str| {
-        for byte in text.bytes() {
-            fingerprint ^= u64::from(byte);
-            fingerprint = fingerprint.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    };
-    hash(&format!("{:?}", ir.types));
-    hash(&format!("{:?}", ir.enums));
-    hash(&format!("{:?}", ir.contracts));
-    hash(&format!("{:?}", ir.host_contracts));
-    hash(&format!("{:?}", ir.langs));
-    if let Some(bundle) = &ir.bundle {
-        hash(&format!(
-            "{:?}{:?}{:?}{:?}{:?}",
-            bundle.name,
-            bundle.version,
-            bundle.loader,
-            bundle.bundle_id,
-            bundle.needs_reinit_on_dep_reload
-        ));
-        hash(&format!("{:?}", bundle.plugins));
-        hash(&format!("{:?}", bundle.dependencies));
-        match &bundle.file {
-            ResolvedBundleFile::Absent => hash("absent"),
-            ResolvedBundleFile::Single(path) => hash(path),
-            ResolvedBundleFile::PlatformMap(files) => {
-                let mut entries: Vec<(&str, &str, &str)> = files
-                    .iter()
-                    .map(|(key, path)| (key.os.as_str(), key.arch.as_str(), path.as_str()))
-                    .collect();
-                entries.sort_unstable();
-                for (os, arch, path) in entries {
-                    hash(os);
-                    hash(arch);
-                    hash(path);
-                }
-            }
-        }
-    } else {
-        hash("no-bundle");
-    }
-    fingerprint
 }
 
 fn domain_type_name(ty: &ResolvedTypeRef, types: &[ResolvedType], enums: &[EnumDef]) -> String {
@@ -4900,17 +4862,7 @@ fn render_rust_enum_decl(e: &EnumDef, repr_str: &str) -> Result<String, Polyplug
 
 fn contract_name_to_struct(name: &str) -> String {
     // Convert "image.decode" -> "ImageDecodeContract"
-    name.split('.')
-        .map(|p: &str| {
-            let mut chars: core::str::Chars<'_> = p.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("")
-        + "Contract"
+    canonical_pascal_case(name) + "Contract"
 }
 
 /// Convert host contract name to trait name.
@@ -4918,17 +4870,7 @@ fn contract_name_to_struct(name: &str) -> String {
 fn host_contract_name_to_trait(name: &str) -> String {
     let name_without_prefix: &str = name.strip_prefix("host.").unwrap_or(name);
 
-    let pascal: String = name_without_prefix
-        .split('.')
-        .map(|p: &str| {
-            let mut chars: core::str::Chars<'_> = p.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("");
+    let pascal: String = canonical_pascal_case(name_without_prefix);
 
     if pascal.starts_with("Host") {
         pascal
@@ -7100,6 +7042,15 @@ fn generate_guest_mod_rs(
     let peer_contracts: Vec<&ResolvedContract> = collect_peer_contracts(ir);
     if !peer_contracts.is_empty() {
         out.push_str("pub mod peer_callers;\n");
+    }
+    if internal_mode == Some(InternalBindingMode::Profile)
+        && (!ir.types.is_empty() || !ir.enums.is_empty() || !ir.contracts.is_empty())
+    {
+        let fingerprint = internal_generation_fingerprint(ir);
+        out.push_str(&format!(
+            "pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = {fingerprint};\n\
+             const _: [(); 1] = [(); (_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT == domain::_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT && _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT == guest_contracts::_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT && _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT == interfaces::_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT) as usize];\n"
+        ));
     }
     out
 }

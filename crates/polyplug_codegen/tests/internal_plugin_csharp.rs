@@ -8,7 +8,8 @@ use std::process::Output;
 
 use polyplug_codegen::{
     GenerateConfig, InternalCSharpGenerateConfig, Lang, OutputDestination, OutputLayout,
-    OutputPartition, PolyplugcError, Side, generate, generate_internal_csharp, write_output,
+    OutputPartition, PolyplugcError, Side, ValidatedImport, generate, generate_internal_csharp,
+    write_output,
 };
 use tempfile::TempDir;
 
@@ -162,6 +163,31 @@ fn assert_no_domain_types_using(root: &Path) {
     }
 }
 
+fn replace_domain_marker(root: &Path) {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        for entry in fs::read_dir(path).expect("read generated domain directory") {
+            let path = entry.expect("read generated domain entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "cs") {
+                let content = fs::read_to_string(&path).expect("read generated domain source");
+                if let Some(start) = content.find("Value = ") {
+                    let end = content[start..]
+                        .find("UL;")
+                        .map(|offset| start + offset + 3)
+                        .expect("domain fingerprint terminator");
+                    let mut mismatched = content;
+                    mismatched.replace_range(start..end, "Value = 0x0UL;");
+                    fs::write(path, mismatched).expect("write mismatched domain source");
+                    return;
+                }
+            }
+        }
+    }
+    panic!("generated domain fingerprint marker");
+}
+
 #[test]
 fn primitive_csharp_host_omits_domain_types_and_runs() {
     let temp = TempDir::new().expect("create primitive C# host fixture");
@@ -277,5 +303,167 @@ fn rich_csharp_profiles_reject_omitted_domain_types() {
         matches!(internal, PolyplugcError::ValidationFailed { ref message }
             if message.contains("references omitted domain types partition")),
         "unexpected internal C# omission error: {internal}"
+    );
+}
+
+#[test]
+fn internal_csharp_profile_rejects_mismatched_fingerprint_at_module_initialization() {
+    let temp = TempDir::new().expect("create C# fingerprint fixture");
+    let api = temp.path().join("api.toml");
+    let bundle = temp.path().join("bundle.toml");
+    write_primitive_api(&api, "game_engine.Plugin");
+    write_bundle(
+        &bundle,
+        "api.toml",
+        "csharp_fingerprint",
+        "game_engine.Plugin",
+    );
+    let mut output = generate_internal_csharp(InternalCSharpGenerateConfig {
+        bundle_toml: bundle,
+        out_dir: temp.path().join("out"),
+        layout: OutputLayout::unified(),
+    })
+    .expect("generate C# profile");
+    let host_fingerprint = output
+        .files
+        .iter_mut()
+        .find(|file| file.path.ends_with("host/_polyplug_fingerprint.cs"))
+        .expect("host fingerprint partition");
+    let start = host_fingerprint
+        .content
+        .find("Value = ")
+        .expect("fingerprint constant");
+    let end = host_fingerprint.content[start..]
+        .find("UL;")
+        .map(|offset| start + offset + 3)
+        .expect("fingerprint constant terminator");
+    host_fingerprint
+        .content
+        .replace_range(start..end, "Value = 0x0UL;");
+    let project = temp.path().join("project");
+    fs::create_dir_all(&project).expect("create fingerprint project");
+    write_output(&output, &project).expect("write mismatched C# profile");
+    let root = workspace_root();
+    write_project(
+        &project,
+        &[
+            root.join("sdks/csharp/guest/Polyplug.Guest.csproj"),
+            root.join("sdks/csharp/host/Polyplug.Host.csproj"),
+        ],
+    );
+    let result = run_project(&project);
+    assert!(
+        !result.status.success()
+            && String::from_utf8_lossy(&result.stderr)
+                .contains("generated internal partitions are incompatible"),
+        "mismatched C# partitions must fail during generated module initialization:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr),
+    );
+}
+
+#[test]
+fn split_csharp_profile_rejects_mismatched_domain_assembly_at_module_initialization() {
+    let temp = TempDir::new().expect("create split C# fingerprint fixture");
+    let api = temp.path().join("api.toml");
+    let bundle = temp.path().join("bundle.toml");
+    let bindings = temp.path().join("bindings");
+    let domain = temp.path().join("domain");
+    let contracts = temp.path().join("contracts");
+    write_rich_api(&api, "game_engine.Plugin");
+    write_bundle(
+        &bundle,
+        "api.toml",
+        "csharp_split_fingerprint",
+        "game_engine.Plugin",
+    );
+    let layout = OutputLayout {
+        bindings: OutputDestination::Inline,
+        domain_types: OutputDestination::Emit {
+            root: domain.clone(),
+            import: ValidatedImport::parse(Lang::CSharp, "Fingerprint.Domain")
+                .expect("domain namespace import"),
+        },
+        guest_contracts: OutputDestination::Emit {
+            root: contracts.clone(),
+            import: ValidatedImport::parse(Lang::CSharp, "Fingerprint.Contracts")
+                .expect("contract namespace import"),
+        },
+    };
+    let output = generate_internal_csharp(InternalCSharpGenerateConfig {
+        bundle_toml: bundle,
+        out_dir: bindings.clone(),
+        layout,
+    })
+    .expect("generate split C# profile");
+    write_output(&output, &bindings).expect("write split generated C# assemblies");
+    let root = workspace_root();
+    write_project(
+        &domain,
+        &[root.join("sdks/csharp/guest/Polyplug.Guest.csproj")],
+    );
+    write_project(
+        &contracts,
+        &[
+            domain.join("Primitive.csproj"),
+            root.join("sdks/csharp/guest/Polyplug.Guest.csproj"),
+        ],
+    );
+    write_project(
+        &bindings,
+        &[
+            domain.join("Primitive.csproj"),
+            contracts.join("Primitive.csproj"),
+            root.join("sdks/csharp/guest/Polyplug.Guest.csproj"),
+            root.join("sdks/csharp/host/Polyplug.Host.csproj"),
+        ],
+    );
+    for (project, name) in [
+        (&domain, "SplitFingerprintDomain"),
+        (&contracts, "SplitFingerprintContracts"),
+        (&bindings, "SplitFingerprintBindings"),
+    ] {
+        let project_file = project.join("Primitive.csproj");
+        let source = fs::read_to_string(&project_file).expect("read split project");
+        fs::write(
+            &project_file,
+            source.replacen(
+                "<PropertyGroup>",
+                &format!("<PropertyGroup>\n        <AssemblyName>{name}</AssemblyName>"),
+                1,
+            ),
+        )
+        .expect("name split project assembly");
+    }
+    assert_project_runs(&bindings, "matching generated split C# assemblies");
+    replace_domain_marker(&domain);
+    let mismatch_build = Command::new("dotnet")
+        .args(["build", "Primitive.csproj", "-c", "Release", "--nologo"])
+        .current_dir(&domain)
+        .output()
+        .expect("rebuild mismatched domain assembly");
+    assert!(
+        mismatch_build.status.success(),
+        "mismatched domain assembly did not build:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&mismatch_build.stdout),
+        String::from_utf8_lossy(&mismatch_build.stderr),
+    );
+    let dll = "SplitFingerprintDomain.dll";
+    fs::copy(
+        domain.join("bin/Release/net10.0").join(dll),
+        bindings.join("bin/Release/net10.0").join(dll),
+    )
+    .expect("replace deployed domain assembly");
+    let result = Command::new("dotnet")
+        .arg(bindings.join("bin/Release/net10.0/SplitFingerprintBindings.dll"))
+        .output()
+        .expect("execute binding assembly without rebuilding");
+    assert!(
+        !result.status.success()
+            && String::from_utf8_lossy(&result.stderr)
+                .contains("generated internal partitions are incompatible"),
+        "replaced generated domain assembly must fail generated module initialization:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr),
     );
 }

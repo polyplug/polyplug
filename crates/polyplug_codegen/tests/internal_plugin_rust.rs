@@ -29,6 +29,18 @@ fn cargo_path(crate_dir: &str) -> String {
         .replace('\\', "/")
 }
 
+fn generated_consumer_source(source: String) -> String {
+    source
+        .replace(
+            "INTERNAL_GENERATION_FINGERPRINT",
+            "_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT",
+        )
+        .lines()
+        .filter(|line| !line.contains("assert_eq!(DOMAIN_FINGERPRINT"))
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
 #[test]
 fn generated_internal_rust_same_contract_providers_dispatch_statefully_and_unload() {
     let temp: TempDir = tempfile::tempdir().expect("create temporary directory");
@@ -54,19 +66,14 @@ fn generated_internal_rust_same_contract_providers_dispatch_statefully_and_unloa
         .files
         .iter()
         .filter_map(|file| {
-            file.content
-                .lines()
-                .find(|line| line.starts_with("pub const INTERNAL_GENERATION_FINGERPRINT:"))
+            file.content.lines().find(|line| {
+                line.starts_with("pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT:")
+            })
         })
         .collect();
-    assert_eq!(
-        fingerprints.len(),
-        3,
-        "domain declarations, guest contracts, and core bindings must expose one fingerprint"
-    );
     assert!(
-        fingerprints.windows(2).all(|pair| pair[0] == pair[1]),
-        "split declarations and bindings must use the same generation fingerprint: {fingerprints:?}"
+        fingerprints.len() >= 5 && fingerprints.windows(2).all(|pair| pair[0] == pair[1]),
+        "generated internal partitions must expose one fingerprint: {fingerprints:?}"
     );
     let interfaces = generated
         .files
@@ -96,6 +103,11 @@ fn generated_internal_rust_same_contract_providers_dispatch_statefully_and_unloa
             .any(|file| file.path == generated_module_path),
         "generated internal root module"
     );
+    fs::rename(
+        source_dir.join(&generated_root),
+        source_dir.join("generated"),
+    )
+    .expect("place stable generated module root");
 
     fs::write(
         crate_root.join("Cargo.toml"),
@@ -109,7 +121,7 @@ fn generated_internal_rust_same_contract_providers_dispatch_statefully_and_unloa
         ),
     )
     .expect("write consumer Cargo.toml");
-    let consumer_source = format!("#[path = {generated_module_path:?}]\nmod generated;\n")
+    let consumer_source = String::from("mod generated;\n")
         + r#"use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -1237,9 +1249,9 @@ fn generated_internal_rust_three_crate_split_preserves_nominal_types_and_statefu
     let generated_module_path = Path::new("generated").join(&generated_root).join("mod.rs");
     fs::write(
         core.join("src/main.rs"),
-        format!(
+        generated_consumer_source(format!(
             "#[path = {generated_module_path:?}]\nmod generated;\n\nuse std::alloc::{{GlobalAlloc, Layout, System}};\nuse std::sync::Arc;\nuse std::sync::atomic::{{AtomicBool, AtomicUsize, Ordering}};\n\nuse common::domain::{{flags, Envelope, Mode, Row, INTERNAL_GENERATION_FINGERPRINT as DOMAIN_FINGERPRINT}};\nuse common::guest_contracts::INTERNAL_GENERATION_FINGERPRINT as CONTRACT_FINGERPRINT;\nuse platform::Platform;\nuse polyplug::Runtime;\n\nstatic BUFFER_ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);\nstatic TRACK_BUFFER_ALLOCATIONS: AtomicBool = AtomicBool::new(false);\n\nstruct TrackingAllocator;\n\nunsafe impl GlobalAlloc for TrackingAllocator {{\n    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {{\n        let ptr = unsafe {{ System.alloc(layout) }};\n        if TRACK_BUFFER_ALLOCATIONS.load(Ordering::SeqCst) && layout.size() == 37 && !ptr.is_null() {{\n            BUFFER_ALLOCATIONS.fetch_add(1, Ordering::SeqCst);\n        }}\n        ptr\n    }}\n\n    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {{\n        if TRACK_BUFFER_ALLOCATIONS.load(Ordering::SeqCst) && layout.size() == 37 && !ptr.is_null() {{\n            BUFFER_ALLOCATIONS.fetch_sub(1, Ordering::SeqCst);\n        }}\n        unsafe {{ System.dealloc(ptr, layout) }};\n    }}\n}}\n\n#[global_allocator]\nstatic ALLOCATOR: TrackingAllocator = TrackingAllocator;\n\nfn main() {{\n    assert_eq!(DOMAIN_FINGERPRINT, CONTRACT_FINGERPRINT, \"common declarations must share one fingerprint\");\n    assert_eq!(DOMAIN_FINGERPRINT, generated::guest::interfaces::INTERNAL_GENERATION_FINGERPRINT, \"core bindings must retain the common declaration fingerprint\");\n\n    let runtime = Arc::new(Runtime::builder().build().expect(\"build runtime\"));\n    let mut registration = generated::guest::init::register(\n        Arc::clone(&runtime),\n        generated::guest::interfaces::InternalProviders {{\n            platform_platform_plugin: generated::guest::interfaces::InternalProviderFactory::new(|| -> Box<dyn common::guest_contracts::PlatformPluginContract> {{ Box::new(Platform::new()) }}),\n        }},\n    )\n    .expect(\"register platform provider\");\n\n    let input = Envelope {{\n        mode: Mode::Cold,\n        flags: flags::READ_WRITE,\n        text: \"canonical common input\".to_owned(),\n        payload: vec![0xA5; 37],\n        rows: vec![\n            Row {{ modes: vec![Mode::Cold, Mode::Warm] }},\n            Row {{ modes: vec![Mode::Hot] }},\n        ],\n    }};\n    TRACK_BUFFER_ALLOCATIONS.store(true, Ordering::SeqCst);\n    let first = registration.platform_platform_plugin.cycle(&input).expect(\"first stateful roundtrip\");\n    assert_eq!(first.mode, Mode::Hot);\n    assert_eq!(first.flags, flags::READ_WRITE);\n    assert_eq!(first.text, input.text);\n    assert_eq!(first.payload, input.payload);\n    assert_eq!(first.rows, input.rows);\n    drop(first);\n    assert_eq!(BUFFER_ALLOCATIONS.load(Ordering::SeqCst), 0, \"returned Buffer must be copied and released through HostApi\");\n    let second = registration.platform_platform_plugin.cycle(&input).expect(\"preserve platform state\");\n    assert_eq!(second.mode, Mode::Warm);\n    assert_eq!(second.flags, flags::READ_WRITE);\n    assert_eq!(second.text, input.text);\n    assert_eq!(second.payload, input.payload);\n    assert_eq!(second.rows, input.rows);\n    drop(second);\n    assert_eq!(BUFFER_ALLOCATIONS.load(Ordering::SeqCst), 0, \"every returned Buffer allocation must be balanced\");\n    TRACK_BUFFER_ALLOCATIONS.store(false, Ordering::SeqCst);\n\n    let bundle_id = registration.bundle_id;\n    drop(registration);\n    runtime.unload_bundle(bundle_id).expect(\"unload after callers tear down\");\n}}\n"
-        ),
+        )),
     )
     .expect("write core executable");
 
@@ -1255,5 +1267,36 @@ fn generated_internal_rust_three_crate_split_preserves_nominal_types_and_statefu
         "three-crate split internal Rust workspace did not compile, roundtrip, and unload:\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
+    );
+    let interfaces_path = core_generated_root
+        .join(&generated_root)
+        .join("guest/interfaces.rs");
+    let interfaces = fs::read_to_string(&interfaces_path).expect("read core interface partition");
+    let fingerprint_start = interfaces
+        .find("pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = ")
+        .expect("interface fingerprint");
+    let fingerprint_end = interfaces[fingerprint_start..]
+        .find(';')
+        .map(|offset| fingerprint_start + offset + 1)
+        .expect("interface fingerprint terminator");
+    let mut mismatched_interfaces = interfaces;
+    mismatched_interfaces.replace_range(
+        fingerprint_start..fingerprint_end,
+        "pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = 0;",
+    );
+    fs::write(&interfaces_path, mismatched_interfaces)
+        .expect("write mismatched interface partition");
+    let mismatch = Command::new("cargo")
+        .arg("check")
+        .arg("-p")
+        .arg("core")
+        .current_dir(temp.path())
+        .output()
+        .expect("compile mismatched split internal workspace");
+    assert!(
+        !mismatch.status.success(),
+        "generated Rust root must reject mismatched declaration and binding partitions:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&mismatch.stdout),
+        String::from_utf8_lossy(&mismatch.stderr),
     );
 }

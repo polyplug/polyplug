@@ -7,7 +7,9 @@ use super::CALL_ARENA_BUF_LEN;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::canonical_pascal_case;
 use super::collect_peer_contracts;
+use super::internal_generation_fingerprint;
 use super::peer_min_version;
 
 use super::attributes::{inner_attributes, render_attributes};
@@ -530,17 +532,7 @@ fn emit_cs_arg_pack(
 
 /// Convert a name to PascalCase (e.g. "add_primitive" → "AddPrimitive", "test.add" → "TestAdd").
 fn pascal_case(s: &str) -> String {
-    s.split(['_', '.'])
-        .filter(|seg: &&str| !seg.is_empty())
-        .map(|seg: &str| {
-            let mut c: core::str::Chars<'_> = seg.chars();
-            match c.next() {
-                None => String::new(),
-                Some(first) => first.to_uppercase().to_string() + c.as_str(),
-            }
-        })
-        .collect::<Vec<String>>()
-        .join("")
+    canonical_pascal_case(s)
 }
 
 /// Convert contract name to C# interface name: "test.add" → "ITestAddPlugin"
@@ -673,6 +665,10 @@ fn generate_cs_domain_types_file(
         out.push_str(&generate_cs_user_type(ty)?);
         out.push('\n');
     }
+    out.push_str(&format!(
+        "public static class _polyplug_InternalGenerationFingerprint {{ public static readonly ulong Value = 0x{:016X}UL; }}\n",
+        internal_generation_fingerprint(ir)
+    ));
     Ok(out)
 }
 
@@ -757,6 +753,10 @@ fn generate_cs_guest_contracts_partition_file(
         }
         out.push_str("}\n\n");
     }
+    out.push_str(&format!(
+        "public static class _polyplug_InternalGenerationFingerprint {{ public static readonly ulong Value = 0x{:016X}UL; }}\n",
+        internal_generation_fingerprint(ir)
+    ));
     Ok(out)
 }
 
@@ -4887,8 +4887,97 @@ impl CSharpGenerator {
             &guest_namespace,
             &host_namespace,
         )?;
+        let domain_namespace =
+            cs_partition_namespace(&layout.domain_types, &format!("{namespace}.DomainTypes"));
+        append_csharp_internal_fingerprints(
+            files,
+            CSharpInternalFingerprintContext {
+                root_namespace: &namespace,
+                guest_namespace: &guest_namespace,
+                host_namespace: &host_namespace,
+                domain_namespace: &domain_namespace,
+                guest_contract_namespace: &guest_contract_namespace,
+                has_domain_partition: layout != &OutputLayout::unified() && cs_has_domain_types(ir),
+                has_guest_contract_partition: layout != &OutputLayout::unified()
+                    && !ir.contracts.is_empty(),
+                fingerprint: internal_generation_fingerprint(ir),
+            },
+        );
         Ok(())
     }
+}
+
+struct CSharpInternalFingerprintContext<'a> {
+    root_namespace: &'a str,
+    guest_namespace: &'a str,
+    host_namespace: &'a str,
+    domain_namespace: &'a str,
+    guest_contract_namespace: &'a str,
+    has_domain_partition: bool,
+    has_guest_contract_partition: bool,
+    fingerprint: u64,
+}
+
+fn append_csharp_internal_fingerprints(
+    files: &mut GeneratedFiles,
+    context: CSharpInternalFingerprintContext<'_>,
+) {
+    let CSharpInternalFingerprintContext {
+        root_namespace,
+        guest_namespace,
+        host_namespace,
+        domain_namespace,
+        guest_contract_namespace,
+        has_domain_partition,
+        has_guest_contract_partition,
+        fingerprint,
+    } = context;
+    let mut checks = vec![
+        format!("global::{guest_namespace}._polyplug_GuestFingerprint.Value"),
+        format!("global::{host_namespace}._polyplug_HostFingerprint.Value"),
+    ];
+    files.files.push(GeneratedFile {
+        path: PathBuf::from("guest/_polyplug_fingerprint.cs"),
+        content: format!(
+            "namespace {guest_namespace};\n\ninternal static class _polyplug_GuestFingerprint {{ internal static readonly ulong Value = 0x{fingerprint:016X}UL; }}\n"
+        ),
+        force_regenerate: false,
+        partition: OutputPartition::Bindings,
+        references: Vec::new(),
+    });
+    files.files.push(GeneratedFile {
+        path: PathBuf::from("host/_polyplug_fingerprint.cs"),
+        content: format!(
+            "namespace {host_namespace};\n\ninternal static class _polyplug_HostFingerprint {{ internal static readonly ulong Value = 0x{fingerprint:016X}UL; }}\n"
+        ),
+        force_regenerate: false,
+        partition: OutputPartition::Bindings,
+        references: Vec::new(),
+    });
+    if has_domain_partition {
+        checks.push(format!(
+            "global::{domain_namespace}._polyplug_InternalGenerationFingerprint.Value"
+        ));
+    }
+    if has_guest_contract_partition {
+        checks.push(format!(
+            "global::{guest_contract_namespace}._polyplug_InternalGenerationFingerprint.Value"
+        ));
+    }
+    let comparisons = checks
+        .into_iter()
+        .map(|check| format!("{check} != 0x{fingerprint:016X}UL"))
+        .collect::<Vec<_>>()
+        .join(" || ");
+    files.files.push(GeneratedFile {
+        path: PathBuf::from("registration/_polyplug_fingerprint.cs"),
+        content: format!(
+            "using System;\nusing System.Runtime.CompilerServices;\n\nnamespace {root_namespace};\n\ninternal static class _polyplug_FingerprintVerification {{\n    [ModuleInitializer]\n    internal static void Verify() {{\n        if ({comparisons}) throw new InvalidOperationException(\"generated internal partitions are incompatible\");\n    }}\n}}\n"
+        ),
+        force_regenerate: false,
+        partition: OutputPartition::Bindings,
+        references: Vec::new(),
+    });
 }
 
 impl CodeGenerator for CSharpGenerator {

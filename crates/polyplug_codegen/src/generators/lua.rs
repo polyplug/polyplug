@@ -1,10 +1,12 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::canonical_pascal_case;
 use super::collect_peer_contracts;
+use super::internal_generation_fingerprint;
 use super::peer_min_version;
 
 use super::attributes::render_attributes;
@@ -167,13 +169,73 @@ impl LuaGenerator {
                 references: Vec::new(),
             });
         }
-        files.files.push(GeneratedFile { path: PathBuf::from("init.lua"), content: format!(
+        let fingerprint = internal_generation_fingerprint(ir);
+        let mut init_content = format!(
             "{}local source = debug.getinfo(1, \"S\").source\n\
              local root = assert(source:match(\"^@(.+)[/\\\\]init%.lua$\"), \"generated internal Lua bindings need a file path\")\n\
-             return {{ guest = dofile(root .. \"/guest/internal.lua\"), host = dofile(root .. \"/host/callers.lua\") }}\n",
-            file_header()
-        ), force_regenerate: true, partition: OutputPartition::Bindings, references: Vec::new() });
+             local guest = dofile(root .. \"/guest/internal.lua\")\n\
+             local host = dofile(root .. \"/host/callers.lua\")\n",
+            file_header(),
+        );
+        let mut checks = vec![
+            format!("guest._polyplug_internal_generation_fingerprint ~= \"{fingerprint:016X}\""),
+            format!("host._polyplug_internal_generation_fingerprint ~= \"{fingerprint:016X}\""),
+        ];
+        if split && lua_has_domain_types(ir) {
+            let domain =
+                lua_partition_module(layout, OutputPartition::DomainTypes, "domain/types.lua");
+            init_content.push_str(&lua_root_module_loader("domain", &domain));
+            checks.push(format!(
+                "domain._polyplug_internal_generation_fingerprint ~= \"{fingerprint:016X}\""
+            ));
+        }
+        if split
+            && !matches!(
+                layout.destination(OutputPartition::GuestContracts),
+                OutputDestination::Omit
+            )
+        {
+            let contracts = lua_partition_module(
+                layout,
+                OutputPartition::GuestContracts,
+                "guest/contracts.lua",
+            );
+            init_content.push_str(&lua_root_module_loader("guest_contracts", &contracts));
+            checks.push(format!(
+                "guest_contracts._polyplug_internal_generation_fingerprint ~= \"{fingerprint:016X}\""
+            ));
+        }
+        init_content.push_str(&format!(
+            "if {} then error(\"generated internal partitions are incompatible\") end\nreturn {{ guest = guest, host = host }}\n",
+            checks.join(" or ")
+        ));
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("init.lua"),
+            content: init_content,
+            force_regenerate: true,
+            partition: OutputPartition::Bindings,
+            references: Vec::new(),
+        });
+        append_lua_internal_fingerprints(files, internal_generation_fingerprint(ir));
         Ok(())
+    }
+}
+
+fn append_lua_internal_fingerprints(files: &mut GeneratedFiles, fingerprint: u64) {
+    for file in &mut files.files {
+        if matches!(
+            file.path.as_path(),
+            path if path == Path::new("guest/internal.lua")
+                || path == Path::new("host/callers.lua")
+                || path == Path::new("domain/types.lua")
+                || path == Path::new("guest/contracts.lua")
+        ) {
+            file.content = file.content.replacen(
+                "return M\n",
+                &format!("M._polyplug_internal_generation_fingerprint = \"{fingerprint:016X}\"\nreturn M\n"),
+                1,
+            );
+        }
     }
 }
 
@@ -2814,17 +2876,7 @@ fn contract_name_to_prefix(name: &str) -> String {
 }
 
 fn contract_name_to_struct(name: &str) -> String {
-    name.split('.')
-        .map(|p: &str| {
-            let mut chars: core::str::Chars<'_> = p.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("")
-        + "Contract"
+    canonical_pascal_case(name) + "Contract"
 }
 
 fn needs_arg_pack(params: &[ResolvedParam]) -> bool {

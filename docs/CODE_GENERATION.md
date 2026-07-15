@@ -255,12 +255,6 @@ fn main() {
 pub mod domain;
 #[path = "generated/internal/platform-3e4bd4e31c5c3ad2/guest/guest_contracts.rs"]
 pub mod guest_contracts;
-
-const _: () = assert!(
-    domain::INTERNAL_GENERATION_FINGERPRINT
-        == guest_contracts::INTERNAL_GENERATION_FINGERPRINT,
-    "domain and contract declarations must come from one generation",
-);
 ```
 
 `platform/src/lib.rs` implements the declarations directly—there is no ABI
@@ -306,26 +300,17 @@ fn main() {
 }
 ```
 
-In `core`, make the full internal-profile fingerprint a compile-time invariant:
-the common domain declarations, common guest contract declarations, and the
-core generated interface must all be from the same generation.
+`core` includes the generated `mod.rs` root with a portable source-relative path:
 
 ```rust,ignore
 #[path = "generated/internal/platform-3e4bd4e31c5c3ad2/mod.rs"]
 mod generated;
-
-use common::{
-    domain::INTERNAL_GENERATION_FINGERPRINT as DOMAIN_FINGERPRINT,
-    guest_contracts::INTERNAL_GENERATION_FINGERPRINT as CONTRACT_FINGERPRINT,
-};
-use generated::guest::interfaces::INTERNAL_GENERATION_FINGERPRINT as BINDINGS_FINGERPRINT;
-
-const _: () = assert!(
-    DOMAIN_FINGERPRINT == CONTRACT_FINGERPRINT
-        && CONTRACT_FINGERPRINT == BINDINGS_FINGERPRINT,
-    "common declarations and core bindings must be generated together",
-);
 ```
+
+The generated root compares every internal partition fingerprint itself. A
+mixed generation therefore fails during compilation; applications do not add
+their own assertion.
+
 
 The core crate then registers `platform::Platform` through the generated
 internal registration façade and uses the returned callers. `platform` depends
@@ -348,8 +333,7 @@ This is not a file-set or cross-root transaction. Directory creation and
 per-file writes occur after preflight and can fail after earlier files have
 already been replaced, including when several partitions use different roots.
 Polyplug does not roll those replacements back. Treat every generated root as
-one build input, regenerate them from the same API or bundle together, and use
-the fingerprint assertion above for the Rust three-crate arrangement.
+one build input and regenerate it from the same API or bundle.
 
 ## Further reading
 
