@@ -111,7 +111,7 @@ once_cell = { version = "1.21" }
 rquickjs = { version = "0.12" }
 
 # Lua
-mlua = { version = "0.11" }
+mlua = { version = "0.12" }
 
 # Python
 pyo3 = { version = "0.29" }
