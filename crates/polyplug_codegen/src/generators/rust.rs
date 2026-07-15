@@ -75,6 +75,16 @@ enum GuestRustOutputMode<'a> {
     InternalProfile { bundle_name: &'a str },
 }
 
+fn rust_fingerprint_literal(fingerprint: u64) -> String {
+    format!(
+        "0x{:04X}_{:04X}_{:04X}_{:04X}u64",
+        (fingerprint >> 48) & 0xFFFF,
+        (fingerprint >> 32) & 0xFFFF,
+        (fingerprint >> 16) & 0xFFFF,
+        fingerprint & 0xFFFF,
+    )
+}
+
 impl RustGenerator {
     pub(crate) fn generate_internal_bundle(
         &self,
@@ -118,7 +128,7 @@ impl RustGenerator {
         emit_rust_attributes(&mut root_mod_content, "", CustomizableNode::Api, &ir.langs);
         root_mod_content.push_str("pub mod host;\npub mod guest;\n");
         if !ir.types.is_empty() || !ir.enums.is_empty() || !ir.contracts.is_empty() {
-            let fingerprint = internal_generation_fingerprint(ir);
+            let fingerprint = rust_fingerprint_literal(internal_generation_fingerprint(ir));
             root_mod_content.push_str(&format!(
                 "pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = {fingerprint};\n\
                  const _: [(); 1] = [(); (_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT == guest::_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT) as usize];\n"
@@ -140,7 +150,7 @@ impl RustGenerator {
         layout: &OutputLayout,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
-        let fingerprint = internal_generation_fingerprint(ir);
+        let fingerprint = rust_fingerprint_literal(internal_generation_fingerprint(ir));
         if declaration_partition_is_emitted(&layout.domain_types) {
             let mut domain_out = String::from(RUST_FILE_HEADER);
             emit_rust_attributes(&mut domain_out, "", CustomizableNode::Api, &ir.langs);
@@ -336,7 +346,7 @@ impl RustGenerator {
             partition: OutputPartition::Bindings,
             references: Vec::new(),
         });
-        let internal_fingerprint: u64 = internal_generation_fingerprint(ir);
+        let internal_fingerprint = rust_fingerprint_literal(internal_generation_fingerprint(ir));
         if internal_mode == Some(InternalBindingMode::Profile) {
             let mut domain_out: String = String::new();
             domain_out.push_str(header);
@@ -7196,7 +7206,7 @@ fn generate_guest_mod_rs(
     if internal_mode == Some(InternalBindingMode::Profile)
         && (!ir.types.is_empty() || !ir.enums.is_empty() || !ir.contracts.is_empty())
     {
-        let fingerprint = internal_generation_fingerprint(ir);
+        let fingerprint = rust_fingerprint_literal(internal_generation_fingerprint(ir));
         out.push_str(&format!(
             "pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = {fingerprint};\n\
              const _: [(); 1] = [(); (_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT == domain::_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT && _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT == guest_contracts::_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT && _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT == interfaces::_POLYPLUG_INTERNAL_GENERATION_FINGERPRINT) as usize];\n"

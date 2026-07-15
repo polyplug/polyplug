@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use polyplug_codegen::{
-    GenerateConfig, InternalRustGenerateConfig, Lang, OutputDestination, OutputLayout,
-    OutputPartition, Side, ValidatedImport, generate, generate_internal_rust, write_output,
+    GenerateConfig, GenerateOutput, InternalRustGenerateConfig, Lang, OutputDestination,
+    OutputLayout, OutputPartition, Side, ValidatedImport, generate, generate_internal_rust,
+    write_output,
 };
 use polyplug_utils::bundle_id;
 use tempfile::TempDir;
@@ -41,6 +42,41 @@ fn generated_consumer_source(source: String) -> String {
         .collect()
 }
 
+fn assert_readable_fingerprint_literals(output: &GenerateOutput) {
+    let literals: Vec<&str> = output
+        .files
+        .iter()
+        .flat_map(|file| file.content.lines())
+        .filter_map(|line| {
+            line.strip_prefix("pub const _POLYPLUG_INTERNAL_GENERATION_FINGERPRINT: u64 = ")
+                .and_then(|literal| literal.strip_suffix(';'))
+        })
+        .collect();
+    assert!(
+        !literals.is_empty(),
+        "generated Rust output must contain fingerprint literals"
+    );
+    for literal in literals {
+        let digits = literal
+            .strip_prefix("0x")
+            .and_then(|value| value.strip_suffix("u64"))
+            .unwrap_or_else(|| {
+                panic!("fingerprint must be an explicit hexadecimal u64: {literal}")
+            });
+        let groups: Vec<&str> = digits.split('_').collect();
+        assert!(
+            groups.len() == 4
+                && groups.iter().all(|group| {
+                    group.len() == 4
+                        && group
+                            .chars()
+                            .all(|digit| digit.is_ascii_digit() || matches!(digit, 'A'..='F'))
+                }),
+            "fingerprint must have four readable fixed-width hexadecimal groups: {literal}"
+        );
+    }
+}
+
 #[test]
 fn generated_internal_rust_same_contract_providers_dispatch_statefully_and_unload() {
     let temp: TempDir = tempfile::tempdir().expect("create temporary directory");
@@ -62,6 +98,7 @@ fn generated_internal_rust_same_contract_providers_dispatch_statefully_and_unloa
         layout: OutputLayout::unified(),
     })
     .expect("generate Rust internal-plugin bindings");
+    assert_readable_fingerprint_literals(&generated);
     let fingerprints: Vec<&str> = generated
         .files
         .iter()
@@ -143,7 +180,7 @@ impl generated::guest::guest_contracts::PlatformPluginContract for Provider {
         &self,
         value: generated::guest::domain::Envelope,
     ) -> Result<generated::guest::domain::Envelope, GuestError> {
-        let mode = if self.next.fetch_add(1, Ordering::Relaxed) % 2 == 0 {
+        let mode = if self.next.fetch_add(1, Ordering::Relaxed).is_multiple_of(2) {
             generated::guest::domain::Mode::Hot
         } else {
             generated::guest::domain::Mode::Cold
@@ -202,6 +239,18 @@ fn main() {
 }
 "#;
     fs::write(source_dir.join("main.rs"), consumer_source).expect("write consumer source");
+
+    let clippy = Command::new("cargo")
+        .args(["clippy", "--", "-D", "warnings"])
+        .current_dir(&crate_root)
+        .output()
+        .expect("Clippy-check generated full-binding consumer");
+    assert!(
+        clippy.status.success(),
+        "generated full-binding consumer must be warning-free under Clippy:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&clippy.stdout),
+        String::from_utf8_lossy(&clippy.stderr),
+    );
 
     let output = Command::new("cargo")
         .arg("run")
@@ -1177,6 +1226,7 @@ fn generated_internal_rust_declaration_root_is_portable_and_detects_mixed_partit
         },
     })
     .expect("generate declaration-only internal Rust output");
+    assert_readable_fingerprint_literals(&generated);
     assert!(
         generated
             .files
@@ -1250,6 +1300,18 @@ fn generated_internal_rust_declaration_root_is_portable_and_detects_mixed_partit
         "use generated_game_engine_common::domain::GameEnginePluginContract as GameEngineConfig;\nuse generated_game_engine_common::guest_contracts::GameEnginePluginContract as GameEnginePlugin;\nuse polyplug_guest::GuestError;\n\nstruct Engine;\n\nimpl GameEnginePlugin for Engine {\n    fn configure(&self, value: GameEngineConfig) -> Result<GameEngineConfig, GuestError> {\n        Ok(GameEngineConfig { enabled: !value.enabled })\n    }\n}\n\nfn main() {\n    let configured = Engine.configure(GameEngineConfig { enabled: false }).expect(\"configure engine\");\n    assert!(configured.enabled);\n}\n",
     )
     .expect("write declaration consumer");
+    let clippy = Command::new("cargo")
+        .args(["clippy", "--", "-D", "warnings"])
+        .current_dir(&crate_root)
+        .output()
+        .expect("Clippy-check declaration-only consumer");
+    assert!(
+        clippy.status.success(),
+        "declaration-only consumer must be warning-free under Clippy:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&clippy.stdout),
+        String::from_utf8_lossy(&clippy.stderr),
+    );
+
     let output = Command::new("cargo")
         .arg("run")
         .current_dir(&crate_root)
